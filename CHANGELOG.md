@@ -4,7 +4,9 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/) y [SemVer](htt
 
 ## [Unreleased]
 
-Sin cambios todavía. Próxima etapa: diseño visual/estético y UX, sin tocar la lógica de esta versión.
+### Cambiado
+- Sesión rolling/sliding: `sessionToken` pasa de 12h fijas a 30 días, renovado silenciosamente en cada `checkSession` exitoso (el frontend reemplaza el token guardado sin intervención del usuario). En uso periódico la sesión se mantiene indefinidamente; sin uso por 30 días completos, o al tocar "Salir", hay que volver a autenticarse con Google. Firma HMAC-SHA256 y verificación de expiración sin cambios; un usuario deshabilitado sigue perdiendo acceso aunque tenga un token vigente.
+- Rediseño visual/UX ("Acequia Profesional"): logo institucional real de IRRIGACIÓN, ícono PWA nuevo, ajustes de jerarquía/espaciado/tipografía y botones planos sin cápsulas. Sin cambios de lógica, backend, validadores, sesión, historial ni Service Worker.
 
 ## [1.0.0] - 2026-08-27
 

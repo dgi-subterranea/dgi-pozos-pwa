@@ -1,10 +1,15 @@
 // AuthService: identidad y sesion. No sabe nada de HTTP (eso es Api.js) ni
 // de Drive/Sheets (eso son los repositorios).
 
-// Valor definitivo de V1: 12 horas (43200s). Antes estaba en 1800s
-// (30 min), usado durante el desarrollo para poder probar la expiracion
-// y la recuperacion de sesion sin esperar horas.
-var SESSION_TTL_SECONDS = 43200;
+// Sesion rolling/sliding: cada token dura 30 dias (2592000s), pero
+// handleCheckSession reemite uno nuevo con otros 30 dias cada vez que
+// se valida con exito (ver mas abajo). En la practica el usuario queda
+// logueado mientras abra la app con alguna frecuencia razonable, y
+// pierde la sesion solo si pasa 30 dias completos sin usarla o si
+// toca "Salir". Antes de esto el valor era 43200s (12h), que en uso
+// real resultaba demasiado corto: obligaba a reloguearse con Google
+// tras unos pocos dias sin abrir la app.
+var SESSION_TTL_SECONDS = 2592000;
 
 // Cuanto tiempo, como maximo, puede tardar en notarse que alguien fue
 // deshabilitado en la hoja "Usuarios" (evita golpear Sheets en cada
@@ -76,9 +81,19 @@ function handleCheckSession(sessionToken) {
   if (!isUserActive(result.email)) {
     return { status: 'error', code: 'USER_DISABLED', message: 'usuario no habilitado: ' + result.email };
   }
+  // Renovacion silenciosa (rolling/sliding): cada checkSession exitoso
+  // reemite un token nuevo con otros SESSION_TTL_SECONDS, para que un
+  // uso periodico de la app mantenga la sesion viva indefinidamente sin
+  // volver a pasar por Google. El frontend reemplaza el token guardado
+  // con este.
+  var newSessionToken = createSessionToken(result.email);
   return {
     status: 'ok',
-    data: { email: result.email, message: 'sesion validada localmente, sin llamar a Google' }
+    data: {
+      email: result.email,
+      sessionToken: newSessionToken,
+      message: 'sesion validada localmente, sin llamar a Google'
+    }
   };
 }
 

@@ -132,17 +132,47 @@ describe('createSessionToken + verifySessionToken', () => {
 });
 
 describe('handleCheckSession', () => {
-  test('sesion valida y usuario activo -> ok', () => {
+  test('sesion valida y usuario activo -> ok, renueva el sessionToken (rolling/sliding)', () => {
+    // iat se trunca a segundos (Math.floor(Date.now()/1000)): sin avanzar
+    // el reloj, crear dos tokens en el mismo segundo daria el mismo
+    // payload y por lo tanto el mismo token, aunque la renovacion sea
+    // igualmente correcta. Se avanza el tiempo (sin salir de fake timers
+    // hasta el final, para no invalidar despues la verificacion por
+    // exp) para que la diferencia sea observable, como pasaria en un
+    // caso real (login y luego, mas tarde, un checkSession).
+    jest.useFakeTimers({ doNotFake: ['nextTick'] });
+    jest.setSystemTime(new Date());
     const token = AuthService.createSessionToken('user@example.com');
+
+    jest.setSystemTime(new Date(Date.now() + 24 * 60 * 60 * 1000));
     global.sheetUserRepository_getUserStatus.mockReturnValue({ found: true, active: true });
 
     const result = AuthService.handleCheckSession(token);
 
     expect(result.status).toBe('ok');
     expect(result.data.email).toBe('user@example.com');
+    expect(typeof result.data.sessionToken).toBe('string');
+    expect(result.data.sessionToken).not.toBe(token);
+
+    const renewed = AuthService.verifySessionToken(result.data.sessionToken);
+    expect(renewed.valid).toBe(true);
+    expect(renewed.email).toBe('user@example.com');
+
+    jest.useRealTimers();
   });
 
-  test('sesion valida pero usuario deshabilitado -> USER_DISABLED', () => {
+  test('el sessionToken renovado vale por otros 30 dias (2592000s)', () => {
+    const token = AuthService.createSessionToken('user@example.com');
+    global.sheetUserRepository_getUserStatus.mockReturnValue({ found: true, active: true });
+
+    const result = AuthService.handleCheckSession(token);
+
+    const payloadB64 = result.data.sessionToken.split('.')[0];
+    const payload = JSON.parse(global.Utilities.base64DecodeWebSafe(payloadB64).toString('utf8'));
+    expect(payload.exp - payload.iat).toBe(30 * 24 * 60 * 60);
+  });
+
+  test('sesion valida pero usuario deshabilitado -> USER_DISABLED, no emite sessionToken nuevo', () => {
     const token = AuthService.createSessionToken('user@example.com');
     global.sheetUserRepository_getUserStatus.mockReturnValue({ found: true, active: false });
 
@@ -150,6 +180,7 @@ describe('handleCheckSession', () => {
 
     expect(result.status).toBe('error');
     expect(result.code).toBe('USER_DISABLED');
+    expect(result.data).toBeUndefined();
   });
 
   test('token invalido -> UNAUTHORIZED', () => {

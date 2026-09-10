@@ -34,7 +34,7 @@ Backend ya separado en archivos (`backend/src/*.js`) — la migración desde el 
 
 **CORS**: Apps Script Web Apps no manejan el preflight de CORS de forma confiable (no hay garantía documentada de que un `doOptions` funcione siempre). Se evita el problema por diseño: todos los requests autenticados usan `POST` con `Content-Type: text/plain` (nunca headers custom, nunca `application/json` real), lo que el navegador considera "simple" y no dispara preflight. Confirmado funcionando en Chrome (PC) y Safari (iPhone, incluida la PWA instalada en modo standalone), **sin necesidad de Cloudflare**.
 
-**Autenticación**: login con Google Identity Services → el ID token se valida **una sola vez**, contra `https://oauth2.googleapis.com/tokeninfo`, verificando `aud` contra nuestro Client ID. A partir de ahí se emite un `sessionToken` propio firmado con HMAC-SHA256 (`email`, `iat`, `exp`), que se valida **localmente** (sin volver a llamar a Google) en cada request posterior. Confirmado: rechaza correctamente un token alterado (firma inválida) y un token expirado. `SESSION_TTL_SECONDS` definitivo para V1: 12 horas (en V0 se usaron 60s y luego 1800s solo para poder probar la expiración sin esperar horas).
+**Autenticación**: login con Google Identity Services → el ID token se valida **una sola vez**, contra `https://oauth2.googleapis.com/tokeninfo`, verificando `aud` contra nuestro Client ID. A partir de ahí se emite un `sessionToken` propio firmado con HMAC-SHA256 (`email`, `iat`, `exp`), que se valida **localmente** (sin volver a llamar a Google) en cada request posterior. Confirmado: rechaza correctamente un token alterado (firma inválida) y un token expirado. `SESSION_TTL_SECONDS` es de 30 días (2592000s) con renovación rolling/sliding — ver [Sesión rolling/sliding de 30 días](#sesión-rollingsliding-de-30-días-2026-09-10) más abajo. (En V0 se usaron 60s y luego 1800s solo para poder probar la expiración sin esperar horas; el valor definitivo de V1.0 fue 12h/43200s, reemplazado por este esquema.)
 
 **Persistencia de sesión (iOS standalone)**: `localStorage` **sí persiste correctamente** en una PWA instalada en pantalla de inicio de iPhone. El problema observado inicialmente (la app pedía login de nuevo tras cerrar/reabrir) no era un límite de almacenamiento de iOS: el frontend de V0 nunca revisaba `localStorage` al arrancar. Se corrigió agregando una verificación automática al cargar la página (busca el token guardado, lo valida contra el backend, y si es válido reusa la sesión sin pedir login). Como refuerzo adicional se activó `data-auto_select="true"` en Google Identity Services, para relogin silencioso si la sesión de Google del navegador sigue activa.
 
@@ -92,6 +92,17 @@ El input en pantalla tiene además un enmascarado en vivo (`formatWellIdInput`):
 ### Google Identity Services — init programático, no declarativo
 
 V0 inicializaba Google Sign-In de forma declarativa (`<div id="g_id_onload" data-auto_select="true">`), lo que hacía que el prompt de "One Tap" de Google apareciera **siempre**, apenas cargaba la librería, sin importar si la sesión propia ya se había recuperado con éxito. Corregido: la inicialización (`google.accounts.id.initialize` + `.renderButton` + `.prompt()`) ahora es 100% programática desde `js/app.js`, y solo se dispara si `checkSession` ya determinó que no hay una sesión propia válida. También se llama a `google.accounts.id.disableAutoSelect()` al cerrar sesión, para que "Cerrar sesión" no quede anulado por un re-login silencioso de Google.
+
+### Sesión rolling/sliding de 30 días (2026-09-10)
+
+El TTL fijo de 12h (definitivo para `v1.0.0`) resultó demasiado corto en uso real: si el usuario no abría la app en un par de días, tenía que volver a autenticarse con Google. Se reemplaza por una sesión **rolling/sliding**:
+
+- `SESSION_TTL_SECONDS` pasa de `43200` (12h) a `2592000` (30 días) en `backend/src/AuthService.js`.
+- `handleCheckSession` (invocado por el frontend una vez, en `init()`, cada vez que se abre/reabre la app) ya no se limita a validar: si el token es válido **y** el usuario sigue activo, reemite silenciosamente un `sessionToken` nuevo con otros 30 días completos, en `data.sessionToken`.
+- `js/app.js` reemplaza el token guardado en `localStorage` con el nuevo, sin ninguna acción del usuario.
+- Efecto práctico: mientras la app se abra con alguna frecuencia razonable (bastante menos de 30 días entre usos), la sesión se mantiene indefinidamente. Si pasan 30 días completos sin abrirla, el último token emitido expira y vuelve a pedir login con Google. "Salir" sigue siendo el mecanismo principal de cierre de sesión (borra el token local, sin esperar a la expiración).
+- La firma HMAC-SHA256 y la verificación de expiración (`verifySessionToken`) no cambian. Un usuario deshabilitado en la hoja "Usuarios" sigue perdiendo acceso (vía `isUserActive`, cache de 5 minutos) aunque su token no haya vencido — y en ese caso `handleCheckSession` devuelve `USER_DISABLED` sin emitir token nuevo.
+- La renovación queda atada únicamente a `checkSession`, no a `getProfile`: una pestaña abierta sin recargar por más de 30 días seguidos, usando solo búsquedas, terminaría pidiendo login de nuevo. Caso límite aceptado explícitamente, no se resuelve en esta etapa.
 
 ### Fuente de imágenes — confirmado
 

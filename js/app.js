@@ -289,7 +289,12 @@
 
     apiCheckSession(stored).then(function (result) {
       if (result.status === 'ok') {
-        sessionToken = stored;
+        // Renovacion rolling/sliding: el backend reemite un sessionToken
+        // nuevo en cada checkSession exitoso (otros 30 dias). Se
+        // reemplaza el guardado en localStorage sin que el usuario haga
+        // nada; si por algun motivo no viniera, se conserva el actual.
+        sessionToken = result.data.sessionToken || stored;
+        localStorage.setItem('sessionToken', sessionToken);
         currentEmail = result.data.email;
         enterMain();
       } else if (result.code === 'USER_DISABLED') {
