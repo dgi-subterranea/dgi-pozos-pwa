@@ -118,11 +118,17 @@ h1 {
 }
 
 /* Version chica y apagada del logo institucional, al pie del resto de
-   pantallas - visible pero fuera del camino del buscador/perfil. */
+   pantallas - visible pero fuera del camino del buscador/perfil. En el
+   estado vacio de la pantalla principal (sin resultado ni error) se
+   oculta: ahi quedaba demasiado cerca del buscador y sin nada que lo
+   empuje hacia abajo. */
 .footer-brand {
   margin-top: 36px;
   display: flex;
   justify-content: center;
+}
+#screen-main:has(.idle-hint) .footer-brand {
+  display: none;
 }
 .irr-logo-footer {
   width: 92px;
@@ -168,13 +174,20 @@ header {
   white-space: nowrap;
 }
 
+/* Link de texto, no un boton: sin radio ni sombra propios del .button
+   generico (que de lo contrario quedan heredados por ser un <button>). */
 .button-link {
+  min-height: 0;
   background: none;
   border: none;
+  border-radius: 0;
+  box-shadow: none;
+  appearance: none;
+  -webkit-appearance: none;
   color: var(--color-primary);
   font-weight: 700;
   font-size: 0.72rem;
-  padding: 3px 0;
+  padding: 9px 2px;
   cursor: pointer;
 }
 .button-link:hover {
@@ -230,7 +243,9 @@ input[type="text"]::placeholder {
 }
 
 /* Solo el signo, sin circulo ni fondo - area de toque generosa via
-   padding, sin agrandar lo que se ve. */
+   width/height, sin agrandar lo que se ve. Se anulan radio/sombra/
+   min-height del .button generico, que de lo contrario quedan
+   heredados por ser un <button>. */
 .clear-button {
   position: absolute;
   right: 4px;
@@ -238,11 +253,17 @@ input[type="text"]::placeholder {
   transform: translateY(-50%);
   width: 40px;
   height: 40px;
+  min-height: 0;
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   background: none;
   border: none;
+  border-radius: 0;
+  box-shadow: none;
+  appearance: none;
+  -webkit-appearance: none;
   color: var(--color-text-faint);
   font-size: 1.3rem;
   line-height: 1;
