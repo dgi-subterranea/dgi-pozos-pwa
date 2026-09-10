@@ -35,7 +35,26 @@ Descartado explícitamente durante V0: entrega de imagen vía `doGet` + `Blob` d
 
 Los 21 criterios de aceptación quedaron verificados (checklist en `docs/architecture.md`). Próxima etapa: **diseño visual/estético y UX**, sin tocar la lógica ya validada de V1.
 
-## V1.1 — Historial visible
+## V1.1 — Diseño visual/UX y sesión persistente (CERRADA — tag `v1.1.0`, 2026-09-10)
+
+Etapa exclusivamente de diseño visual/UX sobre V1.0 ("Acequia Profesional"), más un cambio funcional acotado en persistencia de sesión pedido por el usuario durante la misma etapa. Sin pantallas ni fuentes de datos nuevas.
+
+**Diseño visual/UX — completo:**
+- ✅ Paleta y tipografía definitivas (azul institucional dominante, acento terracota puntual, monoespaciada para `wellId`).
+- ✅ Logo oficial de IRRIGACIÓN incorporado con la geometría exacta del SVG provisto (recoloreado vía `currentColor`, sin redibujar): grande en el login, chico y discreto al pie del resto de pantallas, oculto en el estado vacío del buscador.
+- ✅ Ícono de PWA nuevo (gota).
+- ✅ Botón de limpiar (`×`) y "Salir" aplanados a icono/link de texto puros, sin cápsula ni sombra heredada del `.button` genérico.
+- ✅ Estados vacío/no encontrado/offline aligerados, imagen de perfil sin borde duro, composición propia para desktop.
+- ✅ Placeholder de carga para el botón de Google Identity Services (causa raíz medida: 3 requests secuenciales al dominio de Google, agravado por el `<script>` sin `async`), con timeout y reintento — corrige una demora de varios segundos observada en iPhone real tras reinstalar la PWA.
+
+**Sesión (cambio funcional, no solo visual):**
+- ✅ Sesión rolling/sliding: `sessionToken` pasa de 12h fijas a 30 días, renovado silenciosamente en cada `checkSession` exitoso. En uso periódico la sesión se mantiene indefinidamente; sin uso por 30 días completos, o al tocar "Salir", pide login de nuevo. Firma HMAC y verificación de expiración sin cambios; un usuario deshabilitado sigue perdiendo acceso aunque tenga un token vigente.
+
+**Tests: 77** (76 de V1.0 + 1 nuevo para la renovación rolling de `checkSession`).
+
+Verificado en dispositivo real (iPhone): login, placeholder de Google y persistencia de sesión funcionando correctamente. Detalle completo en `CHANGELOG.md`.
+
+## V1.2 — Historial visible
 
 Pantalla "mis consultas" para el usuario. Sin fuentes de datos nuevas.
 
