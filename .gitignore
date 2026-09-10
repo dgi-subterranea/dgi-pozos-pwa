@@ -2,3 +2,9 @@ node_modules/
 .clasp.json
 *.log
 .DS_Store
+__pycache__/
+
+# Reporte de Pozos y salida del indexador: datos personales reales
+# (titulares, domicilios). Nunca al repo - se sube a mano a Drive.
+*.csv
+scripts/out/
