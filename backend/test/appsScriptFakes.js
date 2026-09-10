@@ -61,6 +61,8 @@ function installAppsScriptFakes() {
   global.logHistoryEvent = jest.fn();
   global.driveProfileRepository_getFile = jest.fn();
   global.profileService_getProfile = jest.fn();
+  global.registryRepository_getWellRecord = jest.fn();
+  global.registryService_getWellRecord = jest.fn();
   global.verifySessionToken = jest.fn();
   global.isUserActive = jest.fn();
 }

@@ -95,3 +95,92 @@ describe('handleGetProfile', () => {
     expect(result.code).toBe('SERVICE_UNAVAILABLE');
   });
 });
+
+describe('handleGetWellRecord', () => {
+  test('sessionToken invalido: UNAUTHORIZED', () => {
+    global.verifySessionToken.mockReturnValue({ valid: false, reason: 'expirado' });
+
+    const result = Api.handleGetWellRecord('token-vencido', '01-0012');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('UNAUTHORIZED');
+    expect(global.registryService_getWellRecord).not.toHaveBeenCalled();
+  });
+
+  test('usuario deshabilitado: USER_DISABLED', () => {
+    global.verifySessionToken.mockReturnValue({ valid: true, email: 'user@example.com' });
+    global.isUserActive.mockReturnValue(false);
+
+    const result = Api.handleGetWellRecord('token-valido', '01-0012');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('USER_DISABLED');
+  });
+
+  test('formato invalido: INVALID_WELL_ID, no consulta el registro', () => {
+    mockValidSession();
+    const result = Api.handleGetWellRecord('token-valido', '01-ABC');
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('INVALID_WELL_ID');
+    expect(global.registryService_getWellRecord).not.toHaveBeenCalled();
+  });
+
+  test('departamento fuera de rango: INVALID_WELL_ID, no consulta el registro', () => {
+    mockValidSession();
+    const result = Api.handleGetWellRecord('token-valido', '20-0123');
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('INVALID_WELL_ID');
+    expect(global.registryService_getWellRecord).not.toHaveBeenCalled();
+  });
+
+  test('ficha encontrada: OK con el registro tal cual lo devuelve el service', () => {
+    mockValidSession();
+    const record = { wellId: '01-0012', identificacion: { departamento: 'Capital' } };
+    global.registryService_getWellRecord.mockReturnValue({ found: true, record });
+
+    const result = Api.handleGetWellRecord('token-valido', '01-0012');
+
+    expect(result.status).toBe('ok');
+    expect(result.data).toEqual(record);
+  });
+
+  test('ficha inexistente: WELL_RECORD_NOT_FOUND', () => {
+    mockValidSession();
+    global.registryService_getWellRecord.mockReturnValue({ found: false });
+
+    const result = Api.handleGetWellRecord('token-valido', '01-9999');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('WELL_RECORD_NOT_FOUND');
+  });
+
+  test('error del service/Drive: SERVICE_UNAVAILABLE', () => {
+    mockValidSession();
+    global.registryService_getWellRecord.mockImplementation(() => {
+      throw new Error('Drive no disponible');
+    });
+
+    const result = Api.handleGetWellRecord('token-valido', '01-0012');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('SERVICE_UNAVAILABLE');
+  });
+
+  test('registra el evento getWellRecord en el historial con el resultado', () => {
+    mockValidSession('user@example.com');
+    global.registryService_getWellRecord.mockReturnValue({ found: true, record: { wellId: '01-0012' } });
+
+    Api.handleGetWellRecord('token-valido', '01-0012');
+
+    expect(global.logHistoryEvent).toHaveBeenCalledWith('user@example.com', 'getWellRecord', '01-0012', 'OK');
+  });
+
+  test('la ficha del pozo es independiente del ITF: no llama a profileService_getProfile', () => {
+    mockValidSession();
+    global.registryService_getWellRecord.mockReturnValue({ found: true, record: { wellId: '01-0012' } });
+
+    Api.handleGetWellRecord('token-valido', '01-0012');
+
+    expect(global.profileService_getProfile).not.toHaveBeenCalled();
+  });
+});

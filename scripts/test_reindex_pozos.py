@@ -124,6 +124,52 @@ class ParseTramoTests(unittest.TestCase):
     def test_unrecognized_format_is_none(self):
         self.assertIsNone(rp.parse_tramo('cualquier cosa'))
 
+    def test_hasta_zero_with_real_desde_is_kept_literal_not_nulled(self):
+        # Hallazgo verificado contra el CSV real (Etapa 2, revision de
+        # anomalias): en "Reduccion" (a diferencia de "Filtro"), hasta=0
+        # con desde/diametro reales es un patron real y muy frecuente
+        # (10161 casos en Reduccion 1-3) - una reduccion es un punto de
+        # transicion de diametro, no un rango con inicio y fin reales.
+        # No se nulifica el subcampo individual, solo el tramo COMPLETO
+        # vacio (0,00-0,00) se trata como sin dato.
+        self.assertEqual(
+            rp.parse_tramo('79,00-0,00 (Diam.4,00)'),
+            {'desde': 79, 'hasta': 0, 'diametro': 4},
+        )
+
+    def test_diametro_zero_with_real_range_is_kept_literal_not_nulled(self):
+        self.assertEqual(
+            rp.parse_tramo('78,00-0,00 (Diam.0,00)'),
+            {'desde': 78, 'hasta': 0, 'diametro': 0},
+        )
+
+
+class ParseExpedienteTests(unittest.TestCase):
+    def test_numero_cero_sin_codigo_is_none(self):
+        # Verificado: 1302 filas con formato NUMERO--ANIO y numero='0'
+        # (incluye '0--0' y '0--2000') - mismo sin-dato generico del
+        # numero que en el resto del reporte.
+        self.assertIsNone(rp.parse_expediente('0--0'))
+        self.assertIsNone(rp.parse_expediente('0--2000'))
+
+    def test_numero_cero_con_codigo_is_none(self):
+        # 60 filas mas con codigo real y numero='0' (ej. '0-OS-1974').
+        self.assertIsNone(rp.parse_expediente('0-OS-1974'))
+
+    def test_numero_real_con_anio_cero_is_kept(self):
+        # 4164 filas con anio='0' y numero real (la gran mayoria) - sin
+        # evidencia de que el numero sea invalido, se conserva tal cual.
+        # '1--0' es un caso puntual de este mismo patron (numero=1 real).
+        self.assertEqual(rp.parse_expediente('182167--0'), '182167--0')
+        self.assertEqual(rp.parse_expediente('1--0'), '1--0')
+
+    def test_numero_y_anio_reales_is_kept(self):
+        self.assertEqual(rp.parse_expediente('91373-OS-1970'), '91373-OS-1970')
+        self.assertEqual(rp.parse_expediente('69631--1966'), '69631--1966')
+
+    def test_blank_is_none(self):
+        self.assertIsNone(rp.parse_expediente(''))
+
 
 class ParseCementacionTests(unittest.TestCase):
     def test_desde_zero_is_real_when_hasta_is_also_real(self):
@@ -395,6 +441,50 @@ class ReindexEndToEndTests(unittest.TestCase):
         csv_path.write_bytes('a;b;c\r\n1;2;3\r\n'.encode('ISO-8859-1'))
         with self.assertRaises(rp.HeaderMismatch):
             rp.reindex(str(csv_path), str(Path(self.tmpdir.name) / 'out'))
+
+    def test_department_under_threshold_stays_a_single_file(self):
+        csv_path = self._write_csv([
+            make_row({rp.COL_COD_DEPARTAMENTO: '1', rp.COL_NRO_POZO: '12'}),
+            make_row({rp.COL_COD_DEPARTAMENTO: '1', rp.COL_NRO_POZO: '13'}),
+        ])
+        out_dir = Path(self.tmpdir.name) / 'out'
+        metadata, _ = rp.reindex(str(csv_path), str(out_dir), partition_threshold=2)
+
+        self.assertTrue((out_dir / '01.json').exists())
+        self.assertFalse((out_dir / '01-0.json').exists())
+        self.assertEqual(metadata['departamentosParticionados'], [])
+
+    def test_department_over_threshold_is_partitioned_by_first_digit_of_pozo(self):
+        # Umbral bajo (2) para no necesitar miles de filas de fixture:
+        # 3 pozos en el departamento 01, en 3 "primeros digitos" distintos
+        # de Nro Pozo (0012 -> '0', 1005 -> '1', 2001 -> '2').
+        csv_path = self._write_csv([
+            make_row({rp.COL_COD_DEPARTAMENTO: '1', rp.COL_NRO_POZO: '12'}),    # wellId 01-0012
+            make_row({rp.COL_COD_DEPARTAMENTO: '1', rp.COL_NRO_POZO: '1005'}),  # wellId 01-1005
+            make_row({rp.COL_COD_DEPARTAMENTO: '1', rp.COL_NRO_POZO: '2001'}),  # wellId 01-2001
+        ])
+        out_dir = Path(self.tmpdir.name) / 'out'
+        metadata, _ = rp.reindex(str(csv_path), str(out_dir), partition_threshold=2)
+
+        self.assertFalse((out_dir / '01.json').exists())
+        self.assertEqual(metadata['departamentosParticionados'], ['01'])
+        self.assertEqual(metadata['umbralParticionado'], 2)
+
+        # Los 10 archivos de digito siempre se generan, aunque queden vacios.
+        for digit in '0123456789':
+            self.assertTrue((out_dir / f'01-{digit}.json').exists(), f'falta 01-{digit}.json')
+
+        with open(out_dir / '01-0.json', encoding='utf-8') as f:
+            data = json.load(f)
+            self.assertEqual(list(data.keys()), ['01-0012'])
+        with open(out_dir / '01-1.json', encoding='utf-8') as f:
+            data = json.load(f)
+            self.assertEqual(list(data.keys()), ['01-1005'])
+        with open(out_dir / '01-2.json', encoding='utf-8') as f:
+            data = json.load(f)
+            self.assertEqual(list(data.keys()), ['01-2001'])
+        with open(out_dir / '01-3.json', encoding='utf-8') as f:
+            self.assertEqual(json.load(f), {})
 
 
 if __name__ == '__main__':

@@ -153,3 +153,43 @@ Confirmado el 2026-08-27: después del cambio visual (Acequia Refinada), una PWA
 **Arreglo identificado, no aplicado todavía (decisión explícita del usuario, 2026-08-27):** agregar `{ cache: 'no-store' }` a los `fetch()` internos de `sw.js` (tanto en `networkFirstThenCache` como en la rama `mode: 'navigate'`), para que esos requests ignoren la caché HTTP nativa sin importar la plataforma. Se descarta cache-busting por hash/querystring en los archivos del shell por reintroducir un paso manual (justo lo que se eliminó al pasar `CACHE_NAME` a un valor fijo).
 
 Queda como mejora a evaluar en una versión futura, no bloqueante — el mitigante actual (desinstalar y reinstalar la PWA) ya resuelve el caso real observado.
+
+## V2 — Ficha del Pozo: arquitectura (backend cerrado, frontend pendiente)
+
+Módulo nuevo, independiente del ITF, a partir del Reporte de Pozos real (`Reporte Pozos MM_AAAA.csv`, 106 columnas, exportado del sistema interno — no una hoja mantenida a mano). El CSV fuente y toda su salida derivada tienen datos personales reales (titulares, domicilios) y quedan fuera del repositorio (`.gitignore`), nunca en git.
+
+### Modelo de datos
+
+Las 106 columnas se reducen a ~90 campos útiles (se descartan ~15 columnas `Cod. X`/`Cód. X` que son el código numérico de una columna de texto ya presente), agrupados en 9 secciones: `identificacion`, `titularidad`, `usoConcesion`, `tecnicas`, `construccion`, `ubicacion`, `estado`, `laboratorio` (con `analisis[]`, 0..N — ver más abajo), `comentarios`.
+
+### Normalización — no es una regla genérica `0=null`
+
+El sistema origen completa la mayoría de los campos numéricos con `0` cuando no hay dato (nunca los deja en blanco), así que `0→null` es la regla por defecto para esos campos. Pero se verificaron y documentaron excepciones concretas contra el CSV real antes de aplicar cualquier regla:
+
+- **`Cementación desde`**: puede ser un `0` real (cementado desde la superficie) — pero solo si `Cementación hasta` es también un valor real; si ambos son `0`, no hay evidencia de que sea una medición y se nulifica igual que `hasta`.
+- **`Carbonatos`**: no es numérico — trae texto de laboratorio (`ATE`, `AUSENTE`, `NEGATIVO`, `VESTIGIOS`, `N/C`, 311+ casos de `ATE` solo) — se conserva como string, nunca se fuerza a `float`.
+- **`Reducción 1-3` (`hasta=0`/`diametro=0` con `desde` real)**: patrón real y muy frecuente (10.161 casos combinados en las 3 columnas — hasta el 94% de las entradas no vacías de `Reducción 2`), a diferencia de `Filtro 1-5` donde el mismo patrón es raro (menos de 20 casos por columna). Una "reducción" es un punto de transición de diámetro, no un rango con inicio y fin reales como un filtro — el subcampo individual se conserva literal, solo el tramo completo `0,00-0,00 (Diam.0,00)` se trata como sin dato.
+- **`Expediente`** (formato `NUMERO-CODIGO-AÑO`, ej. `91373-OS-1970`, o `NUMERO--AÑO` sin código): cuando `NUMERO` es `0` (1.362 filas: 1.302 en formato `NUMERO--AÑO` + 60 con código real, ej. `0--0`, `0--2000`, `0-OS-1974`) es el mismo sin-dato genérico de campos numéricos — se nulifica el expediente completo. Un `AÑO` en `0` con `NUMERO` real (ej. `182167--0`, 4.164 filas en total, la enorme mayoría con número real) se conserva tal cual — no hay evidencia de que esos números sean inválidos, solo que no se registró el año.
+- **`Plano DGI`**: usa literalmente `"-"` como placeholder (33% de las filas) además de blanco.
+- **`Aptitud`**: código líder `0` (`"0-NO DETERMINADA."`, 93% de las filas) significa sin determinar; cualquier otro código conserva el texto legible.
+
+### Deduplicación — análisis de laboratorio, no un pozo "duplicado"
+
+18 `wellId` aparecen más de una vez en el CSV (0.15% de las filas). 1 es un duplicado exacto fila-por-fila (se descarta). Los otros 17 son el mismo pozo con **análisis de laboratorio distintos** — mismos datos de identificación/titularidad/técnica, difieren solo en columnas de calidad de agua. Se conservan **todos** los análisis distintos en `laboratorio.analisis[]`, sin asumir cuál es más reciente: no existe ningún campo de fecha para el análisis en las 106 columnas (`Nro. Análisis` es un identificador de laboratorio, no correlaciona con orden cronológico — verificado con valores como `950` y `166` para dos análisis del mismo pozo). De los 17 grupos, 9 terminan con más de un análisis realmente distinto tras la normalización; los otros 8 tenían un lado con todos los campos de laboratorio en cero/vacío, correctamente descartado como "sin análisis" en vez de contado como un segundo análisis real.
+
+### Particionado de departamentos grandes
+
+Medido contra Drive real (Apps Script, `getBlob().getDataAsString()` es el cuello de botella, no `JSON.parse`):
+
+| Caso | Antes (archivo único) | Después (particionado) |
+|---|---|---|
+| Departamento chico/vacío | ~0.6-0.7s frío | sin cambios |
+| Departamento 07 (~7MB) | ~3.5s frío | ~0.9-1.2s frío |
+| Departamento 08 (~8.2MB) | ~4.7s frío | ~0.9-1.0s frío |
+| Con `CacheService` (segunda lectura) | ~20-50ms | ~49-94ms |
+
+Departamentos con más de `PARTITION_THRESHOLD` (3.000) pozos se parten en 10 archivos por el primer dígito de `Nro Pozo` (`07-0.json`..`07-9.json`, siempre los 10, aunque algunos queden vacíos `{}`) en vez de un único `DD.json`. El backend (`registryRepository_resolveFileName` en `RegistryRepository.js`) resuelve el nombre de archivo directamente desde el `wellId`, sin leer ningún índice adicional — por eso la lista de departamentos particionados (`PARTITIONED_DEPARTMENTS`) vive como constante hardcodeada en ese archivo y tiene que actualizarse a mano si cambia el resultado del indexador en una corrida futura (el CLI de `scripts/reindex_pozos.py` lo recuerda explícitamente al final de cada corrida). Con el reporte actual, solo 07 y 08 superan el umbral.
+
+### Independencia de capas
+
+La Ficha del Pozo (`getWellRecord`) y el visor ITF (`getProfile`) son acciones de API completamente independientes: un `wellId` puede tener uno, otro, ambos o ninguno, y una falla en una nunca bloquea ni condiciona a la otra. Comparten únicamente la validación de sesión+formato de `wellId` (`validateSessionAndWellId` en `Api.js`), no lógica de negocio.

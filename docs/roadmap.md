@@ -58,9 +58,25 @@ Verificado en dispositivo real (iPhone): login, placeholder de Google y persiste
 
 Pantalla "mis consultas" para el usuario. Sin fuentes de datos nuevas.
 
-## V2 — Información registral
+## V2 — Ficha del Pozo (EN CURSO)
 
-`well.registry` como módulo nuevo (`RegistryService`/`RegistryRepository`), sin tocar el módulo ITF.
+Módulo nuevo e independiente del ITF (`RegistryRepository`/`RegistryService`), a partir del Reporte de Pozos real exportado del sistema interno (106 columnas, no un esquema hipotético). Detalle de diseño (modelo de datos, agrupación de campos, normalización) en `docs/architecture.md`.
+
+**Etapa 1 — Indexador (CERRADA):**
+- ✅ `scripts/reindex_pozos.py`: CSV real (ISO-8859-1, 106 columnas) → 19 archivos `01.json`..`19.json` (siempre los 19, vacíos `{}` si no hay registros) + `metadata.json` (fecha de generación, período de la fuente, conteos por departamento).
+- ✅ Normalización campo por campo (no una regla genérica `0=null`), con excepciones evidenciadas contra el CSV real — ver `docs/architecture.md` para la tabla completa.
+- ✅ Deduplicación: un único duplicado exacto se descarta; los análisis de laboratorio distintos del mismo `wellId` se conservan todos en `laboratorio.analisis[]`, sin asumir cuál es más reciente (no existe ningún campo de fecha para el análisis en el reporte).
+- ✅ El CSV fuente y la salida del indexador quedan fuera del repo (`.gitignore`) — contienen datos personales reales.
+
+**Etapa 2 — Backend (CERRADA):**
+- ✅ `RegistryRepository`/`RegistryService`/`Api.handleGetWellRecord` (acción `getWellRecord`), validación de sesión+wellId compartida con `handleGetProfile` vía `validateSessionAndWellId`.
+- ✅ La Ficha del Pozo es independiente del ITF: un `wellId` puede tener uno, otro, ambos o ninguno — nunca se bloquean entre sí.
+- ✅ **Particionado de departamentos grandes**: medido contra Drive real, leer el JSON completo de un departamento de ~7-8MB (07, 08) tardaba 3.5-4.7s en frío. Se parten en 10 archivos por el primer dígito de `Nro Pozo` (`07-0.json`..`07-9.json`), resuelto por el backend directamente desde el `wellId` sin índice adicional. Verificado de nuevo tras el particionado: ~0.9-1.2s en frío — problema resuelto, sin seguir optimizando sin evidencia adicional.
+- ✅ `RegistryService` limpia recursivamente las claves `null` de la respuesta antes de mandarla por la red.
+- ✅ Evento de auditoría `getWellRecord` en Historial, mismo mecanismo que `getProfile`.
+- ✅ 96 tests (Jest) + 65 tests (Python, `unittest`).
+
+**Etapa 3 — Frontend: pendiente.** Integración visual de la Ficha del Pozo junto al visor de ITF existente, sin romper ninguno de los dos.
 
 ## V3 — Niveles estáticos
 

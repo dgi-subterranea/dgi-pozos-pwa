@@ -27,6 +27,23 @@ from pathlib import Path
 
 EXPECTED_COLUMN_COUNT = 106
 
+# Particionado por departamento grande: medido contra Drive real (Etapa 2),
+# leer el JSON completo de un departamento de ~7-8MB (07, 08) tarda 3.5-
+# 4.7s en frio, contra ~0.6-0.7s para departamentos chicos o vacios - el
+# cuello de botella es getBlob().getDataAsString(), no JSON.parse. Un
+# departamento con mas de PARTITION_THRESHOLD pozos se parte en 10
+# archivos DD-0.json..DD-9.json segun el primer digito de PPPP (siempre
+# los 10, aunque algunos queden vacios {} - mismo criterio que los 19
+# archivos de departamento), en vez de un unico DD.json. El backend
+# (RegistryRepository.js) resuelve el nombre de archivo directamente
+# desde el wellId, sin leer ningun indice - por eso la lista de
+# departamentos particionados tiene que existir tambien, a mano, como
+# PARTITIONED_DEPARTMENTS en RegistryRepository.js. Si al re-correr este
+# script con un CSV nuevo cambia el resultado (ver
+# metadata.departamentosParticionados), hay que actualizar esa constante
+# en el backend tambien - el CLI lo recuerda explicitamente al final.
+PARTITION_THRESHOLD = 3000
+
 # Posiciones (0-indexadas) de las columnas que se usan. El resto de las
 # columnas "Cod. X" / "Cod. X" son el codigo numerico de una columna de
 # texto ya presente aca (ej. "Cod. Uso" vs "Uso") y se descartan.
@@ -179,6 +196,26 @@ def normalize_dash_text(raw):
     (confirmado en Plano DGI, ~33% de las filas)."""
     v = raw.strip()
     if v in ('', '-'):
+        return None
+    return v
+
+
+def parse_expediente(raw):
+    """Formato NUMERO-CODIGO-ANIO (o NUMERO--ANIO sin codigo, ej.
+    '69631--1966'). Verificado contra el CSV real: cuando NUMERO es '0'
+    (1362 filas: 1302 en formato NUMERO--ANIO + 60 con codigo real, ej.
+    '0--0', '0--2000', '0-OS-1974') es el mismo sin-dato generico usado
+    en el resto del reporte para campos numericos - se nulifica el
+    expediente completo. Un ANIO en 0 con NUMERO real (ej. '182167--0',
+    4164 filas en total, la enorme mayoria con numero real) SI se
+    conserva tal cual: no hay evidencia de que esos numeros de expediente
+    sean invalidos, solo que no se registro el anio - inventar una regla
+    para "limpiar" el sufijo "--0" ahi no tiene respaldo en los datos."""
+    v = raw.strip()
+    if not v:
+        return None
+    numero, sep, _resto = v.partition('-')
+    if sep and numero == '0':
         return None
     return v
 
@@ -337,7 +374,7 @@ def map_identificacion(row):
 def map_titularidad(row):
     return {
         'titular': normalize_text(row[COL_PERSONA]),
-        'expediente': normalize_text(row[COL_EXPEDIENTE]),
+        'expediente': parse_expediente(row[COL_EXPEDIENTE]),
         'declaracionJurada': normalize_bool_si_no(row[COL_DECL_JURADA]),
         'domicilioTitular': normalize_text(row[COL_DOMICILIO_TIT_PRINCIPAL]),
         'domicilioPostal': normalize_text(row[COL_DOMICILIO_POSTAL]),
@@ -563,7 +600,7 @@ def parse_periodo_from_filename(filename, warnings):
     return f'{anio}-{mes}'
 
 
-def build_metadata(csv_path, total_rows_source, records, exact_dupes_removed, multi_analysis_count, warnings):
+def build_metadata(csv_path, total_rows_source, records, exact_dupes_removed, multi_analysis_count, warnings, partitioned_deps, partition_threshold):
     departamentos = Counter(well_id[:2] for well_id in records)
     return {
         'generadoEl': datetime.now(timezone.utc).astimezone().isoformat(timespec='seconds'),
@@ -576,6 +613,8 @@ def build_metadata(csv_path, total_rows_source, records, exact_dupes_removed, mu
         'duplicadosExactosEliminados': exact_dupes_removed,
         'wellIdsConMultiplesAnalisis': multi_analysis_count,
         'departamentos': {f'{d:02d}': departamentos.get(f'{d:02d}', 0) for d in range(1, 20)},
+        'departamentosParticionados': sorted(partitioned_deps),
+        'umbralParticionado': partition_threshold,
     }
 
 
@@ -589,7 +628,12 @@ def read_csv_rows(csv_path):
     return header, rows
 
 
-def reindex(csv_path, out_dir):
+def _write_json(path, data):
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=None, separators=(',', ':'), sort_keys=True)
+
+
+def reindex(csv_path, out_dir, partition_threshold=PARTITION_THRESHOLD):
     warnings = []
     header, rows = read_csv_rows(csv_path)
     validate_header(header)
@@ -598,16 +642,28 @@ def reindex(csv_path, out_dir):
     rows, exact_dupes_removed = dedupe_exact_rows(rows)
     groups = group_rows_by_well_id(rows, warnings)
     records, multi_analysis_count = build_records(groups, warnings)
-    metadata = build_metadata(csv_path, total_rows_source, records, exact_dupes_removed, multi_analysis_count, warnings)
+
+    dep_counts = Counter(well_id[:2] for well_id in records)
+    partitioned_deps = {dep_str for dep_str, count in dep_counts.items() if count > partition_threshold}
+
+    metadata = build_metadata(
+        csv_path, total_rows_source, records, exact_dupes_removed,
+        multi_analysis_count, warnings, partitioned_deps, partition_threshold,
+    )
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for dep in range(1, 20):
         dep_str = f'{dep:02d}'
-        bucket = {wid: rec for wid, rec in records.items() if wid[:2] == dep_str}
-        with open(out_dir / f'{dep_str}.json', 'w', encoding='utf-8') as f:
-            json.dump(bucket, f, ensure_ascii=False, indent=None, separators=(',', ':'), sort_keys=True)
+        dep_records = {wid: rec for wid, rec in records.items() if wid[:2] == dep_str}
+
+        if dep_str in partitioned_deps:
+            for digit in '0123456789':
+                bucket = {wid: rec for wid, rec in dep_records.items() if wid[3] == digit}
+                _write_json(out_dir / f'{dep_str}-{digit}.json', bucket)
+        else:
+            _write_json(out_dir / f'{dep_str}.json', dep_records)
 
     with open(out_dir / 'metadata.json', 'w', encoding='utf-8') as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2, sort_keys=True)
@@ -632,6 +688,13 @@ def main(argv=None):
     print(f'  duplicados exactos eliminados: {metadata["duplicadosExactosEliminados"]}')
     print(f'  wellId con mas de un analisis de laboratorio: {metadata["wellIdsConMultiplesAnalisis"]}')
     print(f'  por departamento: {metadata["departamentos"]}')
+    if metadata['departamentosParticionados']:
+        print(f'\n  Departamentos particionados (>{metadata["umbralParticionado"]} pozos): {metadata["departamentosParticionados"]}')
+        print('  IMPORTANTE: si esta lista cambio respecto a la corrida anterior, actualizar')
+        print('  PARTITIONED_DEPARTMENTS en backend/src/RegistryRepository.js a mano antes de subir')
+        print('  los archivos nuevos a Drive - el backend no lee ningun indice para saber esto.')
+    else:
+        print('\n  Ningun departamento supero el umbral de particionado.')
     if warnings:
         print(f'\n{len(warnings)} advertencia(s):', file=sys.stderr)
         for w in warnings:

@@ -19,6 +19,18 @@ function getFolderId() {
   return folderId;
 }
 
+// Carpeta de Drive con 01.json..19.json + metadata.json (Ficha del Pozo),
+// generados por scripts/reindex_pozos.py y subidos a mano. Carpeta
+// distinta de FOLDER_ID (esa es de las imagenes THUMB del ITF) a
+// proposito - son dos fuentes de datos independientes.
+function getRegistryFolderId() {
+  var folderId = PropertiesService.getScriptProperties().getProperty('REGISTRY_FOLDER_ID');
+  if (!folderId) {
+    throw new Error('REGISTRY_FOLDER_ID no configurado en Script Properties');
+  }
+  return folderId;
+}
+
 function getSpreadsheetId() {
   var spreadsheetId = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
   if (!spreadsheetId) {

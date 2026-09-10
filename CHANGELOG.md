@@ -4,7 +4,14 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/) y [SemVer](htt
 
 ## [Unreleased]
 
-Sin cambios todavía.
+V2 — Ficha del Pozo, en curso (backend cerrado, frontend pendiente — no forma parte todavía de una release taggeada).
+
+### Agregado
+- `scripts/reindex_pozos.py`: convierte el Reporte de Pozos real (CSV, 106 columnas) en 19 archivos JSON por departamento + `metadata.json`, con normalización basada en evidencia (no reglas genéricas), deduplicación, y conservación de todos los análisis de laboratorio distintos por pozo.
+- `RegistryRepository`/`RegistryService`/`Api.handleGetWellRecord` (acción `getWellRecord`): capa de backend para la Ficha del Pozo, independiente del visor ITF. Particionado automático de departamentos grandes (07, 08) por primer dígito de `Nro Pozo` — medido contra Drive real: 3.5-4.7s → 0.9-1.2s en frío.
+- Validación de sesión+`wellId` compartida entre `getProfile` y `getWellRecord` (`validateSessionAndWellId`).
+- Evento de auditoría `getWellRecord` en Historial.
+- 96 tests (Jest) + 65 tests (Python, `unittest`).
 
 ## [1.1.0] - 2026-09-10
 
