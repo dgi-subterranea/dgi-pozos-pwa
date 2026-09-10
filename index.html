@@ -35,7 +35,17 @@
     <h1>Consulta<br>de Pozos</h1>
     <p class="subtitle">Accedé con tu cuenta de Google</p>
 
-    <div id="google-signin-button"></div>
+    <div class="gsi-slot">
+      <div id="google-signin-loading" class="gsi-loading">
+        <span class="gsi-spinner" aria-hidden="true"></span>
+        <span>Cargando acceso con Google…</span>
+      </div>
+      <div id="google-signin-button" hidden></div>
+      <div id="google-signin-error" class="gsi-error" hidden>
+        <p>No se pudo cargar el inicio de sesión de Google.</p>
+        <button type="button" id="btn-retry-gsi" class="button-secondary">Reintentar</button>
+      </div>
+    </div>
 
     <p id="login-error" class="error-message" hidden></p>
 
@@ -97,8 +107,11 @@
   <script src="js/errorMessages.js"></script>
   <script src="js/api.js"></script>
   <script src="js/app.js"></script>
-  <!-- Sin async/defer, a proposito: tiene que cargar despues de app.js
-       para que onGsiLoaded ya exista cuando dispare el onload. -->
-  <script src="https://accounts.google.com/gsi/client" onload="onGsiLoaded()"></script>
+  <!-- Va DESPUES de app.js en el documento a proposito, para que
+       onGsiLoaded/onGsiLoadError ya existan antes de que puedan
+       dispararse (async solo afecta cuando se DESCARGA el script en
+       paralelo, no el orden de ejecucion respecto a los <script>
+       anteriores, que ya corrieron para cuando el parser llega aca). -->
+  <script id="gsi-script" src="https://accounts.google.com/gsi/client" async onload="onGsiLoaded()" onerror="onGsiLoadError()"></script>
 </body>
 </html>

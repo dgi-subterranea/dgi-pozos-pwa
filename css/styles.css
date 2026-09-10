@@ -92,6 +92,53 @@ h1 {
   text-align: center;
 }
 
+/* Reserva el alto real del boton de Google (44px, medido) para que
+   pasar de "cargando" al boton real no salte el layout. */
+.gsi-slot {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* display:flex se aplica solo cuando NO esta [hidden]: puesto sin
+   condicion, una regla de autor con la misma especificidad que
+   [hidden]{display:none} le gana igual (los estilos de autor siempre
+   pisan al user-agent), y los tres estados quedarian visibles a la vez. */
+#google-signin-button:not([hidden]) {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+.gsi-loading:not([hidden]) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--color-text-soft);
+  font-size: 0.86rem;
+}
+.gsi-spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-primary);
+  animation: gsi-spin 0.8s linear infinite;
+  flex: none;
+}
+@keyframes gsi-spin {
+  to { transform: rotate(360deg); }
+}
+.gsi-error {
+  width: 100%;
+  text-align: center;
+}
+.gsi-error p {
+  margin: 0 0 12px;
+  color: var(--color-text-soft);
+  font-size: 0.86rem;
+}
+
 /* Espacio de marca institucional al pie del login: grande y protagonista,
    sin competir con nada (es la unica pantalla sin buscador ni perfil). */
 .login-brand {

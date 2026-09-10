@@ -35,9 +35,30 @@
   var gsiLoaded = false;
   var shouldInitGoogleSignIn = false;
 
+  // El boton de Google tarda en aparecer porque script + estilo + iframe
+  // del boton son 3 requests seguidos al dominio de Google (medido: ~250-
+  // 650ms en una red rapida; bastante mas en datos moviles o en la
+  // primera conexion a ese dominio tras reinstalar la PWA). Mientras
+  // tanto se muestra un placeholder en el mismo lugar donde va a aparecer
+  // el boton real, para que nunca parezca que no hay forma de entrar.
+  var GSI_LOAD_TIMEOUT_MS = 10000;
+  var gsiLoadTimer = null;
+
+  function showGsiState(state) {
+    document.getElementById('google-signin-loading').hidden = state !== 'loading';
+    document.getElementById('google-signin-button').hidden = state !== 'button';
+    document.getElementById('google-signin-error').hidden = state !== 'error';
+  }
+
   window.onGsiLoaded = function () {
+    clearTimeout(gsiLoadTimer);
     gsiLoaded = true;
     tryInitGoogleSignIn();
+  };
+
+  window.onGsiLoadError = function () {
+    clearTimeout(gsiLoadTimer);
+    showGsiState('error');
   };
 
   function tryInitGoogleSignIn() {
@@ -56,13 +77,45 @@
       size: 'large'
     });
     google.accounts.id.prompt();
+    showGsiState('button');
   }
 
   function goToLogin() {
     shouldInitGoogleSignIn = true;
+    if (!gsiLoaded) {
+      showGsiState('loading');
+      clearTimeout(gsiLoadTimer);
+      gsiLoadTimer = setTimeout(function () {
+        showGsiState('error');
+      }, GSI_LOAD_TIMEOUT_MS);
+    }
     tryInitGoogleSignIn();
     showScreen('login');
   }
+
+  // El <script> original ya fallo (onerror) o nunca cargo (timeout): un
+  // tag de script fallido no se puede "reintentar" solo, hace falta
+  // crear uno nuevo. El happy path (carga bien la primera vez) no pasa
+  // por aca.
+  document.getElementById('btn-retry-gsi').addEventListener('click', function () {
+    showGsiState('loading');
+    clearTimeout(gsiLoadTimer);
+    gsiLoadTimer = setTimeout(function () {
+      showGsiState('error');
+    }, GSI_LOAD_TIMEOUT_MS);
+
+    var oldScript = document.getElementById('gsi-script');
+    if (oldScript) {
+      oldScript.remove();
+    }
+    var script = document.createElement('script');
+    script.id = 'gsi-script';
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.onload = window.onGsiLoaded;
+    script.onerror = window.onGsiLoadError;
+    document.body.appendChild(script);
+  });
 
   // --- Area de resultado (dentro de screen-main, no se pierde el input) ---
   var resultArea = document.getElementById('result-area');
