@@ -49,7 +49,12 @@
       callback: handleCredentialResponse,
       auto_select: true
     });
-    google.accounts.id.renderButton(document.getElementById('google-signin-button'), { type: 'standard' });
+    google.accounts.id.renderButton(document.getElementById('google-signin-button'), {
+      type: 'standard',
+      shape: 'pill',
+      text: 'continue_with',
+      size: 'large'
+    });
     google.accounts.id.prompt();
   }
 
@@ -63,7 +68,11 @@
   var resultArea = document.getElementById('result-area');
 
   function renderIdle() {
-    resultArea.innerHTML = '';
+    var html = '<div class="idle-hint">';
+    html += '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>';
+    html += '<span>Escribí el número de pozo para empezar</span>';
+    html += '</div>';
+    resultArea.innerHTML = html;
   }
 
   function renderSearching(wellId) {
@@ -112,13 +121,14 @@
     var dataUri = 'data:' + mimeType + ';base64,' + imageBase64;
     var html = '<p class="status success">Perfil encontrado</p>';
     html += '<img class="profile-image" src="' + dataUri + '" alt="Perfil del pozo ' + wellId + '" />';
-    // Mismo texto en todas las plataformas a proposito (Guardar / Compartir),
-    // aunque el comportamiento real difiera: en iOS dispara el share sheet
-    // nativo (ver handleSaveImageIOS), en el resto es una descarga directa.
+    // Mismo texto e icono en todas las plataformas a proposito, aunque el
+    // comportamiento real difiera: en iOS dispara el share sheet nativo
+    // (ver handleSaveImageIOS), en el resto es una descarga directa.
+    var saveIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>';
     if (isIOS()) {
-      html += '<button type="button" id="btn-save-image" class="button">Guardar / Compartir</button>';
+      html += '<button type="button" id="btn-save-image" class="button">' + saveIcon + 'Guardar / Compartir</button>';
     } else {
-      html += '<a class="button" href="' + dataUri + '" download="' + wellId + '.jpg">Guardar / Compartir</a>';
+      html += '<a class="button" href="' + dataUri + '" download="' + wellId + '.jpg">' + saveIcon + 'Guardar / Compartir</a>';
     }
     resultArea.innerHTML = html;
 

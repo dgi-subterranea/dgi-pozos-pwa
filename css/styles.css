@@ -3,12 +3,13 @@
   --color-primary-dark: #073e54;
   --color-primary-tint: #eaf3f6;
   --color-accent: #b8632f;
-  --color-accent-tint: #fbeee5;
   --color-text: #16212a;
   --color-text-soft: #5b6b74;
+  --color-text-faint: #97a5ac;
   --color-error: #b3261e;
   --color-border: #e1e6e9;
-  --color-bg: #f7f9fa;
+  --color-border-soft: #edf1f2;
+  --color-bg: #f6f9fa;
   --color-surface: #ffffff;
 }
 
@@ -33,13 +34,19 @@ body {
   max-width: 420px;
 }
 
-/* --- Marca / slot de logo (reemplazar por el isologo oficial cuando este) --- */
+a, button, input, [tabindex] {
+  outline-offset: 2px;
+}
+a:focus-visible, button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
+  outline: 2.5px solid var(--color-primary);
+}
+
+/* --- Marca de la app (logo propio, no el institucional) --- */
 .logo-mark {
   width: 26px;
   height: 26px;
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--color-primary);
-  color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -48,27 +55,32 @@ body {
 .logo-mark svg { width: 15px; height: 15px; }
 
 .logo-mark-lg {
-  width: 56px;
-  height: 56px;
-  border-radius: 16px;
-  margin: 8px auto 18px;
+  width: 58px;
+  height: 58px;
+  border-radius: 17px;
+  margin: 6px auto 18px;
+  background: linear-gradient(155deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
+  box-shadow: 0 10px 22px -8px rgba(11, 90, 122, 0.45);
 }
-.logo-mark-lg svg { width: 32px; height: 32px; }
+.logo-mark-lg svg { width: 33px; height: 33px; }
 
 /* --- Login --- */
 .eyebrow {
   margin: 0;
   text-align: center;
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--color-text-soft);
 }
 
 h1 {
-  font-size: 1.5rem;
-  margin: 6px 0 4px;
+  font-size: 1.9rem;
+  line-height: 1.1;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  margin: 10px 0 6px;
   text-align: center;
   color: var(--color-text);
 }
@@ -76,30 +88,84 @@ h1 {
 .subtitle {
   margin: 0 0 28px;
   color: var(--color-text-soft);
-  font-size: 0.9rem;
+  font-size: 0.86rem;
   text-align: center;
+}
+
+/* Espacio de marca institucional al pie del login: grande y protagonista,
+   sin competir con nada (es la unica pantalla sin buscador ni perfil). */
+.login-brand {
+  margin-top: 34px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.login-brand-caption {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-faint);
+}
+.irr-logo {
+  color: var(--color-primary);
+  display: block;
+}
+.irr-logo-login {
+  width: 176px;
+  height: calc(176px * 169 / 807);
+}
+
+/* Version chica y apagada del logo institucional, al pie del resto de
+   pantallas - visible pero fuera del camino del buscador/perfil. */
+.footer-brand {
+  margin-top: 36px;
+  display: flex;
+  justify-content: center;
+}
+.irr-logo-footer {
+  width: 92px;
+  height: calc(92px * 169 / 807);
+  color: #c2cdd1;
 }
 
 /* --- Header compacto de la pantalla principal --- */
 header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 22px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--color-border);
+  gap: 10px;
+  margin-bottom: 24px;
+  padding-bottom: 15px;
+  border-bottom: 1px solid var(--color-border-soft);
 }
 
 .app-name {
   font-weight: 700;
-  font-size: 0.95rem;
+  font-size: 0.94rem;
   color: var(--color-text);
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-cluster {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  flex: none;
 }
 
 #user-email {
-  font-size: 0.72rem;
-  color: var(--color-text-soft);
+  font-size: 0.62rem;
+  color: var(--color-text-faint);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .button-link {
@@ -107,8 +173,8 @@ header {
   border: none;
   color: var(--color-primary);
   font-weight: 700;
-  font-size: 0.78rem;
-  padding: 4px 0 4px 10px;
+  font-size: 0.72rem;
+  padding: 3px 0;
   cursor: pointer;
 }
 .button-link:hover {
@@ -118,8 +184,8 @@ header {
 
 /* --- Buscador: el elemento principal de la pantalla --- */
 .search-label {
-  margin: 0 0 8px;
-  font-size: 0.72rem;
+  margin: 0 0 9px;
+  font-size: 0.7rem;
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -140,55 +206,62 @@ header {
 
 input[type="text"] {
   width: 100%;
-  height: 52px;
-  padding: 0 40px 0 14px;
-  font-size: 1.15rem;
+  height: 56px;
+  padding: 0 42px 0 16px;
+  font-size: 1.2rem;
   font-family: "SFMono-Regular", ui-monospace, "IBM Plex Mono", Menlo, Consolas, monospace;
   font-weight: 600;
   color: var(--color-text);
   background: var(--color-surface);
-  border: 2px solid var(--color-primary);
-  border-radius: 10px;
+  border: 1.5px solid var(--color-border);
+  border-radius: 14px;
   text-align: center;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+input[type="text"]:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(11, 90, 122, 0.14);
 }
 
 input[type="text"]::placeholder {
-  color: #a9b6bd;
+  color: #becbd0;
   font-weight: 500;
 }
 
+/* Solo el signo, sin circulo ni fondo - area de toque generosa via
+   padding, sin agrandar lo que se ve. */
 .clear-button {
   position: absolute;
-  right: 6px;
+  right: 4px;
   top: 50%;
   transform: translateY(-50%);
-  width: 28px;
-  height: 28px;
-  line-height: 26px;
-  text-align: center;
-  background: var(--color-border);
-  color: var(--color-text-soft);
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
   border: none;
-  border-radius: 50%;
-  font-size: 1.2rem;
+  color: var(--color-text-faint);
+  font-size: 1.3rem;
+  line-height: 1;
   padding: 0;
   cursor: pointer;
 }
-
 .clear-button:hover {
-  background: #d3dade;
-  color: var(--color-text);
+  color: var(--color-text-soft);
 }
 
-/* --- Botones: evidentes, tamaño tactil comodo, sin sombras --- */
+/* --- Botones: evidentes, tamaño tactil comodo, sin sombras duras --- */
 button,
 .button {
-  min-height: 52px;
-  padding: 12px 20px;
+  min-height: 56px;
+  padding: 12px 22px;
   font-size: 1rem;
   font-weight: 700;
   border: none;
-  border-radius: 10px;
+  border-radius: 14px;
   background: var(--color-primary);
   color: #fff;
   cursor: pointer;
@@ -196,12 +269,21 @@ button,
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 8px;
   text-align: center;
+  box-shadow: 0 4px 10px -4px rgba(11, 90, 122, 0.5);
+}
+
+button svg,
+.button svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
 }
 
 #search-form button[type="submit"] {
   flex: none;
-  min-width: 96px;
+  min-width: 100px;
 }
 
 button:hover,
@@ -214,6 +296,7 @@ button:hover,
   color: var(--color-primary);
   border: 1.5px solid var(--color-primary);
   min-height: 48px;
+  box-shadow: none;
 }
 .button-secondary:hover {
   background: var(--color-primary-tint);
@@ -242,30 +325,46 @@ button:hover,
   gap: 7px;
   color: var(--color-text-soft);
   font-weight: 700;
-  font-size: 0.76rem;
-  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 .status.success::before {
   content: "";
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--color-primary);
   flex: none;
 }
 
-.hint {
+.idle-hint {
+  margin-top: 36px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+}
+.idle-hint svg {
+  width: 34px;
+  height: 34px;
+  color: var(--color-text-faint);
+  opacity: 0.7;
+}
+.idle-hint span {
+  font-size: 0.82rem;
   color: var(--color-text-soft);
-  font-size: 0.85rem;
 }
 
+/* La imagen es la protagonista: sin borde duro, esquinas suaves, una
+   sombra apenas perceptible en vez de un contorno marcado. */
 .profile-image {
   max-width: 100%;
-  border-radius: 10px;
-  border: 1px solid var(--color-border);
+  border-radius: 16px;
   margin-bottom: 14px;
   display: block;
+  box-shadow: 0 8px 20px -10px rgba(20, 37, 48, 0.22);
 }
 
 #result-area .button {
@@ -273,57 +372,80 @@ button:hover,
   margin-top: 8px;
 }
 
-/* --- Estado "no encontrado": tarjeta simple con el acento terracota --- */
+/* --- Estado "no encontrado": liviano, sin tarjeta de fondo --- */
 .empty-state {
-  margin-top: 16px;
+  margin-top: 32px;
   text-align: center;
-  padding: 26px 16px;
-  background: var(--color-accent-tint);
-  border-radius: 10px;
 }
 .empty-state-icon {
-  width: 34px;
-  height: 34px;
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
-  margin: 0 auto 12px;
-  border: 2px solid var(--color-accent);
+  margin: 0 auto 14px;
+  border: 1.5px solid var(--color-accent);
   color: var(--color-accent);
   display: flex;
   align-items: center;
   justify-content: center;
 }
-.empty-state-icon svg { width: 16px; height: 16px; }
+.empty-state-icon svg { width: 18px; height: 18px; }
 .empty-state-title {
   font-weight: 700;
-  font-size: 0.86rem;
+  font-size: 0.92rem;
   color: var(--color-text);
-  margin: 0 0 4px;
+  margin: 0 0 5px;
 }
 .empty-state-text {
-  font-size: 0.78rem;
+  font-size: 0.8rem;
   color: var(--color-text-soft);
   margin: 0;
 }
 
-/* --- Sin conexion --- */
+/* --- Sin conexion: mismo tratamiento que "no encontrado" --- */
 #screen-offline {
   text-align: center;
-  padding-top: 40px;
+  padding-top: 48px;
 }
 .offline-icon {
-  width: 56px;
-  height: 56px;
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
-  margin: 0 auto 18px;
-  background: var(--color-primary-tint);
+  margin: 0 auto 14px;
+  border: 1.5px solid var(--color-primary);
   color: var(--color-primary);
   display: flex;
   align-items: center;
   justify-content: center;
 }
-.offline-icon svg { width: 28px; height: 28px; }
+.offline-icon svg { width: 18px; height: 18px; }
 #offline-message {
   color: var(--color-text-soft);
-  font-size: 0.92rem;
+  font-size: 0.86rem;
   margin: 0 0 22px;
+}
+
+/* --- Desktop: la columna deja de flotar sola sobre el fondo --- */
+@media (min-width: 640px) {
+  body {
+    background:
+      radial-gradient(1100px 380px at 15% -10%, rgba(11, 90, 122, 0.06), transparent 60%),
+      radial-gradient(900px 460px at 100% 110%, rgba(184, 99, 47, 0.045), transparent 55%),
+      var(--color-bg);
+  }
+
+  .screen {
+    max-width: 480px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-soft);
+    border-radius: 22px;
+    padding: 30px 30px 26px;
+    box-shadow: 0 24px 48px -22px rgba(20, 37, 48, 0.2);
+  }
+
+  header {
+    margin: -30px -30px 24px;
+    padding: 20px 30px 16px;
+    border-radius: 22px 22px 0 0;
+    background: linear-gradient(180deg, #ffffff 0%, #fbfdfd 100%);
+  }
 }
