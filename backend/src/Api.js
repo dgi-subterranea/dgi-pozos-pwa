@@ -18,6 +18,8 @@ function doPost(e) {
         response = handleGetProfile(body.sessionToken, body.wellId);
       } else if (body.action === 'getWellRecord') {
         response = handleGetWellRecord(body.sessionToken, body.wellId);
+      } else if (body.action === 'getMetadata') {
+        response = handleGetMetadata(body.sessionToken);
       } else {
         response = { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'accion desconocida: ' + body.action };
       }
@@ -31,21 +33,34 @@ function doPost(e) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-// Validacion compartida por cualquier accion que reciba sessionToken +
-// wellId (hoy getProfile y getWellRecord; manana la que sea la siguiente
-// capa - niveles estaticos, etc.). Devuelve {ok:true, session} o
-// {ok:false, response} ya listo para devolver tal cual si algo fallo, para
-// no repetir este bloque en cada handler.
-function validateSessionAndWellId(sessionToken, wellId, accion) {
+// Validacion compartida por cualquier accion que reciba sessionToken,
+// tenga o no wellId (checkSession queda afuera a proposito: es
+// recuperacion silenciosa de sesion, no una accion de negocio, y no
+// recibe wellId ni se audita). Devuelve {ok:true, session} o {ok:false,
+// response} ya listo para devolver tal cual si algo fallo.
+function validateSession(sessionToken, accion, wellId) {
   var session = verifySessionToken(sessionToken);
   if (!session.valid) {
     return { ok: false, response: { status: 'error', code: 'UNAUTHORIZED', message: 'sessionToken invalido: ' + session.reason } };
   }
 
   if (!isUserActive(session.email)) {
-    logHistoryEvent(session.email, accion, wellId, 'USER_DISABLED');
+    logHistoryEvent(session.email, accion, wellId || null, 'USER_DISABLED');
     return { ok: false, response: { status: 'error', code: 'USER_DISABLED', message: 'usuario no habilitado: ' + session.email } };
   }
+
+  return { ok: true, session: session };
+}
+
+// Ademas de la sesion, valida formato/rango de wellId - para las
+// acciones que reciben uno (hoy getProfile y getWellRecord; manana la
+// que sea la siguiente capa - niveles estaticos, etc.).
+function validateSessionAndWellId(sessionToken, wellId, accion) {
+  var sessionValidation = validateSession(sessionToken, accion, wellId);
+  if (!sessionValidation.ok) {
+    return sessionValidation;
+  }
+  var session = sessionValidation.session;
 
   if (!wellId || !/^\d{2}-\d{4}$/.test(wellId)) {
     logHistoryEvent(session.email, accion, wellId, 'INVALID_WELL_ID');
@@ -133,6 +148,37 @@ function handleGetWellRecord(sessionToken, wellId) {
   return { status: 'ok', data: result.record };
 }
 
+// Metadata del padron (fecha de generacion, periodo de la fuente) para
+// el caption "Padron: <mes> <anio>" - no es una accion de negocio (no
+// depende de un wellId, no se audita en Historial), igual que
+// checkSession.
+function handleGetMetadata(sessionToken) {
+  var validation = validateSession(sessionToken, 'getMetadata');
+  if (!validation.ok) {
+    return validation.response;
+  }
+
+  var result;
+  try {
+    result = registryService_getMetadata();
+  } catch (err) {
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+
+  if (!result.found) {
+    return { status: 'error', code: 'REGISTRY_METADATA_NOT_FOUND', message: 'no se encontro metadata.json' };
+  }
+
+  return { status: 'ok', data: result.metadata };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { doPost, handleGetProfile, handleGetWellRecord, validateSessionAndWellId };
+  module.exports = {
+    doPost,
+    handleGetProfile,
+    handleGetWellRecord,
+    handleGetMetadata,
+    validateSession,
+    validateSessionAndWellId
+  };
 }

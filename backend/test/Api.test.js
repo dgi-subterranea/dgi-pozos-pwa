@@ -184,3 +184,80 @@ describe('handleGetWellRecord', () => {
     expect(global.profileService_getProfile).not.toHaveBeenCalled();
   });
 });
+
+describe('handleGetMetadata', () => {
+  test('sessionToken invalido: UNAUTHORIZED', () => {
+    global.verifySessionToken.mockReturnValue({ valid: false, reason: 'expirado' });
+
+    const result = Api.handleGetMetadata('token-vencido');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('UNAUTHORIZED');
+    expect(global.registryService_getMetadata).not.toHaveBeenCalled();
+  });
+
+  test('usuario deshabilitado: USER_DISABLED', () => {
+    global.verifySessionToken.mockReturnValue({ valid: true, email: 'user@example.com' });
+    global.isUserActive.mockReturnValue(false);
+
+    const result = Api.handleGetMetadata('token-valido');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('USER_DISABLED');
+  });
+
+  test('no requiere wellId: sesion valida sin wellId alcanza', () => {
+    mockValidSession();
+    global.registryService_getMetadata.mockReturnValue({ found: true, metadata: { generadoEl: 'x', periodo: '2026-09' } });
+
+    const result = Api.handleGetMetadata('token-valido');
+
+    expect(result.status).toBe('ok');
+  });
+
+  test('metadata encontrada: OK con generadoEl y periodo', () => {
+    mockValidSession();
+    global.registryService_getMetadata.mockReturnValue({
+      found: true,
+      metadata: { generadoEl: '2026-09-10T13:48:20-03:00', periodo: '2026-09' }
+    });
+
+    const result = Api.handleGetMetadata('token-valido');
+
+    expect(result).toEqual({
+      status: 'ok',
+      data: { generadoEl: '2026-09-10T13:48:20-03:00', periodo: '2026-09' }
+    });
+  });
+
+  test('metadata.json inexistente: REGISTRY_METADATA_NOT_FOUND', () => {
+    mockValidSession();
+    global.registryService_getMetadata.mockReturnValue({ found: false });
+
+    const result = Api.handleGetMetadata('token-valido');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('REGISTRY_METADATA_NOT_FOUND');
+  });
+
+  test('error del service/Drive: SERVICE_UNAVAILABLE', () => {
+    mockValidSession();
+    global.registryService_getMetadata.mockImplementation(() => {
+      throw new Error('Drive no disponible');
+    });
+
+    const result = Api.handleGetMetadata('token-valido');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('SERVICE_UNAVAILABLE');
+  });
+
+  test('no se audita en Historial (igual que checkSession, no es una accion de negocio)', () => {
+    mockValidSession();
+    global.registryService_getMetadata.mockReturnValue({ found: true, metadata: { generadoEl: 'x', periodo: '2026-09' } });
+
+    Api.handleGetMetadata('token-valido');
+
+    expect(global.logHistoryEvent).not.toHaveBeenCalled();
+  });
+});

@@ -35,6 +35,23 @@ function registryService_cleanRecord(value) {
   return value;
 }
 
+// Solo expone lo que el frontend necesita para el caption "Padron: mes
+// anio" (ver metadata.json) - no todo el objeto crudo (conteos por
+// departamento, etc. son un detalle interno del indexador).
+function registryService_getMetadata() {
+  var metadata = registryRepository_getMetadata();
+  if (!metadata) {
+    return { found: false };
+  }
+  return {
+    found: true,
+    metadata: {
+      generadoEl: metadata.generadoEl,
+      periodo: metadata.fuente ? metadata.fuente.periodo : null
+    }
+  };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { registryService_getWellRecord, registryService_cleanRecord };
+  module.exports = { registryService_getWellRecord, registryService_cleanRecord, registryService_getMetadata };
 }

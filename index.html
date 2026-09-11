@@ -79,6 +79,12 @@
 
     <div id="result-area"></div>
 
+    <!-- Ficha del Pozo: capa independiente del ITF, se llena con su
+         propio fetch en paralelo (ver apiGetWellRecord en app.js). Vive
+         fuera de #result-area a proposito, para no depender de que el
+         ITF haya encontrado nada. -->
+    <div id="well-record-area"></div>
+
     <div class="footer-brand">
       <svg class="irr-logo irr-logo-footer" role="img" aria-label="Irrigación"><use href="#irr-logo"></use></svg>
     </div>

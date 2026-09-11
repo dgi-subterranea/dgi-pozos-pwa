@@ -25,3 +25,11 @@ function apiCheckSession(sessionToken) {
 function apiGetProfile(sessionToken, wellId) {
   return callBackend('getProfile', { sessionToken: sessionToken, wellId: wellId });
 }
+
+function apiGetWellRecord(sessionToken, wellId) {
+  return callBackend('getWellRecord', { sessionToken: sessionToken, wellId: wellId });
+}
+
+function apiGetRegistryMetadata(sessionToken) {
+  return callBackend('getMetadata', { sessionToken: sessionToken });
+}

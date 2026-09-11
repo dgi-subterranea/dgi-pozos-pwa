@@ -207,6 +207,310 @@
     resultArea.innerHTML = html;
   }
 
+  // --- Ficha del Pozo (padron/registro tecnico) ---
+  // Capa completamente independiente del ITF: vive en #well-record-area,
+  // fuera de #result-area, con su propio fetch (apiGetWellRecord) que se
+  // dispara en paralelo al del ITF y nunca depende de su resultado ni lo
+  // bloquea - ver el submit handler mas abajo.
+  var wellRecordArea = document.getElementById('well-record-area');
+  var registryMetadataPromise = null;
+
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  // Se pide una sola vez (al entrar a screen-main) y se reusa para todas
+  // las busquedas de la sesion - metadata.json no cambia salvo que se
+  // re-corra el indexador, no tiene sentido pedirlo en cada busqueda.
+  function loadRegistryMetadataOnce() {
+    if (!registryMetadataPromise) {
+      registryMetadataPromise = apiGetRegistryMetadata(sessionToken).then(function (result) {
+        return result.status === 'ok' ? result.data : null;
+      }).catch(function () {
+        return null;
+      });
+    }
+    return registryMetadataPromise;
+  }
+
+  var MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+
+  function formatPeriodo(periodo) {
+    if (!periodo) {
+      return null;
+    }
+    var partes = periodo.split('-');
+    var mesIndex = parseInt(partes[1], 10) - 1;
+    if (!partes[0] || !MESES[mesIndex]) {
+      return null;
+    }
+    return MESES[mesIndex] + ' ' + partes[0];
+  }
+
+  function renderWellRecordIdle() {
+    wellRecordArea.innerHTML = '';
+  }
+
+  function renderWellRecordNotFound(message) {
+    var html = '<div class="ficha-empty-note">';
+    html += '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>';
+    html += escapeHtml(message || 'Sin información registral cargada para este pozo.');
+    html += '</div>';
+    wellRecordArea.innerHTML = html;
+  }
+
+  // El backend (RegistryService) ya saco las claves en null - aca solo
+  // se saltea lo que no vino (undefined). '' y null igual se filtran por
+  // si acaso, pero 0/false SI deben poder mostrarse (ej.
+  // declaracionJurada:false via rowBool) - por eso no se usa un chequeo
+  // "falsy" generico.
+  function row(label, value) {
+    if (value === undefined || value === null || value === '') {
+      return '';
+    }
+    return '<dt>' + escapeHtml(label) + '</dt><dd>' + escapeHtml(value) + '</dd>';
+  }
+
+  function rowSecondary(label, value) {
+    if (value === undefined || value === null || value === '') {
+      return '';
+    }
+    return '<dt>' + escapeHtml(label) + '</dt><dd class="secundario">' + escapeHtml(value) + '</dd>';
+  }
+
+  function rowBool(label, value) {
+    if (value === undefined || value === null) {
+      return '';
+    }
+    return row(label, value ? 'Sí' : 'No');
+  }
+
+  function sectionBody(rowsHtml) {
+    return rowsHtml ? '<dl class="ficha-rows">' + rowsHtml + '</dl>' : '<p class="ficha-empty">Sin información en esta sección.</p>';
+  }
+
+  function buildSection(title, bodyHtml) {
+    var html = '<details class="ficha-section"><summary>' + escapeHtml(title) + ' <span class="chev">›</span></summary>';
+    html += '<div class="ficha-section-body">' + bodyHtml + '</div>';
+    html += '</details>';
+    return html;
+  }
+
+  function formatCementacion(cem) {
+    if (!cem) {
+      return undefined;
+    }
+    var partes = [];
+    if (cem.estado) {
+      partes.push(cem.estado);
+    }
+    if (cem.desde !== undefined || cem.hasta !== undefined) {
+      var desde = cem.desde !== undefined ? cem.desde : '?';
+      var hasta = cem.hasta !== undefined ? cem.hasta : '?';
+      partes.push(desde + '–' + hasta + ' m');
+    }
+    return partes.length ? partes.join(', ') : undefined;
+  }
+
+  function formatTramos(tramos) {
+    if (!tramos || !tramos.length) {
+      return undefined;
+    }
+    return tramos.map(function (t) {
+      var desde = t.desde !== undefined ? t.desde : '?';
+      var hasta = t.hasta !== undefined ? t.hasta : '?';
+      var diam = t.diametro !== undefined ? ' (⌀' + t.diametro + ')' : '';
+      return desde + '–' + hasta + ' m' + diam;
+    }).join('; ');
+  }
+
+  function buildResumenRows(record) {
+    var ident = record.identificacion || {};
+    var tit = record.titularidad || {};
+    var uso = record.usoConcesion || {};
+    var tec = record.tecnicas || {};
+    var con = record.construccion || {};
+
+    var rows = '';
+    rows += row('Departamento', [ident.departamento, ident.distrito].filter(Boolean).join(' — '));
+    rows += row('Titular', tit.titular);
+    rows += row('Uso', uso.uso);
+    rows += row('Profundidad', tec.profundidadTotal !== undefined ? tec.profundidadTotal + ' m' : undefined);
+    rows += row('Construcción', con.fecha ? con.fecha.slice(0, 4) : undefined);
+    var superficie = uso.superficieConcesion !== undefined ? uso.superficieConcesion : uso.superficieOrigen;
+    rows += row('Superficie', superficie !== undefined ? superficie + ' ha' : undefined);
+    return rows;
+  }
+
+  // "Datos del pozo": identificacion + titularidad + detalle de estado.
+  // domicilioTitular queda en secundario a proposito (domicilioPozo, en
+  // Ubicacion, se muestra normal).
+  function buildDatosPozoRows(record) {
+    var ident = record.identificacion || {};
+    var tit = record.titularidad || {};
+    var estado = record.estado || {};
+    var rows = '';
+    rows += row('Nomenclatura', ident.nomenclatura);
+    rows += row('Registro de perforación', ident.registroPerforacion);
+    rows += row('NIC', ident.nic);
+    rows += row('Expediente', tit.expediente);
+    rows += rowBool('Declaración jurada', tit.declaracionJurada);
+    rows += row('Organismo', tit.organismo);
+    rows += row('Familia', tit.familia);
+    rows += rowSecondary('Domicilio del titular', tit.domicilioTitular);
+    rows += rowSecondary('Domicilio postal', tit.domicilioPostal);
+    if (estado.situacion === 'Baja' && estado.baja) {
+      rows += row('Fecha de baja', estado.baja.fecha);
+      rows += row('Motivo de baja', estado.baja.motivo);
+      rows += row('Expediente de baja', estado.baja.expediente);
+    }
+    rows += row('Estado de la obra', estado.estadoObra);
+    rows += row('Cegado', estado.cegado);
+    return rows;
+  }
+
+  function buildTecnicasRows(record) {
+    var t = record.tecnicas || {};
+    var rows = '';
+    rows += row('Diámetro de entubación', t.diametroEntubacion);
+    rows += row('Diámetro de bomba', t.diametroBomba);
+    rows += row('Profundidad de bomba', t.profundidadBomba !== undefined ? t.profundidadBomba + ' m' : undefined);
+    rows += row('Diámetro de antepozo', t.diametroAntepozo);
+    rows += row('Profundidad de antepozo', t.profundidadAntepozo !== undefined ? t.profundidadAntepozo + ' m' : undefined);
+    rows += row('Nivel estático', t.nivelEstatico);
+    rows += row('Caudal', t.caudal);
+    rows += row('Depresión', t.depresion);
+    rows += row('Potencia', t.potencia);
+    rows += row('Índice promedio', t.indicePromedio);
+    rows += row('Surgencia', t.surgencia);
+    rows += row('Aptitud', t.aptitud);
+    rows += rowBool('Riego superficial', t.riegoSuperficial);
+    rows += rowBool('Perfilaje', t.perfilaje);
+    return rows;
+  }
+
+  function buildConstruccionRows(record) {
+    var c = record.construccion || {};
+    var rows = '';
+    rows += row('Fecha', c.fecha);
+    rows += row('Empresa', c.empresa);
+    rows += row('Director técnico', c.directorTecnico);
+    rows += row('Mecanismo de bomba', c.mecanismoBomba);
+    rows += row('Cementación', formatCementacion(c.cementacion));
+    rows += row('Filtros', formatTramos(c.filtros));
+    rows += row('Reducciones', formatTramos(c.reducciones));
+    return rows;
+  }
+
+  function buildUbicacionRows(record) {
+    var u = record.ubicacion || {};
+    var uc = record.usoConcesion || {};
+    var rows = '';
+    rows += row('Domicilio del pozo', u.domicilioPozo);
+    rows += row('Plano DGI', u.planoDgi);
+    rows += row('Plano catastro', u.planoCatastro);
+    rows += row('Uso secundario', uc.usoSecundario);
+    rows += row('Superficie de origen', uc.superficieOrigen !== undefined ? uc.superficieOrigen + ' ha' : undefined);
+    rows += row('Hectáreas factibles de riego', uc.hectareasFactibles !== undefined ? uc.hectareasFactibles + ' ha' : undefined);
+    rows += row('Resolución de concesión', uc.resolucionConcesion);
+    if (uc.enProcesoCaducidad) {
+      rows += row('Caducidad', 'En trámite');
+    }
+    return rows;
+  }
+
+  function buildMasInfoRows(record) {
+    var com = record.comentarios || {};
+    var rows = '';
+    rows += row('Comentario', com.comentario);
+    rows += row('Documentación faltante', com.documentacionFaltante);
+    return rows;
+  }
+
+  // Cada analisis de laboratorio se muestra como su propia mini-tarjeta,
+  // en el orden que vino del backend - nunca se ordena ni se marca
+  // ninguno como "el mas reciente" (el reporte no trae fecha de
+  // analisis, ver docs/architecture.md).
+  var LAB_FIELD_LABELS = {
+    laboratorio: 'Laboratorio',
+    nroAnalisis: 'N° de análisis',
+    ph: 'PH',
+    durezaTotal: 'Dureza total',
+    durezaPermanente: 'Dureza permanente',
+    durezaTemporal: 'Dureza temporal',
+    conductividad: 'Conductividad',
+    calcio: 'Calcio',
+    magnesio: 'Magnesio',
+    sodio: 'Sodio',
+    potasio: 'Potasio',
+    cloruros: 'Cloruros',
+    sulfatos: 'Sulfatos',
+    bicarbonatos: 'Bicarbonatos',
+    carbonatos: 'Carbonatos',
+    residuos: 'Residuos',
+    residuoSeco: 'Residuo seco',
+    csr: 'C.S.R.',
+    diagRiever: 'Diagnóstico de Riever',
+    coefAlcalinidad: 'Coeficiente de alcalinidad',
+    ras: 'R.A.S.',
+    rasp: 'R.A.S.P.',
+    indiceKelle: 'Índice de Kelle',
+    nitratos: 'Nitratos',
+    nitritos: 'Nitritos',
+    silice: 'Sílice',
+    amoniaco: 'Amoníaco'
+  };
+  var LAB_FIELD_ORDER = Object.keys(LAB_FIELD_LABELS);
+
+  function buildLaboratorioBody(analisisArray) {
+    var html = '<p class="ficha-lab-label">' + analisisArray.length +
+      (analisisArray.length === 1 ? ' análisis registrado' : ' análisis registrados') + '</p>';
+    analisisArray.forEach(function (analisis) {
+      var rows = '';
+      LAB_FIELD_ORDER.forEach(function (key) {
+        rows += row(LAB_FIELD_LABELS[key], analisis[key]);
+      });
+      html += '<div class="ficha-lab"><dl class="ficha-rows">' + rows + '</dl></div>';
+    });
+    return html;
+  }
+
+  function renderWellRecordFound(record, metadata) {
+    var estado = record.estado || {};
+    var badgeClass = estado.situacion === 'Baja' ? 'ficha-badge baja' : 'ficha-badge';
+
+    var html = '<div class="ficha-pozo">';
+    html += '<div class="ficha-pozo-header"><p class="ficha-eyebrow">Ficha del pozo</p>';
+    if (estado.situacion) {
+      html += '<span class="' + badgeClass + '">' + escapeHtml(estado.situacion) + '</span>';
+    }
+    html += '</div>';
+
+    var periodoTexto = formatPeriodo(metadata && metadata.periodo);
+    if (periodoTexto) {
+      html += '<p class="padron-caption">Padrón: ' + escapeHtml(periodoTexto) + '</p>';
+    }
+
+    html += '<dl class="ficha-resumen">' + buildResumenRows(record) + '</dl>';
+
+    html += '<div class="ficha-mas">';
+    html += buildSection('Datos del pozo', sectionBody(buildDatosPozoRows(record)));
+    html += buildSection('Características técnicas', sectionBody(buildTecnicasRows(record)));
+    html += buildSection('Construcción', sectionBody(buildConstruccionRows(record)));
+    html += buildSection('Ubicación y concesión', sectionBody(buildUbicacionRows(record)));
+    var analisis = (record.laboratorio && record.laboratorio.analisis) || [];
+    if (analisis.length > 0) {
+      html += buildSection('Laboratorio', buildLaboratorioBody(analisis));
+    }
+    html += buildSection('Más información', sectionBody(buildMasInfoRows(record)));
+    html += '</div>';
+
+    html += '</div>';
+    wellRecordArea.innerHTML = html;
+  }
+
   // --- Login ---
   var loginErrorEl = document.getElementById('login-error');
 
@@ -233,6 +537,8 @@
   function enterMain() {
     document.getElementById('user-email').textContent = currentEmail;
     renderIdle();
+    renderWellRecordIdle();
+    loadRegistryMetadataOnce();
     showScreen('main');
   }
 
@@ -320,6 +626,27 @@
       }
     }).catch(function () {
       renderMessage(networkAwareMessage());
+    });
+
+    // Ficha del Pozo: fetch completamente aparte del ITF de arriba - ni
+    // lo espera ni lo bloquea, y un error aca nunca toca resultArea.
+    renderWellRecordIdle();
+    apiGetWellRecord(sessionToken, normalized).then(function (result) {
+      if (result.status === 'ok') {
+        loadRegistryMetadataOnce().then(function (metadata) {
+          renderWellRecordFound(result.data, metadata);
+        });
+      } else if (result.code === 'USER_DISABLED') {
+        showScreen('disabled');
+      } else if (result.code === 'UNAUTHORIZED') {
+        logout();
+      } else if (result.code === 'WELL_RECORD_NOT_FOUND') {
+        renderWellRecordNotFound();
+      } else {
+        renderWellRecordNotFound('Sin información registral disponible en este momento.');
+      }
+    }).catch(function () {
+      renderWellRecordNotFound('Sin información registral disponible en este momento.');
     });
   });
 

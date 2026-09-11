@@ -59,6 +59,35 @@ function registryRepository_getWellRecord(wellId) {
   return record ? { found: true, record: record } : { found: false };
 }
 
+// metadata.json es chico (fecha de generacion + conteos) y cambia solo
+// cuando se re-corre el indexador - se cachea entero, a diferencia de los
+// archivos de departamento.
+var REGISTRY_METADATA_CACHE_SECONDS = 600;
+
+function registryRepository_getMetadata() {
+  var cache = CacheService.getScriptCache();
+  var cacheKey = 'registry_metadata';
+
+  var cached = cache.get(cacheKey);
+  if (cached !== null) {
+    return JSON.parse(cached);
+  }
+
+  var folder = DriveApp.getFolderById(getRegistryFolderId());
+  var files = folder.getFilesByName('metadata.json');
+  if (!files.hasNext()) {
+    return null;
+  }
+
+  var metadata = JSON.parse(files.next().getBlob().getDataAsString('UTF-8'));
+  cache.put(cacheKey, JSON.stringify(metadata), REGISTRY_METADATA_CACHE_SECONDS);
+  return metadata;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { registryRepository_getWellRecord, registryRepository_resolveFileName };
+  module.exports = {
+    registryRepository_getWellRecord,
+    registryRepository_resolveFileName,
+    registryRepository_getMetadata
+  };
 }

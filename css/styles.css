@@ -492,6 +492,169 @@ button:hover,
   margin: 0 0 22px;
 }
 
+/* --- Ficha del pozo: capa independiente del ITF, se agrega debajo del
+   resultado del ITF (encontrado, no encontrado, o ausente) sin
+   modificarlo. Reusa los mismos tokens del resto de la app. --- */
+.ficha-pozo {
+  margin-top: 26px;
+  padding-top: 20px;
+  border-top: 1px solid var(--color-border-soft);
+}
+.ficha-pozo-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.ficha-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--color-text-soft);
+  font-weight: 700;
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.ficha-eyebrow::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  flex: none;
+}
+.ficha-badge {
+  font-size: 0.64rem;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--color-primary-tint);
+  color: var(--color-primary-dark);
+}
+.ficha-badge.baja {
+  background: #fbeee5;
+  color: var(--color-accent);
+}
+.padron-caption {
+  font-size: 0.62rem;
+  color: var(--color-text-faint);
+  margin: 2px 0 14px;
+}
+
+.ficha-resumen {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  row-gap: 9px;
+  column-gap: 16px;
+  margin-bottom: 6px;
+}
+.ficha-resumen dt {
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--color-text-faint);
+  padding-top: 1px;
+  white-space: nowrap;
+}
+.ficha-resumen dd {
+  font-size: 0.82rem;
+  color: var(--color-text);
+  margin: 0;
+}
+
+.ficha-mas {
+  margin-top: 14px;
+}
+.ficha-section {
+  border-top: 1px solid var(--color-border-soft);
+}
+.ficha-section:last-child {
+  border-bottom: 1px solid var(--color-border-soft);
+}
+.ficha-section summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 12px 1px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.ficha-section summary::-webkit-details-marker {
+  display: none;
+}
+.ficha-section summary .chev {
+  color: var(--color-text-faint);
+  transition: transform 0.15s;
+  flex: none;
+}
+.ficha-section[open] summary .chev {
+  transform: rotate(90deg);
+}
+.ficha-section-body {
+  padding: 0 1px 15px;
+}
+.ficha-rows {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  row-gap: 8px;
+  column-gap: 16px;
+}
+.ficha-rows dt {
+  font-size: 0.63rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--color-text-faint);
+  padding-top: 1px;
+}
+.ficha-rows dd {
+  font-size: 0.8rem;
+  color: var(--color-text);
+  margin: 0;
+}
+.ficha-rows dd.secundario {
+  color: var(--color-text-soft);
+}
+.ficha-empty {
+  font-size: 0.78rem;
+  color: var(--color-text-faint);
+}
+
+.ficha-lab + .ficha-lab {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--color-border-soft);
+}
+.ficha-lab-label {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--color-text-soft);
+  margin: 0 0 9px;
+}
+
+.ficha-empty-note {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border-soft);
+  font-size: 0.8rem;
+  color: var(--color-text-faint);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ficha-empty-note svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+
 /* --- Desktop: la columna deja de flotar sola sobre el fondo --- */
 @media (min-width: 640px) {
   body {

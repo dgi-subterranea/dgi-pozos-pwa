@@ -87,3 +87,26 @@ describe('registryService_cleanRecord', () => {
     expect(cleaned).toEqual({ declaracionJurada: false, profundidadTotal: 0 });
   });
 });
+
+describe('registryService_getMetadata', () => {
+  test('metadata.json no existe -> found:false', () => {
+    global.registryRepository_getMetadata.mockReturnValue(null);
+    expect(RegistryService.registryService_getMetadata()).toEqual({ found: false });
+  });
+
+  test('expone solo generadoEl y fuente.periodo, no el resto del detalle interno', () => {
+    global.registryRepository_getMetadata.mockReturnValue({
+      generadoEl: '2026-09-10T13:48:20-03:00',
+      fuente: { archivo: 'Reporte Pozos 09_2026.csv', periodo: '2026-09', filasFuente: 24198 },
+      pozosUnicos: 24180,
+      departamentos: { '01': 52 }
+    });
+
+    const result = RegistryService.registryService_getMetadata();
+
+    expect(result).toEqual({
+      found: true,
+      metadata: { generadoEl: '2026-09-10T13:48:20-03:00', periodo: '2026-09' }
+    });
+  });
+});
