@@ -88,11 +88,35 @@ describe('isUserActive', () => {
     expect(AuthService.isUserActive('desconocido@example.com')).toBe(false);
   });
 
-  test('usa el cache: la segunda llamada no vuelve a consultar la hoja', () => {
+  test('usuario activo: la segunda llamada no vuelve a consultar la hoja (queda cacheado)', () => {
     global.sheetUserRepository_getUserStatus.mockReturnValue({ found: true, active: true });
     AuthService.isUserActive('user@example.com');
     AuthService.isUserActive('user@example.com');
     expect(global.sheetUserRepository_getUserStatus).toHaveBeenCalledTimes(1);
+  });
+
+  test('usuario inexistente: NO queda cacheado, cada llamada vuelve a consultar la hoja', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({ found: false, active: false });
+    AuthService.isUserActive('desconocido@example.com');
+    AuthService.isUserActive('desconocido@example.com');
+    expect(global.sheetUserRepository_getUserStatus).toHaveBeenCalledTimes(2);
+  });
+
+  test('usuario inactivo: NO queda cacheado, cada llamada vuelve a consultar la hoja', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({ found: true, active: false });
+    AuthService.isUserActive('inactivo@example.com');
+    AuthService.isUserActive('inactivo@example.com');
+    expect(global.sheetUserRepository_getUserStatus).toHaveBeenCalledTimes(2);
+  });
+
+  test('alta inmediata: usuario inexistente y luego agregado como activo entra en el intento siguiente, sin esperar el TTL', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValueOnce({ found: false, active: false });
+    expect(AuthService.isUserActive('nuevo@example.com')).toBe(false);
+
+    global.sheetUserRepository_getUserStatus.mockReturnValueOnce({ found: true, active: true });
+    expect(AuthService.isUserActive('nuevo@example.com')).toBe(true);
+
+    expect(global.sheetUserRepository_getUserStatus).toHaveBeenCalledTimes(2);
   });
 });
 

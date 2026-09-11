@@ -16,18 +16,27 @@ var SESSION_TTL_SECONDS = 2592000;
 // request; CacheService puede desalojar antes, nunca despues).
 var USER_STATUS_CACHE_SECONDS = 300;
 
+// Solo se cachea el resultado POSITIVO (usuario encontrado y activo). Un
+// usuario inexistente o inactivo nunca queda en cache, a proposito: dar
+// de alta o reactivar a alguien en la hoja "Usuarios" tiene que surtir
+// efecto en el intento siguiente, no esperar hasta que venza el cache.
+// La contrapartida es asimetrica y deliberada: deshabilitar a alguien
+// que YA estaba cacheado como activo puede tardar hasta
+// USER_STATUS_CACHE_SECONDS en notarse (ese caso si sigue cacheado) -
+// ya documentado como aceptado, no es parte de este cambio.
 function isUserActive(email) {
   var cache = CacheService.getScriptCache();
   var cacheKey = 'user_active_' + String(email).trim().toLowerCase();
 
-  var cached = cache.get(cacheKey);
-  if (cached !== null) {
-    return cached === 'true';
+  if (cache.get(cacheKey) === 'true') {
+    return true;
   }
 
   var status = sheetUserRepository_getUserStatus(email);
   var active = status.found && status.active;
-  cache.put(cacheKey, active ? 'true' : 'false', USER_STATUS_CACHE_SECONDS);
+  if (active) {
+    cache.put(cacheKey, 'true', USER_STATUS_CACHE_SECONDS);
+  }
   return active;
 }
 
