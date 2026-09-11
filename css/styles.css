@@ -655,6 +655,207 @@ button:hover,
   flex: none;
 }
 
+/* Boton secundario y discreto: lleva a la Vista Tecnica completa. No
+   compite con Guardar/Compartir - por eso el radio/sombra propios del
+   .button generico se anulan explicitamente (mismo motivo que
+   .clear-button/.button-link). */
+.tabla-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  margin-top: 18px;
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  box-shadow: none;
+  appearance: none;
+  -webkit-appearance: none;
+  -webkit-tap-highlight-color: transparent;
+  color: var(--color-text-soft);
+  font-size: 0.78rem;
+  font-weight: 600;
+  min-height: 42px;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+.tabla-toggle:active,
+.tabla-toggle:focus {
+  background: none;
+}
+.tabla-toggle svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+
+/* --- Vista Tecnica completa: pantalla propia (#screen-well-record-table),
+   no un panel dentro de screen-main - por eso tiene su propio header/tabs
+   con tratamiento deliberadamente distinto (banda con tinte, tabs
+   subrayadas en vez de chips) en lugar de reusar <header>/.ficha-section. --- */
+#screen-well-record-table {
+  padding: 0;
+  overflow: hidden;
+  border-radius: 16px;
+}
+
+.tv-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--color-border-soft);
+}
+.tv-volver {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  appearance: none;
+  -webkit-appearance: none;
+  -webkit-tap-highlight-color: transparent;
+  color: var(--color-primary);
+  font-weight: 700;
+  font-size: 0.82rem;
+  min-height: 0;
+  padding: 0;
+  cursor: pointer;
+}
+.tv-volver:active,
+.tv-volver:focus {
+  background: none;
+}
+.tv-volver svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.tv-header {
+  background: var(--color-primary-tint);
+  padding: 18px 18px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.tv-wellid {
+  font-family: "SFMono-Regular", ui-monospace, "IBM Plex Mono", Menlo, Consolas, monospace;
+  font-weight: 700;
+  font-size: 1.15rem;
+  color: var(--color-primary-dark);
+  margin: 0 0 3px;
+}
+.tv-header-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-primary);
+  margin: 0;
+  opacity: 0.75;
+}
+.tv-badge {
+  font-size: 0.64rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-primary-dark);
+  flex: none;
+}
+.tv-badge.baja {
+  color: var(--color-accent);
+}
+
+.tv-tabs {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  padding: 0 14px;
+  border-bottom: 1.5px solid var(--color-border-soft);
+  background: var(--color-surface);
+}
+.tv-tab {
+  flex: none;
+  background: none;
+  border: none;
+  border-bottom: 2.5px solid transparent;
+  border-radius: 0;
+  box-shadow: none;
+  appearance: none;
+  -webkit-appearance: none;
+  -webkit-tap-highlight-color: transparent;
+  padding: 13px 12px 11px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--color-text-faint);
+  min-height: 0;
+  white-space: nowrap;
+  cursor: pointer;
+}
+/* Sin esto, el fondo nativo de :active/:focus de un <button> se ve
+   como un flash solido oscuro al tocar - con el texto activo (mismo
+   color que ese fondo) quedaba ilegible durante el tap en mobile. */
+.tv-tab:active,
+.tv-tab:focus {
+  background: none;
+}
+.tv-tab.active {
+  color: var(--color-primary-dark);
+  border-bottom-color: var(--color-primary);
+}
+
+.tv-content {
+  padding: 20px 18px 24px;
+}
+.tv-rows {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  row-gap: 12px;
+  column-gap: 16px;
+}
+.tv-rows dt {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--color-text-faint);
+  padding-top: 2px;
+}
+.tv-rows dd {
+  font-size: 0.86rem;
+  color: var(--color-text);
+  margin: 0;
+}
+.tv-empty {
+  font-size: 0.84rem;
+  color: var(--color-text-faint);
+  text-align: center;
+  padding: 40px 0;
+}
+.tv-analisis + .tv-analisis {
+  margin-top: 22px;
+  padding-top: 22px;
+  border-top: 1px dashed var(--color-border-soft);
+}
+.tv-analisis-label {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--color-primary-dark);
+  background: var(--color-primary-tint);
+  padding: 4px 10px;
+  border-radius: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin: 0 0 14px;
+}
+
 /* --- Desktop: la columna deja de flotar sola sobre el fondo --- */
 @media (min-width: 640px) {
   body {
@@ -678,5 +879,36 @@ button:hover,
     padding: 20px 30px 16px;
     border-radius: 22px 22px 0 0;
     background: linear-gradient(180deg, #ffffff 0%, #fbfdfd 100%);
+  }
+
+  /* Vista Tecnica: "ventana tecnica" deliberadamente mas ancha que el
+     resto de la app (820px vs. 480px) - se despega a proposito, no es
+     otra card mas. padding:0 porque .tv-topbar/.tv-header/.tv-content
+     ya manejan su propio espaciado interno (banda con tinte de fondo
+     completo, no inset por el padding generico de .screen). */
+  #screen-well-record-table {
+    max-width: 820px;
+    padding: 0;
+  }
+  .tv-topbar {
+    padding: 16px 34px;
+  }
+  .tv-header {
+    padding: 22px 34px 18px;
+  }
+  .tv-wellid {
+    font-size: 1.4rem;
+  }
+  .tv-tabs {
+    padding: 0 30px;
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+  .tv-content {
+    padding: 26px 34px 32px;
+  }
+  .tv-rows {
+    grid-template-columns: 1fr 1fr;
+    column-gap: 40px;
   }
 }

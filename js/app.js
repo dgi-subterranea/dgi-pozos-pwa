@@ -8,6 +8,7 @@
     loading: document.getElementById('screen-loading'),
     login: document.getElementById('screen-login'),
     main: document.getElementById('screen-main'),
+    wellRecordTable: document.getElementById('screen-well-record-table'),
     disabled: document.getElementById('screen-disabled'),
     offline: document.getElementById('screen-offline')
   };
@@ -507,9 +508,211 @@
     html += buildSection('Más información', sectionBody(buildMasInfoRows(record)));
     html += '</div>';
 
+    html += '<button type="button" id="btn-ver-tabla" class="tabla-toggle">';
+    html += '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>';
+    html += 'Ver en formato tabla</button>';
+
     html += '</div>';
     wellRecordArea.innerHTML = html;
+
+    document.getElementById('btn-ver-tabla').addEventListener('click', function () {
+      showWellRecordTable(record);
+    });
   }
+
+  // --- Vista Tecnica completa: pantalla propia (screen-well-record-table),
+  // no un panel dentro de la Ficha del Pozo. Se arma a partir del MISMO
+  // record ya cargado arriba - nunca dispara un fetch nuevo. Las 8
+  // categorias se calculan una sola vez al abrir la vista; cambiar de
+  // pestana solo reemplaza el HTML ya generado, no vuelve a construirlo.
+  var tvTabsEl = document.getElementById('tv-tabs');
+  var tvContentEl = document.getElementById('tv-content');
+  var tvWellIdEl = document.getElementById('tv-wellid');
+  var tvBadgeEl = document.getElementById('tv-badge');
+  var tvCategoryContents = [];
+
+  function tvSectionBody(rowsHtml) {
+    return rowsHtml ? '<dl class="tv-rows">' + rowsHtml + '</dl>' : '<p class="tv-empty">Sin información registrada.</p>';
+  }
+
+  function buildTvPadronRows(record) {
+    var ident = record.identificacion || {};
+    var ubic = record.ubicacion || {};
+    var rows = '';
+    rows += row('Departamento', ident.departamento);
+    rows += row('Distrito', ident.distrito);
+    rows += row('Nomenclatura', ident.nomenclatura);
+    rows += row('Registro de perforación', ident.registroPerforacion);
+    rows += row('NIC', ident.nic);
+    rows += row('Plano DGI', ubic.planoDgi);
+    rows += row('Plano catastro', ubic.planoCatastro);
+    return rows;
+  }
+
+  function buildTvTitularidadRows(record) {
+    var tit = record.titularidad || {};
+    var rows = '';
+    rows += row('Titular', tit.titular);
+    rows += rowBool('Declaración jurada', tit.declaracionJurada);
+    rows += row('Organismo', tit.organismo);
+    rows += row('Familia', tit.familia);
+    return rows;
+  }
+
+  function buildTvDomiciliosRows(record) {
+    var tit = record.titularidad || {};
+    var ubic = record.ubicacion || {};
+    var rows = '';
+    rows += row('Domicilio del titular', tit.domicilioTitular);
+    rows += row('Domicilio postal', tit.domicilioPostal);
+    rows += row('Domicilio del pozo', ubic.domicilioPozo);
+    return rows;
+  }
+
+  function buildTvTecnicasRows(record) {
+    var t = record.tecnicas || {};
+    var rows = '';
+    rows += row('Diámetro de entubación', t.diametroEntubacion);
+    rows += row('Diámetro de bomba', t.diametroBomba);
+    rows += row('Profundidad de bomba', t.profundidadBomba !== undefined ? t.profundidadBomba + ' m' : undefined);
+    rows += row('Diámetro de antepozo', t.diametroAntepozo);
+    rows += row('Profundidad de antepozo', t.profundidadAntepozo !== undefined ? t.profundidadAntepozo + ' m' : undefined);
+    rows += row('Profundidad total', t.profundidadTotal !== undefined ? t.profundidadTotal + ' m' : undefined);
+    rows += row('Nivel estático', t.nivelEstatico);
+    rows += row('Caudal', t.caudal);
+    rows += row('Depresión', t.depresion);
+    rows += row('Potencia', t.potencia);
+    rows += row('Índice promedio', t.indicePromedio);
+    rows += row('Surgencia', t.surgencia);
+    rows += row('Aptitud', t.aptitud);
+    rows += rowBool('Riego superficial', t.riegoSuperficial);
+    rows += rowBool('Perfilaje', t.perfilaje);
+    return rows;
+  }
+
+  function buildTvConstruccionRows(record) {
+    var c = record.construccion || {};
+    var rows = '';
+    rows += row('Fecha', c.fecha);
+    rows += row('Empresa', c.empresa);
+    rows += row('Director técnico', c.directorTecnico);
+    rows += row('Mecanismo de bomba', c.mecanismoBomba);
+    rows += row('Cementación', formatCementacion(c.cementacion));
+    rows += row('Filtros', formatTramos(c.filtros));
+    rows += row('Reducciones', formatTramos(c.reducciones));
+    return rows;
+  }
+
+  function buildTvEstadoRows(record) {
+    var estado = record.estado || {};
+    var uc = record.usoConcesion || {};
+    var tit = record.titularidad || {};
+    var rows = '';
+    rows += row('Estado', estado.situacion);
+    if (estado.situacion === 'Baja' && estado.baja) {
+      rows += row('Fecha de baja', estado.baja.fecha);
+      rows += row('Fecha de baja (ctacte)', estado.baja.fechaContable);
+      rows += row('Motivo de baja', estado.baja.motivo);
+      rows += row('Expediente de baja', estado.baja.expediente);
+    }
+    rows += row('Estado de la obra', estado.estadoObra);
+    rows += row('Cegado', estado.cegado);
+    rows += row('Uso', uc.uso);
+    rows += row('Uso secundario', uc.usoSecundario);
+    rows += row('Superficie de origen', uc.superficieOrigen !== undefined ? uc.superficieOrigen + ' ha' : undefined);
+    rows += row('Superficie de concesión', uc.superficieConcesion !== undefined ? uc.superficieConcesion + ' ha' : undefined);
+    rows += row('Hectáreas factibles de riego', uc.hectareasFactibles !== undefined ? uc.hectareasFactibles + ' ha' : undefined);
+    rows += row('Resolución de concesión', uc.resolucionConcesion);
+    if (uc.enProcesoCaducidad) {
+      rows += row('Caducidad', 'En trámite');
+    }
+    rows += row('Expediente', tit.expediente);
+    return rows;
+  }
+
+  function buildTvComentariosRows(record) {
+    var com = record.comentarios || {};
+    var rows = '';
+    rows += row('Comentario', com.comentario);
+    rows += row('Documentación faltante', com.documentacionFaltante);
+    return rows;
+  }
+
+  // Datos quimicos: cada analisis es su propia mini-tarjeta, identificada
+  // por N° de analisis + laboratorio cuando existen - nunca por "mas
+  // reciente" (el reporte no trae fecha de analisis).
+  function buildTvQuimicosBody(record) {
+    var analisis = (record.laboratorio && record.laboratorio.analisis) || [];
+    if (!analisis.length) {
+      return '<p class="tv-empty">Sin información registrada.</p>';
+    }
+    var html = '';
+    analisis.forEach(function (a, index) {
+      var labelPartes = ['Análisis ' + (a.nroAnalisis || (index + 1))];
+      if (a.laboratorio) {
+        labelPartes.push(a.laboratorio);
+      }
+      var rows = '';
+      LAB_FIELD_ORDER.forEach(function (key) {
+        rows += row(LAB_FIELD_LABELS[key], a[key]);
+      });
+      html += '<div class="tv-analisis"><p class="tv-analisis-label">' + escapeHtml(labelPartes.join(' — ')) + '</p>';
+      html += '<dl class="tv-rows">' + rows + '</dl></div>';
+    });
+    return html;
+  }
+
+  var TV_CATEGORIES = [
+    { label: 'Padrón', build: function (r) { return tvSectionBody(buildTvPadronRows(r)); } },
+    { label: 'Titularidad', build: function (r) { return tvSectionBody(buildTvTitularidadRows(r)); } },
+    { label: 'Domicilios', build: function (r) { return tvSectionBody(buildTvDomiciliosRows(r)); } },
+    { label: 'Datos técnicos', build: function (r) { return tvSectionBody(buildTvTecnicasRows(r)); } },
+    { label: 'Construcción', build: function (r) { return tvSectionBody(buildTvConstruccionRows(r)); } },
+    { label: 'Datos químicos', build: buildTvQuimicosBody },
+    { label: 'Estado y concesión', build: function (r) { return tvSectionBody(buildTvEstadoRows(r)); } },
+    { label: 'Comentarios', build: function (r) { return tvSectionBody(buildTvComentariosRows(r)); } }
+  ];
+
+  function showWellRecordTable(record) {
+    tvWellIdEl.textContent = record.wellId || '';
+
+    var estado = record.estado || {};
+    if (estado.situacion) {
+      tvBadgeEl.textContent = estado.situacion;
+      tvBadgeEl.className = estado.situacion === 'Baja' ? 'tv-badge baja' : 'tv-badge';
+      tvBadgeEl.hidden = false;
+    } else {
+      tvBadgeEl.hidden = true;
+    }
+
+    tvCategoryContents = TV_CATEGORIES.map(function (cat) { return cat.build(record); });
+
+    var tabsHtml = '';
+    TV_CATEGORIES.forEach(function (cat, index) {
+      tabsHtml += '<button type="button" class="tv-tab' + (index === 0 ? ' active' : '') + '" data-tv-index="' + index + '">' + escapeHtml(cat.label) + '</button>';
+    });
+    tvTabsEl.innerHTML = tabsHtml;
+    tvContentEl.innerHTML = tvCategoryContents[0];
+
+    showScreen('wellRecordTable');
+  }
+
+  tvTabsEl.addEventListener('click', function (event) {
+    var btn = event.target.closest ? event.target.closest('.tv-tab') : null;
+    if (!btn) {
+      return;
+    }
+    var index = parseInt(btn.getAttribute('data-tv-index'), 10);
+    Array.prototype.forEach.call(tvTabsEl.querySelectorAll('.tv-tab'), function (t) {
+      t.classList.remove('active');
+    });
+    btn.classList.add('active');
+    tvContentEl.innerHTML = tvCategoryContents[index];
+  });
+
+  document.getElementById('btn-tv-volver').addEventListener('click', function () {
+    showScreen('main');
+  });
 
   // --- Login ---
   var loginErrorEl = document.getElementById('login-error');

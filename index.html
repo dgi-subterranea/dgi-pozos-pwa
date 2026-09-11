@@ -90,6 +90,28 @@
     </div>
   </div>
 
+  <!-- Vista Tecnica completa: pantalla propia (otra entrada mas en
+       showScreen(), igual que login/main/disabled/offline), no un panel
+       dentro de screen-main. Se llena en JS a partir del mismo registro
+       ya cargado por la Ficha del Pozo - no dispara un fetch nuevo. -->
+  <div id="screen-well-record-table" class="screen" hidden>
+    <div class="tv-topbar">
+      <button type="button" id="btn-tv-volver" class="tv-volver">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+        Volver a ficha
+      </button>
+    </div>
+    <div class="tv-header">
+      <div>
+        <p id="tv-wellid" class="tv-wellid"></p>
+        <p class="tv-header-label">Vista técnica completa</p>
+      </div>
+      <span id="tv-badge" class="tv-badge" hidden></span>
+    </div>
+    <div id="tv-tabs" class="tv-tabs"></div>
+    <div id="tv-content" class="tv-content"></div>
+  </div>
+
   <div id="screen-disabled" class="screen" hidden>
     <p>Tu cuenta no tiene acceso habilitado. Contactá al administrador.</p>
     <button id="btn-logout-disabled" class="button-secondary">Cerrar sesión</button>
