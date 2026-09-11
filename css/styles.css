@@ -680,8 +680,10 @@ button:hover,
   padding: 8px 14px;
   cursor: pointer;
 }
+.tabla-toggle:hover,
 .tabla-toggle:active,
-.tabla-toggle:focus {
+.tabla-toggle:focus,
+.tabla-toggle:focus-visible {
   background: none;
 }
 .tabla-toggle svg {
@@ -725,8 +727,10 @@ button:hover,
   padding: 0;
   cursor: pointer;
 }
+.tv-volver:hover,
 .tv-volver:active,
-.tv-volver:focus {
+.tv-volver:focus,
+.tv-volver:focus-visible {
   background: none;
 }
 .tv-volver svg {
@@ -798,11 +802,18 @@ button:hover,
   white-space: nowrap;
   cursor: pointer;
 }
-/* Sin esto, el fondo nativo de :active/:focus de un <button> se ve
-   como un flash solido oscuro al tocar - con el texto activo (mismo
-   color que ese fondo) quedaba ilegible durante el tap en mobile. */
+/* Sin esto, el fondo oscuro de la regla generica "button:hover,
+   .button:hover { background: var(--color-primary-dark); }" gana por
+   especificidad (0,1,1) contra el "background:none" base de .tv-tab
+   (0,1,0) en cuanto entra en juego :hover - y en iOS Safari un tap deja
+   el boton "pegado" en :hover (no hay puntero real que dispare
+   mouseleave), asi que la pestana tocada quedaba con un fondo solido
+   oscuro permanente en vez de un flash transitorio. :active/:focus se
+   cubren por las mismas dudas, aunque el causante real era :hover. */
+.tv-tab:hover,
 .tv-tab:active,
-.tv-tab:focus {
+.tv-tab:focus,
+.tv-tab:focus-visible {
   background: none;
 }
 .tv-tab.active {
