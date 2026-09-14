@@ -31,6 +31,19 @@ function getRegistryFolderId() {
   return folderId;
 }
 
+// Carpeta de Drive con nivelesEstaticos.json + metadata.json (Red de
+// Niveles Estaticos), generados por scripts/reindex_niveles_estaticos.py
+// y subidos a mano. Carpeta distinta de REGISTRY_FOLDER_ID a proposito -
+// la red NE es un recurso independiente del padron (ver
+// NivelesEstaticosRepository.js): un monitoringId puede no tener wellId.
+function getNivelesEstaticosFolderId() {
+  var folderId = PropertiesService.getScriptProperties().getProperty('NIVELES_ESTATICOS_FOLDER_ID');
+  if (!folderId) {
+    throw new Error('NIVELES_ESTATICOS_FOLDER_ID no configurado en Script Properties');
+  }
+  return folderId;
+}
+
 function getSpreadsheetId() {
   var spreadsheetId = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
   if (!spreadsheetId) {

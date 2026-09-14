@@ -261,3 +261,98 @@ describe('handleGetMetadata', () => {
     expect(global.logHistoryEvent).not.toHaveBeenCalled();
   });
 });
+
+describe('handleGetMonitoringPoint', () => {
+  test('sessionToken invalido: UNAUTHORIZED', () => {
+    global.verifySessionToken.mockReturnValue({ valid: false, reason: 'expirado' });
+
+    const result = Api.handleGetMonitoringPoint('token-vencido', '04-0263');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('UNAUTHORIZED');
+    expect(global.nivelesEstaticosService_getPunto).not.toHaveBeenCalled();
+  });
+
+  test('usuario deshabilitado: USER_DISABLED', () => {
+    global.verifySessionToken.mockReturnValue({ valid: true, email: 'user@example.com' });
+    global.isUserActive.mockReturnValue(false);
+
+    const result = Api.handleGetMonitoringPoint('token-valido', '04-0263');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('USER_DISABLED');
+  });
+
+  test('monitoringId vacio: INVALID_MONITORING_ID, no consulta el servicio', () => {
+    mockValidSession();
+    const result = Api.handleGetMonitoringPoint('token-valido', '');
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('INVALID_MONITORING_ID');
+    expect(global.nivelesEstaticosService_getPunto).not.toHaveBeenCalled();
+  });
+
+  test('punto con wellId (pozo del padron): OK con el punto tal cual lo devuelve el service', () => {
+    mockValidSession();
+    const punto = { monitoringId: '04-0263', wellId: '04-0263', coordenadas: { x: 2523332, y: 6363757 } };
+    global.nivelesEstaticosService_getPunto.mockReturnValue({ found: true, punto });
+
+    const result = Api.handleGetMonitoringPoint('token-valido', '04-0263');
+
+    expect(result.status).toBe('ok');
+    expect(result.data).toEqual(punto);
+  });
+
+  // No pasa por validateSessionAndWellId (formato DD-PPPP): un punto
+  // especial (INA/RTR/Puesto) nunca tiene esa forma y sigue siendo un
+  // monitoringId valido - ver NivelesEstaticosRepository.js.
+  test('punto especial sin wellId (formato no DD-PPPP): OK igual, no se rechaza por formato', () => {
+    mockValidSession();
+    const punto = { monitoringId: '6 RTR7', wellId: null, nombreOriginal: 'PASNOA' };
+    global.nivelesEstaticosService_getPunto.mockReturnValue({ found: true, punto });
+
+    const result = Api.handleGetMonitoringPoint('token-valido', '6 RTR7');
+
+    expect(result.status).toBe('ok');
+    expect(result.data).toEqual(punto);
+  });
+
+  test('punto inexistente: MONITORING_POINT_NOT_FOUND', () => {
+    mockValidSession();
+    global.nivelesEstaticosService_getPunto.mockReturnValue({ found: false });
+
+    const result = Api.handleGetMonitoringPoint('token-valido', '04-9999');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('MONITORING_POINT_NOT_FOUND');
+  });
+
+  test('error del service/Drive: SERVICE_UNAVAILABLE', () => {
+    mockValidSession();
+    global.nivelesEstaticosService_getPunto.mockImplementation(() => {
+      throw new Error('Drive no disponible');
+    });
+
+    const result = Api.handleGetMonitoringPoint('token-valido', '04-0263');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('SERVICE_UNAVAILABLE');
+  });
+
+  test('registra el evento getMonitoringPoint en el historial con el resultado', () => {
+    mockValidSession('user@example.com');
+    global.nivelesEstaticosService_getPunto.mockReturnValue({ found: true, punto: { monitoringId: '04-0263' } });
+
+    Api.handleGetMonitoringPoint('token-valido', '04-0263');
+
+    expect(global.logHistoryEvent).toHaveBeenCalledWith('user@example.com', 'getMonitoringPoint', '04-0263', 'OK');
+  });
+
+  test('es independiente del padron: no llama a registryService_getWellRecord', () => {
+    mockValidSession();
+    global.nivelesEstaticosService_getPunto.mockReturnValue({ found: true, punto: { monitoringId: '04-0263' } });
+
+    Api.handleGetMonitoringPoint('token-valido', '04-0263');
+
+    expect(global.registryService_getWellRecord).not.toHaveBeenCalled();
+  });
+});

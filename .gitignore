@@ -8,3 +8,8 @@ __pycache__/
 # (titulares, domicilios). Nunca al repo - se sube a mano a Drive.
 *.csv
 scripts/out/
+
+# Sidecars de QGIS (metadata de capa, ej. CRS) para los CSV de arriba -
+# no los usa la app ni el indexador, quedan solo localmente por si se
+# vuelve a abrir el CSV en QGIS.
+*.qmd

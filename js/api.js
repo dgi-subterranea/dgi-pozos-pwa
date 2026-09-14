@@ -33,3 +33,7 @@ function apiGetWellRecord(sessionToken, wellId) {
 function apiGetRegistryMetadata(sessionToken) {
   return callBackend('getMetadata', { sessionToken: sessionToken });
 }
+
+function apiGetMonitoringPoint(sessionToken, monitoringId) {
+  return callBackend('getMonitoringPoint', { sessionToken: sessionToken, monitoringId: monitoringId });
+}

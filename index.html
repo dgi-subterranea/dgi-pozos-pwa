@@ -77,13 +77,13 @@
     </form>
     <p id="input-error" class="error-message" hidden></p>
 
-    <div id="result-area"></div>
-
-    <!-- Ficha del Pozo: capa independiente del ITF, se llena con su
-         propio fetch en paralelo (ver apiGetWellRecord en app.js). Vive
-         fuera de #result-area a proposito, para no depender de que el
-         ITF haya encontrado nada. -->
-    <div id="well-record-area"></div>
+    <!-- Hub modular: cabecera compacta + tarjetas de acceso solo a los
+         modulos que existen (Perfil/Datos/Ubicacion/Niveles Estaticos).
+         Los 3 fetches (ITF, Ficha, NE) corren en paralelo y son
+         independientes entre si - ver buscarPozo() en app.js. Cada
+         modulo es su propia pantalla (screen-perfil/datos/ubicacion/ne),
+         nunca un panel aca adentro. -->
+    <div id="hub-area"></div>
 
     <div class="footer-brand">
       <svg class="irr-logo irr-logo-footer" role="img" aria-label="Irrigación"><use href="#irr-logo"></use></svg>
@@ -110,6 +110,50 @@
     </div>
     <div id="tv-tabs" class="tv-tabs"></div>
     <div id="tv-content" class="tv-content"></div>
+  </div>
+
+  <!-- Los 4 modulos: cada uno su propia pantalla, siempre vuelven al hub
+       (screen-main), nunca a otra pantalla - ver .btn-volver-pozo en
+       app.js. Se llenan sin fetch nuevo, a partir de pozoActual ya
+       obtenido en la busqueda. -->
+  <div id="screen-perfil" class="screen" hidden>
+    <div class="tv-topbar">
+      <button type="button" class="tv-volver btn-volver-pozo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+        Volver al pozo
+      </button>
+    </div>
+    <div id="perfil-content" class="modulo-content"></div>
+  </div>
+
+  <div id="screen-datos" class="screen" hidden>
+    <div class="tv-topbar">
+      <button type="button" class="tv-volver btn-volver-pozo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+        Volver al pozo
+      </button>
+    </div>
+    <div id="datos-content" class="modulo-content"></div>
+  </div>
+
+  <div id="screen-ubicacion" class="screen" hidden>
+    <div class="tv-topbar">
+      <button type="button" class="tv-volver btn-volver-pozo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+        Volver al pozo
+      </button>
+    </div>
+    <div id="ubicacion-content" class="modulo-content"></div>
+  </div>
+
+  <div id="screen-ne" class="screen" hidden>
+    <div class="tv-topbar">
+      <button type="button" class="tv-volver btn-volver-pozo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+        Volver al pozo
+      </button>
+    </div>
+    <div id="ne-content" class="modulo-content"></div>
   </div>
 
   <div id="screen-disabled" class="screen" hidden>

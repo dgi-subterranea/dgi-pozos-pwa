@@ -9,6 +9,10 @@
     login: document.getElementById('screen-login'),
     main: document.getElementById('screen-main'),
     wellRecordTable: document.getElementById('screen-well-record-table'),
+    perfil: document.getElementById('screen-perfil'),
+    datos: document.getElementById('screen-datos'),
+    ubicacion: document.getElementById('screen-ubicacion'),
+    ne: document.getElementById('screen-ne'),
     disabled: document.getElementById('screen-disabled'),
     offline: document.getElementById('screen-offline')
   };
@@ -25,6 +29,12 @@
 
   function networkAwareMessage() {
     return navigator.onLine ? getErrorMessage('SERVICE_UNAVAILABLE') : getErrorMessage('OFFLINE');
+  }
+
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
   }
 
   // --- Google Identity Services: init programatico, nunca declarativo ---
@@ -118,21 +128,151 @@
     document.body.appendChild(script);
   });
 
-  // --- Area de resultado (dentro de screen-main, no se pierde el input) ---
-  var resultArea = document.getElementById('result-area');
+  // --- Hub modular: cabecera compacta + tarjetas de acceso solo a los
+  // modulos que existen. pozoActual guarda lo que ya se obtuvo de la
+  // ultima busqueda (ITF, Ficha/Ubicacion, NE) - las 4 pantallas de
+  // modulo leen de aca, nunca refetchean. Se reemplaza por completo en
+  // cada busqueda nueva. ---
+  var hubArea = document.getElementById('hub-area');
+  var perfilContent = document.getElementById('perfil-content');
+  var datosContent = document.getElementById('datos-content');
+  var ubicacionContent = document.getElementById('ubicacion-content');
+  var neContent = document.getElementById('ne-content');
+  var pozoActual = null;
 
-  function renderIdle() {
-    var html = '<div class="idle-hint">';
-    html += '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>';
-    html += '<span>Escribí el número de pozo para empezar</span>';
+  var ICON_PERFIL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5.5-5.5L11 15l-3-3-4.5 4.5"/></svg>';
+  var ICON_DATOS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>';
+  var ICON_UBICACION = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 21s7-7.2 7-12a7 7 0 10-14 0c0 4.8 7 12 7 12z"/><circle cx="12" cy="9" r="2.4"/></svg>';
+  var ICON_UBICACION_WARN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s7-7.2 7-12a7 7 0 10-14 0c0 4.8 7 12 7 12z"/><path d="M12 7v5M12 15h.01"/></svg>';
+  var ICON_NE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 17l5-6 4 3 4-7 5 5"/><path d="M3 21h18" stroke-linecap="round"/></svg>';
+  var ICON_MAPS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 20l-5-2V5l5 2 6-2 5 2v13l-5-2-6 2z"/></svg>';
+  var ICON_SEARCH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>';
+  var ICON_CLOSE = '<svg viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+
+  function renderHubIdle() {
+    var html = '<div class="idle-hint">' + ICON_SEARCH + '<span>Escribí el número de pozo para empezar</span></div>';
+    hubArea.innerHTML = html;
+  }
+
+  function renderHubSearching(wellId) {
+    hubArea.innerHTML = '<p class="status">Buscando ' + escapeHtml(wellId) + '...</p>';
+  }
+
+  function renderHubNotFound(wellId) {
+    var html = '<div class="empty-state">';
+    html += '<div class="empty-state-icon">' + ICON_CLOSE + '</div>';
+    html += '<p class="empty-state-title">No se encontró información</p>';
+    html += '<p class="empty-state-text">para el pozo ' + escapeHtml(wellId) + '. Revisá el número e intentá de nuevo.</p>';
     html += '</div>';
-    resultArea.innerHTML = html;
+    hubArea.innerHTML = html;
   }
 
-  function renderSearching(wellId) {
-    resultArea.innerHTML = '<p class="status">Buscando ' + wellId + '...</p>';
+  function renderHubError(mensaje) {
+    hubArea.innerHTML = '<p class="status error">' + escapeHtml(mensaje) + '</p>';
   }
 
+  // Un punto de la red NE sin wellId (INA/RTR/Puesto/etc.) nunca tiene
+  // ubicacionResuelta del padron - eso vive solo en record.ubicacion, que
+  // no existe para esos puntos. El modulo Ubicacion del pozo (padron) es
+  // por eso condicional a que haya Ficha encontrada.
+  function ubicacionModuloDisponible(ubicacion) {
+    var resuelta = ubicacion && ubicacion.ubicacionResuelta;
+    return !!resuelta && resuelta.estado !== 'sinCoordenadas';
+  }
+
+  function renderHubResultado(pozo) {
+    if (!pozo.itf.found && !pozo.registro.found && !pozo.ne.found) {
+      renderHubNotFound(pozo.wellId);
+      return;
+    }
+
+    var html = '<div class="hub-header"><span class="hub-id mono">' + escapeHtml(pozo.wellId) + '</span>';
+    if (pozo.registro.found) {
+      var estado = pozo.registro.data.estado || {};
+      if (estado.situacion) {
+        var chipClass = estado.situacion === 'Baja' ? 'hub-chip baja' : 'hub-chip';
+        html += '<span class="' + chipClass + '">' + escapeHtml(estado.situacion) + '</span>';
+      }
+    }
+    html += '</div>';
+
+    if (pozo.registro.found) {
+      var ident = pozo.registro.data.identificacion || {};
+      var sub = [ident.departamento, ident.distrito].filter(Boolean).join(' · ');
+      if (sub) {
+        html += '<p class="hub-sub">' + escapeHtml(sub) + '</p>';
+      }
+    }
+
+    var modulos = [];
+    if (pozo.itf.found) {
+      modulos.push({ id: 'perfil', titulo: 'Perfil', desc: 'Ver imagen ITF', icono: ICON_PERFIL });
+    }
+    if (pozo.registro.found) {
+      modulos.push({ id: 'datos', titulo: 'Datos', desc: 'Ficha técnica y registral', icono: ICON_DATOS });
+      if (ubicacionModuloDisponible(pozo.registro.data.ubicacion)) {
+        modulos.push({ id: 'ubicacion', titulo: 'Ubicación', desc: 'Mapa y coordenadas', icono: ICON_UBICACION });
+      }
+    }
+    if (pozo.ne.found) {
+      modulos.push({ id: 'ne', titulo: 'Niveles estáticos', desc: 'Histórico y evolución', icono: ICON_NE });
+    }
+
+    var gridClass = 'hub-grid';
+    if (modulos.length === 1) {
+      gridClass += ' n1';
+    } else if (modulos.length === 3) {
+      gridClass += ' n3';
+    }
+
+    html += '<div class="' + gridClass + '">';
+    modulos.forEach(function (m) {
+      html += '<button type="button" class="hub-card" data-modulo="' + m.id + '">';
+      html += '<span class="hub-card-icon">' + m.icono + '</span>';
+      html += '<span class="hub-card-ct">' + escapeHtml(m.titulo) + '</span>';
+      html += '<span class="hub-card-cd">' + escapeHtml(m.desc) + '</span>';
+      html += '</button>';
+    });
+    html += '</div>';
+
+    hubArea.innerHTML = html;
+
+    Array.prototype.forEach.call(hubArea.querySelectorAll('.hub-card'), function (btn) {
+      btn.addEventListener('click', function () {
+        abrirModulo(btn.getAttribute('data-modulo'));
+      });
+    });
+  }
+
+  function abrirModulo(id) {
+    if (id === 'perfil') {
+      renderPerfil(pozoActual.itf.data);
+      showScreen('perfil');
+    } else if (id === 'datos') {
+      loadRegistryMetadataOnce().then(function (metadata) {
+        renderDatos(pozoActual.registro.data, metadata);
+        showScreen('datos');
+      });
+    } else if (id === 'ubicacion') {
+      renderUbicacion(pozoActual.registro.data);
+      showScreen('ubicacion');
+    } else if (id === 'ne') {
+      renderNE(pozoActual.ne.data);
+      showScreen('ne');
+    }
+  }
+
+  // Los 4 modulos siempre vuelven al hub (screen-main) - nunca a otra
+  // pantalla, sin importar como se entro. Vista Tecnica es la unica
+  // excepcion (vuelve a Datos, es su pantalla padre - ver btn-tv-volver
+  // mas abajo), por eso no lleva esta clase.
+  Array.prototype.forEach.call(document.querySelectorAll('.btn-volver-pozo'), function (btn) {
+    btn.addEventListener('click', function () {
+      showScreen('main');
+    });
+  });
+
+  // --- Modulo Perfil (ITF) ---------------------------------------------
   function base64ToFile(base64, mimeType, filename) {
     var byteChars = atob(base64);
     var byteNumbers = new Array(byteChars.length);
@@ -171,56 +311,28 @@
     window.open(dataUri, '_blank');
   }
 
-  function renderFound(wellId, mimeType, imageBase64) {
-    var dataUri = 'data:' + mimeType + ';base64,' + imageBase64;
-    var html = '<p class="status success">Perfil encontrado</p>';
-    html += '<img class="profile-image" src="' + dataUri + '" alt="Perfil del pozo ' + wellId + '" />';
-    // Mismo texto e icono en todas las plataformas a proposito, aunque el
-    // comportamiento real difiera: en iOS dispara el share sheet nativo
-    // (ver handleSaveImageIOS), en el resto es una descarga directa.
+  function renderPerfil(data) {
+    var dataUri = 'data:' + data.mimeType + ';base64,' + data.imageBase64;
+    var html = '<div class="modulo-id-line"><span class="modulo-id mono">' + escapeHtml(data.wellId) + '</span></div>';
+    html += '<p class="modulo-subline">Perfil</p>';
+    html += '<img class="profile-image" src="' + dataUri + '" alt="Perfil del pozo ' + escapeHtml(data.wellId) + '" />';
     var saveIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>';
     if (isIOS()) {
       html += '<button type="button" id="btn-save-image" class="button">' + saveIcon + 'Guardar / Compartir</button>';
     } else {
-      html += '<a class="button" href="' + dataUri + '" download="' + wellId + '.jpg">' + saveIcon + 'Guardar / Compartir</a>';
+      html += '<a class="button" href="' + dataUri + '" download="' + data.wellId + '.jpg">' + saveIcon + 'Guardar / Compartir</a>';
     }
-    resultArea.innerHTML = html;
+    perfilContent.innerHTML = html;
 
     if (isIOS()) {
       document.getElementById('btn-save-image').addEventListener('click', function () {
-        handleSaveImageIOS(wellId, mimeType, imageBase64, dataUri);
+        handleSaveImageIOS(data.wellId, data.mimeType, data.imageBase64, dataUri);
       });
     }
   }
 
-  function renderMessage(text) {
-    resultArea.innerHTML = '<p class="status error">' + text + '</p>';
-  }
-
-  // Mismo caso (PROFILE_NOT_FOUND) que antes, solo cambia el marcado: una
-  // tarjeta simple en vez de una linea de texto suelta.
-  function renderNotFound(wellId) {
-    var html = '<div class="empty-state">';
-    html += '<div class="empty-state-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div>';
-    html += '<p class="empty-state-title">No se encontró información</p>';
-    html += '<p class="empty-state-text">para el pozo ' + wellId + '. Revisá el número e intentá de nuevo.</p>';
-    html += '</div>';
-    resultArea.innerHTML = html;
-  }
-
-  // --- Ficha del Pozo (padron/registro tecnico) ---
-  // Capa completamente independiente del ITF: vive en #well-record-area,
-  // fuera de #result-area, con su propio fetch (apiGetWellRecord) que se
-  // dispara en paralelo al del ITF y nunca depende de su resultado ni lo
-  // bloquea - ver el submit handler mas abajo.
-  var wellRecordArea = document.getElementById('well-record-area');
+  // --- Modulo Datos (Ficha del Pozo / padron) ----------------------------
   var registryMetadataPromise = null;
-
-  function escapeHtml(value) {
-    return String(value).replace(/[&<>"']/g, function (c) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-    });
-  }
 
   // Se pide una sola vez (al entrar a screen-main) y se reusa para todas
   // las busquedas de la sesion - metadata.json no cambia salvo que se
@@ -248,18 +360,6 @@
       return null;
     }
     return MESES[mesIndex] + ' ' + partes[0];
-  }
-
-  function renderWellRecordIdle() {
-    wellRecordArea.innerHTML = '';
-  }
-
-  function renderWellRecordNotFound(message) {
-    var html = '<div class="ficha-empty-note">';
-    html += '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>';
-    html += escapeHtml(message || 'Sin información registral cargada para este pozo.');
-    html += '</div>';
-    wellRecordArea.innerHTML = html;
   }
 
   // El backend (RegistryService) ya saco las claves en null - aca solo
@@ -478,7 +578,7 @@
     return html;
   }
 
-  function renderWellRecordFound(record, metadata) {
+  function renderDatos(record, metadata) {
     var estado = record.estado || {};
     var badgeClass = estado.situacion === 'Baja' ? 'ficha-badge baja' : 'ficha-badge';
 
@@ -513,7 +613,7 @@
     html += 'Ver en formato tabla</button>';
 
     html += '</div>';
-    wellRecordArea.innerHTML = html;
+    datosContent.innerHTML = html;
 
     document.getElementById('btn-ver-tabla').addEventListener('click', function () {
       showWellRecordTable(record);
@@ -521,10 +621,10 @@
   }
 
   // --- Vista Tecnica completa: pantalla propia (screen-well-record-table),
-  // no un panel dentro de la Ficha del Pozo. Se arma a partir del MISMO
-  // record ya cargado arriba - nunca dispara un fetch nuevo. Las 8
-  // categorias se calculan una sola vez al abrir la vista; cambiar de
-  // pestana solo reemplaza el HTML ya generado, no vuelve a construirlo.
+  // no un panel dentro de Datos. Se arma a partir del MISMO record ya
+  // cargado - nunca dispara un fetch nuevo. Las 8 categorias se calculan
+  // una sola vez al abrir la vista; cambiar de pestana solo reemplaza el
+  // HTML ya generado, no vuelve a construirlo.
   var tvTabsEl = document.getElementById('tv-tabs');
   var tvContentEl = document.getElementById('tv-content');
   var tvWellIdEl = document.getElementById('tv-wellid');
@@ -710,9 +810,229 @@
     tvContentEl.innerHTML = tvCategoryContents[index];
   });
 
+  // Vista Tecnica es hija de Datos (se llega ahi desde adentro de ese
+  // modulo), no del hub - por eso vuelve a 'datos', no a 'main' como los
+  // 4 modulos principales.
   document.getElementById('btn-tv-volver').addEventListener('click', function () {
-    showScreen('main');
+    showScreen('datos');
   });
+
+  // --- Modulo Ubicacion --------------------------------------------------
+  // Nombres de estado explicitos: una coordenada nunca se llama
+  // "confiable" solo por ser la unica disponible (decision explicita del
+  // usuario - puede ser la unica y estar mal). "corroborada" es la unica
+  // etiqueta que implica 2+ fuentes de acuerdo.
+  var UBICACION_ESTADO_LABEL = {
+    corroborada: 'Ubicación confirmada',
+    unica: 'Ubicación disponible'
+  };
+  var FUENTE_LABEL = {
+    reportePozos: 'Reporte Pozos',
+    coordProvincia: 'Coordenadas de la provincia'
+  };
+
+  function formatXY(c) {
+    return 'x ' + c.x + ' / y ' + c.y;
+  }
+
+  function buildFuentesUbicacion(ubicacion) {
+    var fuentes = [];
+    if (ubicacion.coordenadas) {
+      fuentes.push({ etiqueta: FUENTE_LABEL.reportePozos, c: ubicacion.coordenadas });
+    }
+    var provincia = ubicacion.coordenadasProvincia || [];
+    provincia.forEach(function (c, i) {
+      var etiqueta = FUENTE_LABEL.coordProvincia + (provincia.length > 1 ? ' (' + (i + 1) + ')' : '');
+      fuentes.push({ etiqueta: etiqueta, c: c });
+    });
+    return fuentes;
+  }
+
+  function renderUbicacion(record) {
+    var ubic = record.ubicacion || {};
+    var resuelta = ubic.ubicacionResuelta || { estado: 'sinCoordenadas' };
+
+    var html = '<div class="modulo-id-line"><span class="modulo-id mono">' + escapeHtml(record.wellId) + '</span></div>';
+    html += '<p class="modulo-subline">Ubicación</p>';
+
+    html += '<div class="ubic-row">';
+    if (resuelta.estado === 'corroborada' || resuelta.estado === 'unica') {
+      html += '<span class="pin pin-ok">' + ICON_UBICACION + '</span>';
+      html += '<div class="ubic-text"><strong>' + UBICACION_ESTADO_LABEL[resuelta.estado] + '</strong>';
+      if (resuelta.estado === 'corroborada') {
+        html += '2 o más fuentes independientes coinciden a ' + resuelta.distanciaCorroboracion + ' m entre sí.';
+      } else {
+        html += 'Fuente: ' + escapeHtml(FUENTE_LABEL[resuelta.fuente] || resuelta.fuente) + ' · sin corroborar por otra fuente.';
+      }
+      html += '<div class="coord-mono">' + resuelta.lat + ', ' + resuelta.lon + '<br>' + formatXY(resuelta) + '</div>';
+      html += '<a class="maps-btn" href="https://www.google.com/maps?q=' + resuelta.lat + ',' + resuelta.lon + '" target="_blank" rel="noopener">' + ICON_MAPS + 'Abrir en Google Maps</a>';
+      html += '</div>';
+    } else {
+      html += '<span class="pin pin-warn">' + ICON_UBICACION_WARN + '</span>';
+      html += '<div class="ubic-text"><strong>Ubicación a revisar</strong>';
+      html += 'Hay coordenadas de distintas fuentes que no coinciden entre sí. Un técnico debe revisarlas antes de habilitar el mapa.';
+      html += '</div>';
+    }
+    html += '</div>';
+
+    var fuentes = buildFuentesUbicacion(ubic);
+    if (fuentes.length > 1) {
+      html += '<p class="field-label">Fuentes (detalle técnico)</p><div class="src-list">';
+      fuentes.forEach(function (f) {
+        html += '<div class="src-item"><div class="src-tag">' + escapeHtml(f.etiqueta) + '</div><div class="src-xy mono">' + formatXY(f.c) + '</div></div>';
+      });
+      html += '</div>';
+    }
+
+    ubicacionContent.innerHTML = html;
+  }
+
+  // --- Modulo Niveles Estaticos --------------------------------------------
+  function formatMetros(valor) {
+    if (valor === null || valor === undefined) {
+      return '';
+    }
+    return (valor > 0 ? '+' : '') + valor + ' m';
+  }
+
+  function formatFechaDMY(iso) {
+    return iso ? iso.split('-').reverse().join('/') : null;
+  }
+
+  function surgenteTag(surgente) {
+    return surgente
+      ? '<span class="surg-tag surg-si">surgente</span>'
+      : '<span class="surg-tag surg-no">bajo superficie</span>';
+  }
+
+  // Une historico (anual, hasta 2025) + campana2026 (por visita) en una
+  // sola serie cronologica para el grafico - las dos fuentes se guardan
+  // separadas en el modelo (son estructuralmente distintas, ver
+  // scripts/reindex_niveles_estaticos.py) pero el grafico las muestra
+  // como una continuidad. Corta la linea en cada cruce de signo para
+  // poder pintar el tramo surgente (arriba de 0) distinto del tramo bajo
+  // superficie - ambos son reales y pueden convivir en el mismo pozo a
+  // lo largo del tiempo (confirmado con datos reales).
+  function buildNivelesChart(historico, campana2026) {
+    var puntos = (historico || []).map(function (m) {
+      return { anio: m.anio, nivel: m.nivel };
+    });
+    (campana2026 || []).forEach(function (m) {
+      if (m.fecha) {
+        puntos.push({ anio: parseInt(m.fecha.slice(0, 4), 10), nivel: m.nivel });
+      }
+    });
+    if (puntos.length < 2) {
+      return null;
+    }
+    puntos.sort(function (a, b) { return a.anio - b.anio; });
+
+    var w = 600, h = 150, padTop = 14, padBottom = 14, padX = 6;
+    var anioMin = puntos[0].anio, anioMax = puntos[puntos.length - 1].anio;
+    var anioRango = (anioMax - anioMin) || 1;
+    var niveles = puntos.map(function (p) { return p.nivel; });
+    var vMin = Math.min.apply(null, niveles);
+    var vMax = Math.max.apply(null, niveles);
+    var vRango = (vMax - vMin) || 1;
+
+    function X(anio) { return padX + (anio - anioMin) / anioRango * (w - 2 * padX); }
+    function Y(val) { return padTop + (1 - (val - vMin) / vRango) * (h - padTop - padBottom); }
+
+    var coords = puntos.map(function (p) { return { x: X(p.anio), y: Y(p.nivel), nivel: p.nivel }; });
+    var zeroY = (vMin < 0 && vMax > 0) ? Y(0) : null;
+
+    var segmentos = [];
+    var actual = [coords[0]];
+    var signoActual = coords[0].nivel > 0;
+    for (var i = 1; i < coords.length; i++) {
+      var signo = coords[i].nivel > 0;
+      if (signo !== signoActual) {
+        actual.push(coords[i]);
+        segmentos.push({ surgente: signoActual, puntos: actual });
+        actual = [coords[i]];
+        signoActual = signo;
+      } else {
+        actual.push(coords[i]);
+      }
+    }
+    segmentos.push({ surgente: signoActual, puntos: actual });
+
+    return { segmentos: segmentos, zeroY: zeroY, anioMin: anioMin, anioMax: anioMax, w: w, h: h };
+  }
+
+  function renderNivelesChartSvg(chart) {
+    var html = '<svg viewBox="0 0 ' + chart.w + ' ' + chart.h + '" width="100%" height="86" preserveAspectRatio="none">';
+    if (chart.zeroY !== null) {
+      html += '<line x1="6" y1="' + chart.zeroY.toFixed(1) + '" x2="' + (chart.w - 6) + '" y2="' + chart.zeroY.toFixed(1) + '" stroke="#97a5ac" stroke-width="1" stroke-dasharray="3 3"/>';
+    }
+    chart.segmentos.forEach(function (seg) {
+      var color = seg.surgente ? '#b8632f' : '#0b5a7a';
+      var pts = seg.puntos.map(function (p) { return p.x.toFixed(1) + ',' + p.y.toFixed(1); }).join(' ');
+      html += '<polyline points="' + pts + '" fill="none" stroke="' + color + '" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>';
+    });
+    html += '</svg>';
+    return html;
+  }
+
+  function renderNE(punto) {
+    var html = '<div class="modulo-id-line"><span class="modulo-id mono">' + escapeHtml(punto.monitoringId) + '</span></div>';
+    html += '<p class="modulo-subline">Niveles Estáticos' + (punto.nombreOriginal ? ' · ' + escapeHtml(punto.nombreOriginal) : '') + '</p>';
+
+    if (punto.ultimaMedicion) {
+      var um = punto.ultimaMedicion;
+      html += '<div class="ne-last">Última medición ';
+      var fechaTexto = formatFechaDMY(um.fecha);
+      if (fechaTexto) {
+        html += '<b>' + escapeHtml(fechaTexto) + '</b> · ';
+      }
+      html += '<b>' + formatMetros(um.nivel) + '</b>';
+      if (um.persona) {
+        html += ' · ' + escapeHtml(um.persona);
+      }
+      html += '</div>';
+    }
+
+    var chart = buildNivelesChart(punto.historico, punto.campana2026);
+    if (chart) {
+      html += '<div class="spark-wrap">' + renderNivelesChartSvg(chart) + '</div>';
+      html += '<div class="spark-axis"><span>' + chart.anioMin + '</span><span>nivel del suelo</span><span>' + chart.anioMax + '</span></div>';
+    }
+
+    if (punto.estadisticas) {
+      var e = punto.estadisticas;
+      html += '<div class="stat-grid">';
+      html += '<div class="stat"><div class="k">Nivel más profundo</div><div class="v down">' + formatMetros(e.nivelMasProfundo.valor) + ' <span class="v-anio">· ' + e.nivelMasProfundo.anio + '</span></div></div>';
+      html += '<div class="stat"><div class="k">Nivel más alto</div><div class="v up">' + formatMetros(e.nivelMasAlto.valor) + ' <span class="v-anio">· ' + e.nivelMasAlto.anio + '</span></div></div>';
+      html += '<div class="stat"><div class="k">Media</div><div class="v">' + formatMetros(e.media) + '</div></div>';
+      html += '<div class="stat"><div class="k">Mediciones</div><div class="v">' + e.cantidadMediciones + '</div></div>';
+      html += '</div>';
+    }
+
+    var filas = (punto.historico || []).map(function (m) {
+      return '<tr><td>' + m.anio + '</td><td>' + formatMetros(m.nivel) + '</td><td>' + surgenteTag(m.surgente) + '</td></tr>';
+    }).join('');
+    filas += (punto.campana2026 || []).map(function (m) {
+      var fechaTexto = formatFechaDMY(m.fecha) || 'campaña 2026';
+      return '<tr><td class="mono" style="font-size:.72rem">' + escapeHtml(fechaTexto) + '</td><td>' + formatMetros(m.nivel) + '</td><td>' + surgenteTag(m.surgente) + '</td></tr>';
+    }).join('');
+    if (filas) {
+      html += '<p class="field-label">Histórico + campaña 2026</p>';
+      html += '<div class="ne-table-wrap"><table class="ne-table"><thead><tr><th>Año</th><th>Nivel</th><th></th></tr></thead><tbody>' + filas + '</tbody></table></div>';
+    }
+
+    if (punto.coordenadas) {
+      html += '<hr class="divider">';
+      html += '<p class="field-label">Ubicación del pozo de monitoreo</p>';
+      html += '<div class="ubic-row"><span class="pin pin-ok">' + ICON_UBICACION + '</span>';
+      html += '<div class="ubic-text"><strong>Ubicación disponible</strong>';
+      html += 'Coordenada propia del pozo de monitoreo (independiente de la del padrón), sin corroborar.';
+      html += '<div class="coord-mono">' + punto.coordenadas.lat + ', ' + punto.coordenadas.lon + '</div>';
+      html += '<a class="maps-btn" href="https://www.google.com/maps?q=' + punto.coordenadas.lat + ',' + punto.coordenadas.lon + '" target="_blank" rel="noopener">' + ICON_MAPS + 'Abrir pozo en Google Maps</a>';
+      html += '</div></div>';
+    }
+
+    neContent.innerHTML = html;
+  }
 
   // --- Login ---
   var loginErrorEl = document.getElementById('login-error');
@@ -739,8 +1059,8 @@
 
   function enterMain() {
     document.getElementById('user-email').textContent = currentEmail;
-    renderIdle();
-    renderWellRecordIdle();
+    pozoActual = null;
+    renderHubIdle();
     loadRegistryMetadataOnce();
     showScreen('main');
   }
@@ -801,6 +1121,57 @@
     input.focus();
   });
 
+  // Cada fetch normaliza sus propios errores de red a una forma
+  // consistente con las respuestas del backend, para que Promise.all
+  // nunca rechace por una falla de conectividad - un modulo que no se
+  // pudo consultar simplemente no aparece, igual que uno que respondio
+  // "no encontrado".
+  function fetchSinRechazo(promise) {
+    return promise.catch(function () {
+      return { status: 'error', code: 'SERVICE_UNAVAILABLE' };
+    });
+  }
+
+  function buscarPozo(wellId) {
+    pozoActual = {
+      wellId: wellId,
+      itf: { found: false },
+      registro: { found: false },
+      ne: { found: false }
+    };
+    renderHubSearching(wellId);
+
+    var pItf = fetchSinRechazo(apiGetProfile(sessionToken, wellId));
+    var pRegistro = fetchSinRechazo(apiGetWellRecord(sessionToken, wellId));
+    var pNe = fetchSinRechazo(apiGetMonitoringPoint(sessionToken, wellId));
+
+    Promise.all([pItf, pRegistro, pNe]).then(function (results) {
+      // Esta busqueda puede haber quedado obsoleta si el usuario ya
+      // disparo otra mientras esta seguia en vuelo.
+      if (!pozoActual || pozoActual.wellId !== wellId) {
+        return;
+      }
+      var itfResult = results[0], registroResult = results[1], neResult = results[2];
+
+      if (itfResult.code === 'USER_DISABLED' || registroResult.code === 'USER_DISABLED' || neResult.code === 'USER_DISABLED') {
+        showScreen('disabled');
+        return;
+      }
+      if (itfResult.code === 'UNAUTHORIZED' || registroResult.code === 'UNAUTHORIZED' || neResult.code === 'UNAUTHORIZED') {
+        logout();
+        return;
+      }
+
+      pozoActual.itf = itfResult.status === 'ok' ? { found: true, data: itfResult.data } : { found: false };
+      pozoActual.registro = registroResult.status === 'ok' ? { found: true, data: registroResult.data } : { found: false };
+      pozoActual.ne = neResult.status === 'ok' ? { found: true, data: neResult.data } : { found: false };
+
+      renderHubResultado(pozoActual);
+    }).catch(function () {
+      renderHubError(networkAwareMessage());
+    });
+  }
+
   form.addEventListener('submit', function (event) {
     event.preventDefault();
     inputError.hidden = true;
@@ -814,43 +1185,7 @@
     }
     input.value = normalized;
 
-    renderSearching(normalized);
-    apiGetProfile(sessionToken, normalized).then(function (result) {
-      if (result.status === 'ok') {
-        renderFound(result.data.wellId, result.data.mimeType, result.data.imageBase64);
-      } else if (result.code === 'USER_DISABLED') {
-        showScreen('disabled');
-      } else if (result.code === 'UNAUTHORIZED') {
-        logout();
-      } else if (result.code === 'PROFILE_NOT_FOUND') {
-        renderNotFound(normalized);
-      } else {
-        renderMessage(getErrorMessage(result.code));
-      }
-    }).catch(function () {
-      renderMessage(networkAwareMessage());
-    });
-
-    // Ficha del Pozo: fetch completamente aparte del ITF de arriba - ni
-    // lo espera ni lo bloquea, y un error aca nunca toca resultArea.
-    renderWellRecordIdle();
-    apiGetWellRecord(sessionToken, normalized).then(function (result) {
-      if (result.status === 'ok') {
-        loadRegistryMetadataOnce().then(function (metadata) {
-          renderWellRecordFound(result.data, metadata);
-        });
-      } else if (result.code === 'USER_DISABLED') {
-        showScreen('disabled');
-      } else if (result.code === 'UNAUTHORIZED') {
-        logout();
-      } else if (result.code === 'WELL_RECORD_NOT_FOUND') {
-        renderWellRecordNotFound();
-      } else {
-        renderWellRecordNotFound('Sin información registral disponible en este momento.');
-      }
-    }).catch(function () {
-      renderWellRecordNotFound('Sin información registral disponible en este momento.');
-    });
+    buscarPozo(normalized);
   });
 
   // --- Recuperacion de sesion al cargar ---

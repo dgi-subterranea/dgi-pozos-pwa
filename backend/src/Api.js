@@ -20,6 +20,8 @@ function doPost(e) {
         response = handleGetWellRecord(body.sessionToken, body.wellId);
       } else if (body.action === 'getMetadata') {
         response = handleGetMetadata(body.sessionToken);
+      } else if (body.action === 'getMonitoringPoint') {
+        response = handleGetMonitoringPoint(body.sessionToken, body.monitoringId);
       } else {
         response = { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'accion desconocida: ' + body.action };
       }
@@ -172,12 +174,47 @@ function handleGetMetadata(sessionToken) {
   return { status: 'ok', data: result.metadata };
 }
 
+// Niveles Estaticos: capa independiente del padron y del ITF (ver
+// NivelesEstaticosRepository.js) - por eso monitoringId NO pasa por
+// validateSessionAndWellId (esa funcion exige el formato DD-PPPP; un
+// punto especial como "INA 2055" o "6 RTR7" es un monitoringId valido
+// que nunca tiene esa forma). Solo se valida que no venga vacio.
+function handleGetMonitoringPoint(sessionToken, monitoringId) {
+  var validation = validateSession(sessionToken, 'getMonitoringPoint', monitoringId);
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  if (!monitoringId) {
+    logHistoryEvent(session.email, 'getMonitoringPoint', null, 'INVALID_MONITORING_ID');
+    return { status: 'error', code: 'INVALID_MONITORING_ID', message: 'monitoringId vacio' };
+  }
+
+  var result;
+  try {
+    result = nivelesEstaticosService_getPunto(monitoringId);
+  } catch (err) {
+    logHistoryEvent(session.email, 'getMonitoringPoint', monitoringId, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+
+  if (!result.found) {
+    logHistoryEvent(session.email, 'getMonitoringPoint', monitoringId, 'MONITORING_POINT_NOT_FOUND');
+    return { status: 'error', code: 'MONITORING_POINT_NOT_FOUND', message: 'no se encontro punto de monitoreo para ' + monitoringId };
+  }
+
+  logHistoryEvent(session.email, 'getMonitoringPoint', monitoringId, 'OK');
+  return { status: 'ok', data: result.punto };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     doPost,
     handleGetProfile,
     handleGetWellRecord,
     handleGetMetadata,
+    handleGetMonitoringPoint,
     validateSession,
     validateSessionAndWellId
   };
