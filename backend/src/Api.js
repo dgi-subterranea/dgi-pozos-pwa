@@ -22,6 +22,8 @@ function doPost(e) {
         response = handleGetMetadata(body.sessionToken);
       } else if (body.action === 'getMonitoringPoint') {
         response = handleGetMonitoringPoint(body.sessionToken, body.monitoringId);
+      } else if (body.action === 'getWellLocation') {
+        response = handleGetWellLocation(body.sessionToken, body.wellId);
       } else {
         response = { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'accion desconocida: ' + body.action };
       }
@@ -81,12 +83,31 @@ function validateSessionAndWellId(sessionToken, wellId, accion) {
   return { ok: true, session: session };
 }
 
+// Permisos por modulo (perfil/datos/ubicacion/ne): se chequean DESPUES de
+// sesion/formato, con la sesion ya validada - nunca antes, para no
+// filtrar "existis pero no tenes permiso" a alguien con un token
+// invalido. Un intento denegado se audita igual que cualquier otro
+// resultado (ver logHistoryEvent) - PERMISSION_DENIED es un resultado
+// mas en Historial, no un caso especial.
+function validarPermiso(session, accion, wellId, modulo) {
+  if (!hasPermission(session.email, modulo)) {
+    logHistoryEvent(session.email, accion, wellId || null, 'PERMISSION_DENIED');
+    return { ok: false, response: { status: 'error', code: 'PERMISSION_DENIED', message: 'usuario sin permiso "' + modulo + '": ' + session.email } };
+  }
+  return { ok: true };
+}
+
 function handleGetProfile(sessionToken, wellId) {
   var validation = validateSessionAndWellId(sessionToken, wellId, 'getProfile');
   if (!validation.ok) {
     return validation.response;
   }
   var session = validation.session;
+
+  var permiso = validarPermiso(session, 'getProfile', wellId, 'perfil');
+  if (!permiso.ok) {
+    return permiso.response;
+  }
 
   var startTime = Date.now();
   var profile;
@@ -131,6 +152,11 @@ function handleGetWellRecord(sessionToken, wellId) {
     return validation.response;
   }
   var session = validation.session;
+
+  var permiso = validarPermiso(session, 'getWellRecord', wellId, 'datos');
+  if (!permiso.ok) {
+    return permiso.response;
+  }
 
   var result;
   try {
@@ -191,6 +217,11 @@ function handleGetMonitoringPoint(sessionToken, monitoringId) {
     return { status: 'error', code: 'INVALID_MONITORING_ID', message: 'monitoringId vacio' };
   }
 
+  var permiso = validarPermiso(session, 'getMonitoringPoint', monitoringId, 'ne');
+  if (!permiso.ok) {
+    return permiso.response;
+  }
+
   var result;
   try {
     result = nivelesEstaticosService_getPunto(monitoringId);
@@ -208,6 +239,41 @@ function handleGetMonitoringPoint(sessionToken, monitoringId) {
   return { status: 'ok', data: result.punto };
 }
 
+// Modulo Ubicacion: API independiente de Datos, requiere el permiso
+// "ubicacion" (no "datos") - un usuario puede tener datos=NO,
+// ubicacion=SI y usar este endpoint sin recibir el resto de la ficha
+// registral (ver registryService_getWellLocation, que devuelve solo lo
+// geografico). Comparte repositorio y cache por wellId con
+// getWellRecord, pero nunca su payload.
+function handleGetWellLocation(sessionToken, wellId) {
+  var validation = validateSessionAndWellId(sessionToken, wellId, 'getWellLocation');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var permiso = validarPermiso(session, 'getWellLocation', wellId, 'ubicacion');
+  if (!permiso.ok) {
+    return permiso.response;
+  }
+
+  var result;
+  try {
+    result = registryService_getWellLocation(wellId);
+  } catch (err) {
+    logHistoryEvent(session.email, 'getWellLocation', wellId, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+
+  if (!result.found) {
+    logHistoryEvent(session.email, 'getWellLocation', wellId, 'WELL_LOCATION_NOT_FOUND');
+    return { status: 'error', code: 'WELL_LOCATION_NOT_FOUND', message: 'no se encontro ubicacion para ' + wellId };
+  }
+
+  logHistoryEvent(session.email, 'getWellLocation', wellId, 'OK');
+  return { status: 'ok', data: result.location };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     doPost,
@@ -215,6 +281,8 @@ if (typeof module !== 'undefined' && module.exports) {
     handleGetWellRecord,
     handleGetMetadata,
     handleGetMonitoringPoint,
+    handleGetWellLocation,
+    validarPermiso,
     validateSession,
     validateSessionAndWellId
   };

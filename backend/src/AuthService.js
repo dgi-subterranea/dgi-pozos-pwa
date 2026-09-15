@@ -23,21 +23,54 @@ var USER_STATUS_CACHE_SECONDS = 300;
 // La contrapartida es asimetrica y deliberada: deshabilitar a alguien
 // que YA estaba cacheado como activo puede tardar hasta
 // USER_STATUS_CACHE_SECONDS en notarse (ese caso si sigue cacheado) -
-// ya documentado como aceptado, no es parte de este cambio.
-function isUserActive(email) {
+// ya documentado como aceptado.
+//
+// Los permisos por modulo (perfil/datos/ubicacion/ne) viajan en el MISMO
+// objeto cacheado que el estado activo/inactivo, con la misma regla
+// asimetrica: solo se cachean junto a un usuario activo. Esto significa
+// que otorgar O quitar un permiso a un usuario ya activo (y por lo tanto
+// ya cacheado) puede tardar hasta USER_STATUS_CACHE_SECONDS en
+// reflejarse - mismo trade-off que ya existia para activo/inactivo,
+// ahora extendido a permisos. Nunca se guardan permisos en el
+// sessionToken (ver createSessionToken) - el token sigue siendo pura
+// identidad, los permisos se recalculan (con este cache) en cada
+// request.
+function getUserAccess(email) {
   var cache = CacheService.getScriptCache();
-  var cacheKey = 'user_active_' + String(email).trim().toLowerCase();
+  var cacheKey = 'user_access_' + String(email).trim().toLowerCase();
 
-  if (cache.get(cacheKey) === 'true') {
-    return true;
+  var cached = cache.get(cacheKey);
+  if (cached !== null) {
+    return JSON.parse(cached);
   }
 
   var status = sheetUserRepository_getUserStatus(email);
-  var active = status.found && status.active;
-  if (active) {
-    cache.put(cacheKey, 'true', USER_STATUS_CACHE_SECONDS);
+  // Fail-closed tambien si el repositorio no trajo permisos por algun
+  // motivo (forma inesperada, columna faltante que ademas rompio el
+  // objeto entero, etc.) - nunca se asume acceso por ausencia de dato.
+  var permisosVacios = { perfil: false, datos: false, ubicacion: false, ne: false };
+  var access = {
+    active: status.found && status.active,
+    permisos: (status.found && status.permisos) ? status.permisos : permisosVacios
+  };
+  if (access.active) {
+    cache.put(cacheKey, JSON.stringify(access), USER_STATUS_CACHE_SECONDS);
   }
-  return active;
+  return access;
+}
+
+function isUserActive(email) {
+  return getUserAccess(email).active;
+}
+
+// Fail-closed: si el modulo no existe en access.permisos (no deberia
+// pasar, pero por las dudas) o el usuario no esta activo, false.
+function hasPermission(email, modulo) {
+  var access = getUserAccess(email);
+  if (!access.active) {
+    return false;
+  }
+  return access.permisos[modulo] === true;
 }
 
 function signPayload(payloadB64) {
@@ -87,20 +120,23 @@ function handleCheckSession(sessionToken) {
   if (!result.valid) {
     return { status: 'error', code: 'UNAUTHORIZED', message: 'sessionToken invalido: ' + result.reason };
   }
-  if (!isUserActive(result.email)) {
+  var access = getUserAccess(result.email);
+  if (!access.active) {
     return { status: 'error', code: 'USER_DISABLED', message: 'usuario no habilitado: ' + result.email };
   }
   // Renovacion silenciosa (rolling/sliding): cada checkSession exitoso
   // reemite un token nuevo con otros SESSION_TTL_SECONDS, para que un
   // uso periodico de la app mantenga la sesion viva indefinidamente sin
   // volver a pasar por Google. El frontend reemplaza el token guardado
-  // con este.
+  // con este. Los permisos NUNCA viajan dentro del token - se recalculan
+  // (con cache) en cada request, ver getUserAccess.
   var newSessionToken = createSessionToken(result.email);
   return {
     status: 'ok',
     data: {
       email: result.email,
       sessionToken: newSessionToken,
+      permisos: access.permisos,
       message: 'sesion validada localmente, sin llamar a Google'
     }
   };
@@ -130,7 +166,8 @@ function handleLogin(idToken) {
     return { status: 'error', code: 'UNAUTHORIZED', message: 'aud no coincide con nuestro client id' };
   }
 
-  if (!isUserActive(tokenInfo.email)) {
+  var access = getUserAccess(tokenInfo.email);
+  if (!access.active) {
     logHistoryEvent(tokenInfo.email, 'login', null, 'USER_DISABLED');
     return { status: 'error', code: 'USER_DISABLED', message: 'usuario no habilitado: ' + tokenInfo.email };
   }
@@ -144,11 +181,21 @@ function handleLogin(idToken) {
       email: tokenInfo.email,
       name: tokenInfo.name || null,
       emailVerified: tokenInfo.email_verified === 'true' || tokenInfo.email_verified === true,
-      sessionToken: sessionToken
+      sessionToken: sessionToken,
+      permisos: access.permisos
     }
   };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { isUserActive, signPayload, createSessionToken, verifySessionToken, handleCheckSession, handleLogin };
+  module.exports = {
+    isUserActive,
+    getUserAccess,
+    hasPermission,
+    signPayload,
+    createSessionToken,
+    verifySessionToken,
+    handleCheckSession,
+    handleLogin
+  };
 }

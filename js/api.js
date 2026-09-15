@@ -37,3 +37,7 @@ function apiGetRegistryMetadata(sessionToken) {
 function apiGetMonitoringPoint(sessionToken, monitoringId) {
   return callBackend('getMonitoringPoint', { sessionToken: sessionToken, monitoringId: monitoringId });
 }
+
+function apiGetWellLocation(sessionToken, wellId) {
+  return callBackend('getWellLocation', { sessionToken: sessionToken, wellId: wellId });
+}

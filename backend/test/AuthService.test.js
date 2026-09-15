@@ -70,6 +70,25 @@ describe('handleLogin', () => {
     expect(result.code).toBe('USER_DISABLED');
     expect(result.data).toBeUndefined();
   });
+
+  test('login exitoso devuelve los permisos efectivos del usuario, nunca dentro del sessionToken', () => {
+    global.UrlFetchApp.fetch.mockReturnValue({
+      getResponseCode: () => 200,
+      getContentText: () => JSON.stringify({ aud: global.GOOGLE_CLIENT_ID, email: 'user@example.com' })
+    });
+    global.sheetUserRepository_getUserStatus.mockReturnValue({
+      found: true, active: true, permisos: { perfil: true, datos: true, ubicacion: false, ne: false }
+    });
+
+    const result = AuthService.handleLogin('un-id-token-cualquiera');
+
+    expect(result.data.permisos).toEqual({ perfil: true, datos: true, ubicacion: false, ne: false });
+
+    const payloadB64 = result.data.sessionToken.split('.')[0];
+    const payload = JSON.parse(global.Utilities.base64DecodeWebSafe(payloadB64).toString('utf8'));
+    expect(payload.permisos).toBeUndefined();
+    expect(Object.keys(payload).sort()).toEqual(['email', 'exp', 'iat']);
+  });
 });
 
 describe('isUserActive', () => {
@@ -117,6 +136,112 @@ describe('isUserActive', () => {
     expect(AuthService.isUserActive('nuevo@example.com')).toBe(true);
 
     expect(global.sheetUserRepository_getUserStatus).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('getUserAccess / hasPermission', () => {
+  const permisosCompletos = { perfil: true, datos: true, ubicacion: true, ne: true };
+
+  test('usuario completo: hasPermission true para los 4 modulos', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({ found: true, active: true, permisos: permisosCompletos });
+    expect(AuthService.hasPermission('user@example.com', 'perfil')).toBe(true);
+    expect(AuthService.hasPermission('user@example.com', 'datos')).toBe(true);
+    expect(AuthService.hasPermission('user@example.com', 'ubicacion')).toBe(true);
+    expect(AuthService.hasPermission('user@example.com', 'ne')).toBe(true);
+  });
+
+  test('usuario solo Perfil: hasPermission true solo para perfil', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({
+      found: true, active: true, permisos: { perfil: true, datos: false, ubicacion: false, ne: false }
+    });
+    expect(AuthService.hasPermission('user@example.com', 'perfil')).toBe(true);
+    expect(AuthService.hasPermission('user@example.com', 'datos')).toBe(false);
+    expect(AuthService.hasPermission('user@example.com', 'ubicacion')).toBe(false);
+    expect(AuthService.hasPermission('user@example.com', 'ne')).toBe(false);
+  });
+
+  test('usuario Perfil + Datos: ubicacion y ne siguen en false', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({
+      found: true, active: true, permisos: { perfil: true, datos: true, ubicacion: false, ne: false }
+    });
+    expect(AuthService.hasPermission('user@example.com', 'perfil')).toBe(true);
+    expect(AuthService.hasPermission('user@example.com', 'datos')).toBe(true);
+    expect(AuthService.hasPermission('user@example.com', 'ubicacion')).toBe(false);
+    expect(AuthService.hasPermission('user@example.com', 'ne')).toBe(false);
+  });
+
+  test('Ubicacion sin Datos: combinacion valida, cada permiso es independiente', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({
+      found: true, active: true, permisos: { perfil: false, datos: false, ubicacion: true, ne: false }
+    });
+    expect(AuthService.hasPermission('user@example.com', 'datos')).toBe(false);
+    expect(AuthService.hasPermission('user@example.com', 'ubicacion')).toBe(true);
+  });
+
+  test('NE sin Datos: combinacion valida', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({
+      found: true, active: true, permisos: { perfil: false, datos: false, ubicacion: false, ne: true }
+    });
+    expect(AuthService.hasPermission('user@example.com', 'datos')).toBe(false);
+    expect(AuthService.hasPermission('user@example.com', 'ne')).toBe(true);
+  });
+
+  test('permiso "NO": false', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({
+      found: true, active: true, permisos: { perfil: false, datos: true, ubicacion: false, ne: false }
+    });
+    expect(AuthService.hasPermission('user@example.com', 'perfil')).toBe(false);
+  });
+
+  test('permisos ausentes/vacios en la respuesta del repositorio: fail-closed, todo false', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({ found: true, active: true });
+    expect(AuthService.hasPermission('user@example.com', 'perfil')).toBe(false);
+    expect(AuthService.hasPermission('user@example.com', 'datos')).toBe(false);
+    expect(AuthService.hasPermission('user@example.com', 'ubicacion')).toBe(false);
+    expect(AuthService.hasPermission('user@example.com', 'ne')).toBe(false);
+  });
+
+  test('modulo invalido/desconocido: false, no lanza error', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({ found: true, active: true, permisos: permisosCompletos });
+    expect(AuthService.hasPermission('user@example.com', 'modulo_que_no_existe')).toBe(false);
+  });
+
+  test('usuario inactivo aunque tenga los 4 permisos en SI: hasPermission false para todos', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({ found: true, active: false, permisos: permisosCompletos });
+    expect(AuthService.hasPermission('user@example.com', 'perfil')).toBe(false);
+    expect(AuthService.hasPermission('user@example.com', 'datos')).toBe(false);
+    expect(AuthService.hasPermission('user@example.com', 'ubicacion')).toBe(false);
+    expect(AuthService.hasPermission('user@example.com', 'ne')).toBe(false);
+  });
+
+  test('usuario inexistente en la hoja: hasPermission false, sin lanzar error', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({ found: false, active: false, permisos: {} });
+    expect(AuthService.hasPermission('desconocido@example.com', 'perfil')).toBe(false);
+  });
+
+  test('permisos se cachean junto con el estado activo (una sola consulta a la hoja para ambos)', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({ found: true, active: true, permisos: permisosCompletos });
+    AuthService.isUserActive('user@example.com');
+    AuthService.hasPermission('user@example.com', 'datos');
+    AuthService.hasPermission('user@example.com', 'ne');
+    expect(global.sheetUserRepository_getUserStatus).toHaveBeenCalledTimes(1);
+  });
+
+  test('cambio de permisos compatible con sesion existente: el token no cambia, hasPermission refleja el nuevo valor apenas vence el cache', () => {
+    const token = AuthService.createSessionToken('user@example.com');
+
+    global.sheetUserRepository_getUserStatus.mockReturnValueOnce({
+      found: true, active: true, permisos: { perfil: true, datos: false, ubicacion: false, ne: false }
+    });
+    expect(AuthService.hasPermission('user@example.com', 'datos')).toBe(false);
+
+    // El mismo token sigue siendo valido - la sesion nunca dependio de
+    // los permisos, solo de la identidad/expiracion.
+    const stillValid = AuthService.verifySessionToken(token);
+    expect(stillValid.valid).toBe(true);
+    expect(stillValid.email).toBe('user@example.com');
+    // El payload del token nunca tuvo permisos, no hay nada que migrar.
+    expect(stillValid.permisos).toBeUndefined();
   });
 });
 
@@ -211,5 +336,16 @@ describe('handleCheckSession', () => {
     const result = AuthService.handleCheckSession('token-truchisimo');
     expect(result.status).toBe('error');
     expect(result.code).toBe('UNAUTHORIZED');
+  });
+
+  test('checkSession devuelve los permisos vigentes (pueden haber cambiado desde el login original)', () => {
+    const token = AuthService.createSessionToken('user@example.com');
+    global.sheetUserRepository_getUserStatus.mockReturnValue({
+      found: true, active: true, permisos: { perfil: true, datos: false, ubicacion: true, ne: false }
+    });
+
+    const result = AuthService.handleCheckSession(token);
+
+    expect(result.data.permisos).toEqual({ perfil: true, datos: false, ubicacion: true, ne: false });
   });
 });

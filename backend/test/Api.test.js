@@ -11,9 +11,14 @@ beforeEach(() => {
   installAppsScriptFakes();
 });
 
+// Por defecto, una sesion valida tiene los 4 permisos concedidos - asi
+// los tests existentes de cada handler (que no son sobre permisos) no
+// necesitan mockear hasPermission uno por uno. Los tests de permisos
+// especificos pisan esto con mockImplementation/mockReturnValueOnce.
 function mockValidSession(email) {
   global.verifySessionToken.mockReturnValue({ valid: true, email: email || 'user@example.com' });
   global.isUserActive.mockReturnValue(true);
+  global.hasPermission.mockReturnValue(true);
 }
 
 describe('handleGetProfile', () => {
@@ -83,6 +88,26 @@ describe('handleGetProfile', () => {
     expect(result.code).toBe('PROFILE_NOT_FOUND');
   });
 
+  test('sin permiso "perfil" (usuario activo, sesion valida): PERMISSION_DENIED, no consulta Drive - llamada manual directa al handler', () => {
+    mockValidSession();
+    global.hasPermission.mockImplementation((email, modulo) => modulo !== 'perfil');
+
+    const result = Api.handleGetProfile('token-valido', '03-0123');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('PERMISSION_DENIED');
+    expect(global.profileService_getProfile).not.toHaveBeenCalled();
+  });
+
+  test('PERMISSION_DENIED se audita en Historial, distinto de PROFILE_NOT_FOUND', () => {
+    mockValidSession('user@example.com');
+    global.hasPermission.mockReturnValue(false);
+
+    Api.handleGetProfile('token-valido', '03-0123');
+
+    expect(global.logHistoryEvent).toHaveBeenCalledWith('user@example.com', 'getProfile', '03-0123', 'PERMISSION_DENIED');
+  });
+
   test('error de repositorio/Drive al buscar: SERVICE_UNAVAILABLE', () => {
     mockValidSession();
     global.profileService_getProfile.mockImplementation(() => {
@@ -133,6 +158,17 @@ describe('handleGetWellRecord', () => {
     expect(global.registryService_getWellRecord).not.toHaveBeenCalled();
   });
 
+  test('sin permiso "datos": PERMISSION_DENIED, no consulta el registro - llamada manual directa al handler', () => {
+    mockValidSession();
+    global.hasPermission.mockImplementation((email, modulo) => modulo !== 'datos');
+
+    const result = Api.handleGetWellRecord('token-valido', '01-0012');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('PERMISSION_DENIED');
+    expect(global.registryService_getWellRecord).not.toHaveBeenCalled();
+  });
+
   test('ficha encontrada: OK con el registro tal cual lo devuelve el service', () => {
     mockValidSession();
     const record = { wellId: '01-0012', identificacion: { departamento: 'Capital' } };
@@ -142,6 +178,26 @@ describe('handleGetWellRecord', () => {
 
     expect(result.status).toBe('ok');
     expect(result.data).toEqual(record);
+  });
+
+  // El saneo de coordenadas es responsabilidad de RegistryService (ver
+  // RegistryService.test.js) - aca solo se confirma que Api.js nunca
+  // agrega ni reintroduce campos geograficos: pasa el record tal cual
+  // lo devuelve el service, incluso si por error trajera coordenadas.
+  test('getWellRecord no agrega coordenadas geograficas al payload: pasa el record del service sin tocarlo', () => {
+    mockValidSession();
+    const recordSinGeo = {
+      wellId: '01-0012',
+      ubicacion: { domicilioPozo: 'CALLE FALSA 123', planoDgi: '1-A' }
+    };
+    global.registryService_getWellRecord.mockReturnValue({ found: true, record: recordSinGeo });
+
+    const result = Api.handleGetWellRecord('token-valido', '01-0012');
+
+    expect(result.data.ubicacion.coordenadas).toBeUndefined();
+    expect(result.data.ubicacion.coordenadasProvincia).toBeUndefined();
+    expect(result.data.ubicacion.ubicacionResuelta).toBeUndefined();
+    expect(result.data.ubicacion.domicilioPozo).toBe('CALLE FALSA 123');
   });
 
   test('ficha inexistente: WELL_RECORD_NOT_FOUND', () => {
@@ -291,6 +347,17 @@ describe('handleGetMonitoringPoint', () => {
     expect(global.nivelesEstaticosService_getPunto).not.toHaveBeenCalled();
   });
 
+  test('sin permiso "ne": PERMISSION_DENIED, no consulta el servicio - llamada manual directa al handler', () => {
+    mockValidSession();
+    global.hasPermission.mockImplementation((email, modulo) => modulo !== 'ne');
+
+    const result = Api.handleGetMonitoringPoint('token-valido', '04-0263');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('PERMISSION_DENIED');
+    expect(global.nivelesEstaticosService_getPunto).not.toHaveBeenCalled();
+  });
+
   test('punto con wellId (pozo del padron): OK con el punto tal cual lo devuelve el service', () => {
     mockValidSession();
     const punto = { monitoringId: '04-0263', wellId: '04-0263', coordenadas: { x: 2523332, y: 6363757 } };
@@ -354,5 +421,120 @@ describe('handleGetMonitoringPoint', () => {
     Api.handleGetMonitoringPoint('token-valido', '04-0263');
 
     expect(global.registryService_getWellRecord).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleGetWellLocation', () => {
+  test('sessionToken invalido: UNAUTHORIZED', () => {
+    global.verifySessionToken.mockReturnValue({ valid: false, reason: 'expirado' });
+
+    const result = Api.handleGetWellLocation('token-vencido', '01-0012');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('UNAUTHORIZED');
+    expect(global.registryService_getWellLocation).not.toHaveBeenCalled();
+  });
+
+  test('usuario deshabilitado: USER_DISABLED', () => {
+    global.verifySessionToken.mockReturnValue({ valid: true, email: 'user@example.com' });
+    global.isUserActive.mockReturnValue(false);
+
+    const result = Api.handleGetWellLocation('token-valido', '01-0012');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('USER_DISABLED');
+  });
+
+  test('formato invalido: INVALID_WELL_ID, no consulta el servicio', () => {
+    mockValidSession();
+    const result = Api.handleGetWellLocation('token-valido', '01-ABC');
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('INVALID_WELL_ID');
+    expect(global.registryService_getWellLocation).not.toHaveBeenCalled();
+  });
+
+  test('sin permiso "ubicacion" (aunque tenga "datos"): PERMISSION_DENIED, no consulta el servicio - llamada manual directa al handler', () => {
+    mockValidSession();
+    global.hasPermission.mockImplementation((email, modulo) => modulo === 'datos');
+
+    const result = Api.handleGetWellLocation('token-valido', '01-0012');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('PERMISSION_DENIED');
+    expect(global.registryService_getWellLocation).not.toHaveBeenCalled();
+  });
+
+  // El caso central del diseño: datos=NO, ubicacion=SI debe poder usar
+  // el modulo Ubicacion igual, sin pasar por getWellRecord ni recibir el
+  // resto de la ficha.
+  test('ubicacion=SI con datos=NO: OK, funciona sin necesitar el permiso "datos"', () => {
+    mockValidSession();
+    global.hasPermission.mockImplementation((email, modulo) => modulo === 'ubicacion');
+    const location = { wellId: '01-0012', coordenadas: { x: 1, y: 2 }, ubicacionResuelta: { estado: 'unica' } };
+    global.registryService_getWellLocation.mockReturnValue({ found: true, location });
+
+    const result = Api.handleGetWellLocation('token-valido', '01-0012');
+
+    expect(result.status).toBe('ok');
+    expect(result.data).toEqual(location);
+    expect(global.registryService_getWellRecord).not.toHaveBeenCalled();
+  });
+
+  test('ubicacion encontrada: OK con el location tal cual lo devuelve el service', () => {
+    mockValidSession();
+    const location = { wellId: '01-0012', coordenadas: { x: 100, y: 200 } };
+    global.registryService_getWellLocation.mockReturnValue({ found: true, location });
+
+    const result = Api.handleGetWellLocation('token-valido', '01-0012');
+
+    expect(result.status).toBe('ok');
+    expect(result.data).toEqual(location);
+  });
+
+  test('ubicacion inexistente: WELL_LOCATION_NOT_FOUND', () => {
+    mockValidSession();
+    global.registryService_getWellLocation.mockReturnValue({ found: false });
+
+    const result = Api.handleGetWellLocation('token-valido', '01-9999');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('WELL_LOCATION_NOT_FOUND');
+  });
+
+  test('error del service/Drive: SERVICE_UNAVAILABLE', () => {
+    mockValidSession();
+    global.registryService_getWellLocation.mockImplementation(() => {
+      throw new Error('Drive no disponible');
+    });
+
+    const result = Api.handleGetWellLocation('token-valido', '01-0012');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('SERVICE_UNAVAILABLE');
+  });
+
+  test('registra el evento getWellLocation en el historial con el resultado', () => {
+    mockValidSession('user@example.com');
+    global.registryService_getWellLocation.mockReturnValue({ found: true, location: { wellId: '01-0012' } });
+
+    Api.handleGetWellLocation('token-valido', '01-0012');
+
+    expect(global.logHistoryEvent).toHaveBeenCalledWith('user@example.com', 'getWellLocation', '01-0012', 'OK');
+  });
+});
+
+describe('validarPermiso', () => {
+  test('PERMISSION_DENIED y *_NOT_FOUND nunca se colapsan al mismo codigo', () => {
+    mockValidSession();
+    global.hasPermission.mockReturnValue(false);
+    const denegado = Api.handleGetWellRecord('token-valido', '01-0012');
+
+    global.hasPermission.mockReturnValue(true);
+    global.registryService_getWellRecord.mockReturnValue({ found: false });
+    const noEncontrado = Api.handleGetWellRecord('token-valido', '01-9999');
+
+    expect(denegado.code).toBe('PERMISSION_DENIED');
+    expect(noEncontrado.code).toBe('WELL_RECORD_NOT_FOUND');
+    expect(denegado.code).not.toBe(noEncontrado.code);
   });
 });

@@ -140,6 +140,15 @@
   var neContent = document.getElementById('ne-content');
   var pozoActual = null;
 
+  // Permisos efectivos del usuario (perfil/datos/ubicacion/ne), tal como
+  // los devolvio el ultimo login/checkSession - NUNCA viven en el
+  // sessionToken (que sigue siendo pura identidad). Fail-closed por
+  // defecto: hasta que login/checkSession responda, no se asume ningun
+  // permiso. Se usan solo para decidir que fetch conviene ni siquiera
+  // disparar - el backend vuelve a validar cada uno igual, esto es una
+  // optimizacion de red, no el limite de seguridad real.
+  var permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false };
+
   var ICON_PERFIL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5.5-5.5L11 15l-3-3-4.5 4.5"/></svg>';
   var ICON_DATOS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>';
   var ICON_UBICACION = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 21s7-7.2 7-12a7 7 0 10-14 0c0 4.8 7 12 7 12z"/><circle cx="12" cy="9" r="2.4"/></svg>';
@@ -171,22 +180,26 @@
     hubArea.innerHTML = '<p class="status error">' + escapeHtml(mensaje) + '</p>';
   }
 
-  // Un punto de la red NE sin wellId (INA/RTR/Puesto/etc.) nunca tiene
-  // ubicacionResuelta del padron - eso vive solo en record.ubicacion, que
-  // no existe para esos puntos. El modulo Ubicacion del pozo (padron) es
-  // por eso condicional a que haya Ficha encontrada.
-  function ubicacionModuloDisponible(ubicacion) {
-    var resuelta = ubicacion && ubicacion.ubicacionResuelta;
+  // location es la respuesta plana de getWellLocation ({wellId,
+  // coordenadas, coordenadasProvincia, ubicacionResuelta}) - independiente
+  // de si hay Ficha del Pozo (datos) o no, y del propio permiso "datos".
+  function ubicacionModuloDisponible(location) {
+    var resuelta = location && location.ubicacionResuelta;
     return !!resuelta && resuelta.estado !== 'sinCoordenadas';
   }
 
   function renderHubResultado(pozo) {
-    if (!pozo.itf.found && !pozo.registro.found && !pozo.ne.found) {
+    if (!pozo.itf.found && !pozo.registro.found && !pozo.ubicacion.found && !pozo.ne.found) {
       renderHubNotFound(pozo.wellId);
       return;
     }
 
-    var html = '<div class="hub-header"><span class="hub-id mono">' + escapeHtml(pozo.wellId) + '</span>';
+    // Ver js/hubIdentificacion.js para la regla completa (y sus tests):
+    // el titular de la cabecera SOLO sale de Datos, nunca de NE, aunque
+    // ne=SI - salvo un punto especial sin wellId, que no tiene otra
+    // forma de identificarse.
+    var identificacion = resolverIdentificacionHub(pozo);
+    var html = '<div class="hub-header"><span class="hub-id mono">' + escapeHtml(identificacion.idPrincipal || '') + '</span>';
     if (pozo.registro.found) {
       var estado = pozo.registro.data.estado || {};
       if (estado.situacion) {
@@ -196,17 +209,8 @@
     }
     html += '</div>';
 
-    // Titular real de la Ficha del Pozo (padron), sin fetch adicional -
-    // ya vino en pozo.registro. Si no hay Ficha pero si hay un punto NE
-    // (caso especial sin wellId/padron, o un wellId monitoreado que no
-    // esta en el padron), se usa su nombreOriginal en su lugar - nunca
-    // se inventa un titular.
-    var tit = pozo.registro.found ? (pozo.registro.data.titularidad || {}).titular : null;
-    if (!tit && !pozo.registro.found && pozo.ne.found) {
-      tit = pozo.ne.data.nombreOriginal;
-    }
-    if (tit) {
-      html += '<p class="hub-titular">' + escapeHtml(tit) + '</p>';
+    if (identificacion.identificacionSecundaria) {
+      html += '<p class="hub-titular">' + escapeHtml(identificacion.identificacionSecundaria) + '</p>';
     }
 
     if (pozo.registro.found) {
@@ -217,15 +221,21 @@
       }
     }
 
+    // Cada modulo es independiente de los demas - "existe" (found) ya
+    // implica "el usuario tiene permiso", porque buscarPozo() ni siquiera
+    // dispara el fetch de un modulo sin permiso (ver permisosActuales), y
+    // el backend lo rechaza con PERMISSION_DENIED si de todas formas
+    // llegara a pedirse. Ubicacion NUNCA depende de pozo.registro (datos)
+    // - son permisos y fetches distintos.
     var modulos = [];
     if (pozo.itf.found) {
       modulos.push({ id: 'perfil', titulo: 'Perfil', desc: 'Ver imagen ITF', icono: ICON_PERFIL });
     }
     if (pozo.registro.found) {
       modulos.push({ id: 'datos', titulo: 'Datos', desc: 'Ficha técnica y registral', icono: ICON_DATOS });
-      if (ubicacionModuloDisponible(pozo.registro.data.ubicacion)) {
-        modulos.push({ id: 'ubicacion', titulo: 'Ubicación', desc: 'Mapa y coordenadas', icono: ICON_UBICACION });
-      }
+    }
+    if (pozo.ubicacion.found && ubicacionModuloDisponible(pozo.ubicacion.data)) {
+      modulos.push({ id: 'ubicacion', titulo: 'Ubicación', desc: 'Mapa y coordenadas', icono: ICON_UBICACION });
     }
     if (pozo.ne.found) {
       modulos.push({ id: 'ne', titulo: 'Niveles estáticos', desc: 'Histórico y evolución', icono: ICON_NE });
@@ -267,7 +277,7 @@
         showScreen('datos');
       });
     } else if (id === 'ubicacion') {
-      renderUbicacion(pozoActual.registro.data);
+      renderUbicacion(pozoActual.ubicacion.data);
       showScreen('ubicacion');
     } else if (id === 'ne') {
       renderNE(pozoActual.ne.data);
@@ -866,11 +876,13 @@
     return fuentes;
   }
 
-  function renderUbicacion(record) {
-    var ubic = record.ubicacion || {};
-    var resuelta = ubic.ubicacionResuelta || { estado: 'sinCoordenadas' };
+  // location: respuesta plana de getWellLocation - {wellId, coordenadas,
+  // coordenadasProvincia, ubicacionResuelta}. Independiente del registro
+  // de Datos (puede haber Ubicacion sin permiso "datos").
+  function renderUbicacion(location) {
+    var resuelta = location.ubicacionResuelta || { estado: 'sinCoordenadas' };
 
-    var html = '<div class="modulo-id-line"><span class="modulo-id mono">' + escapeHtml(record.wellId) + '</span></div>';
+    var html = '<div class="modulo-id-line"><span class="modulo-id mono">' + escapeHtml(location.wellId) + '</span></div>';
     html += '<p class="modulo-subline">Ubicación</p>';
 
     html += '<div class="ubic-row">';
@@ -893,7 +905,7 @@
     }
     html += '</div>';
 
-    var fuentes = buildFuentesUbicacion(ubic);
+    var fuentes = buildFuentesUbicacion(location);
     if (fuentes.length > 1) {
       html += '<p class="field-label">Fuentes (detalle técnico)</p><div class="src-list">';
       fuentes.forEach(function (f) {
@@ -1061,6 +1073,7 @@
       if (result.status === 'ok') {
         sessionToken = result.data.sessionToken;
         currentEmail = result.data.email;
+        permisosActuales = result.data.permisos || permisosActuales;
         localStorage.setItem('sessionToken', sessionToken);
         enterMain();
       } else if (result.code === 'USER_DISABLED') {
@@ -1087,6 +1100,7 @@
     localStorage.removeItem('sessionToken');
     sessionToken = null;
     currentEmail = null;
+    permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false };
     if (gsiLoaded) {
       // Sin esto, auto_select podria volver a loguear silenciosamente a
       // la misma cuenta apenas se re-inicialice el boton de Google.
@@ -1150,39 +1164,61 @@
     });
   }
 
+  // Si permisosActuales ya dice que el modulo esta vedado, ni se dispara
+  // el fetch - resuelve directo a PERMISSION_DENIED (ahorra un viaje a
+  // Apps Script). Esto es una optimizacion de red, no el limite de
+  // seguridad: si por una condicion de carrera (permiso revocado en
+  // Sheets despues del ultimo login/checkSession, dentro de la ventana
+  // de cache de 5 min del backend) el permiso local estuviera
+  // desactualizado "de mas", el backend igual lo habria rechazado.
+  function fetchSiTienePermiso(permitido, promiseFactory) {
+    if (!permitido) {
+      return Promise.resolve({ status: 'error', code: 'PERMISSION_DENIED' });
+    }
+    return fetchSinRechazo(promiseFactory());
+  }
+
   function buscarPozo(wellId) {
     pozoActual = {
       wellId: wellId,
       itf: { found: false },
       registro: { found: false },
+      ubicacion: { found: false },
       ne: { found: false }
     };
     renderHubSearching(wellId);
 
-    var pItf = fetchSinRechazo(apiGetProfile(sessionToken, wellId));
-    var pRegistro = fetchSinRechazo(apiGetWellRecord(sessionToken, wellId));
-    var pNe = fetchSinRechazo(apiGetMonitoringPoint(sessionToken, wellId));
+    var pItf = fetchSiTienePermiso(permisosActuales.perfil, function () { return apiGetProfile(sessionToken, wellId); });
+    var pRegistro = fetchSiTienePermiso(permisosActuales.datos, function () { return apiGetWellRecord(sessionToken, wellId); });
+    var pUbicacion = fetchSiTienePermiso(permisosActuales.ubicacion, function () { return apiGetWellLocation(sessionToken, wellId); });
+    var pNe = fetchSiTienePermiso(permisosActuales.ne, function () { return apiGetMonitoringPoint(sessionToken, wellId); });
 
-    Promise.all([pItf, pRegistro, pNe]).then(function (results) {
+    Promise.all([pItf, pRegistro, pUbicacion, pNe]).then(function (results) {
       // Esta busqueda puede haber quedado obsoleta si el usuario ya
       // disparo otra mientras esta seguia en vuelo.
       if (!pozoActual || pozoActual.wellId !== wellId) {
         return;
       }
-      var itfResult = results[0], registroResult = results[1], neResult = results[2];
+      var itfResult = results[0], registroResult = results[1], ubicacionResult = results[2], neResult = results[3];
 
-      if (itfResult.code === 'USER_DISABLED' || registroResult.code === 'USER_DISABLED' || neResult.code === 'USER_DISABLED') {
+      if (itfResult.code === 'USER_DISABLED' || registroResult.code === 'USER_DISABLED' || ubicacionResult.code === 'USER_DISABLED' || neResult.code === 'USER_DISABLED') {
         showScreen('disabled');
         return;
       }
-      if (itfResult.code === 'UNAUTHORIZED' || registroResult.code === 'UNAUTHORIZED' || neResult.code === 'UNAUTHORIZED') {
+      if (itfResult.code === 'UNAUTHORIZED' || registroResult.code === 'UNAUTHORIZED' || ubicacionResult.code === 'UNAUTHORIZED' || neResult.code === 'UNAUTHORIZED') {
         logout();
         return;
       }
 
-      pozoActual.itf = itfResult.status === 'ok' ? { found: true, data: itfResult.data } : { found: false };
-      pozoActual.registro = registroResult.status === 'ok' ? { found: true, data: registroResult.data } : { found: false };
-      pozoActual.ne = neResult.status === 'ok' ? { found: true, data: neResult.data } : { found: false };
+      // Cada slot conserva el "code" real ademas de found - un modulo sin
+      // permiso se comporta igual que uno inexistente en el hub (no
+      // aparece), pero PERMISSION_DENIED y *_NOT_FOUND nunca se
+      // colapsan al mismo valor: el code sigue disponible para quien lo
+      // necesite mas adelante (diagnostico, futura UX distinta, etc.).
+      pozoActual.itf = itfResult.status === 'ok' ? { found: true, data: itfResult.data } : { found: false, code: itfResult.code };
+      pozoActual.registro = registroResult.status === 'ok' ? { found: true, data: registroResult.data } : { found: false, code: registroResult.code };
+      pozoActual.ubicacion = ubicacionResult.status === 'ok' ? { found: true, data: ubicacionResult.data } : { found: false, code: ubicacionResult.code };
+      pozoActual.ne = neResult.status === 'ok' ? { found: true, data: neResult.data } : { found: false, code: neResult.code };
 
       renderHubResultado(pozoActual);
     }).catch(function () {
@@ -1232,6 +1268,11 @@
         sessionToken = result.data.sessionToken || stored;
         localStorage.setItem('sessionToken', sessionToken);
         currentEmail = result.data.email;
+        // checkSession corre en cada apertura de la app (no en cada
+        // busqueda) - es el punto donde una sesion ya abierta hace mucho
+        // recoge un cambio de permisos hecho en la hoja "Usuarios",
+        // ademas del cache de 5 min del lado del backend.
+        permisosActuales = result.data.permisos || permisosActuales;
         enterMain();
       } else if (result.code === 'USER_DISABLED') {
         showScreen('disabled');

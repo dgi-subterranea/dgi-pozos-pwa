@@ -63,12 +63,15 @@ function installAppsScriptFakes() {
   global.profileService_getProfile = jest.fn();
   global.registryRepository_getWellRecord = jest.fn();
   global.registryService_getWellRecord = jest.fn();
+  global.registryService_getWellLocation = jest.fn();
   global.registryRepository_getMetadata = jest.fn();
   global.registryService_getMetadata = jest.fn();
   global.nivelesEstaticosRepository_getPunto = jest.fn();
   global.nivelesEstaticosService_getPunto = jest.fn();
   global.verifySessionToken = jest.fn();
   global.isUserActive = jest.fn();
+  global.getUserAccess = jest.fn();
+  global.hasPermission = jest.fn();
 }
 
 module.exports = { installAppsScriptFakes };

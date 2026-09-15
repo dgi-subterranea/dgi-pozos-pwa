@@ -43,6 +43,142 @@ describe('registryService_getWellRecord', () => {
     RegistryService.registryService_getWellRecord('07-1234');
     expect(global.registryRepository_getWellRecord).toHaveBeenCalledWith('07-1234');
   });
+
+  // Caso central de seguridad: coordenadas/coordenadasProvincia/
+  // ubicacionResuelta NUNCA viajan por getWellRecord - es estructural,
+  // no depende de ningun permiso (ver registryService_getWellLocation,
+  // el unico camino autorizado para esos 3 campos).
+  test('nunca incluye coordenadas geograficas, sin importar que el repositorio las traiga', () => {
+    global.registryRepository_getWellRecord.mockReturnValue({
+      found: true,
+      record: {
+        wellId: '14-0202',
+        ubicacion: {
+          domicilioPozo: 'CALLE C ESQ. 6 Y 7',
+          planoDgi: '8418-F',
+          planoCatastro: null,
+          coordenadas: { x: 2487370.5, y: 6299934 },
+          coordenadasProvincia: [{ x: 2487371.0, y: 6299934.0 }],
+          ubicacionResuelta: { estado: 'corroborada', lat: -33.44429, lon: -69.13583 }
+        }
+      }
+    });
+
+    const result = RegistryService.registryService_getWellRecord('14-0202');
+
+    expect(result.record.ubicacion).toEqual({ domicilioPozo: 'CALLE C ESQ. 6 Y 7', planoDgi: '8418-F' });
+    expect(result.record.ubicacion.coordenadas).toBeUndefined();
+    expect(result.record.ubicacion.coordenadasProvincia).toBeUndefined();
+    expect(result.record.ubicacion.ubicacionResuelta).toBeUndefined();
+  });
+
+  test('conserva domicilioPozo/planoDgi/planoCatastro - son de Datos, no geograficos', () => {
+    global.registryRepository_getWellRecord.mockReturnValue({
+      found: true,
+      record: {
+        wellId: '04-0263',
+        ubicacion: { domicilioPozo: 'TIRASSO A 355M', planoDgi: '12490-P', planoCatastro: '69758', coordenadas: null }
+      }
+    });
+
+    const result = RegistryService.registryService_getWellRecord('04-0263');
+
+    expect(result.record.ubicacion).toEqual({ domicilioPozo: 'TIRASSO A 355M', planoDgi: '12490-P', planoCatastro: '69758' });
+  });
+
+  test('un record sin ubicacion no rompe (no todos los registros la tienen necesariamente)', () => {
+    global.registryRepository_getWellRecord.mockReturnValue({
+      found: true,
+      record: { wellId: '01-0012' }
+    });
+
+    const result = RegistryService.registryService_getWellRecord('01-0012');
+
+    expect(result.record).toEqual({ wellId: '01-0012' });
+  });
+});
+
+describe('registryService_sanitizarUbicacionParaDatos', () => {
+  test('quita solo los 3 campos geograficos, conserva el resto de ubicacion y del record', () => {
+    const record = {
+      wellId: '14-0202',
+      identificacion: { departamento: 'TUPUNGATO' },
+      ubicacion: {
+        domicilioPozo: 'X', planoDgi: 'Y', planoCatastro: 'Z',
+        coordenadas: { x: 1, y: 2 }, coordenadasProvincia: [{ x: 3, y: 4 }], ubicacionResuelta: { estado: 'unica' }
+      }
+    };
+    const sanitized = RegistryService.registryService_sanitizarUbicacionParaDatos(record);
+    expect(sanitized).toEqual({
+      wellId: '14-0202',
+      identificacion: { departamento: 'TUPUNGATO' },
+      ubicacion: { domicilioPozo: 'X', planoDgi: 'Y', planoCatastro: 'Z' }
+    });
+  });
+
+  test('no muta el record original', () => {
+    const record = { wellId: '01-0012', ubicacion: { coordenadas: { x: 1, y: 2 } } };
+    RegistryService.registryService_sanitizarUbicacionParaDatos(record);
+    expect(record.ubicacion.coordenadas).toEqual({ x: 1, y: 2 });
+  });
+});
+
+describe('registryService_getWellLocation', () => {
+  test('no encontrado -> found:false', () => {
+    global.registryRepository_getWellRecord.mockReturnValue({ found: false });
+    expect(RegistryService.registryService_getWellLocation('01-9999')).toEqual({ found: false });
+  });
+
+  test('encontrado -> found:true con solo wellId + los 3 campos geograficos, nada mas de la ficha', () => {
+    global.registryRepository_getWellRecord.mockReturnValue({
+      found: true,
+      record: {
+        wellId: '14-0202',
+        titularidad: { titular: 'FRANCESCHETTI, MARIANA LOURDES' },
+        identificacion: { departamento: 'TUPUNGATO' },
+        ubicacion: {
+          domicilioPozo: 'CALLE C ESQ. 6 Y 7', planoDgi: '8418-F',
+          coordenadas: { x: 2487370.5, y: 6299934 },
+          coordenadasProvincia: [{ x: 2487371.0, y: 6299934.0 }],
+          ubicacionResuelta: { estado: 'corroborada', lat: -33.44429, lon: -69.13583 }
+        }
+      }
+    });
+
+    const result = RegistryService.registryService_getWellLocation('14-0202');
+
+    expect(result.found).toBe(true);
+    expect(result.location).toEqual({
+      wellId: '14-0202',
+      coordenadas: { x: 2487370.5, y: 6299934 },
+      coordenadasProvincia: [{ x: 2487371.0, y: 6299934.0 }],
+      ubicacionResuelta: { estado: 'corroborada', lat: -33.44429, lon: -69.13583 }
+    });
+    expect(result.location.titularidad).toBeUndefined();
+    expect(result.location.domicilioPozo).toBeUndefined();
+  });
+
+  test('reusa registryRepository_getWellRecord (mismo cache por wellId que getWellRecord) - no hay repositorio propio', () => {
+    global.registryRepository_getWellRecord.mockReturnValue({ found: false });
+    RegistryService.registryService_getWellLocation('07-1234');
+    expect(global.registryRepository_getWellRecord).toHaveBeenCalledWith('07-1234');
+  });
+
+  test('pozo sin coordenadas del Reporte Pozos: coordenadas queda ausente (null se limpia), coordenadasProvincia vacio se conserva', () => {
+    global.registryRepository_getWellRecord.mockReturnValue({
+      found: true,
+      record: {
+        wellId: '04-0263',
+        ubicacion: { coordenadas: null, coordenadasProvincia: [], ubicacionResuelta: { estado: 'sinCoordenadas' } }
+      }
+    });
+
+    const result = RegistryService.registryService_getWellLocation('04-0263');
+
+    expect(result.location.coordenadas).toBeUndefined();
+    expect(result.location.coordenadasProvincia).toEqual([]);
+    expect(result.location.ubicacionResuelta).toEqual({ estado: 'sinCoordenadas' });
+  });
 });
 
 describe('registryService_cleanRecord', () => {
