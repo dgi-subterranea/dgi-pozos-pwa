@@ -1194,13 +1194,11 @@
     var pNe = fetchSiTienePermiso(permisosActuales.ne, function () { return apiGetMonitoringPoint(sessionToken, wellId); });
 
     Promise.all([pItf, pRegistro, pUbicacion, pNe]).then(function (results) {
-      // Esta busqueda puede haber quedado obsoleta si el usuario ya
-      // disparo otra mientras esta seguia en vuelo.
-      if (!pozoActual || pozoActual.wellId !== wellId) {
-        return;
-      }
       var itfResult = results[0], registroResult = results[1], ubicacionResult = results[2], neResult = results[3];
 
+      // Estos dos casos reflejan el estado real de la sesion (no del
+      // hub que se este mostrando en pantalla), asi que se atienden sin
+      // importar si esta busqueda quedo obsoleta mientras tanto.
       if (itfResult.code === 'USER_DISABLED' || registroResult.code === 'USER_DISABLED' || ubicacionResult.code === 'USER_DISABLED' || neResult.code === 'USER_DISABLED') {
         showScreen('disabled');
         return;
@@ -1215,25 +1213,40 @@
       // aparece), pero PERMISSION_DENIED y *_NOT_FOUND nunca se
       // colapsan al mismo valor: el code sigue disponible para quien lo
       // necesite mas adelante (diagnostico, futura UX distinta, etc.).
-      pozoActual.itf = itfResult.status === 'ok' ? { found: true, data: itfResult.data } : { found: false, code: itfResult.code };
-      pozoActual.registro = registroResult.status === 'ok' ? { found: true, data: registroResult.data } : { found: false, code: registroResult.code };
-      pozoActual.ubicacion = ubicacionResult.status === 'ok' ? { found: true, data: ubicacionResult.data } : { found: false, code: ubicacionResult.code };
-      pozoActual.ne = neResult.status === 'ok' ? { found: true, data: neResult.data } : { found: false, code: neResult.code };
+      // Se calculan como variables locales, no directamente sobre
+      // pozoActual: esta busqueda puede haber quedado obsoleta (el
+      // usuario ya disparo otra mientras esta seguia en vuelo) y en ese
+      // caso no debe pisar el hub que esta en pantalla - pero eso solo
+      // afecta al render, no al registro/notificacion de abajo.
+      var itf = itfResult.status === 'ok' ? { found: true, data: itfResult.data } : { found: false, code: itfResult.code };
+      var registro = registroResult.status === 'ok' ? { found: true, data: registroResult.data } : { found: false, code: registroResult.code };
+      var ubicacion = ubicacionResult.status === 'ok' ? { found: true, data: ubicacionResult.data } : { found: false, code: ubicacionResult.code };
+      var ne = neResult.status === 'ok' ? { found: true, data: neResult.data } : { found: false, code: neResult.code };
 
-      renderHubResultado(pozoActual);
+      if (pozoActual && pozoActual.wellId === wellId) {
+        pozoActual.itf = itf;
+        pozoActual.registro = registro;
+        pozoActual.ubicacion = ubicacion;
+        pozoActual.ne = ne;
+        renderHubResultado(pozoActual);
+      }
 
-      // Un solo aviso de Telegram por busqueda, disparado aca (no desde
-      // cada fetch individual de arriba). Fire-and-forget: no bloquea el
-      // render ya hecho, y un error de red acá no debe mostrarse - el
-      // backend ya audita en Historial si Telegram mismo falla.
-      apiNotifyWellSearch(sessionToken, wellId, {
-        perfil: pozoActual.itf.found,
-        datos: pozoActual.registro.found,
-        ubicacion: pozoActual.ubicacion.found,
-        ne: pozoActual.ne.found
+      // Registro en la hoja Busquedas + aviso de Telegram: efectos del
+      // lado del backend, independientes del render de arriba. Esta
+      // busqueda fue iniciada realmente por el usuario aunque haya
+      // quedado obsoleta para el hub, asi que se registra/notifica
+      // igual, con los datos de ESTA busqueda (itf/registro/ubicacion/ne
+      // locales, nunca leidos de pozoActual que puede ya ser de otra).
+      apiRegisterWellSearch(sessionToken, wellId, {
+        perfil: itf.found,
+        datos: registro.found,
+        ubicacion: ubicacion.found,
+        ne: ne.found
       }).catch(function () {});
     }).catch(function () {
-      renderHubError(networkAwareMessage());
+      if (pozoActual && pozoActual.wellId === wellId) {
+        renderHubError(networkAwareMessage());
+      }
     });
   }
 

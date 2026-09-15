@@ -76,6 +76,8 @@ function installAppsScriptFakes() {
   global.hasPermission = jest.fn();
   global.telegramRepository_sendMessage = jest.fn();
   global.notificationService_notifyWellSearch = jest.fn();
+  global.sheetSearchHistoryRepository_logSearch = jest.fn();
+  global.searchHistoryService_registerSearch = jest.fn();
 }
 
 module.exports = { installAppsScriptFakes };

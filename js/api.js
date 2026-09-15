@@ -46,8 +46,10 @@ function apiGetWellLocation(sessionToken, wellId) {
 // keepalive: true - para que el request tenga mas chance de llegar
 // aunque el usuario cierre/navegue afuera de la PWA justo despues de
 // buscar (fire-and-forget, no se espera ni se usa la respuesta). Un
-// solo aviso por busqueda, disparado una vez al terminar buscarPozo() -
-// nunca desde los fetches individuales de cada modulo.
-function apiNotifyWellSearch(sessionToken, wellId, modulos) {
-  return callBackend('notifyWellSearch', { sessionToken: sessionToken, wellId: wellId, modulos: modulos }, { keepalive: true });
+// solo registro por busqueda, disparado una vez al terminar buscarPozo() -
+// nunca desde los fetches individuales de cada modulo. Registra en la
+// hoja Busquedas y dispara la notificacion Telegram (efectos
+// independientes del lado del backend).
+function apiRegisterWellSearch(sessionToken, wellId, modulos) {
+  return callBackend('registerWellSearch', { sessionToken: sessionToken, wellId: wellId, modulos: modulos }, { keepalive: true });
 }

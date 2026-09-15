@@ -539,7 +539,7 @@ describe('validarPermiso', () => {
   });
 });
 
-describe('handleNotifyWellSearch', () => {
+describe('handleRegisterWellSearch', () => {
   function mockAccess(nombre) {
     global.getUserAccess.mockReturnValue({
       active: true,
@@ -548,135 +548,171 @@ describe('handleNotifyWellSearch', () => {
     });
   }
 
-  test('sessionToken invalido: UNAUTHORIZED, no notifica', () => {
+  // Por defecto ambos efectos "salen bien" - los tests de cada falla se
+  // encargan de pisar esto donde corresponda.
+  function mockAmbosOk() {
+    global.searchHistoryService_registerSearch.mockReturnValue({ logged: true });
+    global.notificationService_notifyWellSearch.mockReturnValue({ sent: true });
+  }
+
+  test('sessionToken invalido: UNAUTHORIZED, no registra ni notifica', () => {
     global.verifySessionToken.mockReturnValue({ valid: false, reason: 'expirado' });
 
-    const result = Api.handleNotifyWellSearch('token-vencido', '04-0263', { perfil: true });
+    const result = Api.handleRegisterWellSearch('token-vencido', '04-0263', { perfil: true });
 
     expect(result.status).toBe('error');
     expect(result.code).toBe('UNAUTHORIZED');
+    expect(global.searchHistoryService_registerSearch).not.toHaveBeenCalled();
     expect(global.notificationService_notifyWellSearch).not.toHaveBeenCalled();
   });
 
-  test('usuario deshabilitado: USER_DISABLED, no notifica', () => {
+  test('usuario deshabilitado: USER_DISABLED, no registra ni notifica', () => {
     global.verifySessionToken.mockReturnValue({ valid: true, email: 'user@example.com' });
     global.isUserActive.mockReturnValue(false);
 
-    const result = Api.handleNotifyWellSearch('token-valido', '04-0263', {});
+    const result = Api.handleRegisterWellSearch('token-valido', '04-0263', {});
 
     expect(result.status).toBe('error');
     expect(result.code).toBe('USER_DISABLED');
+    expect(global.searchHistoryService_registerSearch).not.toHaveBeenCalled();
     expect(global.notificationService_notifyWellSearch).not.toHaveBeenCalled();
   });
 
-  test('formato de wellId invalido: INVALID_WELL_ID, no notifica', () => {
+  test('formato de wellId invalido: INVALID_WELL_ID, no registra ni notifica', () => {
     mockValidSession();
     mockAccess();
 
-    const result = Api.handleNotifyWellSearch('token-valido', '01-ABC', {});
+    const result = Api.handleRegisterWellSearch('token-valido', '01-ABC', {});
 
     expect(result.status).toBe('error');
     expect(result.code).toBe('INVALID_WELL_ID');
+    expect(global.searchHistoryService_registerSearch).not.toHaveBeenCalled();
     expect(global.notificationService_notifyWellSearch).not.toHaveBeenCalled();
   });
 
   // Caso central de seguridad: la identidad SIEMPRE sale del
-  // sessionToken verificado, nunca de un email que mande el body.
-  test('la identidad usada para notificar es la del sessionToken, nunca un email del body', () => {
+  // sessionToken verificado, nunca de un email que mande el body -
+  // vale para los dos efectos.
+  test('la identidad usada es la del sessionToken, nunca un email del body', () => {
     mockValidSession('real@example.com');
     mockAccess('Usuario Real');
-    global.notificationService_notifyWellSearch.mockReturnValue({ sent: true });
+    mockAmbosOk();
 
-    Api.handleNotifyWellSearch('token-valido', '04-0263', { perfil: true, email: 'atacante@evil.com' });
+    Api.handleRegisterWellSearch('token-valido', '04-0263', { perfil: true, email: 'atacante@evil.com' });
 
+    expect(global.searchHistoryService_registerSearch).toHaveBeenCalledWith(
+      'real@example.com', 'Usuario Real', '04-0263', { perfil: true, email: 'atacante@evil.com' }
+    );
     expect(global.notificationService_notifyWellSearch).toHaveBeenCalledWith(
       'real@example.com', 'Usuario Real', '04-0263', { perfil: true, email: 'atacante@evil.com' }
     );
   });
 
-  test('pozo encontrado: notifica con los modulos recibidos, devuelve status ok', () => {
+  test('pozo encontrado: registra Y notifica con los modulos recibidos, devuelve status ok', () => {
     mockValidSession('juan@example.com');
     mockAccess('Juan Pérez');
-    global.notificationService_notifyWellSearch.mockReturnValue({ sent: true });
+    mockAmbosOk();
 
-    const result = Api.handleNotifyWellSearch('token-valido', '04-0263', { perfil: true, datos: true, ubicacion: true, ne: true });
+    const result = Api.handleRegisterWellSearch('token-valido', '04-0263', { perfil: true, datos: true, ubicacion: true, ne: true });
 
     expect(result).toEqual({ status: 'ok' });
+    expect(global.searchHistoryService_registerSearch).toHaveBeenCalledWith(
+      'juan@example.com', 'Juan Pérez', '04-0263', { perfil: true, datos: true, ubicacion: true, ne: true }
+    );
     expect(global.notificationService_notifyWellSearch).toHaveBeenCalledWith(
       'juan@example.com', 'Juan Pérez', '04-0263', { perfil: true, datos: true, ubicacion: true, ne: true }
     );
   });
 
-  test('pozo no encontrado (modulos vacio): igual devuelve status ok, notifica igual', () => {
+  test('pozo no encontrado (modulos vacio): igual registra y notifica, devuelve status ok', () => {
     mockValidSession();
     mockAccess();
-    global.notificationService_notifyWellSearch.mockReturnValue({ sent: true });
+    mockAmbosOk();
 
-    const result = Api.handleNotifyWellSearch('token-valido', '05-9999', {});
+    const result = Api.handleRegisterWellSearch('token-valido', '05-9999', {});
 
     expect(result).toEqual({ status: 'ok' });
-    expect(global.notificationService_notifyWellSearch).toHaveBeenCalledWith(
-      expect.any(String), expect.anything(), '05-9999', {}
-    );
+    expect(global.searchHistoryService_registerSearch).toHaveBeenCalledWith(expect.any(String), expect.anything(), '05-9999', {});
+    expect(global.notificationService_notifyWellSearch).toHaveBeenCalledWith(expect.any(String), expect.anything(), '05-9999', {});
   });
 
-  test('deduplicado: status ok igual, no se audita como error', () => {
+  test('Telegram deduplicado: status ok igual, no se audita como error, el registro en Busquedas se intenta igual', () => {
     mockValidSession('user@example.com');
     mockAccess();
+    global.searchHistoryService_registerSearch.mockReturnValue({ logged: true });
     global.notificationService_notifyWellSearch.mockReturnValue({ sent: false, reason: 'DEDUPED' });
 
-    const result = Api.handleNotifyWellSearch('token-valido', '04-0263', {});
+    const result = Api.handleRegisterWellSearch('token-valido', '04-0263', {});
 
     expect(result).toEqual({ status: 'ok' });
+    expect(global.searchHistoryService_registerSearch).toHaveBeenCalled();
     expect(global.logHistoryEvent).not.toHaveBeenCalled();
   });
 
   // El caso pedido explicitamente: un error de Telegram nunca debe
-  // afectar la respuesta de esta accion ni, por extension, la busqueda
-  // que ya se resolvio en el frontend antes de llamar a esto.
-  test('error de Telegram (notificationService devuelve reason ERROR): status ok igual, se audita TELEGRAM_ERROR', () => {
+  // afectar la respuesta de esta accion, y el registro en Busquedas
+  // (independiente) se intenta de todas formas.
+  test('error de Telegram: status ok igual, se audita TELEGRAM_ERROR, Busquedas se registra igual', () => {
     mockValidSession('user@example.com');
     mockAccess();
+    global.searchHistoryService_registerSearch.mockReturnValue({ logged: true });
     global.notificationService_notifyWellSearch.mockReturnValue({ sent: false, reason: 'ERROR' });
 
-    const result = Api.handleNotifyWellSearch('token-valido', '04-0263', { perfil: true });
+    const result = Api.handleRegisterWellSearch('token-valido', '04-0263', { perfil: true });
 
     expect(result).toEqual({ status: 'ok' });
-    expect(global.logHistoryEvent).toHaveBeenCalledWith('user@example.com', 'notifyWellSearch', '04-0263', 'TELEGRAM_ERROR');
+    expect(global.searchHistoryService_registerSearch).toHaveBeenCalled();
+    expect(global.logHistoryEvent).toHaveBeenCalledWith('user@example.com', 'registerWellSearch', '04-0263', 'TELEGRAM_ERROR');
   });
 
-  test('si notificationService lanza una excepcion inesperada: igual status ok, se audita TELEGRAM_ERROR, no se propaga', () => {
+  // El caso simetrico: si falla el registro en Busquedas, Telegram se
+  // intenta igual - son independientes en los dos sentidos.
+  test('error al registrar en Busquedas: status ok igual, se audita SEARCH_LOG_ERROR, Telegram se intenta igual', () => {
     mockValidSession('user@example.com');
     mockAccess();
-    global.notificationService_notifyWellSearch.mockImplementation(() => {
-      throw new Error('fallo inesperado');
-    });
-
-    const result = Api.handleNotifyWellSearch('token-valido', '04-0263', {});
-
-    expect(result).toEqual({ status: 'ok' });
-    expect(global.logHistoryEvent).toHaveBeenCalledWith('user@example.com', 'notifyWellSearch', '04-0263', 'TELEGRAM_ERROR');
-  });
-
-  test('envio exitoso NO agrega fila a Historial (las llamadas reales de la busqueda ya quedaron registradas)', () => {
-    mockValidSession();
-    mockAccess();
+    global.searchHistoryService_registerSearch.mockReturnValue({ logged: false });
     global.notificationService_notifyWellSearch.mockReturnValue({ sent: true });
 
-    Api.handleNotifyWellSearch('token-valido', '04-0263', { perfil: true });
+    const result = Api.handleRegisterWellSearch('token-valido', '04-0263', { perfil: true });
+
+    expect(result).toEqual({ status: 'ok' });
+    expect(global.notificationService_notifyWellSearch).toHaveBeenCalled();
+    expect(global.logHistoryEvent).toHaveBeenCalledWith('user@example.com', 'registerWellSearch', '04-0263', 'SEARCH_LOG_ERROR');
+  });
+
+  test('ambos efectos fallan: status ok igual, se auditan ambos errores, ninguno bloquea al otro', () => {
+    mockValidSession('user@example.com');
+    mockAccess();
+    global.searchHistoryService_registerSearch.mockImplementation(() => { throw new Error('Sheets caido'); });
+    global.notificationService_notifyWellSearch.mockImplementation(() => { throw new Error('Telegram caido'); });
+
+    const result = Api.handleRegisterWellSearch('token-valido', '04-0263', {});
+
+    expect(result).toEqual({ status: 'ok' });
+    expect(global.logHistoryEvent).toHaveBeenCalledWith('user@example.com', 'registerWellSearch', '04-0263', 'SEARCH_LOG_ERROR');
+    expect(global.logHistoryEvent).toHaveBeenCalledWith('user@example.com', 'registerWellSearch', '04-0263', 'TELEGRAM_ERROR');
+  });
+
+  test('exito en ambos NO agrega fila a Historial (las llamadas reales de la busqueda ya quedaron registradas ahi)', () => {
+    mockValidSession();
+    mockAccess();
+    mockAmbosOk();
+
+    Api.handleRegisterWellSearch('token-valido', '04-0263', { perfil: true });
 
     expect(global.logHistoryEvent).not.toHaveBeenCalled();
   });
 
-  test('no requiere ningun permiso especifico de modulo - cualquier usuario activo puede notificar su propia busqueda', () => {
+  test('no requiere ningun permiso especifico de modulo - cualquier usuario activo puede registrar su propia busqueda', () => {
     mockValidSession();
     global.hasPermission.mockReturnValue(false); // sin ningun permiso de modulo
     mockAccess();
-    global.notificationService_notifyWellSearch.mockReturnValue({ sent: true });
+    mockAmbosOk();
 
-    const result = Api.handleNotifyWellSearch('token-valido', '04-0263', {});
+    const result = Api.handleRegisterWellSearch('token-valido', '04-0263', {});
 
     expect(result).toEqual({ status: 'ok' });
+    expect(global.searchHistoryService_registerSearch).toHaveBeenCalled();
     expect(global.notificationService_notifyWellSearch).toHaveBeenCalled();
   });
 });
