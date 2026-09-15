@@ -196,6 +196,19 @@
     }
     html += '</div>';
 
+    // Titular real de la Ficha del Pozo (padron), sin fetch adicional -
+    // ya vino en pozo.registro. Si no hay Ficha pero si hay un punto NE
+    // (caso especial sin wellId/padron, o un wellId monitoreado que no
+    // esta en el padron), se usa su nombreOriginal en su lugar - nunca
+    // se inventa un titular.
+    var tit = pozo.registro.found ? (pozo.registro.data.titularidad || {}).titular : null;
+    if (!tit && !pozo.registro.found && pozo.ne.found) {
+      tit = pozo.ne.data.nombreOriginal;
+    }
+    if (tit) {
+      html += '<p class="hub-titular">' + escapeHtml(tit) + '</p>';
+    }
+
     if (pozo.registro.found) {
       var ident = pozo.registro.data.identificacion || {};
       var sub = [ident.departamento, ident.distrito].filter(Boolean).join(' · ');
@@ -826,9 +839,14 @@
     corroborada: 'Ubicación confirmada',
     unica: 'Ubicación disponible'
   };
+  // "Irrigación" (no "Provincia"): la capa coordProvincia sale de un
+  // archivo llamado pozos_provincia (cubre pozos de toda la provincia),
+  // pero las coordenadas en si son las que releva el Departamento
+  // General de Irrigacion - decision explicita del usuario de no llamar
+  // "provincia" a la fuente en la UI.
   var FUENTE_LABEL = {
     reportePozos: 'Reporte Pozos',
-    coordProvincia: 'Coordenadas de la provincia'
+    coordProvincia: 'Irrigación'
   };
 
   function formatXY(c) {

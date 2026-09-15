@@ -902,6 +902,15 @@ button:hover,
   background: #fbeee5;
   color: var(--color-accent);
 }
+.hub-titular {
+  margin: 2px 0 0;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .hub-sub {
   margin: 3px 0 18px;
   font-size: 0.82rem;
