@@ -44,6 +44,26 @@ function getNivelesEstaticosFolderId() {
   return folderId;
 }
 
+// Notificaciones de busqueda por Telegram (ver NotificationService.js /
+// TelegramRepository.js) - secretos en Script Properties, nunca en el
+// codigo. El token nunca debe aparecer en logs ni mensajes de error, ver
+// TelegramRepository.js.
+function getTelegramBotToken() {
+  var token = PropertiesService.getScriptProperties().getProperty('TELEGRAM_BOT_TOKEN');
+  if (!token) {
+    throw new Error('TELEGRAM_BOT_TOKEN no configurado en Script Properties');
+  }
+  return token;
+}
+
+function getTelegramChatId() {
+  var chatId = PropertiesService.getScriptProperties().getProperty('TELEGRAM_CHAT_ID');
+  if (!chatId) {
+    throw new Error('TELEGRAM_CHAT_ID no configurado en Script Properties');
+  }
+  return chatId;
+}
+
 function getSpreadsheetId() {
   var spreadsheetId = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
   if (!spreadsheetId) {

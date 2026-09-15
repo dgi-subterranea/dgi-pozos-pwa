@@ -538,3 +538,145 @@ describe('validarPermiso', () => {
     expect(denegado.code).not.toBe(noEncontrado.code);
   });
 });
+
+describe('handleNotifyWellSearch', () => {
+  function mockAccess(nombre) {
+    global.getUserAccess.mockReturnValue({
+      active: true,
+      permisos: { perfil: true, datos: true, ubicacion: true, ne: true },
+      nombre: nombre === undefined ? 'Juan Pérez' : nombre
+    });
+  }
+
+  test('sessionToken invalido: UNAUTHORIZED, no notifica', () => {
+    global.verifySessionToken.mockReturnValue({ valid: false, reason: 'expirado' });
+
+    const result = Api.handleNotifyWellSearch('token-vencido', '04-0263', { perfil: true });
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('UNAUTHORIZED');
+    expect(global.notificationService_notifyWellSearch).not.toHaveBeenCalled();
+  });
+
+  test('usuario deshabilitado: USER_DISABLED, no notifica', () => {
+    global.verifySessionToken.mockReturnValue({ valid: true, email: 'user@example.com' });
+    global.isUserActive.mockReturnValue(false);
+
+    const result = Api.handleNotifyWellSearch('token-valido', '04-0263', {});
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('USER_DISABLED');
+    expect(global.notificationService_notifyWellSearch).not.toHaveBeenCalled();
+  });
+
+  test('formato de wellId invalido: INVALID_WELL_ID, no notifica', () => {
+    mockValidSession();
+    mockAccess();
+
+    const result = Api.handleNotifyWellSearch('token-valido', '01-ABC', {});
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('INVALID_WELL_ID');
+    expect(global.notificationService_notifyWellSearch).not.toHaveBeenCalled();
+  });
+
+  // Caso central de seguridad: la identidad SIEMPRE sale del
+  // sessionToken verificado, nunca de un email que mande el body.
+  test('la identidad usada para notificar es la del sessionToken, nunca un email del body', () => {
+    mockValidSession('real@example.com');
+    mockAccess('Usuario Real');
+    global.notificationService_notifyWellSearch.mockReturnValue({ sent: true });
+
+    Api.handleNotifyWellSearch('token-valido', '04-0263', { perfil: true, email: 'atacante@evil.com' });
+
+    expect(global.notificationService_notifyWellSearch).toHaveBeenCalledWith(
+      'real@example.com', 'Usuario Real', '04-0263', { perfil: true, email: 'atacante@evil.com' }
+    );
+  });
+
+  test('pozo encontrado: notifica con los modulos recibidos, devuelve status ok', () => {
+    mockValidSession('juan@example.com');
+    mockAccess('Juan Pérez');
+    global.notificationService_notifyWellSearch.mockReturnValue({ sent: true });
+
+    const result = Api.handleNotifyWellSearch('token-valido', '04-0263', { perfil: true, datos: true, ubicacion: true, ne: true });
+
+    expect(result).toEqual({ status: 'ok' });
+    expect(global.notificationService_notifyWellSearch).toHaveBeenCalledWith(
+      'juan@example.com', 'Juan Pérez', '04-0263', { perfil: true, datos: true, ubicacion: true, ne: true }
+    );
+  });
+
+  test('pozo no encontrado (modulos vacio): igual devuelve status ok, notifica igual', () => {
+    mockValidSession();
+    mockAccess();
+    global.notificationService_notifyWellSearch.mockReturnValue({ sent: true });
+
+    const result = Api.handleNotifyWellSearch('token-valido', '05-9999', {});
+
+    expect(result).toEqual({ status: 'ok' });
+    expect(global.notificationService_notifyWellSearch).toHaveBeenCalledWith(
+      expect.any(String), expect.anything(), '05-9999', {}
+    );
+  });
+
+  test('deduplicado: status ok igual, no se audita como error', () => {
+    mockValidSession('user@example.com');
+    mockAccess();
+    global.notificationService_notifyWellSearch.mockReturnValue({ sent: false, reason: 'DEDUPED' });
+
+    const result = Api.handleNotifyWellSearch('token-valido', '04-0263', {});
+
+    expect(result).toEqual({ status: 'ok' });
+    expect(global.logHistoryEvent).not.toHaveBeenCalled();
+  });
+
+  // El caso pedido explicitamente: un error de Telegram nunca debe
+  // afectar la respuesta de esta accion ni, por extension, la busqueda
+  // que ya se resolvio en el frontend antes de llamar a esto.
+  test('error de Telegram (notificationService devuelve reason ERROR): status ok igual, se audita TELEGRAM_ERROR', () => {
+    mockValidSession('user@example.com');
+    mockAccess();
+    global.notificationService_notifyWellSearch.mockReturnValue({ sent: false, reason: 'ERROR' });
+
+    const result = Api.handleNotifyWellSearch('token-valido', '04-0263', { perfil: true });
+
+    expect(result).toEqual({ status: 'ok' });
+    expect(global.logHistoryEvent).toHaveBeenCalledWith('user@example.com', 'notifyWellSearch', '04-0263', 'TELEGRAM_ERROR');
+  });
+
+  test('si notificationService lanza una excepcion inesperada: igual status ok, se audita TELEGRAM_ERROR, no se propaga', () => {
+    mockValidSession('user@example.com');
+    mockAccess();
+    global.notificationService_notifyWellSearch.mockImplementation(() => {
+      throw new Error('fallo inesperado');
+    });
+
+    const result = Api.handleNotifyWellSearch('token-valido', '04-0263', {});
+
+    expect(result).toEqual({ status: 'ok' });
+    expect(global.logHistoryEvent).toHaveBeenCalledWith('user@example.com', 'notifyWellSearch', '04-0263', 'TELEGRAM_ERROR');
+  });
+
+  test('envio exitoso NO agrega fila a Historial (las llamadas reales de la busqueda ya quedaron registradas)', () => {
+    mockValidSession();
+    mockAccess();
+    global.notificationService_notifyWellSearch.mockReturnValue({ sent: true });
+
+    Api.handleNotifyWellSearch('token-valido', '04-0263', { perfil: true });
+
+    expect(global.logHistoryEvent).not.toHaveBeenCalled();
+  });
+
+  test('no requiere ningun permiso especifico de modulo - cualquier usuario activo puede notificar su propia busqueda', () => {
+    mockValidSession();
+    global.hasPermission.mockReturnValue(false); // sin ningun permiso de modulo
+    mockAccess();
+    global.notificationService_notifyWellSearch.mockReturnValue({ sent: true });
+
+    const result = Api.handleNotifyWellSearch('token-valido', '04-0263', {});
+
+    expect(result).toEqual({ status: 'ok' });
+    expect(global.notificationService_notifyWellSearch).toHaveBeenCalled();
+  });
+});

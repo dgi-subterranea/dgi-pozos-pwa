@@ -55,6 +55,8 @@ function installAppsScriptFakes() {
 
   global.GOOGLE_CLIENT_ID = 'test-client-id.apps.googleusercontent.com';
   global.getSessionSecret = () => 'test-session-secret';
+  global.getTelegramBotToken = () => 'test-telegram-token-nunca-debe-aparecer-en-un-error';
+  global.getTelegramChatId = () => '-1000000000';
 
   global.UrlFetchApp = { fetch: jest.fn() };
   global.sheetUserRepository_getUserStatus = jest.fn();
@@ -72,6 +74,8 @@ function installAppsScriptFakes() {
   global.isUserActive = jest.fn();
   global.getUserAccess = jest.fn();
   global.hasPermission = jest.fn();
+  global.telegramRepository_sendMessage = jest.fn();
+  global.notificationService_notifyWellSearch = jest.fn();
 }
 
 module.exports = { installAppsScriptFakes };

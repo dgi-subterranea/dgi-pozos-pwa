@@ -1221,6 +1221,17 @@
       pozoActual.ne = neResult.status === 'ok' ? { found: true, data: neResult.data } : { found: false, code: neResult.code };
 
       renderHubResultado(pozoActual);
+
+      // Un solo aviso de Telegram por busqueda, disparado aca (no desde
+      // cada fetch individual de arriba). Fire-and-forget: no bloquea el
+      // render ya hecho, y un error de red acá no debe mostrarse - el
+      // backend ya audita en Historial si Telegram mismo falla.
+      apiNotifyWellSearch(sessionToken, wellId, {
+        perfil: pozoActual.itf.found,
+        datos: pozoActual.registro.found,
+        ubicacion: pozoActual.ubicacion.found,
+        ne: pozoActual.ne.found
+      }).catch(function () {});
     }).catch(function () {
       renderHubError(networkAwareMessage());
     });

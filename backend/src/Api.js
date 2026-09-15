@@ -24,6 +24,8 @@ function doPost(e) {
         response = handleGetMonitoringPoint(body.sessionToken, body.monitoringId);
       } else if (body.action === 'getWellLocation') {
         response = handleGetWellLocation(body.sessionToken, body.wellId);
+      } else if (body.action === 'notifyWellSearch') {
+        response = handleNotifyWellSearch(body.sessionToken, body.wellId, body.modulos);
       } else {
         response = { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'accion desconocida: ' + body.action };
       }
@@ -274,6 +276,41 @@ function handleGetWellLocation(sessionToken, wellId) {
   return { status: 'ok', data: result.location };
 }
 
+// Un solo mensaje de Telegram por busqueda - el frontend llama a esta
+// accion UNA vez al terminar buscarPozo(), nunca desde
+// getProfile/getWellRecord/getWellLocation/getMonitoringPoint (esos se
+// llaman varias veces por busqueda). La identidad (email) sale SIEMPRE
+// del sessionToken verificado - nunca se confia en un email que mande
+// el navegador. "modulos" es contenido informativo para el texto del
+// mensaje, no interviene en permisos.
+//
+// Esta accion es secundaria a proposito: pase lo que pase con Telegram
+// (caido, mal configurado, deduplicado), siempre devuelve status:'ok' -
+// la busqueda del usuario ya se resolvio antes de que esto se llame, y
+// nunca debe verse afectada por esto. Un error real de Telegram se
+// audita en Historial (TELEGRAM_ERROR); un envio exitoso NO genera fila
+// nueva (las 3-4 llamadas reales de la busqueda ya quedaron registradas,
+// una fila mas seria redundante).
+function handleNotifyWellSearch(sessionToken, wellId, modulos) {
+  var validation = validateSessionAndWellId(sessionToken, wellId, 'notifyWellSearch');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  try {
+    var access = getUserAccess(session.email);
+    var resultado = notificationService_notifyWellSearch(session.email, access.nombre, wellId, modulos || {});
+    if (!resultado.sent && resultado.reason === 'ERROR') {
+      logHistoryEvent(session.email, 'notifyWellSearch', wellId, 'TELEGRAM_ERROR');
+    }
+  } catch (err) {
+    logHistoryEvent(session.email, 'notifyWellSearch', wellId, 'TELEGRAM_ERROR');
+  }
+
+  return { status: 'ok' };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     doPost,
@@ -282,6 +319,7 @@ if (typeof module !== 'undefined' && module.exports) {
     handleGetMetadata,
     handleGetMonitoringPoint,
     handleGetWellLocation,
+    handleNotifyWellSearch,
     validarPermiso,
     validateSession,
     validateSessionAndWellId

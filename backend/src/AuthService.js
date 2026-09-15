@@ -49,9 +49,16 @@ function getUserAccess(email) {
   // motivo (forma inesperada, columna faltante que ademas rompio el
   // objeto entero, etc.) - nunca se asume acceso por ausencia de dato.
   var permisosVacios = { perfil: false, datos: false, ubicacion: false, ne: false };
+  // nombre viaja en el MISMO objeto cacheado (misma lectura de Sheets
+  // que ya trae estado/permisos) - se usa para notificaciones de
+  // Telegram (ver NotificationService.js), no requiere una consulta
+  // aparte. Mismo trade-off de cache que el resto: un cambio de nombre
+  // en la hoja para un usuario ya activo puede tardar hasta
+  // USER_STATUS_CACHE_SECONDS en reflejarse.
   var access = {
     active: status.found && status.active,
-    permisos: (status.found && status.permisos) ? status.permisos : permisosVacios
+    permisos: (status.found && status.permisos) ? status.permisos : permisosVacios,
+    nombre: status.found ? (status.nombre || null) : null
   };
   if (access.active) {
     cache.put(cacheKey, JSON.stringify(access), USER_STATUS_CACHE_SECONDS);

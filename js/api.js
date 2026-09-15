@@ -3,13 +3,14 @@
 // Apps Script no maneja de forma confiable) - ver docs/architecture.md.
 var APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby_fttbCjlZaE7qjhZipqRxvLtdXZV1kCaEjyOeK8UZEJy9VgC5LmAGiyUtVeUZRq1Z/exec';
 
-function callBackend(action, payload) {
+function callBackend(action, payload, fetchOptions) {
   var body = Object.assign({ action: action }, payload || {});
-  return fetch(APPS_SCRIPT_URL, {
+  var options = Object.assign({
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify(body)
-  }).then(function (response) {
+  }, fetchOptions || {});
+  return fetch(APPS_SCRIPT_URL, options).then(function (response) {
     return response.json();
   });
 }
@@ -40,4 +41,13 @@ function apiGetMonitoringPoint(sessionToken, monitoringId) {
 
 function apiGetWellLocation(sessionToken, wellId) {
   return callBackend('getWellLocation', { sessionToken: sessionToken, wellId: wellId });
+}
+
+// keepalive: true - para que el request tenga mas chance de llegar
+// aunque el usuario cierre/navegue afuera de la PWA justo despues de
+// buscar (fire-and-forget, no se espera ni se usa la respuesta). Un
+// solo aviso por busqueda, disparado una vez al terminar buscarPozo() -
+// nunca desde los fetches individuales de cada modulo.
+function apiNotifyWellSearch(sessionToken, wellId, modulos) {
+  return callBackend('notifyWellSearch', { sessionToken: sessionToken, wellId: wellId, modulos: modulos }, { keepalive: true });
 }

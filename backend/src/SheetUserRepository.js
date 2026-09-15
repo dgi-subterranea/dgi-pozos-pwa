@@ -47,7 +47,7 @@ function sheetUserRepository_getUserStatus(email) {
 
   var data = sheet.getDataRange().getValues();
   if (data.length === 0) {
-    return { found: false, active: false, permisos: sheetUserRepository_permisosVacios() };
+    return { found: false, active: false, permisos: sheetUserRepository_permisosVacios(), nombre: null };
   }
 
   var indices = sheetUserRepository_indiceColumnas(data[0]);
@@ -59,14 +59,15 @@ function sheetUserRepository_getUserStatus(email) {
     if (rowEmail === normalizedEmail) {
       var estado = indices.estado >= 0 ? String(row[indices.estado]).trim().toLowerCase() : '';
       var permisos = {};
-      USUARIOS_COLUMNAS_PERMISO.forEach(function (nombre) {
-        permisos[nombre] = sheetUserRepository_leerPermiso(row, indices, nombre);
+      USUARIOS_COLUMNAS_PERMISO.forEach(function (columna) {
+        permisos[columna] = sheetUserRepository_leerPermiso(row, indices, columna);
       });
-      return { found: true, active: estado === 'activo', permisos: permisos };
+      var nombreUsuario = indices.nombre >= 0 ? (String(row[indices.nombre]).trim() || null) : null;
+      return { found: true, active: estado === 'activo', permisos: permisos, nombre: nombreUsuario };
     }
   }
 
-  return { found: false, active: false, permisos: sheetUserRepository_permisosVacios() };
+  return { found: false, active: false, permisos: sheetUserRepository_permisosVacios(), nombre: null };
 }
 
 if (typeof module !== 'undefined' && module.exports) {

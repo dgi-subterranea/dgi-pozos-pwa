@@ -227,6 +227,30 @@ describe('getUserAccess / hasPermission', () => {
     expect(global.sheetUserRepository_getUserStatus).toHaveBeenCalledTimes(1);
   });
 
+  test('getUserAccess propaga el nombre de la hoja Usuarios (para notificaciones de Telegram), en la misma consulta que estado/permisos', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({
+      found: true, active: true, permisos: permisosCompletos, nombre: 'Juan Pérez'
+    });
+
+    const access = AuthService.getUserAccess('juan@example.com');
+
+    expect(access.nombre).toBe('Juan Pérez');
+    expect(global.sheetUserRepository_getUserStatus).toHaveBeenCalledTimes(1);
+  });
+
+  test('usuario sin nombre cargado en la hoja: nombre queda null, no revienta', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({
+      found: true, active: true, permisos: permisosCompletos, nombre: null
+    });
+
+    expect(AuthService.getUserAccess('user@example.com').nombre).toBeNull();
+  });
+
+  test('usuario inexistente: nombre null (no se inventa)', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({ found: false, active: false, permisos: {}, nombre: null });
+    expect(AuthService.getUserAccess('desconocido@example.com').nombre).toBeNull();
+  });
+
   test('cambio de permisos compatible con sesion existente: el token no cambia, hasPermission refleja el nuevo valor apenas vence el cache', () => {
     const token = AuthService.createSessionToken('user@example.com');
 
