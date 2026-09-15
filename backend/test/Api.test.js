@@ -716,3 +716,213 @@ describe('handleRegisterWellSearch', () => {
     expect(global.notificationService_notifyWellSearch).toHaveBeenCalled();
   });
 });
+
+describe('handleGetMapaPozos', () => {
+  test('sessionToken invalido: UNAUTHORIZED, no consulta el servicio', () => {
+    global.verifySessionToken.mockReturnValue({ valid: false, reason: 'expirado' });
+
+    const result = Api.handleGetMapaPozos('token-vencido');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('UNAUTHORIZED');
+    expect(global.mapaService_getPozos).not.toHaveBeenCalled();
+  });
+
+  test('usuario deshabilitado: USER_DISABLED', () => {
+    global.verifySessionToken.mockReturnValue({ valid: true, email: 'user@example.com' });
+    global.isUserActive.mockReturnValue(false);
+
+    const result = Api.handleGetMapaPozos('token-valido');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('USER_DISABLED');
+  });
+
+  // El caso central del diseño: getMapaPozos requiere "ubicacion", nunca
+  // "datos" - el dataset general no lleva ningun campo que dependa de
+  // "datos".
+  test('ubicacion=NO (aunque tenga "datos"): PERMISSION_DENIED, no consulta el servicio', () => {
+    mockValidSession();
+    global.hasPermission.mockImplementation((email, modulo) => modulo === 'datos');
+
+    const result = Api.handleGetMapaPozos('token-valido');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('PERMISSION_DENIED');
+    expect(global.mapaService_getPozos).not.toHaveBeenCalled();
+  });
+
+  test('ubicacion=SI con datos=NO: OK, funciona sin necesitar el permiso "datos"', () => {
+    mockValidSession();
+    global.hasPermission.mockImplementation((email, modulo) => modulo === 'ubicacion');
+    global.mapaService_getPozos.mockReturnValue({
+      found: true,
+      pozos: [{ wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C' }],
+      metadata: { generadoEl: '2026-09-15T13:33:58-03:00', totalPuntos: 1 }
+    });
+
+    const result = Api.handleGetMapaPozos('token-valido');
+
+    expect(result.status).toBe('ok');
+    expect(result.data.pozos).toEqual([{ wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C' }]);
+  });
+
+  test('dataset encontrado: OK con pozos + metadata tal cual los devuelve el service', () => {
+    mockValidSession();
+    const pozos = [
+      { wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C' },
+      { wellId: '05-0001', lat: -33.1, lon: -68.5, estado: 'D' }
+    ];
+    const metadata = { generadoEl: '2026-09-15T13:33:58-03:00', totalPuntos: 2 };
+    global.mapaService_getPozos.mockReturnValue({ found: true, pozos, metadata });
+
+    const result = Api.handleGetMapaPozos('token-valido');
+
+    expect(result).toEqual({ status: 'ok', data: { pozos, metadata } });
+  });
+
+  // Caso central de seguridad: ningun punto del dataset debe traer mas
+  // que wellId/lat/lon/estado - esta prueba lo verifica a nivel del
+  // handler completo, no solo del service (ver tambien
+  // MapaService.test.js, que lo prueba a nivel unitario).
+  test('dataset sin campos sensibles en la respuesta del handler', () => {
+    mockValidSession();
+    global.mapaService_getPozos.mockReturnValue({
+      found: true,
+      pozos: [{ wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C' }],
+      metadata: null
+    });
+
+    const result = Api.handleGetMapaPozos('token-valido');
+
+    expect(Object.keys(result.data.pozos[0]).sort()).toEqual(['estado', 'lat', 'lon', 'wellId']);
+  });
+
+  test('pozos.json inexistente: MAPA_NOT_FOUND', () => {
+    mockValidSession();
+    global.mapaService_getPozos.mockReturnValue({ found: false });
+
+    const result = Api.handleGetMapaPozos('token-valido');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('MAPA_NOT_FOUND');
+  });
+
+  test('error del service/Drive: SERVICE_UNAVAILABLE', () => {
+    mockValidSession();
+    global.mapaService_getPozos.mockImplementation(() => {
+      throw new Error('Drive no disponible');
+    });
+
+    const result = Api.handleGetMapaPozos('token-valido');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('SERVICE_UNAVAILABLE');
+  });
+});
+
+describe('handleGetWellSummary', () => {
+  test('sessionToken invalido: UNAUTHORIZED, no consulta el servicio', () => {
+    global.verifySessionToken.mockReturnValue({ valid: false, reason: 'expirado' });
+
+    const result = Api.handleGetWellSummary('token-vencido', '01-0012');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('UNAUTHORIZED');
+    expect(global.registryService_getWellSummary).not.toHaveBeenCalled();
+  });
+
+  test('usuario deshabilitado: USER_DISABLED', () => {
+    global.verifySessionToken.mockReturnValue({ valid: true, email: 'user@example.com' });
+    global.isUserActive.mockReturnValue(false);
+
+    const result = Api.handleGetWellSummary('token-valido', '01-0012');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('USER_DISABLED');
+  });
+
+  test('formato de wellId invalido: INVALID_WELL_ID, no consulta el servicio', () => {
+    mockValidSession();
+
+    const result = Api.handleGetWellSummary('token-valido', '01-ABC');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('INVALID_WELL_ID');
+    expect(global.registryService_getWellSummary).not.toHaveBeenCalled();
+  });
+
+  // El caso central del diseño: getWellSummary requiere "datos", igual
+  // que getWellRecord - nunca "ubicacion" (el summary expone titular,
+  // que es contenido de Datos, no de Ubicacion).
+  test('datos=NO (aunque tenga "ubicacion"): PERMISSION_DENIED, no consulta el servicio', () => {
+    mockValidSession();
+    global.hasPermission.mockImplementation((email, modulo) => modulo === 'ubicacion');
+
+    const result = Api.handleGetWellSummary('token-valido', '01-0012');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('PERMISSION_DENIED');
+    expect(global.registryService_getWellSummary).not.toHaveBeenCalled();
+  });
+
+  test('datos=SI: OK con el summary tal cual lo devuelve el service', () => {
+    mockValidSession();
+    global.hasPermission.mockImplementation((email, modulo) => modulo === 'datos');
+    const summary = { wellId: '14-0202', titular: 'FRANCESCHETTI, MARIANA LOURDES', departamento: 'TUPUNGATO', distrito: 'LA ARBOLEDA' };
+    global.registryService_getWellSummary.mockReturnValue({ found: true, summary });
+
+    const result = Api.handleGetWellSummary('token-valido', '14-0202');
+
+    expect(result).toEqual({ status: 'ok', data: summary });
+  });
+
+  // Caso central de seguridad: el summary del popup nunca debe traer mas
+  // que los 4 campos autorizados, sin importar que el service (por un
+  // bug futuro) devolviera algo mas.
+  test('summary solo con los 4 campos autorizados', () => {
+    mockValidSession();
+    global.registryService_getWellSummary.mockReturnValue({
+      found: true,
+      summary: { wellId: '14-0202', titular: 'X', departamento: 'Y', distrito: 'Z' }
+    });
+
+    const result = Api.handleGetWellSummary('token-valido', '14-0202');
+
+    expect(Object.keys(result.data).sort()).toEqual(['departamento', 'distrito', 'titular', 'wellId']);
+  });
+
+  test('pozo inexistente: WELL_RECORD_NOT_FOUND', () => {
+    mockValidSession();
+    global.registryService_getWellSummary.mockReturnValue({ found: false });
+
+    const result = Api.handleGetWellSummary('token-valido', '01-9999');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('WELL_RECORD_NOT_FOUND');
+  });
+
+  test('error del service/Drive: SERVICE_UNAVAILABLE', () => {
+    mockValidSession();
+    global.registryService_getWellSummary.mockImplementation(() => {
+      throw new Error('Drive no disponible');
+    });
+
+    const result = Api.handleGetWellSummary('token-valido', '01-0012');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('SERVICE_UNAVAILABLE');
+  });
+
+  test('registra el evento getWellSummary en el historial con el resultado', () => {
+    mockValidSession('user@example.com');
+    global.registryService_getWellSummary.mockReturnValue({
+      found: true,
+      summary: { wellId: '01-0012', titular: 'X', departamento: 'Y', distrito: 'Z' }
+    });
+
+    Api.handleGetWellSummary('token-valido', '01-0012');
+
+    expect(global.logHistoryEvent).toHaveBeenCalledWith('user@example.com', 'getWellSummary', '01-0012', 'OK');
+  });
+});

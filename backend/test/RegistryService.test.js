@@ -181,6 +181,83 @@ describe('registryService_getWellLocation', () => {
   });
 });
 
+describe('registryService_getWellSummary', () => {
+  test('no encontrado -> found:false', () => {
+    global.registryRepository_getWellRecord.mockReturnValue({ found: false });
+    expect(RegistryService.registryService_getWellSummary('01-9999')).toEqual({ found: false });
+  });
+
+  test('encontrado -> found:true con solo los 4 campos autorizados', () => {
+    global.registryRepository_getWellRecord.mockReturnValue({
+      found: true,
+      record: {
+        wellId: '14-0202',
+        titularidad: { titular: 'FRANCESCHETTI, MARIANA LOURDES', domicilioTitular: 'CALLE X 123' },
+        identificacion: { departamento: 'TUPUNGATO', distrito: 'LA ARBOLEDA', nomenclatura: 'B00140202' },
+        ubicacion: {
+          coordenadas: { x: 2487370.5, y: 6299934 },
+          ubicacionResuelta: { estado: 'corroborada', lat: -33.44429, lon: -69.13583 }
+        },
+        tecnicas: { profundidadTotal: 80 }
+      }
+    });
+
+    const result = RegistryService.registryService_getWellSummary('14-0202');
+
+    expect(result.found).toBe(true);
+    expect(result.summary).toEqual({
+      wellId: '14-0202',
+      titular: 'FRANCESCHETTI, MARIANA LOURDES',
+      departamento: 'TUPUNGATO',
+      distrito: 'LA ARBOLEDA'
+    });
+    expect(Object.keys(result.summary).sort()).toEqual(['departamento', 'distrito', 'titular', 'wellId']);
+  });
+
+  // Caso central de seguridad: nunca coordenadas, nunca domicilio, nunca
+  // ningun otro campo de la ficha - solo los 4 explicitos, sin importar
+  // cuanto traiga el registro completo.
+  test('nunca incluye coordenadas ni ningun otro campo de la ficha completa', () => {
+    global.registryRepository_getWellRecord.mockReturnValue({
+      found: true,
+      record: {
+        wellId: '04-0263',
+        titularidad: { titular: 'PEREZ, JUAN' },
+        identificacion: { departamento: 'GUAYMALLEN', distrito: 'X' },
+        ubicacion: {
+          coordenadas: { x: 1, y: 2 },
+          coordenadasProvincia: [{ x: 3, y: 4 }],
+          ubicacionResuelta: { estado: 'unica', lat: -32.8, lon: -68.7 },
+          domicilioPozo: 'CALLE FALSA 123'
+        }
+      }
+    });
+
+    const result = RegistryService.registryService_getWellSummary('04-0263');
+
+    expect(result.summary.coordenadas).toBeUndefined();
+    expect(result.summary.ubicacion).toBeUndefined();
+    expect(result.summary.domicilioPozo).toBeUndefined();
+  });
+
+  test('campos ausentes en el registro -> null, nunca se omiten ni rompen', () => {
+    global.registryRepository_getWellRecord.mockReturnValue({
+      found: true,
+      record: { wellId: '01-0012' }
+    });
+
+    const result = RegistryService.registryService_getWellSummary('01-0012');
+
+    expect(result.summary).toEqual({ wellId: '01-0012', titular: null, departamento: null, distrito: null });
+  });
+
+  test('reusa registryRepository_getWellRecord (mismo cache por wellId que getWellRecord) - no hay repositorio propio', () => {
+    global.registryRepository_getWellRecord.mockReturnValue({ found: false });
+    RegistryService.registryService_getWellSummary('07-1234');
+    expect(global.registryRepository_getWellRecord).toHaveBeenCalledWith('07-1234');
+  });
+});
+
 describe('registryService_cleanRecord', () => {
   test('quita claves con valor null de un objeto', () => {
     const cleaned = RegistryService.registryService_cleanRecord({ a: 1, b: null, c: 'x' });

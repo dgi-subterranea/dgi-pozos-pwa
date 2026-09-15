@@ -78,6 +78,10 @@ function installAppsScriptFakes() {
   global.notificationService_notifyWellSearch = jest.fn();
   global.sheetSearchHistoryRepository_logSearch = jest.fn();
   global.searchHistoryService_registerSearch = jest.fn();
+  global.mapaRepository_getPozos = jest.fn();
+  global.mapaRepository_getMetadata = jest.fn();
+  global.mapaService_getPozos = jest.fn();
+  global.registryService_getWellSummary = jest.fn();
 }
 
 module.exports = { installAppsScriptFakes };

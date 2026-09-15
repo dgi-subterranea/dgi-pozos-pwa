@@ -63,6 +63,33 @@ function registryService_getWellLocation(wellId) {
   return { found: true, location: registryService_cleanRecord(location) };
 }
 
+// Popup liviano del Mapa de Pozos (getWellSummary): reutiliza el MISMO
+// repositorio y cache por wellId que getWellRecord (no es una lectura
+// nueva de Drive), pero devuelve solo 4 campos - nunca la ficha completa
+// ni coordenadas. Estructural, igual que
+// registryService_sanitizarUbicacionParaDatos: arma el objeto de salida
+// campo por campo en vez de recortar el registro completo, para que
+// agregar un campo nuevo a la ficha en el futuro nunca lo filtre aca sin
+// una decision explicita.
+function registryService_getWellSummary(wellId) {
+  var result = registryRepository_getWellRecord(wellId);
+  if (!result.found) {
+    return { found: false };
+  }
+  var record = result.record;
+  var identificacion = record.identificacion || {};
+  var titularidad = record.titularidad || {};
+  return {
+    found: true,
+    summary: {
+      wellId: record.wellId,
+      titular: titularidad.titular !== undefined ? titularidad.titular : null,
+      departamento: identificacion.departamento !== undefined ? identificacion.departamento : null,
+      distrito: identificacion.distrito !== undefined ? identificacion.distrito : null
+    }
+  };
+}
+
 // Quita recursivamente las claves con valor null de objetos y limpia cada
 // elemento de los arrays (ej. laboratorio.analisis[]). No toca arrays u
 // objetos vacios en si mismos (un array vacio, como analisis:[] cuando no
@@ -109,6 +136,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     registryService_getWellRecord,
     registryService_getWellLocation,
+    registryService_getWellSummary,
     registryService_cleanRecord,
     registryService_sanitizarUbicacionParaDatos,
     registryService_getMetadata

@@ -26,6 +26,10 @@ function doPost(e) {
         response = handleGetWellLocation(body.sessionToken, body.wellId);
       } else if (body.action === 'registerWellSearch') {
         response = handleRegisterWellSearch(body.sessionToken, body.wellId, body.modulos);
+      } else if (body.action === 'getMapaPozos') {
+        response = handleGetMapaPozos(body.sessionToken);
+      } else if (body.action === 'getWellSummary') {
+        response = handleGetWellSummary(body.sessionToken, body.wellId);
       } else {
         response = { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'accion desconocida: ' + body.action };
       }
@@ -322,6 +326,77 @@ function handleRegisterWellSearch(sessionToken, wellId, modulos) {
   return { status: 'ok' };
 }
 
+// Mapa de Pozos: dataset general (todos los puntos con coordenada
+// confirmada/disponible), requiere el permiso "ubicacion" - mismo
+// permiso que getWellLocation, coherente con que ambos exponen
+// coordenadas; nunca "datos" (el dataset general no lleva titular ni
+// ningun otro campo registral, ver MapaService.js). No es una accion
+// por-wellId (no recibe ni valida uno), asi que no pasa por
+// validateSessionAndWellId ni se audita por wellId en Historial - mismo
+// criterio que getMetadata.
+function handleGetMapaPozos(sessionToken) {
+  var validation = validateSession(sessionToken, 'getMapaPozos');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var permiso = validarPermiso(session, 'getMapaPozos', null, 'ubicacion');
+  if (!permiso.ok) {
+    return permiso.response;
+  }
+
+  var result;
+  try {
+    result = mapaService_getPozos();
+  } catch (err) {
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+
+  if (!result.found) {
+    return { status: 'error', code: 'MAPA_NOT_FOUND', message: 'no se encontro pozos.json' };
+  }
+
+  return { status: 'ok', data: { pozos: result.pozos, metadata: result.metadata } };
+}
+
+// Popup liviano del Mapa de Pozos: reutiliza el mismo
+// RegistryRepository/cache que getWellRecord (mismo archivo de
+// departamento, mismo cache por wellId - no es una lectura nueva de
+// Drive) pero devuelve solo 4 campos (ver
+// registryService_getWellSummary), nunca la ficha completa ni
+// coordenadas. Requiere "datos" (no "ubicacion") - es el mismo permiso
+// que getWellRecord, coherente con que ambos exponen identidad
+// registral (titular).
+function handleGetWellSummary(sessionToken, wellId) {
+  var validation = validateSessionAndWellId(sessionToken, wellId, 'getWellSummary');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var permiso = validarPermiso(session, 'getWellSummary', wellId, 'datos');
+  if (!permiso.ok) {
+    return permiso.response;
+  }
+
+  var result;
+  try {
+    result = registryService_getWellSummary(wellId);
+  } catch (err) {
+    logHistoryEvent(session.email, 'getWellSummary', wellId, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+
+  if (!result.found) {
+    logHistoryEvent(session.email, 'getWellSummary', wellId, 'WELL_RECORD_NOT_FOUND');
+    return { status: 'error', code: 'WELL_RECORD_NOT_FOUND', message: 'no se encontro ficha para ' + wellId };
+  }
+
+  logHistoryEvent(session.email, 'getWellSummary', wellId, 'OK');
+  return { status: 'ok', data: result.summary };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     doPost,
@@ -331,6 +406,8 @@ if (typeof module !== 'undefined' && module.exports) {
     handleGetMonitoringPoint,
     handleGetWellLocation,
     handleRegisterWellSearch,
+    handleGetMapaPozos,
+    handleGetWellSummary,
     validarPermiso,
     validateSession,
     validateSessionAndWellId

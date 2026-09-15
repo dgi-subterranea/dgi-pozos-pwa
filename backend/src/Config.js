@@ -64,6 +64,21 @@ function getTelegramChatId() {
   return chatId;
 }
 
+// Carpeta de Drive con pozos.json + metadata.json (Mapa de Pozos),
+// generados por scripts/reindex_mapa.py a partir de la salida ya
+// indexada de scripts/out/registro y subidos a mano. Carpeta distinta de
+// REGISTRY_FOLDER_ID a proposito: el mapa se regenera en su propio ritmo
+// (solo depende de coordenadas, no de toda la ficha registral) y su
+// contenido ya viene sanitizado por diseno (ver MapaService.js) - no
+// tiene sentido que comparta carpeta con datos registrales completos.
+function getMapaFolderId() {
+  var folderId = PropertiesService.getScriptProperties().getProperty('MAPA_FOLDER_ID');
+  if (!folderId) {
+    throw new Error('MAPA_FOLDER_ID no configurado en Script Properties');
+  }
+  return folderId;
+}
+
 function getSpreadsheetId() {
   var spreadsheetId = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
   if (!spreadsheetId) {
