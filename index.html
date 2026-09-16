@@ -192,14 +192,36 @@
         <p class="tv-header-label">Ubicaciones confirmadas y disponibles del padrón</p>
       </div>
     </div>
-    <div class="mapa-toolbar">
-      <div class="mapa-legend">
-        <span class="mapa-legend-item"><span class="mapa-dot mapa-dot-confirmada"></span>Confirmada</span>
-        <span class="mapa-legend-item"><span class="mapa-dot mapa-dot-disponible"></span>Disponible</span>
+    <!-- Mapa/Satelite: control compacto, arriba del mapa (aprobado - ver
+         punto 3 de la Etapa v2.1.0). Cambiar de capa nunca recarga los
+         13.804 puntos ni toca zoom/centro/filtros - ver
+         mapaController_cambiarCapaBase en js/mapa.js. -->
+    <div class="mapa-capas-base" role="group" aria-label="Tipo de mapa">
+      <button type="button" class="mapa-capa-chip active" data-capa="calle" aria-pressed="true">Mapa</button>
+      <button type="button" class="mapa-capa-chip" data-capa="satelite" aria-pressed="false">Satélite</button>
+    </div>
+
+    <div class="mapa-filtros">
+      <div class="mapa-filtro-grupo">
+        <p class="mapa-filtro-label">Departamento</p>
+        <div id="mapa-deptos-chips" class="mapa-chips-wrap">
+          <button type="button" class="mapa-depto-chip active" data-depto="todos" aria-pressed="true">Todos</button>
+        </div>
+        <button type="button" id="btn-mapa-deptos-expandir" class="mapa-expandir-btn" hidden></button>
       </div>
-      <select id="mapa-filtro-departamento" class="mapa-select" aria-label="Filtrar por departamento">
-        <option value="todos">Todos los departamentos</option>
-      </select>
+
+      <!-- Ubicacion: chips que son filtro real por estado C/D del dataset
+           (nunca por membresia a la red NE - ver adjustment #1 de la
+           Etapa 5B/5C, sigue vigente). Arrancan ambos activos; el click
+           que apagaria el ultimo activo se ignora (ver mapa.js) - nunca
+           quedan los 2 apagados a la vez. -->
+      <div class="mapa-filtro-grupo">
+        <p class="mapa-filtro-label">Ubicación</p>
+        <div class="mapa-chips-wrap">
+          <button type="button" class="mapa-estado-chip mapa-estado-chip-confirmada active" data-estado="C" aria-pressed="true">Confirmada</button>
+          <button type="button" class="mapa-estado-chip mapa-estado-chip-disponible active" data-estado="D" aria-pressed="true">Disponible</button>
+        </div>
+      </div>
     </div>
     <div id="mapa-contador" class="mapa-contador" hidden></div>
     <div class="mapa-viewport">

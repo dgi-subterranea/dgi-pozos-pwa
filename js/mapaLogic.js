@@ -70,6 +70,34 @@ function mapaLogic_filtrarPorDepartamento(pozos, codigo) {
   return pozos.filter(function (p) { return mapaLogic_departamentoDeWellId(p.wellId) === codigo; });
 }
 
+// Filtro por estado (chips Confirmada/Disponible - Etapa v2.1.0). Nunca
+// deja el mapa en un estado ambiguo: si por algun motivo llegaran los 2
+// apagados (la UI de mapa.js ya lo impide del lado del click - ver
+// mapaController_toggleEstado - pero esta funcion no depende de eso para
+// ser correcta), se interpreta como "sin filtro de estado" y se
+// devuelve el dataset completo, nunca una lista vacia que parezca un
+// error. estadosActivos: {C: bool, D: bool}.
+function mapaLogic_filtrarPorEstado(pozos, estadosActivos) {
+  var c = !!(estadosActivos && estadosActivos.C);
+  var d = !!(estadosActivos && estadosActivos.D);
+  if (!c && !d) {
+    return pozos;
+  }
+  return pozos.filter(function (p) { return (p.estado === 'C' && c) || (p.estado === 'D' && d); });
+}
+
+// Divide las opciones de departamento en "visibles de entrada" y
+// "detras del +N mas", para el patron de chips mobile-first del mockup.
+// "Todos" no pasa por aca - es una opcion aparte, siempre visible, que
+// mapa.js agrega por su cuenta antes de estas.
+function mapaLogic_dividirChipsDepartamento(opciones, cantidadInicial) {
+  var n = Math.max(0, cantidadInicial || 0);
+  return {
+    visibles: opciones.slice(0, n),
+    ocultos: opciones.slice(n)
+  };
+}
+
 // Decide si conviene pedir el summary liviano (titular/departamento/
 // distrito) para el popup de un punto. El permiso se respeta ANTES de
 // disparar la llamada de red, no solo al decidir que mostrar despues -
@@ -87,6 +115,8 @@ if (typeof module !== 'undefined' && module.exports) {
     mapaLogic_estadoLabel,
     mapaLogic_construirOpcionesDepartamento,
     mapaLogic_filtrarPorDepartamento,
+    mapaLogic_filtrarPorEstado,
+    mapaLogic_dividirChipsDepartamento,
     mapaLogic_debeConsultarSummary
   };
 }

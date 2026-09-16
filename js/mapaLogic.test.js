@@ -4,6 +4,8 @@ const {
   mapaLogic_estadoLabel,
   mapaLogic_construirOpcionesDepartamento,
   mapaLogic_filtrarPorDepartamento,
+  mapaLogic_filtrarPorEstado,
+  mapaLogic_dividirChipsDepartamento,
   mapaLogic_debeConsultarSummary
 } = require('./mapaLogic');
 
@@ -88,6 +90,76 @@ describe('mapaLogic_filtrarPorDepartamento', () => {
 
   test('departamento sin puntos -> lista vacia, no rompe', () => {
     expect(mapaLogic_filtrarPorDepartamento(pozos, '19')).toEqual([]);
+  });
+});
+
+describe('mapaLogic_filtrarPorEstado', () => {
+  const pozos = [punto('01-0001', 'C'), punto('04-0001', 'D'), punto('04-0002', 'D'), punto('19-0001', 'C')];
+
+  test('ambos activos -> dataset completo', () => {
+    expect(mapaLogic_filtrarPorEstado(pozos, { C: true, D: true })).toEqual(pozos);
+  });
+
+  test('solo Confirmada -> solo puntos estado C', () => {
+    const r = mapaLogic_filtrarPorEstado(pozos, { C: true, D: false });
+    expect(r).toEqual([punto('01-0001', 'C'), punto('19-0001', 'C')]);
+  });
+
+  test('solo Disponible -> solo puntos estado D', () => {
+    const r = mapaLogic_filtrarPorEstado(pozos, { C: false, D: true });
+    expect(r).toEqual([punto('04-0001', 'D'), punto('04-0002', 'D')]);
+  });
+
+  // Requisito explicito: nunca un estado ambiguo. La UI de mapa.js ya
+  // impide apagar el ultimo chip activo (ver mapaController_toggleEstado),
+  // pero esta funcion es correcta por si sola igual: 0 activos se
+  // interpreta como "sin filtro", nunca como "nada visible".
+  test('ambos apagados -> se interpreta como "todos", nunca lista vacia', () => {
+    expect(mapaLogic_filtrarPorEstado(pozos, { C: false, D: false })).toEqual(pozos);
+  });
+
+  test('estadosActivos ausente/null -> se interpreta como "todos", no rompe', () => {
+    expect(mapaLogic_filtrarPorEstado(pozos, undefined)).toEqual(pozos);
+    expect(mapaLogic_filtrarPorEstado(pozos, null)).toEqual(pozos);
+  });
+
+  test('dataset vacio -> lista vacia con cualquier combinacion', () => {
+    expect(mapaLogic_filtrarPorEstado([], { C: true, D: false })).toEqual([]);
+  });
+});
+
+describe('mapaLogic_dividirChipsDepartamento', () => {
+  const opciones = [
+    { codigo: '01', nombre: 'Capital', cantidad: 1 },
+    { codigo: '04', nombre: 'Guaymallén', cantidad: 3 },
+    { codigo: '06', nombre: 'Luján de Cuyo', cantidad: 2 },
+    { codigo: '14', nombre: 'Tupungato', cantidad: 5 },
+    { codigo: '17', nombre: 'San Rafael', cantidad: 4 },
+    { codigo: '19', nombre: 'Malargüe', cantidad: 1 }
+  ];
+
+  test('separa los primeros N en "visibles", el resto en "ocultos"', () => {
+    const r = mapaLogic_dividirChipsDepartamento(opciones, 4);
+    expect(r.visibles).toEqual(opciones.slice(0, 4));
+    expect(r.ocultos).toEqual(opciones.slice(4));
+    expect(r.visibles.length).toBe(4);
+    expect(r.ocultos.length).toBe(2);
+  });
+
+  test('cantidadInicial mayor o igual al total -> todo en "visibles", "ocultos" vacio', () => {
+    const r = mapaLogic_dividirChipsDepartamento(opciones, 100);
+    expect(r.visibles).toEqual(opciones);
+    expect(r.ocultos).toEqual([]);
+  });
+
+  test('cantidadInicial 0 o negativa -> nada visible de entrada, no rompe', () => {
+    expect(mapaLogic_dividirChipsDepartamento(opciones, 0).visibles).toEqual([]);
+    expect(mapaLogic_dividirChipsDepartamento(opciones, -3).visibles).toEqual([]);
+  });
+
+  test('lista de opciones vacia -> ambos arrays vacios', () => {
+    const r = mapaLogic_dividirChipsDepartamento([], 4);
+    expect(r).toEqual({ visibles: [], ocultos: [] });
   });
 });
 
