@@ -6,12 +6,26 @@
 // API publica (las unicas 2 funciones que app.js llama, ver
 // window.mapaController_* al final): mapaController_abrir(contexto) y
 // mapaController_cerrar(). contexto = {sessionToken, permisos,
-// onAbrirPozo(wellId)} - app.js es SIEMPRE quien decide sessionToken y
-// permisos vigentes (los lee de su propio estado privado en el momento
-// del click), este archivo nunca los cachea mas alla de una apertura.
+// onAbrirPozo(wellId), enfoque} - app.js es SIEMPRE quien decide
+// sessionToken y permisos vigentes (los lee de su propio estado privado
+// en el momento del click), este archivo nunca los cachea mas alla de
+// una apertura.
+//
+// enfoque (opcional, usado por "Ver en mapa"/"Ver todos en el mapa" de
+// Cerca Mio - ver js/cercaMio.js):
+//   {tipo: 'pozo', wellId}                    - centra y abre el popup de ESE pozo
+//   {tipo: 'ubicacion', lat, lon, radioMetros} - centra en esas coordenadas (la posicion del usuario, que SOLO viaja de app.js a aca en memoria - nunca se manda a ningun backend) y agrega el marcador "Tu ubicacion"
 (function () {
   var MAPA_COLOR_CONFIRMADA = '#0b5a7a';
   var MAPA_COLOR_DISPONIBLE = '#4fa3c4';
+  // Mismo valor que disableClusteringAtZoom del clusterGroup (ver
+  // mapaController_crearMapaSiHaceFalta) - a este zoom un marker
+  // individual deja de estar agrupado, sin importar cuantos vecinos
+  // tenga. mapaController_aplicarEnfoque lo reusa para "Ver en mapa" de
+  // un pozo puntual: centrar ahi con setView() (no zoomToShowLayer, ver
+  // comentario en esa funcion) garantiza que el marker exista de verdad
+  // en el mapa antes de abrirle el popup.
+  var MAPA_ZOOM_INDIVIDUAL = 16;
 
   // Proveedor de tiles: unico lugar que sabe la URL/atribucion de OSM.
   // Cambiar de proveedor (ej. a uno con distinto limite de uso) es tocar
@@ -25,11 +39,13 @@
   };
 
   var mapaEstado = {
-    mapa: null,           // instancia L.Map, se crea UNA sola vez (el contenedor sigue vivo en el DOM aunque la pantalla este hidden)
-    clusterGroup: null,   // L.markerClusterGroup, se crea junto con mapa.mapa
-    puntosCrudos: null,   // ultimo dataset recibido de getMapaPozos (para filtrar sin refetch)
-    contextoActual: null, // {sessionToken, permisos, onAbrirPozo} de la apertura en curso
-    aperturaId: 0          // se incrementa en cada apertura/cierre - una respuesta de red de una apertura vieja se descarta si ya cambio (mismo patron de staleness que buscarPozo en app.js)
+    mapa: null,              // instancia L.Map, se crea UNA sola vez (el contenedor sigue vivo en el DOM aunque la pantalla este hidden)
+    clusterGroup: null,      // L.markerClusterGroup, se crea junto con mapa.mapa
+    puntosCrudos: null,      // ultimo dataset recibido de getMapaPozos (para filtrar sin refetch)
+    markersPorWellId: {},    // se reconstruye en cada renderPuntos() - permite ubicar el marker de un wellId puntual para enfoque:{tipo:'pozo'}
+    miUbicacionMarker: null, // marcador "Tu ubicacion" (enfoque:{tipo:'ubicacion'}) - se saca en cada apertura que no lo pida, para no dejar uno viejo colgado
+    contextoActual: null,    // {sessionToken, permisos, onAbrirPozo, enfoque} de la apertura en curso
+    aperturaId: 0             // se incrementa en cada apertura/cierre - una respuesta de red de una apertura vieja se descarta si ya cambio (mismo patron de staleness que buscarPozo en app.js)
   };
 
   var loadingEl = document.getElementById('mapa-loading');
@@ -91,7 +107,7 @@
     mapaEstado.clusterGroup = L.markerClusterGroup({
       chunkedLoading: true,
       spiderfyOnMaxZoom: true,
-      disableClusteringAtZoom: 16
+      disableClusteringAtZoom: MAPA_ZOOM_INDIVIDUAL
     });
     mapaEstado.mapa.addLayer(mapaEstado.clusterGroup);
   }
@@ -207,18 +223,98 @@
     filtroSelect.value = siguesValido ? valorPrevio : 'todos';
   }
 
-  function mapaController_renderPuntos(contexto) {
+  // saltarAutoFit: true cuando mapaController_aplicarEnfoque va a poner
+  // su propia vista (centrar en un pozo puntual o en la ubicacion del
+  // usuario) inmediatamente despues - encadenar 2 fitBounds/setView
+  // seguidos confundia la animacion de Leaflet (la 2da terminaba
+  // "ganando" el frame final pero la 1ra a veces revertia el zoom poco
+  // despues, bug real encontrado en la Etapa 5C-3 con "Ver en mapa"
+  // desde Cerca Mio) - mas simple y confiable evitar la 1ra por completo
+  // en vez de pelear las dos animaciones entre si.
+  function mapaController_renderPuntos(contexto, saltarAutoFit) {
     var filtrados = mapaLogic_filtrarPorDepartamento(mapaEstado.puntosCrudos, filtroSelect.value);
 
     mapaEstado.clusterGroup.clearLayers();
-    var markers = filtrados.map(function (p) { return mapaController_crearMarker(p, contexto); });
+    mapaEstado.markersPorWellId = {};
+    var markers = filtrados.map(function (p) {
+      var marker = mapaController_crearMarker(p, contexto);
+      mapaEstado.markersPorWellId[p.wellId] = marker;
+      return marker;
+    });
     mapaEstado.clusterGroup.addLayers(markers);
 
     contadorEl.hidden = false;
     contadorEl.textContent = filtrados.length + ' de ' + mapaEstado.puntosCrudos.length + ' pozos';
 
-    if (filtrados.length > 0) {
+    if (filtrados.length > 0 && !saltarAutoFit) {
       mapaEstado.mapa.fitBounds(mapaEstado.clusterGroup.getBounds().pad(0.05));
+    }
+  }
+
+  // Icono div (sin imagenes vendorizadas, igual que los circleMarker de
+  // pozos) para "Tu ubicacion" - un punto solido con un pulso animado
+  // alrededor, visualmente bien distinto de los pozos (color accent en
+  // vez de los 2 teals de Confirmada/Disponible).
+  function mapaController_iconoMiUbicacion() {
+    return L.divIcon({
+      className: 'mapa-mi-ubicacion-icono',
+      html: '<span class="mapa-mi-ubicacion-pulso"></span><span class="mapa-mi-ubicacion-punto"></span>',
+      iconSize: [18, 18],
+      iconAnchor: [9, 9]
+    });
+  }
+
+  // Aplica un enfoque (opcional) DESPUES de renderizar los puntos: o
+  // centra+abre el popup de un pozo puntual, o centra en la ubicacion
+  // del usuario y le agrega su marcador. El marcador "Tu ubicacion" de
+  // una apertura anterior se saca siempre primero - si esta apertura no
+  // pide uno nuevo, no debe quedar ninguno colgado.
+  function mapaController_aplicarEnfoque(contexto) {
+    if (mapaEstado.miUbicacionMarker) {
+      mapaEstado.mapa.removeLayer(mapaEstado.miUbicacionMarker);
+      mapaEstado.miUbicacionMarker = null;
+    }
+
+    var enfoque = contexto.enfoque;
+    if (!enfoque) {
+      return;
+    }
+
+    if (enfoque.tipo === 'ubicacion') {
+      mapaEstado.miUbicacionMarker = L.marker([enfoque.lat, enfoque.lon], { icon: mapaController_iconoMiUbicacion() })
+        .bindPopup('Tu ubicación');
+      mapaEstado.miUbicacionMarker.addTo(mapaEstado.mapa);
+
+      var bbox = cercaMioLogic_boundingBox(enfoque.lat, enfoque.lon, enfoque.radioMetros || CERCA_MIO_RADIO_DEFAULT_METROS);
+      mapaEstado.mapa.fitBounds([[bbox.latMin, bbox.lonMin], [bbox.latMax, bbox.lonMax]], { padding: [20, 20] });
+    } else if (enfoque.tipo === 'pozo') {
+      // NO se usa clusterGroup.zoomToShowLayer(): su heuristica interna
+      // (¿el marker ya esta "visible" segun sus bounds actuales? ¿hace
+      // falta spiderfy en vez de zoom?) dio resultados inconsistentes
+      // con clusters de miles de puntos - a veces no cambiaba el zoom
+      // en absoluto (bug real encontrado en la Etapa 5C-3). setView() al
+      // zoom exacto donde el clusterGroup desagrupa TODO
+      // (MAPA_ZOOM_INDIVIDUAL = disableClusteringAtZoom) es determinista:
+      // a ese zoom el marker SIEMPRE es una capa individual real, nunca
+      // parte de un cluster - once('moveend') espera a que el pan/zoom
+      // (animado) termine antes de abrir el popup, para no abrirlo
+      // mientras el marker todavia no esta agregado al mapa de verdad.
+      var marker = mapaEstado.markersPorWellId[enfoque.wellId];
+      if (marker) {
+        // Si ya estamos parados justo ahi (ej. tocar "Ver en mapa" dos
+        // veces seguidas para el mismo pozo), setView() no mueve nada y
+        // "moveend" nunca dispara - se abre directo en ese caso.
+        var yaEstaAhi = mapaEstado.mapa.getZoom() === MAPA_ZOOM_INDIVIDUAL &&
+          mapaEstado.mapa.getCenter().distanceTo(marker.getLatLng()) < 1;
+        if (yaEstaAhi) {
+          marker.openPopup();
+        } else {
+          mapaEstado.mapa.once('moveend', function () {
+            marker.openPopup();
+          });
+          mapaEstado.mapa.setView(marker.getLatLng(), MAPA_ZOOM_INDIVIDUAL);
+        }
+      }
     }
   }
 
@@ -274,7 +370,9 @@
         return null;
       }
       mapaController_crearMapaSiHaceFalta();
-      return apiGetMapaPozos(contexto.sessionToken);
+      // Dataset compartido con Cerca Mio (js/mapaDataset.js): si ya lo
+      // cargo el otro, esto no vuelve a pedirlo a Apps Script.
+      return mapaDataset_obtener(contexto.sessionToken);
     }).then(function (result) {
       if (!result || aperturaId !== mapaEstado.aperturaId) {
         return;
@@ -295,8 +393,22 @@
       mapaEl.hidden = false;
       mapaEstado.mapa.invalidateSize();
 
+      // Si vinimos a mostrar un pozo puntual (enfoque:{tipo:'pozo'}), el
+      // filtro de departamento tiene que estar en "todos" ANTES de
+      // renderizar - si no, un filtro previo podria dejar ese wellId
+      // afuera y mapaController_aplicarEnfoque no lo encontraria.
+      if (contexto.enfoque && contexto.enfoque.tipo === 'pozo') {
+        filtroSelect.value = 'todos';
+      }
+
       mapaController_poblarFiltroDepartamento(mapaEstado.puntosCrudos);
-      mapaController_renderPuntos(contexto);
+      mapaController_renderPuntos(contexto, !!contexto.enfoque);
+      // markersPorWellId ya esta poblado en este punto (renderPuntos lo
+      // arma de forma sincronica, ANTES de pasarle los markers a
+      // clusterGroup.addLayers - no hace falta esperar a que termine el
+      // chunked loading de addLayers para encontrar el marker de un
+      // wellId puntual).
+      mapaController_aplicarEnfoque(contexto);
     }).catch(function () {
       mapaController_mostrarError(aperturaId, 'No se pudo cargar el mapa. Revisá tu conexión.');
     });

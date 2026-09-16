@@ -14,6 +14,7 @@
     ubicacion: document.getElementById('screen-ubicacion'),
     ne: document.getElementById('screen-ne'),
     mapa: document.getElementById('screen-mapa'),
+    cercaMio: document.getElementById('screen-cerca-mio'),
     disabled: document.getElementById('screen-disabled'),
     offline: document.getElementById('screen-offline')
   };
@@ -1089,13 +1090,15 @@
     });
   }
 
-  // Acceso al Mapa de Pozos: visible/habilitado SOLO con ubicacion=SI -
-  // se llama cada vez que permisosActuales cambia de verdad (login,
-  // checkSession, logout), nunca se asume estatico. Como el boton
-  // empieza hidden en el HTML, un usuario sin el permiso nunca lo ve
-  // parpadear antes de que llegue la respuesta real.
-  function toggleAccesoMapa() {
+  // Acceso al Mapa de Pozos y a Cerca Mio: ambos visibles/habilitados
+  // SOLO con ubicacion=SI (mismo permiso para los dos) - se llama cada
+  // vez que permisosActuales cambia de verdad (login, checkSession,
+  // logout), nunca se asume estatico. Como los botones empiezan hidden
+  // en el HTML, un usuario sin el permiso nunca los ve parpadear antes
+  // de que llegue la respuesta real.
+  function toggleAccesosUbicacion() {
     document.getElementById('btn-abrir-mapa').hidden = !permisosActuales.ubicacion;
+    document.getElementById('btn-abrir-cerca-mio').hidden = !permisosActuales.ubicacion;
   }
 
   function enterMain() {
@@ -1103,7 +1106,7 @@
     pozoActual = null;
     renderHubIdle();
     loadRegistryMetadataOnce();
-    toggleAccesoMapa();
+    toggleAccesosUbicacion();
     showScreen('main');
   }
 
@@ -1112,7 +1115,7 @@
     sessionToken = null;
     currentEmail = null;
     permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false };
-    toggleAccesoMapa();
+    toggleAccesosUbicacion();
     if (gsiLoaded) {
       // Sin esto, auto_select podria volver a loguear silenciosamente a
       // la misma cuenta apenas se re-inicialice el boton de Google.
@@ -1278,11 +1281,14 @@
     buscarPozo(normalized);
   });
 
-  // --- Mapa de Pozos: bordes con js/mapa.js -------------------------------
+  // --- Mapa de Pozos / Cerca Mio: bordes con js/mapa.js y js/cercaMio.js -
   // app.js es el UNICO que conoce sessionToken/permisosActuales/buscarPozo
-  // - mapa.js nunca los cachea mas alla de una apertura, los recibe
-  // frescos en cada click via este contexto.
-  document.getElementById('btn-abrir-mapa').addEventListener('click', function () {
+  // - ninguno de los dos archivos los cachea mas alla de una apertura,
+  // los reciben frescos en cada click via este contexto. abrirMapaDesde()
+  // evita repetir la construccion del contexto del mapa en los 3 lugares
+  // que lo abren (acceso directo, "Ver en mapa" y "Ver todos en el mapa"
+  // desde Cerca Mio).
+  function abrirMapaDesde(enfoque) {
     showScreen('mapa');
     mapaController_abrir({
       sessionToken: sessionToken,
@@ -1290,12 +1296,45 @@
       onAbrirPozo: function (wellId) {
         showScreen('main');
         buscarPozo(wellId);
-      }
+      },
+      enfoque: enfoque
     });
+  }
+
+  document.getElementById('btn-abrir-mapa').addEventListener('click', function () {
+    abrirMapaDesde(null);
   });
 
   document.getElementById('btn-mapa-volver').addEventListener('click', function () {
     mapaController_cerrar();
+    showScreen('main');
+  });
+
+  // La posicion del usuario (lat/lon) le llega a cercaMioController_abrir
+  // desde js/cercaMio.js via navigator.geolocation - app.js nunca la lee
+  // ni la reenvia a ningun lado, solo la deja pasar hacia
+  // abrirMapaDesde()/mapaController_abrir (que tampoco la manda a ningun
+  // backend, ver comentario al inicio de js/mapa.js).
+  document.getElementById('btn-abrir-cerca-mio').addEventListener('click', function () {
+    showScreen('cercaMio');
+    cercaMioController_abrir({
+      sessionToken: sessionToken,
+      permisos: permisosActuales,
+      onAbrirPozo: function (wellId) {
+        showScreen('main');
+        buscarPozo(wellId);
+      },
+      onVerEnMapa: function (wellId) {
+        abrirMapaDesde({ tipo: 'pozo', wellId: wellId });
+      },
+      onVerTodosEnMapa: function (lat, lon, radioMetros) {
+        abrirMapaDesde({ tipo: 'ubicacion', lat: lat, lon: lon, radioMetros: radioMetros });
+      }
+    });
+  });
+
+  document.getElementById('btn-cercamio-volver').addEventListener('click', function () {
+    cercaMioController_cerrar();
     showScreen('main');
   });
 

@@ -79,12 +79,20 @@
 
     <!-- Acceso principal al Mapa de Pozos: independiente de cualquier
          busqueda por wellId, visible/habilitado solo si el usuario tiene
-         ubicacion=SI (ver toggleAccesoMapa() en app.js). Empieza hidden
-         para que nunca parpadee visible antes de que el permiso real
-         llegue de login/checkSession. -->
+         ubicacion=SI (ver toggleAccesosUbicacion() en app.js). Empieza
+         hidden para que nunca parpadee visible antes de que el permiso
+         real llegue de login/checkSession. -->
     <button type="button" id="btn-abrir-mapa" class="button-secondary btn-mapa-acceso" hidden>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 20l-5-2V5l5 2 6-2 5 2v13l-5-2-6 2z"/></svg>
       Mapa de pozos
+    </button>
+
+    <!-- Mismo permiso/gate que btn-abrir-mapa (ver toggleAccesosUbicacion
+         en app.js) - "cerca mío" solo tiene sentido si el usuario puede
+         ver ubicaciones. -->
+    <button type="button" id="btn-abrir-cerca-mio" class="button-secondary btn-mapa-acceso" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke-linecap="round"/></svg>
+      Pozos cerca mío
     </button>
 
     <!-- Hub modular: cabecera compacta + tarjetas de acceso solo a los
@@ -207,6 +215,67 @@
     </div>
   </div>
 
+  <!-- Pozos Cerca Mio: requiere ubicacion=SI (mismo permiso que el
+       Mapa), reusa el MISMO dataset de getMapaPozos (ver
+       js/mapaDataset.js) - no dispara un fetch propio si el Mapa ya lo
+       cargo antes, y viceversa. La posicion del usuario
+       (navigator.geolocation) vive solo en js/cercaMio.js, en memoria -
+       nunca viaja a Apps Script ni se guarda en ningun lado (ver
+       comentario al inicio de ese archivo). -->
+  <div id="screen-cerca-mio" class="screen" hidden>
+    <div class="tv-topbar">
+      <button type="button" id="btn-cercamio-volver" class="tv-volver">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+        Volver
+      </button>
+    </div>
+    <div class="tv-header">
+      <div>
+        <p class="mapa-titulo">Pozos cerca mío</p>
+        <p class="tv-header-label">Según tu ubicación actual</p>
+      </div>
+    </div>
+
+    <div class="cercamio-radios" role="group" aria-label="Radio de búsqueda">
+      <button type="button" class="cercamio-radio-chip" data-radio="500" aria-pressed="false">500 m</button>
+      <button type="button" class="cercamio-radio-chip" data-radio="1000" aria-pressed="false">1 km</button>
+      <button type="button" class="cercamio-radio-chip active" data-radio="2000" aria-pressed="true">2 km</button>
+      <button type="button" class="cercamio-radio-chip" data-radio="5000" aria-pressed="false">5 km</button>
+    </div>
+
+    <div class="cercamio-viewport">
+      <div id="cercamio-pidiendo-permiso" class="cercamio-estado">
+        <span class="spinner" aria-hidden="true"></span>
+        <span>Solicitando tu ubicación...</span>
+      </div>
+
+      <div id="cercamio-permiso-denegado" class="cercamio-estado" hidden>
+        <p>No pudimos acceder a tu ubicación. Activá el permiso de ubicación de tu navegador para este sitio e intentá de nuevo.</p>
+        <button type="button" class="button-secondary btn-cercamio-reintentar">Reintentar</button>
+      </div>
+
+      <div id="cercamio-no-disponible" class="cercamio-estado" hidden>
+        <p>Tu navegador no permite obtener tu ubicación.</p>
+      </div>
+
+      <div id="cercamio-error" class="cercamio-estado" hidden>
+        <p id="cercamio-error-mensaje">No pudimos obtener tu ubicación.</p>
+        <button type="button" class="button-secondary btn-cercamio-reintentar">Reintentar</button>
+      </div>
+
+      <div id="cercamio-sin-resultados" class="cercamio-estado" hidden>
+        <p id="cercamio-sin-resultados-mensaje">No encontramos pozos a menos de 2 km.</p>
+        <button type="button" id="btn-cercamio-ampliar" class="button-secondary" hidden>Ampliar a 5 km</button>
+      </div>
+
+      <div id="cercamio-resultados" hidden>
+        <p id="cercamio-contador" class="mapa-contador"></p>
+        <div id="cercamio-lista" class="cercamio-lista"></div>
+        <button type="button" id="btn-cercamio-ver-todos-mapa" class="button cercamio-ver-todos-mapa">Ver todos en el mapa</button>
+      </div>
+    </div>
+  </div>
+
   <div id="screen-disabled" class="screen" hidden>
     <p>Tu cuenta no tiene acceso habilitado. Contactá al administrador.</p>
     <button id="btn-logout-disabled" class="button-secondary">Cerrar sesión</button>
@@ -231,7 +300,10 @@
   <script src="js/api.js"></script>
   <script src="js/hubIdentificacion.js"></script>
   <script src="js/mapaLogic.js"></script>
+  <script src="js/mapaDataset.js"></script>
+  <script src="js/cercaMioLogic.js"></script>
   <script src="js/mapa.js"></script>
+  <script src="js/cercaMio.js"></script>
   <script src="js/app.js"></script>
   <!-- Va DESPUES de app.js en el documento a proposito, para que
        onGsiLoaded/onGsiLoadError ya existan antes de que puedan

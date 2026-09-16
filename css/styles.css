@@ -28,6 +28,25 @@
   box-sizing: border-box;
 }
 
+/* Regla global, a proposito con !important: sin esto, CUALQUIER regla
+   de autor que le ponga display a un elemento (ej. button/.button:
+   display:inline-flex, .clear-button/.mapa-loading/.cercamio-estado:
+   display:flex) le gana al [hidden]{display:none} del user-agent -
+   misma especificidad, pero los estilos de autor SIEMPRE pisan al UA,
+   sin importar el orden. Bug real encontrado en la Etapa 5C-3
+   (verificando Cerca Mio con screenshots reales, no solo con
+   el.hidden - esa propiedad queda true igual aunque el elemento se siga
+   viendo) que ya afectaba en silencio a btn-abrir-mapa desde 5C-2 y al
+   boton "x" de limpiar busqueda desde mucho antes. Un !important global
+   en el propio atributo [hidden] es el fix recomendado para esta
+   colision especifica (no para ocultar cosas en general) y evita tener
+   que acordarse de agregar :not([hidden]) a cada regla nueva que use
+   display - probado que NO rompe nada mientras ningun otro selector use
+   !important (ver grep, no hay ninguno mas en este archivo). */
+[hidden] {
+  display: none !important;
+}
+
 .mono {
   font-family: "SFMono-Regular", ui-monospace, "IBM Plex Mono", Menlo, Consolas, monospace;
 }
@@ -716,7 +735,8 @@ button:hover,
 #screen-datos,
 #screen-ubicacion,
 #screen-ne,
-#screen-mapa {
+#screen-mapa,
+#screen-cerca-mio {
   padding: 0;
   overflow: hidden;
   border-radius: 16px;
@@ -1392,6 +1412,185 @@ table.ne-table tr:last-child td {
   padding: 8px 14px;
 }
 
+/* Marcador "Tu ubicacion" (enfoque:{tipo:'ubicacion'} - ver
+   mapaController_aplicarEnfoque en js/mapa.js): un punto solido con un
+   pulso animado alrededor, en --color-accent para distinguirse a
+   proposito de los 2 teals de Confirmada/Disponible. Div icon, sin
+   imagenes vendorizadas - mismo criterio que los circleMarker de pozos. */
+.mapa-mi-ubicacion-icono {
+  position: relative;
+}
+.mapa-mi-ubicacion-punto {
+  position: absolute;
+  inset: 4px;
+  background: var(--color-accent);
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+.mapa-mi-ubicacion-pulso {
+  position: absolute;
+  inset: 0;
+  background: var(--color-accent);
+  opacity: 0.35;
+  border-radius: 50%;
+  animation: mapa-mi-ubicacion-pulso 1.8s ease-out infinite;
+}
+@keyframes mapa-mi-ubicacion-pulso {
+  0% { transform: scale(0.6); opacity: 0.5; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mapa-mi-ubicacion-pulso {
+    animation: none;
+    opacity: 0.25;
+  }
+}
+
+/* --- Pozos Cerca Mio: chips de radio + lista de resultados + estados
+   (pidiendo permiso/denegado/no disponible/error/sin resultados) --- */
+.cercamio-radios {
+  display: flex;
+  gap: 8px;
+  padding: 14px 18px;
+  border-bottom: 1.5px solid var(--color-border-soft);
+  overflow-x: auto;
+}
+.cercamio-radio-chip {
+  flex: none;
+  min-height: 38px;
+  padding: 8px 16px;
+  font-size: 0.84rem;
+  font-weight: 700;
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text-soft);
+  border: 1.5px solid var(--color-border);
+  box-shadow: none;
+}
+.cercamio-radio-chip:hover {
+  background: var(--color-primary-tint);
+}
+.cercamio-radio-chip.active {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+
+.cercamio-viewport {
+  padding: 18px;
+}
+
+.cercamio-estado {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--color-text-soft);
+  font-size: 0.9rem;
+}
+.cercamio-estado p {
+  margin: 0;
+  max-width: 320px;
+}
+.cercamio-estado .spinner {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2.5px solid var(--color-border);
+  border-top-color: var(--color-primary);
+  animation: gsi-spin 0.8s linear infinite;
+  flex: none;
+}
+
+.cercamio-lista {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0 16px;
+}
+.cercamio-item {
+  border: 1.5px solid var(--color-border);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.cercamio-item-main {
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  font-weight: 400;
+  text-align: left;
+}
+.cercamio-item-main:hover {
+  background: var(--color-primary-tint);
+}
+.cercamio-item-id {
+  font-weight: 700;
+  color: var(--color-primary-dark);
+}
+.cercamio-item-dist {
+  margin-left: auto;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--color-text-soft);
+}
+.cercamio-item-chev {
+  color: var(--color-text-faint);
+  transition: transform 0.15s;
+  flex: none;
+}
+.cercamio-item-expandido .cercamio-item-chev {
+  transform: rotate(90deg);
+}
+.cercamio-item-detalle {
+  padding: 0 16px 16px;
+  border-top: 1px solid var(--color-border-soft);
+}
+.cercamio-item-summary {
+  padding-top: 12px;
+  min-height: 1px;
+}
+.cercamio-item-summary:empty {
+  padding-top: 0;
+}
+.cercamio-item-titular {
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0 0 2px;
+}
+.cercamio-item-sub {
+  font-size: 0.78rem;
+  color: var(--color-text-soft);
+  margin: 0 0 10px;
+}
+.cercamio-item-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 10px;
+}
+.cercamio-item-actions button {
+  flex: 1;
+  min-height: 44px;
+  font-size: 0.84rem;
+  padding: 8px 12px;
+}
+
+.cercamio-ver-todos-mapa {
+  width: 100%;
+}
+
 @media (min-width: 640px) {
   body {
     background:
@@ -1516,5 +1715,23 @@ table.ne-table tr:last-child td {
   }
   .mapa-viewport {
     height: 560px;
+  }
+
+  /* Pozos Cerca Mio: mismo ancho que Vista Tecnica/los 4 modulos (640px)
+     - a diferencia del Mapa, es una lista, no gana nada con 900px. */
+  #screen-cerca-mio {
+    max-width: 640px;
+  }
+  #screen-cerca-mio .tv-topbar {
+    padding: 16px 34px;
+  }
+  #screen-cerca-mio .tv-header {
+    padding: 22px 34px 18px;
+  }
+  .cercamio-radios {
+    padding: 14px 34px;
+  }
+  .cercamio-viewport {
+    padding: 26px 34px 32px;
   }
 }
