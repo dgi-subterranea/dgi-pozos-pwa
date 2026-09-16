@@ -14,6 +14,14 @@
   --color-border-soft: #edf1f2;
   --color-bg: #f6f9fa;
   --color-surface: #ffffff;
+  /* Mapa de Pozos: mismos 2 valores que MAPA_COLOR_CONFIRMADA/
+     MAPA_COLOR_DISPONIBLE en js/mapa.js (Leaflet no puede leer
+     variables CSS para colorear los markers, asi que el hex vive
+     duplicado a proposito en los dos lugares - mantenerlos en sync si
+     se cambia uno). Deliberadamente NO --color-accent (esa ya significa
+     "baja"/atencion en el resto de la app, ver .hub-chip.baja). */
+  --color-mapa-confirmada: #0b5a7a;
+  --color-mapa-disponible: #4fa3c4;
 }
 
 * {
@@ -377,6 +385,11 @@ button:hover,
   background: var(--color-primary-tint);
 }
 
+.btn-mapa-acceso {
+  width: 100%;
+  margin: 14px 0 4px;
+}
+
 .error-message {
   color: var(--color-error);
   font-size: 0.9rem;
@@ -702,7 +715,8 @@ button:hover,
 #screen-perfil,
 #screen-datos,
 #screen-ubicacion,
-#screen-ne {
+#screen-ne,
+#screen-mapa {
   padding: 0;
   overflow: hidden;
   border-radius: 16px;
@@ -1220,6 +1234,164 @@ table.ne-table tr:last-child td {
 }
 
 /* --- Desktop: la columna deja de flotar sola sobre el fondo --- */
+/* --- Mapa de Pozos: mismo tratamiento de "ventana" que Vista Tecnica
+   (banda con tinte, topbar propio) - ver #screen-mapa mas arriba. El
+   viewport del mapa tiene una altura fija a proposito (no
+   height:100%/vh, que en mobile con barra de direcciones dinamica salta
+   de tamano y confunde a Leaflet) - ver mapaController_abrir, que llama
+   invalidateSize() cada vez que el contenedor pasa de hidden a visible. --- */
+.mapa-titulo {
+  font-family: "SFMono-Regular", ui-monospace, "IBM Plex Mono", Menlo, Consolas, monospace;
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--color-primary-dark);
+  margin: 0 0 3px;
+}
+
+.mapa-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1.5px solid var(--color-border-soft);
+  background: var(--color-surface);
+}
+.mapa-legend {
+  display: flex;
+  gap: 16px;
+  font-size: 0.78rem;
+  color: var(--color-text-soft);
+}
+.mapa-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.mapa-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+}
+.mapa-dot-confirmada {
+  background: var(--color-mapa-confirmada);
+}
+.mapa-dot-disponible {
+  background: var(--color-mapa-disponible);
+}
+.mapa-select {
+  width: 100%;
+  height: 44px;
+  padding: 0 14px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1.5px solid var(--color-border);
+  border-radius: 12px;
+}
+.mapa-select:focus {
+  border-color: var(--color-primary);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(11, 90, 122, 0.14);
+}
+
+.mapa-contador {
+  padding: 8px 18px 0;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--color-text-faint);
+}
+.mapa-contador[hidden] {
+  padding: 0;
+}
+
+.mapa-viewport {
+  position: relative;
+  height: min(70vh, 520px);
+  min-height: 320px;
+}
+.mapa-leaflet {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+.mapa-loading,
+.mapa-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  text-align: center;
+  color: var(--color-text-soft);
+  font-size: 0.9rem;
+}
+.mapa-error p {
+  margin: 0;
+  max-width: 260px;
+}
+.mapa-loading .spinner {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2.5px solid var(--color-border);
+  border-top-color: var(--color-primary);
+  animation: gsi-spin 0.8s linear infinite;
+  flex: none;
+}
+
+/* Popup de Leaflet: se pisan las reglas por defecto de la libreria (usa
+   su propio font-family/padding) para que se vea consistente con el
+   resto de la app - Leaflet se carga recien al abrir el mapa, por eso
+   estas reglas viven aca y no compiten con nada mientras tanto. */
+.leaflet-popup-content-wrapper {
+  border-radius: 12px;
+}
+.leaflet-popup-content {
+  margin: 12px 14px;
+  min-width: 150px;
+}
+.mapa-popup-id {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--color-primary-dark);
+  margin: 0 0 2px;
+}
+.mapa-popup-estado {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--color-text-soft);
+  margin: 0 0 8px;
+}
+.mapa-popup-summary {
+  margin: 0 0 10px;
+  min-height: 1px;
+}
+.mapa-popup-summary:empty {
+  margin: 0;
+}
+.mapa-popup-titular {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0 0 2px;
+}
+.mapa-popup-sub {
+  font-size: 0.76rem;
+  color: var(--color-text-soft);
+  margin: 0;
+}
+.mapa-popup-btn {
+  width: 100%;
+  min-height: 40px;
+  font-size: 0.84rem;
+  padding: 8px 14px;
+}
+
 @media (min-width: 640px) {
   body {
     background:
@@ -1315,5 +1487,34 @@ table.ne-table tr:last-child td {
   #screen-ubicacion .tv-topbar,
   #screen-ne .tv-topbar {
     padding: 16px 34px;
+  }
+
+  /* Mapa de Pozos: la mas ancha de todas las "ventanas" (900px) - un
+     mapa aprovecha el espacio horizontal mucho mas que una ficha de
+     texto, y el filtro/leyenda entran comodos en una sola fila. */
+  #screen-mapa {
+    max-width: 900px;
+  }
+  #screen-mapa .tv-topbar {
+    padding: 16px 34px;
+  }
+  #screen-mapa .tv-header {
+    padding: 22px 34px 18px;
+  }
+  .mapa-toolbar {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 34px;
+  }
+  .mapa-select {
+    width: auto;
+    min-width: 240px;
+  }
+  .mapa-contador {
+    padding: 8px 34px 0;
+  }
+  .mapa-viewport {
+    height: 560px;
   }
 }

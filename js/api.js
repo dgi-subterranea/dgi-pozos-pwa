@@ -43,6 +43,22 @@ function apiGetWellLocation(sessionToken, wellId) {
   return callBackend('getWellLocation', { sessionToken: sessionToken, wellId: wellId });
 }
 
+// Dataset general del Mapa de Pozos - una sola vez por apertura del mapa,
+// nunca por wellId (ver js/mapa.js). Requiere ubicacion=SI del lado del
+// backend; el frontend no dispara este fetch si permisosActuales.ubicacion
+// es false (ver btn-abrir-mapa en app.js), pero el backend vuelve a
+// validarlo igual.
+function apiGetMapaPozos(sessionToken) {
+  return callBackend('getMapaPozos', { sessionToken: sessionToken });
+}
+
+// Popup liviano del mapa: solo se llama si datos=SI (ver
+// mapaLogic_debeConsultarSummary) - nunca para mostrar "denegado", el
+// permiso se respeta antes de disparar la llamada de red.
+function apiGetWellSummary(sessionToken, wellId) {
+  return callBackend('getWellSummary', { sessionToken: sessionToken, wellId: wellId });
+}
+
 // keepalive: true - para que el request tenga mas chance de llegar
 // aunque el usuario cierre/navegue afuera de la PWA justo despues de
 // buscar (fire-and-forget, no se espera ni se usa la respuesta). Un

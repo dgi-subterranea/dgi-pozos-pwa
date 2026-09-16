@@ -77,6 +77,16 @@
     </form>
     <p id="input-error" class="error-message" hidden></p>
 
+    <!-- Acceso principal al Mapa de Pozos: independiente de cualquier
+         busqueda por wellId, visible/habilitado solo si el usuario tiene
+         ubicacion=SI (ver toggleAccesoMapa() en app.js). Empieza hidden
+         para que nunca parpadee visible antes de que el permiso real
+         llegue de login/checkSession. -->
+    <button type="button" id="btn-abrir-mapa" class="button-secondary btn-mapa-acceso" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 20l-5-2V5l5 2 6-2 5 2v13l-5-2-6 2z"/></svg>
+      Mapa de pozos
+    </button>
+
     <!-- Hub modular: cabecera compacta + tarjetas de acceso solo a los
          modulos que existen (Perfil/Datos/Ubicacion/Niveles Estaticos).
          Los 3 fetches (ITF, Ficha, NE) corren en paralelo y son
@@ -156,6 +166,47 @@
     <div id="ne-content" class="modulo-content"></div>
   </div>
 
+  <!-- Mapa de Pozos: ventana ancha (mismo patron que screen-well-record-table),
+       requiere ubicacion=SI (ver mapaController_abrir en js/mapa.js).
+       Leaflet/markercluster NO se cargan en el <head> - se inyectan recien
+       la primera vez que se abre esta pantalla (carga diferida, ver
+       mapaController_cargarLibrerias). -->
+  <div id="screen-mapa" class="screen" hidden>
+    <div class="tv-topbar">
+      <button type="button" id="btn-mapa-volver" class="tv-volver">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+        Volver
+      </button>
+    </div>
+    <div class="tv-header">
+      <div>
+        <p class="mapa-titulo">Mapa de Pozos</p>
+        <p class="tv-header-label">Ubicaciones confirmadas y disponibles del padrón</p>
+      </div>
+    </div>
+    <div class="mapa-toolbar">
+      <div class="mapa-legend">
+        <span class="mapa-legend-item"><span class="mapa-dot mapa-dot-confirmada"></span>Confirmada</span>
+        <span class="mapa-legend-item"><span class="mapa-dot mapa-dot-disponible"></span>Disponible</span>
+      </div>
+      <select id="mapa-filtro-departamento" class="mapa-select" aria-label="Filtrar por departamento">
+        <option value="todos">Todos los departamentos</option>
+      </select>
+    </div>
+    <div id="mapa-contador" class="mapa-contador" hidden></div>
+    <div class="mapa-viewport">
+      <div id="mapa-loading" class="mapa-loading">
+        <span class="spinner" aria-hidden="true"></span>
+        <span>Cargando mapa...</span>
+      </div>
+      <div id="mapa-error" class="mapa-error" hidden>
+        <p id="mapa-error-mensaje">No se pudo cargar el mapa.</p>
+        <button type="button" id="btn-mapa-reintentar" class="button-secondary">Reintentar</button>
+      </div>
+      <div id="mapa-leaflet" class="mapa-leaflet" hidden></div>
+    </div>
+  </div>
+
   <div id="screen-disabled" class="screen" hidden>
     <p>Tu cuenta no tiene acceso habilitado. Contactá al administrador.</p>
     <button id="btn-logout-disabled" class="button-secondary">Cerrar sesión</button>
@@ -179,6 +230,8 @@
   <script src="js/errorMessages.js"></script>
   <script src="js/api.js"></script>
   <script src="js/hubIdentificacion.js"></script>
+  <script src="js/mapaLogic.js"></script>
+  <script src="js/mapa.js"></script>
   <script src="js/app.js"></script>
   <!-- Va DESPUES de app.js en el documento a proposito, para que
        onGsiLoaded/onGsiLoadError ya existan antes de que puedan

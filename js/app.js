@@ -13,6 +13,7 @@
     datos: document.getElementById('screen-datos'),
     ubicacion: document.getElementById('screen-ubicacion'),
     ne: document.getElementById('screen-ne'),
+    mapa: document.getElementById('screen-mapa'),
     disabled: document.getElementById('screen-disabled'),
     offline: document.getElementById('screen-offline')
   };
@@ -1088,11 +1089,21 @@
     });
   }
 
+  // Acceso al Mapa de Pozos: visible/habilitado SOLO con ubicacion=SI -
+  // se llama cada vez que permisosActuales cambia de verdad (login,
+  // checkSession, logout), nunca se asume estatico. Como el boton
+  // empieza hidden en el HTML, un usuario sin el permiso nunca lo ve
+  // parpadear antes de que llegue la respuesta real.
+  function toggleAccesoMapa() {
+    document.getElementById('btn-abrir-mapa').hidden = !permisosActuales.ubicacion;
+  }
+
   function enterMain() {
     document.getElementById('user-email').textContent = currentEmail;
     pozoActual = null;
     renderHubIdle();
     loadRegistryMetadataOnce();
+    toggleAccesoMapa();
     showScreen('main');
   }
 
@@ -1101,6 +1112,7 @@
     sessionToken = null;
     currentEmail = null;
     permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false };
+    toggleAccesoMapa();
     if (gsiLoaded) {
       // Sin esto, auto_select podria volver a loguear silenciosamente a
       // la misma cuenta apenas se re-inicialice el boton de Google.
@@ -1264,6 +1276,27 @@
     input.value = normalized;
 
     buscarPozo(normalized);
+  });
+
+  // --- Mapa de Pozos: bordes con js/mapa.js -------------------------------
+  // app.js es el UNICO que conoce sessionToken/permisosActuales/buscarPozo
+  // - mapa.js nunca los cachea mas alla de una apertura, los recibe
+  // frescos en cada click via este contexto.
+  document.getElementById('btn-abrir-mapa').addEventListener('click', function () {
+    showScreen('mapa');
+    mapaController_abrir({
+      sessionToken: sessionToken,
+      permisos: permisosActuales,
+      onAbrirPozo: function (wellId) {
+        showScreen('main');
+        buscarPozo(wellId);
+      }
+    });
+  });
+
+  document.getElementById('btn-mapa-volver').addEventListener('click', function () {
+    mapaController_cerrar();
+    showScreen('main');
   });
 
   // --- Recuperacion de sesion al cargar ---
