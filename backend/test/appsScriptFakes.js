@@ -82,6 +82,8 @@ function installAppsScriptFakes() {
   global.mapaRepository_getMetadata = jest.fn();
   global.mapaService_getPozos = jest.fn();
   global.registryService_getWellSummary = jest.fn();
+  global.nivelesEstaticosRepository_getTodosLosPuntos = jest.fn();
+  global.mapaNEService_getPuntos = jest.fn();
 }
 
 module.exports = { installAppsScriptFakes };

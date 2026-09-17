@@ -18,6 +18,13 @@
 (function () {
   var MAPA_COLOR_CONFIRMADA = '#0b5a7a';
   var MAPA_COLOR_DISPONIBLE = '#4fa3c4';
+  // Capa NE (v2.1.0): mismo tono que --color-primary-dark (no un color
+  // nuevo, se mantiene la paleta de 2 teals + accent ya establecida) - la
+  // diferencia con los pozos del padron es la FORMA del marker (diamante
+  // con linea, ver mapaController_iconoNE), no el color. Deliberadamente
+  // distinto de --color-accent (usado por "Tu ubicacion") para no
+  // confundir un punto de datos persistente con la posicion del usuario.
+  var MAPA_COLOR_NE = '#073e54';
   // Mismo valor que disableClusteringAtZoom del clusterGroup (ver
   // mapaController_crearMapaSiHaceFalta) - a este zoom un marker
   // individual deja de estar agrupado, sin importar cuantos vecinos
@@ -81,6 +88,9 @@
     deptosExpandido: false,  // true = "+N mas" ya tocado, se ven todos los chips de departamento
     markersPorWellId: {},    // se reconstruye en cada renderPuntos() - permite ubicar el marker de un wellId puntual para enfoque:{tipo:'pozo'}
     miUbicacionMarker: null, // marcador "Tu ubicacion" (enfoque:{tipo:'ubicacion'}) - se saca en cada apertura que no lo pida, para no dejar uno viejo colgado
+    capaNE: null,            // L.layerGroup con los markers NE - se crea recien la PRIMERA vez que se activa el chip (carga diferida real, igual que Leaflet mismo)
+    puntosNE: null,          // ultimo dataset de getMapaNE ya recibido (independiente del cache de mapaNEDataset.js - evita reconstruir los markers si el usuario apaga/prende el chip varias veces)
+    neActivo: false,         // estado del chip "Niveles estáticos" - independiente de departamentoActual/estadosActivos, esos 2 NUNCA filtran esta capa (ver mapaController_renderPuntos, que no la toca)
     contextoActual: null,    // {sessionToken, permisos, onAbrirPozo, enfoque} de la apertura en curso
     aperturaId: 0             // se incrementa en cada apertura/cierre - una respuesta de red de una apertura vieja se descarta si ya cambio (mismo patron de staleness que buscarPozo en app.js)
   };
@@ -94,6 +104,8 @@
   var btnDeptosExpandirEl = document.getElementById('btn-mapa-deptos-expandir');
   var estadoChipsEls = Array.prototype.slice.call(document.querySelectorAll('.mapa-estado-chip'));
   var capaBaseChipsEls = Array.prototype.slice.call(document.querySelectorAll('.mapa-capa-chip'));
+  var grupoTieneEl = document.getElementById('mapa-grupo-tiene');
+  var chipNEEl = document.getElementById('mapa-chip-ne');
   var btnReintentar = document.getElementById('btn-mapa-reintentar');
 
   function mapaController_cargarScript(src) {
@@ -279,6 +291,139 @@
     });
 
     return marker;
+  }
+
+  // Icono especifico de monitoreo (v2.1.0): un diamante con una linea
+  // horizontal (evoca una regla/gauge de nivel), NO otro circulo de otro
+  // color - pedido explicito del usuario para que se distinga de un
+  // vistazo de los pozos del padron. SVG inline (mismo criterio que los
+  // icons de app.js: ICON_PERFIL, ICON_DATOS, etc.), no una imagen
+  // vendorizada aparte.
+  function mapaController_iconoNE() {
+    var svg = '<svg width="22" height="22" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">' +
+      '<rect x="5" y="5" width="12" height="12" rx="2.5" transform="rotate(45 11 11)" fill="' + MAPA_COLOR_NE + '" stroke="#ffffff" stroke-width="2"/>' +
+      '<line x1="7" y1="11" x2="15" y2="11" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round"/>' +
+      '</svg>';
+    return L.divIcon({ className: 'mapa-ne-icono', html: svg, iconSize: [22, 22], iconAnchor: [11, 11] });
+  }
+
+  // Popup de un punto NE: SIEMPRE distingue "tiene wellId" de "punto
+  // especial" (pedido explicito - nunca se inventa un DD-PPPP para un
+  // punto que no lo tiene). Sin fetch de summary (no aplica aca, a
+  // diferencia del popup de pozos - ver mapaController_crearMarker).
+  function mapaController_crearMarkerNE(punto, contexto) {
+    var marker = L.marker([punto.lat, punto.lon], { icon: mapaController_iconoNE() });
+
+    var el = document.createElement('div');
+    el.className = 'mapa-popup';
+
+    var idEl = document.createElement('p');
+    idEl.className = 'mapa-popup-id mono';
+    idEl.textContent = punto.wellId || mapaLogic_nombrePuntoNE(punto);
+    el.appendChild(idEl);
+
+    var tagEl = document.createElement('p');
+    tagEl.className = 'mapa-popup-estado';
+    tagEl.textContent = 'Niveles estáticos';
+    el.appendChild(tagEl);
+
+    // Punto especial (sin wellId) con nombreOriginal: la linea de arriba
+    // ya muestra el nombre - aca se agrega el monitoringId tecnico como
+    // referencia secundaria, nunca al reves (nunca se inventa un nombre
+    // que no vino del dataset).
+    if (!punto.wellId && punto.nombreOriginal) {
+      var subEl = document.createElement('p');
+      subEl.className = 'mapa-popup-sub';
+      subEl.textContent = punto.monitoringId;
+      el.appendChild(subEl);
+    }
+
+    if (punto.wellId) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'button mapa-popup-btn';
+      btn.textContent = 'Abrir pozo';
+      btn.addEventListener('click', function () {
+        contexto.onAbrirPozo(punto.wellId);
+      });
+      el.appendChild(btn);
+    }
+    // Punto especial sin wellId: sin boton a proposito - todavia no
+    // existe una ruta/controlador reutilizable para abrir el modulo NE
+    // directo desde un monitoringId sin pasar por buscarPozo(wellId) (el
+    // buscador de la app solo acepta el formato DD-PPPP). El popup se
+    // queda solo con la identificacion, tal como se aprobo para esta
+    // etapa.
+
+    marker.bindPopup(el);
+    return marker;
+  }
+
+  // Construye (la primera vez) o repinta la capa NE completa a partir de
+  // mapaEstado.puntosNE - nunca se mezcla con mapaEstado.clusterGroup
+  // (el del padron): son 2 layers de Leaflet totalmente independientes,
+  // agregadas/quitadas del mapa por separado.
+  function mapaController_renderPuntosNE(contexto) {
+    if (!mapaEstado.capaNE) {
+      mapaEstado.capaNE = L.layerGroup();
+    }
+    mapaEstado.capaNE.clearLayers();
+    mapaEstado.puntosNE.forEach(function (punto) {
+      mapaEstado.capaNE.addLayer(mapaController_crearMarkerNE(punto, contexto));
+    });
+  }
+
+  // Toggle del chip "Niveles estáticos": carga lazy en la PRIMERA
+  // activacion (nunca antes), cachea el dataset (mapaNEDataset.js, entre
+  // aperturas del mapa) y los markers ya construidos (mapaEstado.puntosNE,
+  // para no reconstruir el layer group cada vez que se prende/apaga).
+  // Desactivar SOLO saca la capa del mapa - nunca toca zoom/filtros/la
+  // capa del padron.
+  function mapaController_toggleNE(contexto) {
+    mapaEstado.neActivo = !mapaEstado.neActivo;
+    chipNEEl.classList.toggle('active', mapaEstado.neActivo);
+    chipNEEl.setAttribute('aria-pressed', mapaEstado.neActivo ? 'true' : 'false');
+
+    if (!mapaEstado.neActivo) {
+      if (mapaEstado.capaNE) {
+        mapaEstado.mapa.removeLayer(mapaEstado.capaNE);
+      }
+      return;
+    }
+
+    if (mapaEstado.puntosNE) {
+      // Ya se habia cargado antes en esta apertura del mapa (se prendio,
+      // se apago, se vuelve a prender) - se reusa sin refetch.
+      mapaEstado.capaNE.addTo(mapaEstado.mapa);
+      return;
+    }
+
+    var aperturaAlPedir = mapaEstado.aperturaId;
+    mapaNEDataset_obtener(contexto.sessionToken).then(function (result) {
+      // Si el usuario ya salio del mapa (aperturaId cambio) o volvio a
+      // apagar el chip mientras el fetch estaba en vuelo, no se pisa
+      // nada - se descarta en silencio, igual que el resto de los fetches
+      // del mapa.
+      if (aperturaAlPedir !== mapaEstado.aperturaId || !mapaEstado.neActivo) {
+        return;
+      }
+      if (result.status !== 'ok') {
+        mapaEstado.neActivo = false;
+        chipNEEl.classList.remove('active');
+        chipNEEl.setAttribute('aria-pressed', 'false');
+        return;
+      }
+      mapaEstado.puntosNE = result.data.puntos;
+      mapaController_renderPuntosNE(contexto);
+      mapaEstado.capaNE.addTo(mapaEstado.mapa);
+    }).catch(function () {
+      if (aperturaAlPedir !== mapaEstado.aperturaId) {
+        return;
+      }
+      mapaEstado.neActivo = false;
+      chipNEEl.classList.remove('active');
+      chipNEEl.setAttribute('aria-pressed', 'false');
+    });
   }
 
   function mapaController_construirChipDepartamento(codigo, etiqueta, activo) {
@@ -479,6 +624,26 @@
       return;
     }
 
+    // Chip "Niveles estáticos" (grupo TIENE, v2.1.0): visible SOLO con
+    // ne=SI - nunca se revela ni el grupo ni el chip a un usuario sin el
+    // permiso (fail-closed, ver mapaLogic_debeMostrarChipNE). Esto es
+    // independiente de cargar librerias/dataset, no hace falta esperar
+    // nada para decidirlo.
+    var debeMostrarNE = mapaLogic_debeMostrarChipNE(contexto.permisos);
+    grupoTieneEl.hidden = !debeMostrarNE;
+    if (!debeMostrarNE && mapaEstado.neActivo) {
+      // Caso limite: el permiso se revoco entre una apertura y la
+      // siguiente (ej. un admin le saco ne=SI al usuario en la hoja
+      // Usuarios) - se apaga la capa, nunca se deja prendida "a
+      // escondidas" sin su chip visible.
+      mapaEstado.neActivo = false;
+      if (mapaEstado.capaNE && mapaEstado.mapa) {
+        mapaEstado.mapa.removeLayer(mapaEstado.capaNE);
+      }
+      chipNEEl.classList.remove('active');
+      chipNEEl.setAttribute('aria-pressed', 'false');
+    }
+
     mapaController_cargarLibrerias().then(function () {
       if (aperturaId !== mapaEstado.aperturaId) {
         return null;
@@ -598,6 +763,16 @@
     chip.addEventListener('click', function () {
       mapaController_cambiarCapaBase(chip.getAttribute('data-capa'));
     });
+  });
+
+  // Chip "Niveles estáticos" - el grupo entero empieza hidden en el HTML
+  // y mapaController_abrir lo desoculta solo con ne=SI, asi que este
+  // listener nunca dispara para un usuario sin el permiso (el boton ni
+  // siquiera es clickeable/visible).
+  chipNEEl.addEventListener('click', function () {
+    if (mapaEstado.contextoActual) {
+      mapaController_toggleNE(mapaEstado.contextoActual);
+    }
   });
 
   btnReintentar.addEventListener('click', function () {

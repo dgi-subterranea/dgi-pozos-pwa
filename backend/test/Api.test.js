@@ -926,3 +926,104 @@ describe('handleGetWellSummary', () => {
     expect(global.logHistoryEvent).toHaveBeenCalledWith('user@example.com', 'getWellSummary', '01-0012', 'OK');
   });
 });
+
+describe('handleGetMapaNE', () => {
+  test('sessionToken invalido: UNAUTHORIZED, no consulta el servicio', () => {
+    global.verifySessionToken.mockReturnValue({ valid: false, reason: 'expirado' });
+
+    const result = Api.handleGetMapaNE('token-vencido');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('UNAUTHORIZED');
+    expect(global.mapaNEService_getPuntos).not.toHaveBeenCalled();
+  });
+
+  test('usuario deshabilitado: USER_DISABLED', () => {
+    global.verifySessionToken.mockReturnValue({ valid: true, email: 'user@example.com' });
+    global.isUserActive.mockReturnValue(false);
+
+    const result = Api.handleGetMapaNE('token-valido');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('USER_DISABLED');
+  });
+
+  // El caso central del diseño (v2.1.0): getMapaNE requiere EXCLUSIVAMENTE
+  // "ne" - nunca "ubicacion", aunque el usuario tenga acceso al Mapa de
+  // Pozos general. Es la garantia de que ubicacion=SI/ne=NO nunca puede
+  // pedir este dataset.
+  test('ne=NO (aunque tenga "ubicacion"): PERMISSION_DENIED, no consulta el servicio', () => {
+    mockValidSession();
+    global.hasPermission.mockImplementation((email, modulo) => modulo === 'ubicacion');
+
+    const result = Api.handleGetMapaNE('token-valido');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('PERMISSION_DENIED');
+    expect(global.mapaNEService_getPuntos).not.toHaveBeenCalled();
+  });
+
+  test('ne=SI con ubicacion=NO: OK, funciona sin necesitar el permiso "ubicacion"', () => {
+    mockValidSession();
+    global.hasPermission.mockImplementation((email, modulo) => modulo === 'ne');
+    global.mapaNEService_getPuntos.mockReturnValue({
+      found: true,
+      puntos: [{ monitoringId: '04-0263', wellId: '04-0263', lat: -32.86865, lon: -68.7507, nombreOriginal: null }]
+    });
+
+    const result = Api.handleGetMapaNE('token-valido');
+
+    expect(result.status).toBe('ok');
+    expect(result.data.puntos.length).toBe(1);
+  });
+
+  test('dataset encontrado: OK con los puntos tal cual los devuelve el service', () => {
+    mockValidSession();
+    const puntos = [
+      { monitoringId: '04-0263', wellId: '04-0263', lat: -32.86865, lon: -68.7507, nombreOriginal: null },
+      { monitoringId: 'INA 2055', wellId: null, lat: -32.9, lon: -68.9, nombreOriginal: 'Jofre Puesto San Vicente' }
+    ];
+    global.mapaNEService_getPuntos.mockReturnValue({ found: true, puntos });
+
+    const result = Api.handleGetMapaNE('token-valido');
+
+    expect(result).toEqual({ status: 'ok', data: { puntos } });
+  });
+
+  // Caso central de seguridad: cada punto solo trae los 5 campos
+  // autorizados - esta prueba lo verifica a nivel del handler completo
+  // (ver tambien MapaNEService.test.js, que lo prueba a nivel unitario).
+  test('dataset sin campos sensibles en la respuesta del handler', () => {
+    mockValidSession();
+    global.mapaNEService_getPuntos.mockReturnValue({
+      found: true,
+      puntos: [{ monitoringId: '04-0263', wellId: '04-0263', lat: -32.86865, lon: -68.7507, nombreOriginal: null }]
+    });
+
+    const result = Api.handleGetMapaNE('token-valido');
+
+    expect(Object.keys(result.data.puntos[0]).sort()).toEqual(['lat', 'lon', 'monitoringId', 'nombreOriginal', 'wellId']);
+  });
+
+  test('nivelesEstaticos.json inexistente: MAPA_NE_NOT_FOUND', () => {
+    mockValidSession();
+    global.mapaNEService_getPuntos.mockReturnValue({ found: false });
+
+    const result = Api.handleGetMapaNE('token-valido');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('MAPA_NE_NOT_FOUND');
+  });
+
+  test('error del service/Drive: SERVICE_UNAVAILABLE', () => {
+    mockValidSession();
+    global.mapaNEService_getPuntos.mockImplementation(() => {
+      throw new Error('Drive no disponible');
+    });
+
+    const result = Api.handleGetMapaNE('token-valido');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('SERVICE_UNAVAILABLE');
+  });
+});

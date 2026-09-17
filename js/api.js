@@ -59,6 +59,14 @@ function apiGetWellSummary(sessionToken, wellId) {
   return callBackend('getWellSummary', { sessionToken: sessionToken, wellId: wellId });
 }
 
+// Capa Mapa NE (v2.1.0) - dataset SEPARADO de getMapaPozos, requiere el
+// permiso "ne" del lado del backend. El frontend no dispara este fetch
+// si permisos.ne es false (el chip "Niveles estáticos" ni siquiera se
+// muestra - ver mapa.js), pero el backend vuelve a validarlo igual.
+function apiGetMapaNE(sessionToken) {
+  return callBackend('getMapaNE', { sessionToken: sessionToken });
+}
+
 // keepalive: true - para que el request tenga mas chance de llegar
 // aunque el usuario cierre/navegue afuera de la PWA justo despues de
 // buscar (fire-and-forget, no se espera ni se usa la respuesta). Un

@@ -222,6 +222,21 @@
           <button type="button" class="mapa-estado-chip mapa-estado-chip-disponible active" data-estado="D" aria-pressed="true">Disponible</button>
         </div>
       </div>
+
+      <!-- Tiene / Niveles estáticos (v2.1.0): capa SEPARADA de
+           pozos.json, gateada exclusivamente por ne=SI - el grupo entero
+           empieza hidden y mapaController_abrir lo desoculta solo si el
+           usuario tiene el permiso (ver mapaLogic_debeMostrarChipNE en
+           js/mapaLogic.js). Nunca se filtra por departamento/estado (esos
+           2 chips solo aplican al padron - ver mapaController_renderPuntos
+           en js/mapa.js), y nunca dispara el fetch de getMapaNE hasta que
+           el usuario lo activa (carga diferida real). -->
+      <div class="mapa-filtro-grupo" id="mapa-grupo-tiene" hidden>
+        <p class="mapa-filtro-label">Tiene</p>
+        <div class="mapa-chips-wrap">
+          <button type="button" class="mapa-ne-chip" id="mapa-chip-ne" aria-pressed="false">Niveles estáticos</button>
+        </div>
+      </div>
     </div>
     <div id="mapa-contador" class="mapa-contador" hidden></div>
     <div class="mapa-viewport">
@@ -323,6 +338,7 @@
   <script src="js/hubIdentificacion.js"></script>
   <script src="js/mapaLogic.js"></script>
   <script src="js/mapaDataset.js"></script>
+  <script src="js/mapaNEDataset.js"></script>
   <script src="js/cercaMioLogic.js"></script>
   <script src="js/mapa.js"></script>
   <script src="js/cercaMio.js"></script>

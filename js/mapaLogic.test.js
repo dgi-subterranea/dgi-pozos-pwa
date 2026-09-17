@@ -6,7 +6,9 @@ const {
   mapaLogic_filtrarPorDepartamento,
   mapaLogic_filtrarPorEstado,
   mapaLogic_dividirChipsDepartamento,
-  mapaLogic_debeConsultarSummary
+  mapaLogic_debeConsultarSummary,
+  mapaLogic_debeMostrarChipNE,
+  mapaLogic_nombrePuntoNE
 } = require('./mapaLogic');
 
 function punto(wellId, estado) {
@@ -179,5 +181,49 @@ describe('mapaLogic_debeConsultarSummary', () => {
     expect(mapaLogic_debeConsultarSummary(undefined)).toBe(false);
     expect(mapaLogic_debeConsultarSummary(null)).toBe(false);
     expect(mapaLogic_debeConsultarSummary({})).toBe(false);
+  });
+});
+
+describe('mapaLogic_debeMostrarChipNE', () => {
+  test('ne=SI -> true', () => {
+    expect(mapaLogic_debeMostrarChipNE({ ne: true })).toBe(true);
+  });
+
+  test('ne=NO -> false', () => {
+    expect(mapaLogic_debeMostrarChipNE({ ne: false })).toBe(false);
+  });
+
+  // Fail-closed, y en particular: tener ubicacion=SI NUNCA alcanza para
+  // mostrar el chip - son permisos independientes (requisito central de
+  // v2.1.0: no revelar pertenencia a la red NE via otro permiso).
+  test('ubicacion=SI pero ne=NO/ausente -> false', () => {
+    expect(mapaLogic_debeMostrarChipNE({ ubicacion: true, ne: false })).toBe(false);
+    expect(mapaLogic_debeMostrarChipNE({ ubicacion: true })).toBe(false);
+  });
+
+  test('permisos ausente/null -> false, no rompe', () => {
+    expect(mapaLogic_debeMostrarChipNE(undefined)).toBe(false);
+    expect(mapaLogic_debeMostrarChipNE(null)).toBe(false);
+    expect(mapaLogic_debeMostrarChipNE({})).toBe(false);
+  });
+});
+
+describe('mapaLogic_nombrePuntoNE', () => {
+  test('con nombreOriginal -> lo devuelve', () => {
+    expect(mapaLogic_nombrePuntoNE({ monitoringId: 'INA 2055', nombreOriginal: 'Jofre Puesto San Vicente' })).toBe('Jofre Puesto San Vicente');
+  });
+
+  test('sin nombreOriginal -> devuelve monitoringId', () => {
+    expect(mapaLogic_nombrePuntoNE({ monitoringId: 'INA 104', nombreOriginal: null })).toBe('INA 104');
+  });
+
+  test('punto con wellId (nombreOriginal null tipico) -> devuelve monitoringId', () => {
+    expect(mapaLogic_nombrePuntoNE({ monitoringId: '04-0263', wellId: '04-0263', nombreOriginal: null })).toBe('04-0263');
+  });
+
+  test('punto ausente/vacio -> string vacio, no rompe', () => {
+    expect(mapaLogic_nombrePuntoNE(undefined)).toBe('');
+    expect(mapaLogic_nombrePuntoNE(null)).toBe('');
+    expect(mapaLogic_nombrePuntoNE({})).toBe('');
   });
 });

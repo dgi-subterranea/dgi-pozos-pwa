@@ -1390,6 +1390,29 @@ table.ne-table tr:last-child td {
   border-color: var(--color-mapa-disponible);
 }
 
+/* Chip "Niveles estáticos" (v2.1.0, grupo Tiene): mismo color activo que
+   el marker que prende/apaga (--color-primary-dark) - misma logica que
+   los chips de estado, el chip es tambien la leyenda de ese color. */
+.mapa-ne-chip {
+  min-height: 34px;
+  padding: 6px 14px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text-soft);
+  border: 1.5px solid var(--color-border);
+  box-shadow: none;
+}
+.mapa-ne-chip:hover {
+  background: var(--color-primary-tint);
+}
+.mapa-ne-chip.active {
+  background: var(--color-primary-dark);
+  color: #fff;
+  border-color: var(--color-primary-dark);
+}
+
 .mapa-contador {
   padding: 8px 18px 0;
   font-size: 0.76rem;
@@ -1490,9 +1513,17 @@ table.ne-table tr:last-child td {
    mapaController_aplicarEnfoque en js/mapa.js): un punto solido con un
    pulso animado alrededor, en --color-accent para distinguirse a
    proposito de los 2 teals de Confirmada/Disponible. Div icon, sin
-   imagenes vendorizadas - mismo criterio que los circleMarker de pozos. */
+   imagenes vendorizadas - mismo criterio que los circleMarker de pozos.
+   background/border:none a proposito - .leaflet-div-icon (la clase que
+   Leaflet SIEMPRE agrega ademas de la propia) trae un fondo blanco y un
+   borde gris por default, pensados para un icono de texto simple; sin
+   esto quedaba un cuadrado visible detras del pulso (bug real
+   encontrado en la Etapa v2.1.0 al agregar el icono NE, que usa el
+   mismo mecanismo). */
 .mapa-mi-ubicacion-icono {
   position: relative;
+  background: none;
+  border: none;
 }
 .mapa-mi-ubicacion-punto {
   position: absolute;
@@ -1519,6 +1550,15 @@ table.ne-table tr:last-child td {
     animation: none;
     opacity: 0.25;
   }
+}
+
+/* Icono NE (v2.1.0, diamante con linea - ver mapaController_iconoNE en
+   js/mapa.js): el SVG ya trae su propio fill/stroke inline, aca solo se
+   anula el fondo/borde default de .leaflet-div-icon (mismo motivo que
+   .mapa-mi-ubicacion-icono de arriba). */
+.mapa-ne-icono {
+  background: none;
+  border: none;
 }
 
 /* --- Pozos Cerca Mio: chips de radio + lista de resultados + estados

@@ -30,6 +30,8 @@ function doPost(e) {
         response = handleGetMapaPozos(body.sessionToken);
       } else if (body.action === 'getWellSummary') {
         response = handleGetWellSummary(body.sessionToken, body.wellId);
+      } else if (body.action === 'getMapaNE') {
+        response = handleGetMapaNE(body.sessionToken);
       } else {
         response = { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'accion desconocida: ' + body.action };
       }
@@ -397,6 +399,39 @@ function handleGetWellSummary(sessionToken, wellId) {
   return { status: 'ok', data: result.summary };
 }
 
+// Mapa NE (v2.1.0): dataset SEPARADO del Mapa de Pozos, gateado
+// EXCLUSIVAMENTE por el permiso "ne" - nunca "ubicacion". Un usuario con
+// ubicacion=SI, ne=NO nunca puede pedir esto (ver MapaNEService.js: la
+// separacion de pozos.json/nivelesEstaticos.json es justamente para que
+// ese usuario no pueda inferir pertenencia a la red NE inspeccionando el
+// dataset general). Mismo criterio que getMapaPozos: no es una accion
+// por-wellId, no se audita por wellId en Historial.
+function handleGetMapaNE(sessionToken) {
+  var validation = validateSession(sessionToken, 'getMapaNE');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var permiso = validarPermiso(session, 'getMapaNE', null, 'ne');
+  if (!permiso.ok) {
+    return permiso.response;
+  }
+
+  var result;
+  try {
+    result = mapaNEService_getPuntos();
+  } catch (err) {
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+
+  if (!result.found) {
+    return { status: 'error', code: 'MAPA_NE_NOT_FOUND', message: 'no se encontro nivelesEstaticos.json' };
+  }
+
+  return { status: 'ok', data: { puntos: result.puntos } };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     doPost,
@@ -408,6 +443,7 @@ if (typeof module !== 'undefined' && module.exports) {
     handleRegisterWellSearch,
     handleGetMapaPozos,
     handleGetWellSummary,
+    handleGetMapaNE,
     validarPermiso,
     validateSession,
     validateSessionAndWellId

@@ -38,6 +38,25 @@ function nivelesEstaticosRepository_getPunto(monitoringId) {
   return punto ? { found: true, punto: punto } : { found: false };
 }
 
+// Para el Mapa NE (v2.1.0, capa separada de pozos.json - ver
+// MapaNEService.js): a diferencia de nivelesEstaticosRepository_getPunto
+// (un punto puntual, cacheado), esto lee el archivo ENTERO una vez y
+// devuelve el dict completo de puntos - no se cachea (mismos ~680KB de
+// arriba, por encima del limite de 100KB de CacheService). Se llama una
+// sola vez por dataset gracias a mapaNEDataset.js del lado del
+// frontend, igual que mapaDataset.js con getMapaPozos.
+function nivelesEstaticosRepository_getTodosLosPuntos() {
+  var folder = DriveApp.getFolderById(getNivelesEstaticosFolderId());
+  var files = folder.getFilesByName('nivelesEstaticos.json');
+  if (!files.hasNext()) {
+    return { found: false };
+  }
+
+  var file = files.next();
+  var data = JSON.parse(file.getBlob().getDataAsString('UTF-8'));
+  return { found: true, puntos: data.puntos || {} };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { nivelesEstaticosRepository_getPunto };
+  module.exports = { nivelesEstaticosRepository_getPunto, nivelesEstaticosRepository_getTodosLosPuntos };
 }

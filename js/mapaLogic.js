@@ -106,6 +106,22 @@ function mapaLogic_debeConsultarSummary(permisos) {
   return !!(permisos && permisos.datos);
 }
 
+// Capa Mapa NE (v2.1.0): el chip "Niveles estáticos" (y todo lo que
+// dispara) solo existe para un usuario con ne=SI - fail-closed, mismo
+// criterio que mapaLogic_debeConsultarSummary. Nunca se llama "ubicacion"
+// aca: son 2 permisos independientes, ver adjustment de v2.1.0 sobre no
+// revelar pertenencia a la red NE a traves de otro permiso.
+function mapaLogic_debeMostrarChipNE(permisos) {
+  return !!(permisos && permisos.ne);
+}
+
+// Nombre para mostrar de un punto NE: nombreOriginal si existe (el caso
+// tipico de un punto especial sin wellId, ej. "Jofre Puesto San
+// Vicente"), si no el propio monitoringId (nunca se inventa un nombre).
+function mapaLogic_nombrePuntoNE(punto) {
+  return (punto && punto.nombreOriginal) || (punto && punto.monitoringId) || '';
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MAPA_DEPARTAMENTOS,
@@ -117,6 +133,8 @@ if (typeof module !== 'undefined' && module.exports) {
     mapaLogic_filtrarPorDepartamento,
     mapaLogic_filtrarPorEstado,
     mapaLogic_dividirChipsDepartamento,
-    mapaLogic_debeConsultarSummary
+    mapaLogic_debeConsultarSummary,
+    mapaLogic_debeMostrarChipNE,
+    mapaLogic_nombrePuntoNE
   };
 }
