@@ -13,7 +13,9 @@
     datos: document.getElementById('screen-datos'),
     ubicacion: document.getElementById('screen-ubicacion'),
     ne: document.getElementById('screen-ne'),
+    mapaSelector: document.getElementById('screen-mapa-selector'),
     mapa: document.getElementById('screen-mapa'),
+    mapaNE: document.getElementById('screen-mapa-ne'),
     cercaMio: document.getElementById('screen-cerca-mio'),
     disabled: document.getElementById('screen-disabled'),
     offline: document.getElementById('screen-offline')
@@ -1090,15 +1092,38 @@
     });
   }
 
-  // Acceso al Mapa de Pozos y a Cerca Mio: ambos visibles/habilitados
-  // SOLO con ubicacion=SI (mismo permiso para los dos) - se llama cada
-  // vez que permisosActuales cambia de verdad (login, checkSession,
-  // logout), nunca se asume estatico. Como los botones empiezan hidden
-  // en el HTML, un usuario sin el permiso nunca los ve parpadear antes
-  // de que llegue la respuesta real.
+  // Arquitectura de 2 mapas (v2.2.0): ubicacion y ne son permisos
+  // independientes, cada uno da acceso a un mapa distinto (ver
+  // mapaLogic_determinarAccesoMapas en js/mapaLogic.js) - "Mapa de
+  // pozos" y "Cerca mío" YA NO comparten el mismo gate. Cerca Mío sigue
+  // siendo exclusivamente sobre Pozos Provincia (pedido explicito, fuera
+  // de alcance agregar una version NE), asi que sigue gateado solo por
+  // ubicacion=SI. El boton "Mapa de pozos" en cambio se habilita con
+  // ubicacion=SI Y/O ne=SI (accesoMapas() !== 'ninguno') - el click en
+  // si decide a donde entra (ver abrirMapaPrincipal).
+  function accesoMapas() {
+    return mapaLogic_determinarAccesoMapas(permisosActuales);
+  }
+
+  // Los botones "Volver"/"Mapas" de Pozos Provincia y Niveles Estaticos
+  // (screen-mapa/screen-mapa-ne) comparten el mismo criterio: si el
+  // usuario tiene acceso a los 2 mapas (accesoMapas() === 'selector'),
+  // vuelven al selector intermedio ("Mapas"); si solo tiene uno, vuelven
+  // directo al hub ("Volver") - nunca se muestra un selector de 1 sola
+  // opcion (pedido explicito). Se recalcula cada vez que
+  // permisosActuales cambia (no en cada apertura del mapa) porque solo
+  // depende de la sesion, nunca del click en si.
+  function actualizarBotonesVolverMapa() {
+    var esSelector = accesoMapas() === 'selector';
+    var etiqueta = esSelector ? 'Mapas' : 'Volver';
+    document.querySelector('#btn-mapa-volver .tv-volver-label').textContent = etiqueta;
+    document.querySelector('#btn-mapa-ne-volver .tv-volver-label').textContent = etiqueta;
+  }
+
   function toggleAccesosUbicacion() {
-    document.getElementById('btn-abrir-mapa').hidden = !permisosActuales.ubicacion;
     document.getElementById('btn-abrir-cerca-mio').hidden = !permisosActuales.ubicacion;
+    document.getElementById('btn-abrir-mapa').hidden = accesoMapas() === 'ninguno';
+    actualizarBotonesVolverMapa();
   }
 
   function enterMain() {
@@ -1281,13 +1306,16 @@
     buscarPozo(normalized);
   });
 
-  // --- Mapa de Pozos / Cerca Mio: bordes con js/mapa.js y js/cercaMio.js -
-  // app.js es el UNICO que conoce sessionToken/permisosActuales/buscarPozo
-  // - ninguno de los dos archivos los cachea mas alla de una apertura,
-  // los reciben frescos en cada click via este contexto. abrirMapaDesde()
-  // evita repetir la construccion del contexto del mapa en los 3 lugares
-  // que lo abren (acceso directo, "Ver en mapa" y "Ver todos en el mapa"
-  // desde Cerca Mio).
+  // --- Mapas / Cerca Mio: bordes con js/mapa.js, js/mapaNE.js y
+  // js/cercaMio.js - app.js es el UNICO que conoce sessionToken/
+  // permisosActuales/buscarPozo, ninguno de los 3 archivos los cachea
+  // mas alla de una apertura, los reciben frescos en cada click via este
+  // contexto. abrirMapaDesde() evita repetir la construccion del
+  // contexto de Pozos Provincia en los 3 lugares que lo abren (acceso
+  // directo/selector, "Ver en mapa" y "Ver todos en el mapa" desde Cerca
+  // Mio) - estos 2 ultimos SIEMPRE van directo a Pozos Provincia, nunca
+  // pasan por el selector, sin importar los permisos (Cerca Mio es
+  // exclusivamente sobre el padron - ver punto 7 de la Etapa v2.2.0).
   function abrirMapaDesde(enfoque) {
     showScreen('mapa');
     mapaController_abrir({
@@ -1301,13 +1329,60 @@
     });
   }
 
-  document.getElementById('btn-abrir-mapa').addEventListener('click', function () {
+  function abrirMapaNE() {
+    showScreen('mapaNE');
+    mapaNEController_abrir({
+      sessionToken: sessionToken,
+      permisos: permisosActuales,
+      onAbrirPozo: function (wellId) {
+        showScreen('main');
+        buscarPozo(wellId);
+      }
+    });
+  }
+
+  // Boton principal "Mapa de pozos" del hub: el UNICO punto que consulta
+  // el selector (Cerca Mio nunca pasa por aca, ver arriba). Con ambos
+  // permisos, muestra la pantalla intermedia de eleccion; con uno solo,
+  // entra directo al mapa correspondiente - "ninguno" no deberia poder
+  // ocurrir (el boton esta hidden en ese caso, ver toggleAccesosUbicacion),
+  // pero no hace nada si de todas formas se llega aca.
+  function abrirMapaPrincipal() {
+    var acceso = accesoMapas();
+    if (acceso === 'selector') {
+      showScreen('mapaSelector');
+    } else if (acceso === 'provincia') {
+      abrirMapaDesde(null);
+    } else if (acceso === 'ne') {
+      abrirMapaNE();
+    }
+  }
+
+  document.getElementById('btn-abrir-mapa').addEventListener('click', abrirMapaPrincipal);
+
+  document.getElementById('btn-selector-provincia').addEventListener('click', function () {
     abrirMapaDesde(null);
   });
 
+  document.getElementById('btn-selector-ne').addEventListener('click', abrirMapaNE);
+
+  document.getElementById('btn-mapa-selector-volver').addEventListener('click', function () {
+    showScreen('main');
+  });
+
+  // "Volver"/"Mapas" (etiqueta y destino actualizados en
+  // actualizarBotonesVolverMapa, ver toggleAccesosUbicacion): vuelve al
+  // selector SOLO si el usuario tiene acceso a los 2 mapas, si no va
+  // directo al hub - nunca deja a alguien con un solo mapa pasando por
+  // un selector de una sola opcion.
   document.getElementById('btn-mapa-volver').addEventListener('click', function () {
     mapaController_cerrar();
-    showScreen('main');
+    showScreen(accesoMapas() === 'selector' ? 'mapaSelector' : 'main');
+  });
+
+  document.getElementById('btn-mapa-ne-volver').addEventListener('click', function () {
+    mapaNEController_cerrar();
+    showScreen(accesoMapas() === 'selector' ? 'mapaSelector' : 'main');
   });
 
   // La posicion del usuario (lat/lon) le llega a cercaMioController_abrir

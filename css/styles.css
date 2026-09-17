@@ -736,6 +736,8 @@ button:hover,
 #screen-ubicacion,
 #screen-ne,
 #screen-mapa,
+#screen-mapa-selector,
+#screen-mapa-ne,
 #screen-cerca-mio {
   padding: 0;
   overflow: hidden;
@@ -1022,6 +1024,16 @@ button:hover,
   line-height: 1.4;
 }
 
+/* Selector de mapas (v2.2.0): a diferencia de #hub-area (que vive
+   dentro de #screen-main, nunca reseteado a padding:0), esta pantalla
+   es "ventana" como Vista Tecnica/Mapa (ver el reset de padding mas
+   arriba) - su .hub-grid necesita su propio padding horizontal, mismo
+   valor que .mapa-capas-base/.mapa-filtros en mobile (18px, ver
+   override a 34px en el media query de desktop). */
+#screen-mapa-selector .hub-grid {
+  padding: 0 18px 18px;
+}
+
 /* --- Contenido comun a las 4 pantallas de modulo --- */
 .modulo-content {
   padding: 20px 18px 24px;
@@ -1287,13 +1299,31 @@ table.ne-table tr:last-child td {
   border: 1.5px solid var(--color-border);
   box-shadow: none;
 }
-.mapa-capa-chip:hover {
+.mapa-capa-chip:hover,
+.mapa-ne-capa-chip:hover {
   background: var(--color-primary-tint);
 }
-.mapa-capa-chip.active {
+.mapa-capa-chip.active,
+.mapa-ne-capa-chip.active {
   background: var(--color-primary-dark);
   color: #fff;
   border-color: var(--color-primary-dark);
+}
+/* Mismos estilos que .mapa-capa-chip, clase aparte para el mapa Niveles
+   Estaticos independiente (v2.2.0) - evita que
+   document.querySelectorAll('.mapa-capa-chip') en js/mapa.js tambien
+   agarre los chips de esta OTRA pantalla (2 instancias de Leaflet
+   totalmente independientes, ver js/mapaNE.js). */
+.mapa-ne-capa-chip {
+  min-height: 32px;
+  padding: 6px 14px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text-soft);
+  border: 1.5px solid var(--color-border);
+  box-shadow: none;
 }
 
 /* Filtros Departamento/Ubicacion: chips en vez del <select> anterior -
@@ -1802,16 +1832,21 @@ table.ne-table tr:last-child td {
     padding: 16px 34px;
   }
 
-  /* Mapa de Pozos: la mas ancha de todas las "ventanas" (900px) - un
-     mapa aprovecha el espacio horizontal mucho mas que una ficha de
-     texto, y el filtro/leyenda entran comodos en una sola fila. */
-  #screen-mapa {
+  /* Mapa de Pozos Provincia y Mapa Niveles Estaticos: las mas anchas de
+     todas las "ventanas" (900px) - un mapa aprovecha el espacio
+     horizontal mucho mas que una ficha de texto, y el filtro/leyenda
+     entran comodos en una sola fila. Mismo ancho para los 2 mapas
+     (v2.2.0) - son la misma familia de pantalla. */
+  #screen-mapa,
+  #screen-mapa-ne {
     max-width: 900px;
   }
-  #screen-mapa .tv-topbar {
+  #screen-mapa .tv-topbar,
+  #screen-mapa-ne .tv-topbar {
     padding: 16px 34px;
   }
-  #screen-mapa .tv-header {
+  #screen-mapa .tv-header,
+  #screen-mapa-ne .tv-header {
     padding: 22px 34px 18px;
   }
   .mapa-capas-base {
@@ -1825,6 +1860,21 @@ table.ne-table tr:last-child td {
   }
   .mapa-viewport {
     height: 560px;
+  }
+
+  /* Selector de mapas: mismo ancho que el hub (640px) - es una lista de
+     2 tarjetas de eleccion, no gana nada con 900px. */
+  #screen-mapa-selector {
+    max-width: 640px;
+  }
+  #screen-mapa-selector .tv-topbar {
+    padding: 16px 34px;
+  }
+  #screen-mapa-selector .tv-header {
+    padding: 22px 34px 18px;
+  }
+  #screen-mapa-selector .hub-grid {
+    padding: 0 34px 34px;
   }
 
   /* Pozos Cerca Mio: mismo ancho que Vista Tecnica/los 4 modulos (640px)

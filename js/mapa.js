@@ -18,13 +18,6 @@
 (function () {
   var MAPA_COLOR_CONFIRMADA = '#0b5a7a';
   var MAPA_COLOR_DISPONIBLE = '#4fa3c4';
-  // Capa NE (v2.1.0): mismo tono que --color-primary-dark (no un color
-  // nuevo, se mantiene la paleta de 2 teals + accent ya establecida) - la
-  // diferencia con los pozos del padron es la FORMA del marker (diamante
-  // con linea, ver mapaController_iconoNE), no el color. Deliberadamente
-  // distinto de --color-accent (usado por "Tu ubicacion") para no
-  // confundir un punto de datos persistente con la posicion del usuario.
-  var MAPA_COLOR_NE = '#073e54';
   // Mismo valor que disableClusteringAtZoom del clusterGroup (ver
   // mapaController_crearMapaSiHaceFalta) - a este zoom un marker
   // individual deja de estar agrupado, sin importar cuantos vecinos
@@ -34,38 +27,10 @@
   // en el mapa antes de abrirle el popup.
   var MAPA_ZOOM_INDIVIDUAL = 16;
 
-  // Proveedores de tiles (v2.1.0: Mapa/Satelite) - unico lugar que sabe
-  // las URLs/atribuciones. Cambiar o agregar un proveedor es tocar solo
-  // esto, nunca el resto de la arquitectura del mapa (aprobado - ver
-  // Etapa 5B/5C, adjustment #7).
-  //
-  // "satelite" usa Esri World Imagery (server.arcgisonline.com), servicio
-  // publico sin API key ni secreto de por medio - dependencia externa
-  // asumida a proposito, evaluada antes de sumarla: gratuito para uso
-  // interno/no comercial segun los Esri Web Site & Service Terms of Use
-  // (https://www.esri.com/en-us/legal/terms/web-site-service), exige
-  // atribucion visible (incluida abajo, texto recomendado por
-  // leaflet-providers) y no fija un limite de trafico documentado, pero
-  // Esri se reserva poder "change, alter, or discontinue" el servicio en
-  // cualquier momento - no hay SLA. Es la misma clase de dependencia
-  // $0 que ya asumimos con OpenStreetMap para "Mapa" (sin cargo fijo,
-  // sujeta a buena fe/uso razonable) - si alguna vez se vuelve un
-  // problema real, cambiar la URL/atribucion de este objeto alcanza,
-  // nunca hace falta tocar mapa.js mas alla de esto.
-  var MAPA_TILE_PROVIDERS = {
-    calle: {
-      urlTemplate: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>',
-      subdomains: 'abc',
-      maxZoom: 19
-    },
-    satelite: {
-      urlTemplate: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      attribution: 'Tiles &copy; <a href="https://www.esri.com" target="_blank" rel="noopener">Esri</a> — Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
-      maxZoom: 19
-    }
-  };
-  var MAPA_CAPA_BASE_DEFAULT = 'calle';
+  // Proveedores de tiles, carga diferida de Leaflet y capas base:
+  // js/mapaShared.js (arquitectura de 2 mapas, v2.2.0) - compartido con
+  // el mapa independiente de Niveles Estaticos (js/mapaNE.js), para no
+  // duplicar la config ni la carga de las librerias entre los 2.
 
   // "Todos" es aparte (siempre visible, nunca cuenta para el +N mas) -
   // ver mapaController_renderChipsDepartamento. Estos son la cantidad de
@@ -88,9 +53,8 @@
     deptosExpandido: false,  // true = "+N mas" ya tocado, se ven todos los chips de departamento
     markersPorWellId: {},    // se reconstruye en cada renderPuntos() - permite ubicar el marker de un wellId puntual para enfoque:{tipo:'pozo'}
     miUbicacionMarker: null, // marcador "Tu ubicacion" (enfoque:{tipo:'ubicacion'}) - se saca en cada apertura que no lo pida, para no dejar uno viejo colgado
-    capaNE: null,            // L.layerGroup con los markers NE - se crea recien la PRIMERA vez que se activa el chip (carga diferida real, igual que Leaflet mismo)
-    puntosNE: null,          // ultimo dataset de getMapaNE ya recibido (independiente del cache de mapaNEDataset.js - evita reconstruir los markers si el usuario apaga/prende el chip varias veces)
-    neActivo: false,         // estado del chip "Niveles estáticos" - independiente de departamentoActual/estadosActivos, esos 2 NUNCA filtran esta capa (ver mapaController_renderPuntos, que no la toca)
+    neWellIdSet: null,       // Set de wellId de la red NE (mapaLogic_setWellIdNE sobre getMapaNE) - se arma UNA sola vez, la PRIMERA vez que se activa el filtro "Tiene: Niveles estáticos" (carga diferida real)
+    neActivo: false,         // estado del filtro "Tiene: Niveles estáticos" (v2.2.0: filtro sobre el padron, NO una capa aparte - ver mapaController_renderPuntos, que lo combina con AND junto a departamento/estado)
     contextoActual: null,    // {sessionToken, permisos, onAbrirPozo, enfoque} de la apertura en curso
     aperturaId: 0             // se incrementa en cada apertura/cierre - una respuesta de red de una apertura vieja se descarta si ya cambio (mismo patron de staleness que buscarPozo en app.js)
   };
@@ -108,74 +72,13 @@
   var chipNEEl = document.getElementById('mapa-chip-ne');
   var btnReintentar = document.getElementById('btn-mapa-reintentar');
 
-  function mapaController_cargarScript(src) {
-    return new Promise(function (resolve, reject) {
-      var script = document.createElement('script');
-      script.src = src;
-      script.onload = function () { resolve(); };
-      script.onerror = function () { reject(new Error('No se pudo cargar ' + src)); };
-      document.body.appendChild(script);
-    });
-  }
-
-  function mapaController_cargarCSS(href) {
-    var link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = href;
-    document.head.appendChild(link);
-  }
-
-  var mapaLibreriasPromise = null;
-
-  // Carga diferida real: Leaflet/Leaflet.markercluster (vendorizados
-  // localmente en vendor/, nunca por CDN - aprobado, ver adjustment #7)
-  // no se referencian en el <head> del documento - recien se inyectan la
-  // PRIMERA vez que se abre el mapa. La promesa se cachea: una segunda
-  // apertura en la misma sesion de pagina no vuelve a pedir los scripts.
-  function mapaController_cargarLibrerias() {
-    if (mapaLibreriasPromise) {
-      return mapaLibreriasPromise;
-    }
-    mapaController_cargarCSS('vendor/leaflet/leaflet.css');
-    mapaController_cargarCSS('vendor/leaflet.markercluster/MarkerCluster.css');
-    mapaController_cargarCSS('vendor/leaflet.markercluster/MarkerCluster.Default.css');
-
-    mapaLibreriasPromise = mapaController_cargarScript('vendor/leaflet/leaflet.js')
-      .then(function () { return mapaController_cargarScript('vendor/leaflet.markercluster/leaflet.markercluster.js'); });
-    return mapaLibreriasPromise;
-  }
-
   function mapaController_crearMapaSiHaceFalta() {
     if (mapaEstado.mapa) {
       return;
     }
     mapaEstado.mapa = L.map('mapa-leaflet', { zoomControl: true }).setView([-34.6, -68.6], 7);
-
-    // Las 2 capas base se crean juntas aca, pero SOLO se agrega la
-    // default al mapa - la otra queda lista sin pedir tiles hasta que el
-    // usuario realmente cambie a ella (Leaflet no descarga nada de una
-    // capa que no esta agregada al mapa). Cambiar de capa despues (ver
-    // mapaController_cambiarCapaBase) nunca toca clusterGroup/puntos/
-    // vista - son capas independientes.
-    mapaEstado.capasBase = {};
-    Object.keys(MAPA_TILE_PROVIDERS).forEach(function (id) {
-      var p = MAPA_TILE_PROVIDERS[id];
-      var opciones = { attribution: p.attribution, maxZoom: p.maxZoom };
-      // subdomains SOLO si el proveedor lo define (ej. "calle"/OSM, cuya
-      // URL usa {s}) - Esri/"satelite" no tiene {s} en la URL y no
-      // define subdomains. Pasar subdomains:undefined EXPLICITO (en vez
-      // de omitir la clave) pisa el default 'abc' de Leaflet con
-      // undefined literal, y esa capa tira un TypeError interno
-      // ("Cannot read properties of undefined (reading 'length')") la
-      // primera vez que intenta pedir un tile - bug real encontrado en
-      // la Etapa v2.1.0 probando el selector Mapa/Satelite.
-      if (p.subdomains) {
-        opciones.subdomains = p.subdomains;
-      }
-      mapaEstado.capasBase[id] = L.tileLayer(p.urlTemplate, opciones);
-    });
     mapaEstado.capaBaseActual = MAPA_CAPA_BASE_DEFAULT;
-    mapaEstado.capasBase[MAPA_CAPA_BASE_DEFAULT].addTo(mapaEstado.mapa);
+    mapaEstado.capasBase = mapaShared_crearCapasBase(mapaEstado.mapa);
 
     mapaEstado.clusterGroup = L.markerClusterGroup({
       chunkedLoading: true,
@@ -185,24 +88,11 @@
     mapaEstado.mapa.addLayer(mapaEstado.clusterGroup);
   }
 
-  // Nunca recarga el dataset ni toca clusterGroup/markers/vista - solo
-  // quita la capa base vieja y agrega la nueva (las 2 ya existen, creadas
-  // en mapaController_crearMapaSiHaceFalta). Los botones .mapa-capa-chip
-  // se deshabilitan solos si el mapa todavia no existe (ver el listener
-  // mas abajo), asi que aca siempre hay mapa/capasBase ya creados.
+  // Nunca recarga el dataset ni toca clusterGroup/markers/vista - ver
+  // mapaShared_cambiarCapaBase (js/mapaShared.js), compartida con el
+  // mapa NE independiente.
   function mapaController_cambiarCapaBase(id) {
-    if (id === mapaEstado.capaBaseActual || !mapaEstado.capasBase || !mapaEstado.capasBase[id]) {
-      return;
-    }
-    mapaEstado.mapa.removeLayer(mapaEstado.capasBase[mapaEstado.capaBaseActual]);
-    mapaEstado.capasBase[id].addTo(mapaEstado.mapa);
-    mapaEstado.capaBaseActual = id;
-
-    capaBaseChipsEls.forEach(function (chip) {
-      var esEsta = chip.getAttribute('data-capa') === id;
-      chip.classList.toggle('active', esEsta);
-      chip.setAttribute('aria-pressed', esEsta ? 'true' : 'false');
-    });
+    mapaShared_cambiarCapaBase(mapaEstado, id, capaBaseChipsEls);
   }
 
   // Contenido inicial del popup: SOLO wellId + estado + boton "Abrir
@@ -293,115 +183,32 @@
     return marker;
   }
 
-  // Icono especifico de monitoreo (v2.1.0): un diamante con una linea
-  // horizontal (evoca una regla/gauge de nivel), NO otro circulo de otro
-  // color - pedido explicito del usuario para que se distinga de un
-  // vistazo de los pozos del padron. SVG inline (mismo criterio que los
-  // icons de app.js: ICON_PERFIL, ICON_DATOS, etc.), no una imagen
-  // vendorizada aparte.
-  function mapaController_iconoNE() {
-    var svg = '<svg width="22" height="22" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">' +
-      '<rect x="5" y="5" width="12" height="12" rx="2.5" transform="rotate(45 11 11)" fill="' + MAPA_COLOR_NE + '" stroke="#ffffff" stroke-width="2"/>' +
-      '<line x1="7" y1="11" x2="15" y2="11" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round"/>' +
-      '</svg>';
-    return L.divIcon({ className: 'mapa-ne-icono', html: svg, iconSize: [22, 22], iconAnchor: [11, 11] });
-  }
-
-  // Popup de un punto NE: SIEMPRE distingue "tiene wellId" de "punto
-  // especial" (pedido explicito - nunca se inventa un DD-PPPP para un
-  // punto que no lo tiene). Sin fetch de summary (no aplica aca, a
-  // diferencia del popup de pozos - ver mapaController_crearMarker).
-  function mapaController_crearMarkerNE(punto, contexto) {
-    var marker = L.marker([punto.lat, punto.lon], { icon: mapaController_iconoNE() });
-
-    var el = document.createElement('div');
-    el.className = 'mapa-popup';
-
-    var idEl = document.createElement('p');
-    idEl.className = 'mapa-popup-id mono';
-    idEl.textContent = punto.wellId || mapaLogic_nombrePuntoNE(punto);
-    el.appendChild(idEl);
-
-    var tagEl = document.createElement('p');
-    tagEl.className = 'mapa-popup-estado';
-    tagEl.textContent = 'Niveles estáticos';
-    el.appendChild(tagEl);
-
-    // Punto especial (sin wellId) con nombreOriginal: la linea de arriba
-    // ya muestra el nombre - aca se agrega el monitoringId tecnico como
-    // referencia secundaria, nunca al reves (nunca se inventa un nombre
-    // que no vino del dataset).
-    if (!punto.wellId && punto.nombreOriginal) {
-      var subEl = document.createElement('p');
-      subEl.className = 'mapa-popup-sub';
-      subEl.textContent = punto.monitoringId;
-      el.appendChild(subEl);
-    }
-
-    if (punto.wellId) {
-      var btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'button mapa-popup-btn';
-      btn.textContent = 'Abrir pozo';
-      btn.addEventListener('click', function () {
-        contexto.onAbrirPozo(punto.wellId);
-      });
-      el.appendChild(btn);
-    }
-    // Punto especial sin wellId: sin boton a proposito - todavia no
-    // existe una ruta/controlador reutilizable para abrir el modulo NE
-    // directo desde un monitoringId sin pasar por buscarPozo(wellId) (el
-    // buscador de la app solo acepta el formato DD-PPPP). El popup se
-    // queda solo con la identificacion, tal como se aprobo para esta
-    // etapa.
-
-    marker.bindPopup(el);
-    return marker;
-  }
-
-  // Construye (la primera vez) o repinta la capa NE completa a partir de
-  // mapaEstado.puntosNE - nunca se mezcla con mapaEstado.clusterGroup
-  // (el del padron): son 2 layers de Leaflet totalmente independientes,
-  // agregadas/quitadas del mapa por separado.
-  function mapaController_renderPuntosNE(contexto) {
-    if (!mapaEstado.capaNE) {
-      mapaEstado.capaNE = L.layerGroup();
-    }
-    mapaEstado.capaNE.clearLayers();
-    mapaEstado.puntosNE.forEach(function (punto) {
-      mapaEstado.capaNE.addLayer(mapaController_crearMarkerNE(punto, contexto));
-    });
-  }
-
-  // Toggle del chip "Niveles estáticos": carga lazy en la PRIMERA
-  // activacion (nunca antes), cachea el dataset (mapaNEDataset.js, entre
-  // aperturas del mapa) y los markers ya construidos (mapaEstado.puntosNE,
-  // para no reconstruir el layer group cada vez que se prende/apaga).
-  // Desactivar SOLO saca la capa del mapa - nunca toca zoom/filtros/la
-  // capa del padron.
+  // Toggle del filtro "Tiene: Niveles estáticos" (v2.2.0: filtro sobre el
+  // padron, no una capa aparte - la capa NE independiente con su propio
+  // marker/diamante vive en el mapa Niveles Estaticos, ver js/mapaNE.js).
+  // Carga lazy en la PRIMERA activacion (nunca antes), via
+  // mapaNEDataset.js (cache COMPARTIDA con el mapa NE independiente - si
+  // ya se cargo desde ahi, esto no vuelve a pedirlo a Apps Script, y
+  // viceversa). mapaEstado.neWellIdSet se arma una sola vez a partir de
+  // ese dataset y se reusa en cada prendido/apagado posterior.
   function mapaController_toggleNE(contexto) {
     mapaEstado.neActivo = !mapaEstado.neActivo;
     chipNEEl.classList.toggle('active', mapaEstado.neActivo);
     chipNEEl.setAttribute('aria-pressed', mapaEstado.neActivo ? 'true' : 'false');
 
-    if (!mapaEstado.neActivo) {
-      if (mapaEstado.capaNE) {
-        mapaEstado.mapa.removeLayer(mapaEstado.capaNE);
-      }
-      return;
-    }
-
-    if (mapaEstado.puntosNE) {
-      // Ya se habia cargado antes en esta apertura del mapa (se prendio,
-      // se apago, se vuelve a prender) - se reusa sin refetch.
-      mapaEstado.capaNE.addTo(mapaEstado.mapa);
+    if (!mapaEstado.neActivo || mapaEstado.neWellIdSet) {
+      // Apagar nunca necesita el dataset. Prender cuando el Set ya esta
+      // armado (se prendio antes en esta apertura del mapa) tampoco -
+      // ambos casos solo tienen que re-renderizar con el filtro
+      // correspondiente.
+      mapaController_renderPuntos(contexto);
       return;
     }
 
     var aperturaAlPedir = mapaEstado.aperturaId;
     mapaNEDataset_obtener(contexto.sessionToken).then(function (result) {
       // Si el usuario ya salio del mapa (aperturaId cambio) o volvio a
-      // apagar el chip mientras el fetch estaba en vuelo, no se pisa
+      // apagar el filtro mientras el fetch estaba en vuelo, no se pisa
       // nada - se descarta en silencio, igual que el resto de los fetches
       // del mapa.
       if (aperturaAlPedir !== mapaEstado.aperturaId || !mapaEstado.neActivo) {
@@ -413,9 +220,8 @@
         chipNEEl.setAttribute('aria-pressed', 'false');
         return;
       }
-      mapaEstado.puntosNE = result.data.puntos;
-      mapaController_renderPuntosNE(contexto);
-      mapaEstado.capaNE.addTo(mapaEstado.mapa);
+      mapaEstado.neWellIdSet = mapaLogic_setWellIdNE(result.data.puntos);
+      mapaController_renderPuntos(contexto);
     }).catch(function () {
       if (aperturaAlPedir !== mapaEstado.aperturaId) {
         return;
@@ -485,12 +291,20 @@
   // desde Cerca Mio) - mas simple y confiable evitar la 1ra por completo
   // en vez de pelear las dos animaciones entre si.
   function mapaController_renderPuntos(contexto, saltarAutoFit) {
-    // departamento AND estado (aprobado - ver punto 1 de la Etapa
-    // v2.1.0): se encadenan los 2 filtros puros de mapaLogic.js, cada
-    // uno responsable de un solo criterio.
-    var filtrados = mapaLogic_filtrarPorEstado(
-      mapaLogic_filtrarPorDepartamento(mapaEstado.puntosCrudos, mapaEstado.departamentoActual),
-      mapaEstado.estadosActivos
+    // departamento AND estado AND "Tiene: Niveles estáticos" (v2.2.0,
+    // arquitectura de 2 mapas - aprobado): se encadenan 3 filtros puros
+    // de mapaLogic.js, cada uno responsable de un solo criterio. El
+    // filtro NE reduce el padron a la interseccion con la red NE (ver
+    // mapaLogic_filtrarPorNE) - nunca agrega puntos que no esten ya en
+    // getMapaPozos, y nunca muestra los 34 puntos NE especiales (sin
+    // wellId no pueden estar en el Set - ver mapaLogic_setWellIdNE).
+    var filtrados = mapaLogic_filtrarPorNE(
+      mapaLogic_filtrarPorEstado(
+        mapaLogic_filtrarPorDepartamento(mapaEstado.puntosCrudos, mapaEstado.departamentoActual),
+        mapaEstado.estadosActivos
+      ),
+      mapaEstado.neWellIdSet,
+      mapaEstado.neActivo
     );
 
     mapaEstado.clusterGroup.clearLayers();
@@ -634,17 +448,16 @@
     if (!debeMostrarNE && mapaEstado.neActivo) {
       // Caso limite: el permiso se revoco entre una apertura y la
       // siguiente (ej. un admin le saco ne=SI al usuario en la hoja
-      // Usuarios) - se apaga la capa, nunca se deja prendida "a
-      // escondidas" sin su chip visible.
+      // Usuarios) - se apaga el filtro, nunca se deja aplicado "a
+      // escondidas" sin su chip visible. El re-render con el filtro ya
+      // apagado ocurre mas abajo (mapaController_renderPuntos), una vez
+      // que el dataset este listo - no hace falta repintar aca todavia.
       mapaEstado.neActivo = false;
-      if (mapaEstado.capaNE && mapaEstado.mapa) {
-        mapaEstado.mapa.removeLayer(mapaEstado.capaNE);
-      }
       chipNEEl.classList.remove('active');
       chipNEEl.setAttribute('aria-pressed', 'false');
     }
 
-    mapaController_cargarLibrerias().then(function () {
+    mapaShared_cargarLibrerias().then(function () {
       if (aperturaId !== mapaEstado.aperturaId) {
         return null;
       }
@@ -673,10 +486,12 @@
       mapaEstado.mapa.invalidateSize();
 
       // Si vinimos a mostrar un pozo puntual (enfoque:{tipo:'pozo'}), los
-      // filtros de departamento Y estado tienen que estar sin restringir
-      // ANTES de renderizar - si no, un filtro previo (ej. "solo
-      // Confirmada" o un departamento distinto) podria dejar ese wellId
-      // afuera y mapaController_aplicarEnfoque no lo encontraria.
+      // filtros de departamento, estado Y "Tiene: Niveles estáticos"
+      // tienen que estar sin restringir ANTES de renderizar - si no, un
+      // filtro previo (ej. "solo Confirmada", un departamento distinto o
+      // el filtro NE activo con ese wellId fuera del Set) podria dejar
+      // ese wellId afuera y mapaController_aplicarEnfoque no lo
+      // encontraria.
       if (contexto.enfoque && contexto.enfoque.tipo === 'pozo') {
         mapaEstado.departamentoActual = 'todos';
         mapaEstado.estadosActivos = { C: true, D: true };
@@ -684,6 +499,9 @@
           chip.classList.add('active');
           chip.setAttribute('aria-pressed', 'true');
         });
+        mapaEstado.neActivo = false;
+        chipNEEl.classList.remove('active');
+        chipNEEl.setAttribute('aria-pressed', 'false');
       }
 
       mapaController_poblarChipsDepartamento(mapaEstado.puntosCrudos);

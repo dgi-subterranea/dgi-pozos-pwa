@@ -122,6 +122,73 @@ function mapaLogic_nombrePuntoNE(punto) {
   return (punto && punto.nombreOriginal) || (punto && punto.monitoringId) || '';
 }
 
+// --- Filtro "Tiene: Niveles estáticos" dentro de Pozos Provincia ---
+// (arquitectura de 2 mapas, aprobada): a diferencia de la capa NE
+// independiente (que dibuja SUS propios 405 puntos, con su propio
+// marker), este filtro vive DENTRO del padron general - reduce los
+// puntos de getMapaPozos a solo aquellos cuyo wellId pertenece a la red
+// NE. Los 34 puntos NE especiales (sin wellId) nunca pueden matchear
+// nada aca (un Set de wellId no nulos no los contiene) - por diseño,
+// ellos solo existen en el mapa NE independiente, nunca en este filtro.
+//
+// mapaLogic_setWellIdNE construye el Set UNA sola vez a partir del
+// dataset ya cacheado por mapaNEDataset.js (nunca dispara fetch por si
+// misma) - quien la llama decide cuando (ver mapaController_toggleNE en
+// js/mapa.js).
+function mapaLogic_setWellIdNE(puntosNE) {
+  var set = new Set();
+  (puntosNE || []).forEach(function (p) {
+    if (p && p.wellId) {
+      set.add(p.wellId);
+    }
+  });
+  return set;
+}
+
+// Se combina con AND junto a mapaLogic_filtrarPorDepartamento/
+// filtrarPorEstado (ver mapaController_renderPuntos) - cada uno un
+// filtro puro independiente, encadenados. activo=false devuelve el
+// dataset tal cual (comportamiento actual sin cambios, requisito
+// explicito). activo=true con un set todavia no cargado (no deberia
+// pasar en la practica - ver el flujo de carga diferida en mapa.js, que
+// nunca re-renderiza con neActivo=true hasta tener el set) se trata
+// fail-closed: no se asume "todos matchean", se devuelve vacio.
+function mapaLogic_filtrarPorNE(pozos, wellIdSet, activo) {
+  if (!activo) {
+    return pozos;
+  }
+  var set = wellIdSet || new Set();
+  return pozos.filter(function (p) { return set.has(p.wellId); });
+}
+
+// --- Navegacion entre los 2 mapas, segun permisos (arquitectura v2.2.0) ---
+// Centraliza la decision de que le corresponde ver al usuario al tocar
+// "Mapa de pozos" - la UNICA fuente de verdad para app.js (que boton/
+// pantalla mostrar) y para mapa.js/mapaNE.js (que boton "Volver" usar,
+// ver actualizarBotonesVolverMapa en app.js). ubicacion y ne son
+// permisos completamente independientes (nunca se infiere uno del otro -
+// mismo criterio de v2.1.0 aplicado ahora tambien a la navegacion, no
+// solo al dataset):
+//   ambos       -> 'selector'  (elegir Pozos Provincia o Niveles Estaticos)
+//   solo ubicacion -> 'provincia' (entra directo, sin selector ni NE)
+//   solo ne     -> 'ne'        (entra directo a Niveles Estaticos - el
+//                                mapa NE nunca depende de "ubicacion")
+//   ninguno     -> 'ninguno'   (sin acceso a ningun mapa)
+function mapaLogic_determinarAccesoMapas(permisos) {
+  var ubicacion = !!(permisos && permisos.ubicacion);
+  var ne = !!(permisos && permisos.ne);
+  if (ubicacion && ne) {
+    return 'selector';
+  }
+  if (ubicacion) {
+    return 'provincia';
+  }
+  if (ne) {
+    return 'ne';
+  }
+  return 'ninguno';
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MAPA_DEPARTAMENTOS,
@@ -135,6 +202,9 @@ if (typeof module !== 'undefined' && module.exports) {
     mapaLogic_dividirChipsDepartamento,
     mapaLogic_debeConsultarSummary,
     mapaLogic_debeMostrarChipNE,
-    mapaLogic_nombrePuntoNE
+    mapaLogic_nombrePuntoNE,
+    mapaLogic_setWellIdNE,
+    mapaLogic_filtrarPorNE,
+    mapaLogic_determinarAccesoMapas
   };
 }

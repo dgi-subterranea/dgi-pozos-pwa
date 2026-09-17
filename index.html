@@ -77,11 +77,15 @@
     </form>
     <p id="input-error" class="error-message" hidden></p>
 
-    <!-- Acceso principal al Mapa de Pozos: independiente de cualquier
-         busqueda por wellId, visible/habilitado solo si el usuario tiene
-         ubicacion=SI (ver toggleAccesosUbicacion() en app.js). Empieza
-         hidden para que nunca parpadee visible antes de que el permiso
-         real llegue de login/checkSession. -->
+    <!-- Acceso principal a los mapas (Pozos Provincia y/o Niveles
+         Estaticos): visible/habilitado si el usuario tiene ubicacion=SI
+         y/o ne=SI (ver toggleAccesoMapa() en app.js, que usa
+         mapaLogic_determinarAccesoMapas - los 2 permisos son
+         independientes, el mapa NE nunca depende de "ubicacion"). El
+         click en si decide a donde ir (selector/Pozos Provincia/Niveles
+         Estaticos) - ver abrirMapaPrincipal() en app.js. Empieza hidden
+         para que nunca parpadee visible antes de que el permiso real
+         llegue de login/checkSession. -->
     <button type="button" id="btn-abrir-mapa" class="button-secondary btn-mapa-acceso" hidden>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 20l-5-2V5l5 2 6-2 5 2v13l-5-2-6 2z"/></svg>
       Mapa de pozos
@@ -174,16 +178,57 @@
     <div id="ne-content" class="modulo-content"></div>
   </div>
 
-  <!-- Mapa de Pozos: ventana ancha (mismo patron que screen-well-record-table),
-       requiere ubicacion=SI (ver mapaController_abrir en js/mapa.js).
-       Leaflet/markercluster NO se cargan en el <head> - se inyectan recien
-       la primera vez que se abre esta pantalla (carga diferida, ver
-       mapaController_cargarLibrerias). -->
+  <!-- Selector de mapas (arquitectura de 2 mapas, v2.2.0): SOLO se
+       muestra si el usuario tiene ubicacion=SI Y ne=SI a la vez (ver
+       mapaLogic_determinarAccesoMapas en js/mapaLogic.js) - con un solo
+       permiso, se entra directo al mapa correspondiente, sin este paso
+       intermedio (evitar friccion innecesaria, pedido explicito). Sin
+       cantidades en las tarjetas a proposito: mostrar "13.804 pozos"
+       aca forzaria un fetch de getMapaPozos solo para pintar el
+       selector, y el pedido fue explicito en no hacerlo si no hace
+       falta. -->
+  <div id="screen-mapa-selector" class="screen" hidden>
+    <div class="tv-topbar">
+      <button type="button" id="btn-mapa-selector-volver" class="tv-volver">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+        Volver
+      </button>
+    </div>
+    <div class="tv-header">
+      <div>
+        <p class="mapa-titulo">Mapas</p>
+        <p class="tv-header-label">Elegí qué mapa querés ver</p>
+      </div>
+    </div>
+    <div class="hub-grid">
+      <button type="button" class="hub-card" id="btn-selector-provincia">
+        <span class="hub-card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 20l-5-2V5l5 2 6-2 5 2v13l-5-2-6 2z"/></svg></span>
+        <span class="hub-card-ct">Pozos Provincia</span>
+        <span class="hub-card-cd">Padrón provincial</span>
+      </button>
+      <button type="button" class="hub-card" id="btn-selector-ne">
+        <span class="hub-card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="6" y="6" width="12" height="12" rx="2" transform="rotate(45 12 12)"/><line x1="8" y1="12" x2="16" y2="12" stroke-linecap="round"/></svg></span>
+        <span class="hub-card-ct">Niveles Estáticos</span>
+        <span class="hub-card-cd">Red de pozos y puntos de monitoreo</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Mapa de Pozos Provincia: ventana ancha (mismo patron que
+       screen-well-record-table), requiere ubicacion=SI (ver
+       mapaController_abrir en js/mapa.js). Leaflet/markercluster NO se
+       cargan en el <head> - se inyectan recien la primera vez que se
+       abre CUALQUIERA de los 2 mapas (carga diferida compartida, ver
+       mapaShared_cargarLibrerias en js/mapaShared.js). El texto del
+       boton "Volver"/"Mapas" y su destino los decide app.js segun
+       permisos (ver actualizarBotonesVolverMapa) - nunca ambos a la vez
+       (pedido explicito: evitar el selector intermedio si el usuario
+       solo puede ver un mapa). -->
   <div id="screen-mapa" class="screen" hidden>
     <div class="tv-topbar">
       <button type="button" id="btn-mapa-volver" class="tv-volver">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
-        Volver
+        <span class="tv-volver-label">Volver</span>
       </button>
     </div>
     <div class="tv-header">
@@ -223,14 +268,20 @@
         </div>
       </div>
 
-      <!-- Tiene / Niveles estáticos (v2.1.0): capa SEPARADA de
-           pozos.json, gateada exclusivamente por ne=SI - el grupo entero
-           empieza hidden y mapaController_abrir lo desoculta solo si el
-           usuario tiene el permiso (ver mapaLogic_debeMostrarChipNE en
-           js/mapaLogic.js). Nunca se filtra por departamento/estado (esos
-           2 chips solo aplican al padron - ver mapaController_renderPuntos
-           en js/mapa.js), y nunca dispara el fetch de getMapaNE hasta que
-           el usuario lo activa (carga diferida real). -->
+      <!-- Tiene / Niveles estáticos (v2.2.0: FILTRO sobre el padron, no
+           una capa separada - ver mapaLogic_filtrarPorNE en
+           js/mapaLogic.js): reduce Pozos Provincia a la interseccion con
+           la red NE (wellId presente en getMapaNE), gateado
+           exclusivamente por ne=SI - el grupo entero empieza hidden y
+           mapaController_abrir lo desoculta solo si el usuario tiene el
+           permiso (ver mapaLogic_debeMostrarChipNE en js/mapaLogic.js).
+           Se combina con AND junto a Departamento/Ubicacion (ver
+           mapaController_renderPuntos en js/mapa.js), y nunca dispara el
+           fetch de getMapaNE hasta que el usuario lo activa (carga
+           diferida real, cache COMPARTIDA con el mapa Niveles Estaticos
+           independiente - ver js/mapaNEDataset.js). Los 34 puntos NE
+           especiales (sin wellId) nunca pueden aparecer aca - solo
+           existen en el mapa independiente (screen-mapa-ne). -->
       <div class="mapa-filtro-grupo" id="mapa-grupo-tiene" hidden>
         <p class="mapa-filtro-label">Tiene</p>
         <div class="mapa-chips-wrap">
@@ -249,6 +300,44 @@
         <button type="button" id="btn-mapa-reintentar" class="button-secondary">Reintentar</button>
       </div>
       <div id="mapa-leaflet" class="mapa-leaflet" hidden></div>
+    </div>
+  </div>
+
+  <!-- Mapa Niveles Estáticos: mapa independiente y completo de la red
+       NE (v2.2.0, ver js/mapaNE.js) - gateado EXCLUSIVAMENTE por ne=SI
+       (nunca por "ubicacion", requisito central). Muestra los 405 puntos
+       de getMapaNE (371 con wellId + 34 especiales), nunca los puntos
+       del padron general debajo. Sin Departamento/Confirmada-Disponible
+       (esos estados son del padron, no de la red NE) ni Cerca Mio en
+       esta etapa (fuera de alcance, pedido explicito). -->
+  <div id="screen-mapa-ne" class="screen" hidden>
+    <div class="tv-topbar">
+      <button type="button" id="btn-mapa-ne-volver" class="tv-volver">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+        <span class="tv-volver-label">Volver</span>
+      </button>
+    </div>
+    <div class="tv-header">
+      <div>
+        <p class="mapa-titulo">Niveles Estáticos</p>
+        <p class="tv-header-label">Red de pozos y puntos de monitoreo</p>
+      </div>
+    </div>
+    <div class="mapa-capas-base" role="group" aria-label="Tipo de mapa">
+      <button type="button" class="mapa-ne-capa-chip active" data-capa="calle" aria-pressed="true">Mapa</button>
+      <button type="button" class="mapa-ne-capa-chip" data-capa="satelite" aria-pressed="false">Satélite</button>
+    </div>
+    <div id="mapa-ne-contador" class="mapa-contador" hidden></div>
+    <div class="mapa-viewport">
+      <div id="mapa-ne-loading" class="mapa-loading">
+        <span class="spinner" aria-hidden="true"></span>
+        <span>Cargando mapa...</span>
+      </div>
+      <div id="mapa-ne-error" class="mapa-error" hidden>
+        <p id="mapa-ne-error-mensaje">No se pudo cargar el mapa.</p>
+        <button type="button" id="btn-mapa-ne-reintentar" class="button-secondary">Reintentar</button>
+      </div>
+      <div id="mapa-ne-leaflet" class="mapa-leaflet" hidden></div>
     </div>
   </div>
 
@@ -340,7 +429,9 @@
   <script src="js/mapaDataset.js"></script>
   <script src="js/mapaNEDataset.js"></script>
   <script src="js/cercaMioLogic.js"></script>
+  <script src="js/mapaShared.js"></script>
   <script src="js/mapa.js"></script>
+  <script src="js/mapaNE.js"></script>
   <script src="js/cercaMio.js"></script>
   <script src="js/app.js"></script>
   <!-- Va DESPUES de app.js en el documento a proposito, para que
