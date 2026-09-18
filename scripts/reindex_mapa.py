@@ -7,12 +7,19 @@ Uso:
   python scripts/reindex_mapa.py --registro scripts/out/registro --out scripts/out/mapa
 
 Produce, en el directorio --out:
-  pozos.json    - lista de puntos [{wellId, lat, lon, estado}], SOLO esos 4
-                  campos (nunca titular/distrito/uso/NE/ningun otro dato
-                  registral - ver adjustment #1 de la Etapa 5B/5C: el
+  pozos.json          - lista de puntos [{wellId, lat, lon, estado}], SOLO
+                  esos 4 campos (nunca titular/distrito/uso/NE/ningun otro
+                  dato registral - ver adjustment #1 de la Etapa 5B/5C: el
                   dataset general del mapa no debe permitir inferir
                   membresia a la red NE ni exponer nada que dependa de
                   "datos", solo de "ubicacion").
+  pozos_busqueda.json - lista [{wellId, titular}] para los MISMOS pozos de
+                  pozos.json (mismo orden, misma cantidad) - indice
+                  SEPARADO a proposito (Etapa 1A, arquitectura de
+                  busqueda): titular requiere el permiso "datos", nunca
+                  "ubicacion", asi que viaja en un dataset propio que el
+                  backend gatea distinto (ver getIndiceBusquedaProvincia
+                  en Api.js) - jamas se mezcla con pozos.json.
   metadata.json - generadoEl, fuente, conteos (para invalidacion de cache
                   del lado del frontend en una etapa futura, mismo patron
                   que scripts/out/registro/metadata.json).
@@ -37,6 +44,7 @@ de coordenadas.
 import argparse
 import glob
 import gzip
+import re
 import json
 import os
 import sys
@@ -53,6 +61,21 @@ ESTADO_A_CODIGO = {
 # Estados que existen en el padron pero nunca entran al mapa - se cuentan
 # igual para el reporte de exclusiones, no son un error.
 ESTADOS_EXCLUIDOS = ('dudosoLeve', 'revisar', 'revisarGrave', 'sinCoordenadas')
+
+# NC16 (Etapa 1A, nomenclatura catastral): identificacion.nomenclatura NO
+# siempre trae una nomenclatura catastral real - 1.932 de 24.180 registros
+# (medido) traen un codigo interno provisorio en su lugar (prefijo "B"+8
+# digitos, prefijo "E"+1-4 digitos, o "0" como dato faltante), nunca una
+# NC16 valida. Solo el formato EXACTO de 16 digitos numericos (sin
+# separadores - ninguno de los 22.248 casos reales los tiene) se acepta
+# como NC16 - cualquier otra cosa se guarda como None, nunca se completa
+# ni se inventa un valor.
+NC16_RE = re.compile(r'^\d{16}$')
+
+
+def _nc16_valido(raw):
+    s = str(raw or '')
+    return s if NC16_RE.match(s) else None
 
 
 def iter_shard_files(registro_dir):
@@ -111,7 +134,13 @@ def construir_dataset(registro_dir, warnings):
                 excluidos['sinLatLon'] += 1
                 continue
 
-            puntos.append({'wellId': well_id, 'lat': lat, 'lon': lon, 'estado': codigo})
+            titularidad = record.get('titularidad') or {}
+            identificacion = record.get('identificacion') or {}
+            puntos.append({
+                'wellId': well_id, 'lat': lat, 'lon': lon, 'estado': codigo,
+                'titular': titularidad.get('titular') or None,
+                'nc16': _nc16_valido(identificacion.get('nomenclatura')),
+            })
 
     if sin_ubicacion_resuelta:
         warnings.append(f'{sin_ubicacion_resuelta} registro(s) sin ubicacionResuelta (padron generado sin enrich_ubicaciones?), se excluyen')
@@ -130,7 +159,29 @@ def generar(registro_dir, out_dir, umbral_particion_ignorado=None):
     t0 = time.perf_counter()
 
     metadata_padron = leer_metadata_padron(registro_dir)
-    puntos, excluidos = construir_dataset(registro_dir, warnings)
+    # puntos_busqueda_fuente: wellId/lat/lon/estado + titular + nc16 - los
+    # 2 ultimos son datos protegidos por "datos" (ver Etapa 1A, decision
+    # de arquitectura aprobada: NC16 identifica una parcela catastral,
+    # igual de sensible que titular - viven juntos en el MISMO indice
+    # protegido, nunca en pozos.json).
+    puntos_busqueda_fuente, excluidos = construir_dataset(registro_dir, warnings)
+
+    # pozos.json NUNCA lleva titular/nc16 (ver adjustment #1) - se
+    # reconstruye campo por campo (estructural, no "el resto menos
+    # titular/nc16") para que agregar un campo nuevo a
+    # puntos_busqueda_fuente en el futuro no se filtre por default a este
+    # archivo publico.
+    puntos = [{'wellId': p['wellId'], 'lat': p['lat'], 'lon': p['lon'], 'estado': p['estado']} for p in puntos_busqueda_fuente]
+
+    con_titular = sum(1 for p in puntos_busqueda_fuente if p['titular'])
+    sin_titular = len(puntos_busqueda_fuente) - con_titular
+    if sin_titular:
+        warnings.append(f'{sin_titular} pozo(s) del mapa sin titular en el padron - quedan con titular:null en pozos_busqueda.json')
+
+    con_nc16 = sum(1 for p in puntos_busqueda_fuente if p['nc16'])
+    sin_nc16 = len(puntos_busqueda_fuente) - con_nc16
+    if sin_nc16:
+        warnings.append(f'{sin_nc16} pozo(s) del mapa sin NC16 valida (16 digitos) en el padron - quedan con nc16:null en pozos_busqueda.json')
 
     distribucion = Counter(p['estado'] for p in puntos)
 
@@ -139,6 +190,10 @@ def generar(registro_dir, out_dir, umbral_particion_ignorado=None):
 
     pozos_path = out_dir / 'pozos.json'
     _write_json_compacto(pozos_path, puntos)
+
+    pozos_busqueda_path = out_dir / 'pozos_busqueda.json'
+    puntos_busqueda = [{'wellId': p['wellId'], 'nc16': p['nc16'], 'titular': p['titular']} for p in puntos_busqueda_fuente]
+    _write_json_compacto(pozos_busqueda_path, puntos_busqueda)
 
     tiempo_generacion_s = time.perf_counter() - t0
 
@@ -154,6 +209,12 @@ def generar(registro_dir, out_dir, umbral_particion_ignorado=None):
             'disponible': distribucion.get('D', 0),
         },
         'excluidos': dict(excluidos),
+        'busqueda': {
+            'conTitular': con_titular,
+            'sinTitular': sin_titular,
+            'conNc16': con_nc16,
+            'sinNc16': sin_nc16,
+        },
         'tiempoGeneracionSegundos': round(tiempo_generacion_s, 3),
     }
     metadata_path = out_dir / 'metadata.json'
@@ -162,9 +223,11 @@ def generar(registro_dir, out_dir, umbral_particion_ignorado=None):
 
     return {
         'puntos': puntos,
+        'puntosBusqueda': puntos_busqueda,
         'metadata': metadata,
         'warnings': warnings,
         'pozosPath': str(pozos_path),
+        'pozosBusquedaPath': str(pozos_busqueda_path),
         'metadataPath': str(metadata_path),
         'tiempoGeneracionSegundos': tiempo_generacion_s,
     }
@@ -194,19 +257,25 @@ def main(argv=None):
     resultado = generar(args.registro, args.out)
 
     raw_bytes, gzip_bytes = medir_gzip(resultado['pozosPath'])
+    raw_bytes_busqueda, gzip_bytes_busqueda = medir_gzip(resultado['pozosBusquedaPath'])
 
-    print('=== Mapa de Pozos - indexador (Etapa 5C-1) ===')
+    print('=== Mapa de Pozos - indexador (Etapa 5C-1 + 1A busqueda) ===')
     print(f'Entrada:  {args.registro}')
     print(f'Salida:   {resultado["pozosPath"]}')
+    print(f'          {resultado["pozosBusquedaPath"]}')
     print(f'          {resultado["metadataPath"]}')
     print()
     print(f'Cantidad de puntos: {len(resultado["puntos"])}')
     print(f'  Confirmada (C): {resultado["metadata"]["distribucion"]["confirmada"]}')
     print(f'  Disponible (D): {resultado["metadata"]["distribucion"]["disponible"]}')
     print(f'Excluidos: {resultado["metadata"]["excluidos"]}')
+    print(f'Busqueda - con titular: {resultado["metadata"]["busqueda"]["conTitular"]}, sin titular: {resultado["metadata"]["busqueda"]["sinTitular"]}')
+    print(f'Busqueda - con NC16 valida: {resultado["metadata"]["busqueda"]["conNc16"]}, sin NC16: {resultado["metadata"]["busqueda"]["sinNc16"]}')
     print()
     print(f'Tamano pozos.json: {raw_bytes} bytes ({formatear_kb(raw_bytes)})')
     print(f'Tamano gzip (nivel 9): {gzip_bytes} bytes ({formatear_kb(gzip_bytes)}) - {gzip_bytes / raw_bytes * 100:.1f}% del original')
+    print(f'Tamano pozos_busqueda.json: {raw_bytes_busqueda} bytes ({formatear_kb(raw_bytes_busqueda)})')
+    print(f'Tamano gzip (nivel 9): {gzip_bytes_busqueda} bytes ({formatear_kb(gzip_bytes_busqueda)}) - {gzip_bytes_busqueda / raw_bytes_busqueda * 100:.1f}% del original')
     print(f'Tiempo de generacion: {resultado["tiempoGeneracionSegundos"]:.3f}s')
     print()
     if resultado['warnings']:

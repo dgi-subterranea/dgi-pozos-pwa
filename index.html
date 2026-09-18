@@ -244,6 +244,24 @@
     <div class="mapa-capas-base" role="group" aria-label="Tipo de mapa">
       <button type="button" class="mapa-capa-chip active" data-capa="calle" aria-pressed="true">Mapa</button>
       <button type="button" class="mapa-capa-chip" data-capa="satelite" aria-pressed="false">Satélite</button>
+      <!-- Buscador en el mapa (Etapa 1A): lupa que despliega un panel
+           compacto (no una barra fija - pedido explicito de no robarle
+           espacio al mapa en reposo). El panel decide solo, al abrirse,
+           si el campo de titular se muestra o no (ver
+           mapaController_actualizarDisponibilidadBusqueda en js/mapa.js,
+           segun contexto.permisos.datos) - nunca insinua que se puede
+           buscar por nombre sin el permiso. -->
+      <button type="button" id="btn-mapa-buscar-toggle" class="mapa-buscar-toggle" aria-pressed="false" aria-label="Buscar en el mapa" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+
+    <div class="mapa-buscar-panel" id="mapa-buscar-panel" hidden>
+      <div class="mapa-buscar-input-wrap">
+        <input type="text" id="mapa-buscar-input" class="mapa-buscar-input" placeholder="Buscar en el mapa..." autocomplete="off">
+        <button type="button" id="btn-mapa-buscar-cerrar" class="mapa-buscar-cerrar" aria-label="Cerrar búsqueda">&times;</button>
+      </div>
+      <div id="mapa-buscar-resultados" class="mapa-buscar-resultados"></div>
     </div>
 
     <div class="mapa-filtros">
@@ -326,7 +344,23 @@
     <div class="mapa-capas-base" role="group" aria-label="Tipo de mapa">
       <button type="button" class="mapa-ne-capa-chip active" data-capa="calle" aria-pressed="true">Mapa</button>
       <button type="button" class="mapa-ne-capa-chip" data-capa="satelite" aria-pressed="false">Satélite</button>
+      <!-- Buscador NE (Etapa 1A): 100% local sobre el dataset ya cargado
+           (wellId/monitoringId/nombreOriginal), sin filtros que puedan
+           ocultar un resultado en esta etapa - por eso no hace falta el
+           aviso "fuera del filtro" que si tiene Provincia. -->
+      <button type="button" id="btn-mapa-ne-buscar-toggle" class="mapa-buscar-toggle" aria-pressed="false" aria-label="Buscar en el mapa" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/></svg>
+      </button>
     </div>
+
+    <div class="mapa-buscar-panel" id="mapa-ne-buscar-panel" hidden>
+      <div class="mapa-buscar-input-wrap">
+        <input type="text" id="mapa-ne-buscar-input" class="mapa-buscar-input" placeholder="Buscar wellId, monitoringId o nombre..." autocomplete="off">
+        <button type="button" id="btn-mapa-ne-buscar-cerrar" class="mapa-buscar-cerrar" aria-label="Cerrar búsqueda">&times;</button>
+      </div>
+      <div id="mapa-ne-buscar-resultados" class="mapa-buscar-resultados"></div>
+    </div>
+
     <div id="mapa-ne-contador" class="mapa-contador" hidden></div>
     <div class="mapa-viewport">
       <div id="mapa-ne-loading" class="mapa-loading">
@@ -428,6 +462,7 @@
   <script src="js/mapaLogic.js"></script>
   <script src="js/mapaDataset.js"></script>
   <script src="js/mapaNEDataset.js"></script>
+  <script src="js/busquedaProvinciaDataset.js"></script>
   <script src="js/cercaMioLogic.js"></script>
   <script src="js/mapaShared.js"></script>
   <script src="js/mapa.js"></script>

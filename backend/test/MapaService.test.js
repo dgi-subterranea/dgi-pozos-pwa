@@ -109,3 +109,95 @@ describe('mapaService_sanitizarPunto', () => {
     expect(Object.keys(sanitizado)).toEqual(['wellId', 'lat', 'lon', 'estado']);
   });
 });
+
+// Indice de busqueda por titular + NC16 (Etapa 1A) - dataset separado de
+// mapaService_getPozos, gateado por "datos" del lado de Api.js (no algo
+// que esta funcion decida, pero la sanitizacion estructural aca es la
+// misma garantia de fondo: nunca deja pasar mas que wellId/nc16/titular).
+// NC16 vive junto a titular a proposito - ver comentario en MapaService.js
+// (decision aprobada: nomenclatura catastral es igual de sensible que
+// titular, nunca viaja en un dataset gateado solo por "ubicacion").
+describe('mapaService_getIndiceBusqueda', () => {
+  test('no encontrado (no existe pozos_busqueda.json) -> found:false', () => {
+    global.mapaRepository_getPozosBusqueda.mockReturnValue({ found: false });
+
+    const result = MapaService.mapaService_getIndiceBusqueda();
+
+    expect(result).toEqual({ found: false });
+  });
+
+  test('encontrado -> found:true con wellId/nc16/titular tal cual', () => {
+    global.mapaRepository_getPozosBusqueda.mockReturnValue({
+      found: true,
+      pozos: [
+        { wellId: '04-0263', nc16: '0101230020000036', titular: 'PEREZ, JUAN' },
+        { wellId: '05-0001', nc16: null, titular: null }
+      ]
+    });
+
+    const result = MapaService.mapaService_getIndiceBusqueda();
+
+    expect(result).toEqual({
+      found: true,
+      pozos: [
+        { wellId: '04-0263', nc16: '0101230020000036', titular: 'PEREZ, JUAN' },
+        { wellId: '05-0001', nc16: null, titular: null }
+      ]
+    });
+  });
+
+  // Caso central de seguridad, mismo criterio que mapaService_getPozos:
+  // aunque el archivo trajera un campo extra (ej. "departamento",
+  // "distrito", o cualquier otro dato de ficha), la sanitizacion
+  // estructural lo descarta sin que haga falta una lista de exclusion.
+  test('descarta cualquier campo extra que traiga el archivo', () => {
+    global.mapaRepository_getPozosBusqueda.mockReturnValue({
+      found: true,
+      pozos: [{ wellId: '04-0263', nc16: '0101230020000036', titular: 'PEREZ, JUAN', departamento: 'GUAYMALLEN', distrito: 'X', dni: '12345678' }]
+    });
+
+    const result = MapaService.mapaService_getIndiceBusqueda();
+
+    expect(result.pozos).toEqual([{ wellId: '04-0263', nc16: '0101230020000036', titular: 'PEREZ, JUAN' }]);
+    expect(Object.keys(result.pozos[0]).sort()).toEqual(['nc16', 'titular', 'wellId']);
+  });
+
+  test('dataset vacio -> found:true con pozos:[]', () => {
+    global.mapaRepository_getPozosBusqueda.mockReturnValue({ found: true, pozos: [] });
+
+    const result = MapaService.mapaService_getIndiceBusqueda();
+
+    expect(result).toEqual({ found: true, pozos: [] });
+  });
+});
+
+describe('mapaService_sanitizarPuntoBusqueda', () => {
+  test('conserva solo wellId/nc16/titular', () => {
+    const sanitizado = MapaService.mapaService_sanitizarPuntoBusqueda({
+      wellId: '04-0263', nc16: '0101230020000036', titular: 'PEREZ, JUAN', departamento: 'GUAYMALLEN'
+    });
+    expect(sanitizado).toEqual({ wellId: '04-0263', nc16: '0101230020000036', titular: 'PEREZ, JUAN' });
+    expect(Object.keys(sanitizado)).toEqual(['wellId', 'nc16', 'titular']);
+  });
+
+  // NC16 con cero inicial: caso central de correctitud del tipo - si
+  // alguna vez algo lo tratara como Number en el camino, perderia el
+  // cero. Aca solo viaja como string, nunca se parsea.
+  test('preserva NC16 con cero inicial como string', () => {
+    const sanitizado = MapaService.mapaService_sanitizarPuntoBusqueda({
+      wellId: '01-0035', nc16: '0101230020000036', titular: null
+    });
+    expect(sanitizado.nc16).toBe('0101230020000036');
+    expect(typeof sanitizado.nc16).toBe('string');
+  });
+
+  test('nc16 ausente -> null, no rompe', () => {
+    const sanitizado = MapaService.mapaService_sanitizarPuntoBusqueda({ wellId: '04-0263', titular: null });
+    expect(sanitizado.nc16).toBeNull();
+  });
+
+  test('titular ausente -> null, no rompe', () => {
+    const sanitizado = MapaService.mapaService_sanitizarPuntoBusqueda({ wellId: '04-0263' });
+    expect(sanitizado).toEqual({ wellId: '04-0263', nc16: null, titular: null });
+  });
+});

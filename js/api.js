@@ -67,6 +67,15 @@ function apiGetMapaNE(sessionToken) {
   return callBackend('getMapaNE', { sessionToken: sessionToken });
 }
 
+// Indice de busqueda por titular de Pozos Provincia (Etapa 1A) - dataset
+// SEPARADO de getMapaPozos, requiere "datos" del lado del backend. El
+// frontend no dispara este fetch si permisos.datos es false (el campo de
+// busqueda por nombre ni siquiera se muestra - ver mapa.js), pero el
+// backend vuelve a validarlo igual.
+function apiGetIndiceBusquedaProvincia(sessionToken) {
+  return callBackend('getIndiceBusquedaProvincia', { sessionToken: sessionToken });
+}
+
 // keepalive: true - para que el request tenga mas chance de llegar
 // aunque el usuario cierre/navegue afuera de la PWA justo despues de
 // buscar (fire-and-forget, no se espera ni se usa la respuesta). Un

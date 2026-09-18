@@ -1309,6 +1309,159 @@ table.ne-table tr:last-child td {
   color: #fff;
   border-color: var(--color-primary-dark);
 }
+/* Buscador en el mapa (Etapa 1A): boton lupa empujado al extremo derecho
+   de la misma fila de Mapa/Satelite (margin-left:auto) - no agrega una
+   fila nueva en reposo, la unica diferencia visible cuando NO se esta
+   buscando es este circulo chico. El panel que despliega vive aparte
+   (.mapa-buscar-panel), oculto hasta que se toca la lupa. */
+.mapa-buscar-toggle {
+  min-height: 32px;
+  width: 32px;
+  padding: 0;
+  margin-left: auto;
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text-soft);
+  border: 1.5px solid var(--color-border);
+  box-shadow: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.mapa-buscar-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+.mapa-buscar-toggle:hover {
+  background: var(--color-primary-tint);
+}
+.mapa-buscar-toggle.active {
+  background: var(--color-primary-dark);
+  color: #fff;
+  border-color: var(--color-primary-dark);
+}
+
+.mapa-buscar-panel {
+  padding: 10px 18px 4px;
+  border-bottom: 1.5px solid var(--color-border-soft);
+  background: var(--color-surface);
+}
+.mapa-buscar-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--color-primary-tint);
+  border-radius: 12px;
+  padding: 2px 4px 2px 12px;
+}
+.mapa-buscar-input {
+  flex: 1;
+  min-height: 38px;
+  border: none;
+  background: none;
+  box-shadow: none;
+  font-size: 0.86rem;
+  color: var(--color-text);
+  padding: 0;
+}
+.mapa-buscar-input:focus {
+  outline: none;
+}
+.mapa-buscar-cerrar {
+  min-height: 30px;
+  width: 30px;
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+  color: var(--color-text-soft);
+  font-size: 1.1rem;
+  line-height: 1;
+  flex: none;
+}
+.mapa-buscar-cerrar:hover {
+  color: var(--color-text);
+  background: none;
+}
+.mapa-buscar-resultados {
+  display: flex;
+  flex-direction: column;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.mapa-buscar-resultados:empty {
+  padding: 0;
+}
+.mapa-buscar-resultado {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 9px 8px;
+  margin-top: 4px;
+  background: none;
+  border: none;
+  border-radius: 10px;
+  box-shadow: none;
+  min-height: 0;
+}
+.mapa-buscar-resultado:hover,
+.mapa-buscar-resultado:active,
+.mapa-buscar-resultado:focus {
+  background: var(--color-primary-tint);
+}
+.mapa-buscar-resultado-id {
+  font-family: "SFMono-Regular", ui-monospace, "IBM Plex Mono", Menlo, Consolas, monospace;
+  font-weight: 700;
+  font-size: 0.84rem;
+  color: var(--color-primary-dark);
+}
+.mapa-buscar-resultado-sub {
+  font-size: 0.74rem;
+  color: var(--color-text-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.mapa-buscar-sin-resultados {
+  padding: 10px 8px;
+  font-size: 0.78rem;
+  color: var(--color-text-faint);
+}
+
+/* Aviso "fuera del filtro" al elegir un resultado que los filtros
+   activos esconderian - nunca resetea filtros solo, ofrece mostrarlo
+   temporalmente (aprobado, ver mapaController_buscarSeleccionar en
+   js/mapa.js). */
+.mapa-buscar-aviso {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 4px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--color-warn-tint);
+  color: var(--color-warn);
+  font-size: 0.78rem;
+}
+.mapa-buscar-aviso-btn {
+  min-height: 0;
+  padding: 6px 12px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  background: var(--color-primary-dark);
+  color: #fff;
+  border: none;
+  box-shadow: none;
+  flex: none;
+  white-space: nowrap;
+}
+
 /* Mismos estilos que .mapa-capa-chip, clase aparte para el mapa Niveles
    Estaticos independiente (v2.2.0) - evita que
    document.querySelectorAll('.mapa-capa-chip') en js/mapa.js tambien

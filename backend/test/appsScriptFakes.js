@@ -79,8 +79,10 @@ function installAppsScriptFakes() {
   global.sheetSearchHistoryRepository_logSearch = jest.fn();
   global.searchHistoryService_registerSearch = jest.fn();
   global.mapaRepository_getPozos = jest.fn();
+  global.mapaRepository_getPozosBusqueda = jest.fn();
   global.mapaRepository_getMetadata = jest.fn();
   global.mapaService_getPozos = jest.fn();
+  global.mapaService_getIndiceBusqueda = jest.fn();
   global.registryService_getWellSummary = jest.fn();
   global.nivelesEstaticosRepository_getTodosLosPuntos = jest.fn();
   global.mapaNEService_getPuntos = jest.fn();

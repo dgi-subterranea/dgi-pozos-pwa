@@ -55,6 +55,9 @@
     miUbicacionMarker: null, // marcador "Tu ubicacion" (enfoque:{tipo:'ubicacion'}) - se saca en cada apertura que no lo pida, para no dejar uno viejo colgado
     neWellIdSet: null,       // Set de wellId de la red NE (mapaLogic_setWellIdNE sobre getMapaNE) - se arma UNA sola vez, la PRIMERA vez que se activa el filtro "Tiene: Niveles estáticos" (carga diferida real)
     neActivo: false,         // estado del filtro "Tiene: Niveles estáticos" (v2.2.0: filtro sobre el padron, NO una capa aparte - ver mapaController_renderPuntos, que lo combina con AND junto a departamento/estado)
+    indiceBusqueda: null,    // mapa wellId->{nc16,titular} (mapaLogic_indiceBusquedaPorWellId sobre getIndiceBusquedaProvincia) - se arma UNA sola vez, la PRIMERA vez que el usuario escribe algo en el buscador (Etapa 1A, carga diferida real, nunca al abrir el mapa). NC16 y titular viajan juntos, gateados por "datos" - ver decision de arquitectura en MapaService.js
+    busquedaActiva: false,   // true = el panel del buscador esta desplegado
+    marcadorBusquedaTemporal: null, // marker de "Mostrarlo igual" para un resultado de busqueda que los filtros activos esconden - se saca en cuanto cambia cualquier filtro o se abre una busqueda nueva, nunca sobrevive a eso
     contextoActual: null,    // {sessionToken, permisos, onAbrirPozo, enfoque} de la apertura en curso
     aperturaId: 0             // se incrementa en cada apertura/cierre - una respuesta de red de una apertura vieja se descarta si ya cambio (mismo patron de staleness que buscarPozo en app.js)
   };
@@ -71,6 +74,11 @@
   var grupoTieneEl = document.getElementById('mapa-grupo-tiene');
   var chipNEEl = document.getElementById('mapa-chip-ne');
   var btnReintentar = document.getElementById('btn-mapa-reintentar');
+  var btnBuscarToggleEl = document.getElementById('btn-mapa-buscar-toggle');
+  var panelBuscarEl = document.getElementById('mapa-buscar-panel');
+  var inputBuscarEl = document.getElementById('mapa-buscar-input');
+  var btnBuscarCerrarEl = document.getElementById('btn-mapa-buscar-cerrar');
+  var resultadosBuscarEl = document.getElementById('mapa-buscar-resultados');
 
   function mapaController_crearMapaSiHaceFalta() {
     if (mapaEstado.mapa) {
@@ -183,6 +191,186 @@
     return marker;
   }
 
+  // --- Buscador en el mapa (Etapa 1A) ---
+
+  // Centra el mapa en un marker y le abre el popup - factorizado de
+  // mapaController_aplicarEnfoque (tipo:'pozo') porque el buscador
+  // necesita EXACTAMENTE el mismo comportamiento (zoom determinista al
+  // nivel donde el clusterGroup desagrupa todo, esperar 'moveend' antes
+  // de abrir el popup) para un resultado elegido en vivo.
+  function mapaController_centrarYAbrirPopup(marker) {
+    var yaEstaAhi = mapaEstado.mapa.getZoom() === MAPA_ZOOM_INDIVIDUAL &&
+      mapaEstado.mapa.getCenter().distanceTo(marker.getLatLng()) < 1;
+    if (yaEstaAhi) {
+      marker.openPopup();
+    } else {
+      mapaEstado.mapa.once('moveend', function () {
+        marker.openPopup();
+      });
+      mapaEstado.mapa.setView(marker.getLatLng(), MAPA_ZOOM_INDIVIDUAL);
+    }
+  }
+
+  // El marker de "Mostrarlo igual" es SIEMPRE temporal: sobrevive solo
+  // hasta el siguiente cambio de filtro o la siguiente busqueda - se
+  // saca al principio de mapaController_renderPuntos (cualquier filtro
+  // nuevo) y de mapaController_abrir (nueva apertura). Nunca se agrega
+  // al clusterGroup (evita un marker duplicado si el filtro cambia y el
+  // pozo empieza a cumplirlo).
+  function mapaController_limpiarMarcadorBusquedaTemporal() {
+    if (mapaEstado.marcadorBusquedaTemporal) {
+      mapaEstado.mapa.removeLayer(mapaEstado.marcadorBusquedaTemporal);
+      mapaEstado.marcadorBusquedaTemporal = null;
+    }
+  }
+
+  function mapaController_cerrarPanelBusqueda() {
+    mapaEstado.busquedaActiva = false;
+    btnBuscarToggleEl.classList.remove('active');
+    btnBuscarToggleEl.setAttribute('aria-pressed', 'false');
+    btnBuscarToggleEl.setAttribute('aria-expanded', 'false');
+    panelBuscarEl.hidden = true;
+    inputBuscarEl.value = '';
+    resultadosBuscarEl.innerHTML = '';
+  }
+
+  function mapaController_toggleBusqueda() {
+    if (mapaEstado.busquedaActiva) {
+      mapaController_cerrarPanelBusqueda();
+      return;
+    }
+    mapaEstado.busquedaActiva = true;
+    btnBuscarToggleEl.classList.add('active');
+    btnBuscarToggleEl.setAttribute('aria-pressed', 'true');
+    btnBuscarToggleEl.setAttribute('aria-expanded', 'true');
+    panelBuscarEl.hidden = false;
+    inputBuscarEl.value = '';
+    resultadosBuscarEl.innerHTML = '';
+    inputBuscarEl.focus();
+  }
+
+  // Muestra, en el mismo panel, un aviso de que el resultado elegido no
+  // cumple los filtros activos + un boton para mostrarlo temporalmente
+  // (aprobado: nunca resetear filtros en silencio, nunca dejarlo
+  // simplemente afuera sin explicar por que).
+  function mapaController_mostrarAvisoFueraDeFiltro(resultado, contexto) {
+    resultadosBuscarEl.innerHTML = '';
+    var aviso = document.createElement('div');
+    aviso.className = 'mapa-buscar-aviso';
+
+    var texto = document.createElement('span');
+    texto.textContent = resultado.wellId + ' no cumple los filtros activos.';
+    aviso.appendChild(texto);
+
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'mapa-buscar-aviso-btn';
+    btn.textContent = 'Mostrarlo igual';
+    btn.addEventListener('click', function () {
+      mapaController_mostrarResultadoTemporalmente(resultado, contexto);
+    });
+    aviso.appendChild(btn);
+
+    resultadosBuscarEl.appendChild(aviso);
+  }
+
+  function mapaController_mostrarResultadoTemporalmente(resultado, contexto) {
+    mapaController_cerrarPanelBusqueda();
+    mapaController_limpiarMarcadorBusquedaTemporal();
+    var punto = { wellId: resultado.wellId, lat: resultado.lat, lon: resultado.lon, estado: resultado.estado };
+    var marker = mapaController_crearMarker(punto, contexto);
+    marker.addTo(mapaEstado.mapa);
+    mapaEstado.marcadorBusquedaTemporal = marker;
+    mapaController_centrarYAbrirPopup(marker);
+  }
+
+  // Si el wellId elegido ya tiene un marker vivo en el clusterGroup (pasa
+  // los filtros actuales), se reusa ese - nunca se duplica. Si no, se
+  // ofrece el aviso de arriba en vez de mostrarlo/ocultarlo sin avisar.
+  function mapaController_buscarSeleccionar(resultado, contexto) {
+    var marker = mapaEstado.markersPorWellId[resultado.wellId];
+    if (marker) {
+      mapaController_cerrarPanelBusqueda();
+      mapaController_centrarYAbrirPopup(marker);
+      return;
+    }
+    mapaController_mostrarAvisoFueraDeFiltro(resultado, contexto);
+  }
+
+  // Cada sugerencia muestra SIEMPRE el wellId, y ademas "NC16: ..."
+  // cuando el match fue justamente por ahi (nunca en cada resultado -
+  // solo cuando corresponde, para no generar ruido) y el titular cuando
+  // existe y el indice esta cargado (datos=SI) - mismo criterio previo,
+  // sin cambios: el titular es contexto util para identificar el pozo
+  // aunque el match haya sido por wellId o NC16.
+  function mapaController_renderResultadosBusqueda(query, contexto) {
+    resultadosBuscarEl.innerHTML = '';
+    if (!query || !query.trim()) {
+      return;
+    }
+
+    var resultados = mapaLogic_buscarPozosProvincia(mapaEstado.puntosCrudos || [], mapaEstado.indiceBusqueda, query, 6);
+    if (resultados.length === 0) {
+      var vacio = document.createElement('p');
+      vacio.className = 'mapa-buscar-sin-resultados';
+      vacio.textContent = 'Sin resultados.';
+      resultadosBuscarEl.appendChild(vacio);
+      return;
+    }
+
+    resultados.forEach(function (r) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'mapa-buscar-resultado';
+
+      var idEl = document.createElement('span');
+      idEl.className = 'mapa-buscar-resultado-id';
+      idEl.textContent = r.wellId;
+      btn.appendChild(idEl);
+
+      if (r.matchNc16) {
+        var nc16El = document.createElement('span');
+        nc16El.className = 'mapa-buscar-resultado-sub';
+        nc16El.textContent = 'NC16: ' + r.nc16;
+        btn.appendChild(nc16El);
+      }
+
+      if (r.titular) {
+        var subEl = document.createElement('span');
+        subEl.className = 'mapa-buscar-resultado-sub';
+        subEl.textContent = r.titular;
+        btn.appendChild(subEl);
+      }
+
+      btn.addEventListener('click', function () {
+        mapaController_buscarSeleccionar(r, contexto);
+      });
+      resultadosBuscarEl.appendChild(btn);
+    });
+  }
+
+  // Carga diferida real del indice de NC16+titular: NUNCA se pide al
+  // abrir el mapa ni al desplegar el panel - solo la PRIMERA vez que el
+  // usuario escribe algo (ver el listener de 'input' mas abajo), y solo
+  // si tiene el permiso "datos". Sin datos=SI, el buscador sigue
+  // funcionando (wellId, ya disponible sin fetch) pero nunca intenta
+  // este indice - fail-closed, mismo criterio que el resto de los
+  // datasets separados. NC16 nunca viaja por un camino distinto al de
+  // titular (ver decision de arquitectura en MapaService.js).
+  function mapaController_asegurarIndiceBusqueda(contexto) {
+    if (!contexto.permisos || !contexto.permisos.datos || mapaEstado.indiceBusqueda) {
+      return Promise.resolve();
+    }
+    return busquedaProvinciaDataset_obtener(contexto.sessionToken).then(function (result) {
+      if (result.status === 'ok') {
+        mapaEstado.indiceBusqueda = mapaLogic_indiceBusquedaPorWellId(result.data.pozos);
+      }
+    }).catch(function () {
+      // Sin indice cargado, la busqueda sigue funcionando solo por
+      // wellId - no hace falta mostrar un error por esto.
+    });
+  }
+
   // Toggle del filtro "Tiene: Niveles estáticos" (v2.2.0: filtro sobre el
   // padron, no una capa aparte - la capa NE independiente con su propio
   // marker/diamante vive en el mapa Niveles Estaticos, ver js/mapaNE.js).
@@ -291,6 +479,11 @@
   // desde Cerca Mio) - mas simple y confiable evitar la 1ra por completo
   // en vez de pelear las dos animaciones entre si.
   function mapaController_renderPuntos(contexto, saltarAutoFit) {
+    // Cualquier cambio de filtro invalida el "Mostrarlo igual" de una
+    // busqueda anterior - nunca sobrevive a un filtro distinto (ver
+    // mapaController_mostrarResultadoTemporalmente).
+    mapaController_limpiarMarcadorBusquedaTemporal();
+
     // departamento AND estado AND "Tiene: Niveles estáticos" (v2.2.0,
     // arquitectura de 2 mapas - aprobado): se encadenan 3 filtros puros
     // de mapaLogic.js, cada uno responsable de un solo criterio. El
@@ -376,17 +569,9 @@
       if (marker) {
         // Si ya estamos parados justo ahi (ej. tocar "Ver en mapa" dos
         // veces seguidas para el mismo pozo), setView() no mueve nada y
-        // "moveend" nunca dispara - se abre directo en ese caso.
-        var yaEstaAhi = mapaEstado.mapa.getZoom() === MAPA_ZOOM_INDIVIDUAL &&
-          mapaEstado.mapa.getCenter().distanceTo(marker.getLatLng()) < 1;
-        if (yaEstaAhi) {
-          marker.openPopup();
-        } else {
-          mapaEstado.mapa.once('moveend', function () {
-            marker.openPopup();
-          });
-          mapaEstado.mapa.setView(marker.getLatLng(), MAPA_ZOOM_INDIVIDUAL);
-        }
+        // "moveend" nunca dispara - mapaController_centrarYAbrirPopup ya
+        // contempla ese caso (mismo helper que usa el buscador).
+        mapaController_centrarYAbrirPopup(marker);
       }
     }
   }
@@ -428,6 +613,19 @@
     errorEl.hidden = true;
     mapaEl.hidden = true;
     contadorEl.hidden = true;
+    mapaController_cerrarPanelBusqueda();
+    mapaController_limpiarMarcadorBusquedaTemporal();
+
+    // El placeholder del buscador nunca insinua que se puede buscar por
+    // NC16/titular sin el permiso "datos" - NC16 esta gateado por
+    // "datos", igual que titular (decision de arquitectura aprobada, ver
+    // MapaService.js: viven en el MISMO indice/permiso). Con datos=NO,
+    // el placeholder solo menciona numero de pozo - el buscador sigue
+    // existiendo igual (ver mapaLogic_buscarPozosProvincia con indice
+    // null), nunca insinua las otras 2 formas de busqueda.
+    inputBuscarEl.placeholder = (contexto.permisos && contexto.permisos.datos)
+      ? 'Buscar pozo, NC16 o titular...'
+      : 'Buscar número de pozo...';
 
     if (!contexto.permisos || !contexto.permisos.ubicacion) {
       // Defensa en profundidad: el boton de acceso (btn-abrir-mapa) ya
@@ -596,6 +794,31 @@
   btnReintentar.addEventListener('click', function () {
     if (mapaEstado.contextoActual) {
       mapaController_abrir(mapaEstado.contextoActual);
+    }
+  });
+
+  btnBuscarToggleEl.addEventListener('click', mapaController_toggleBusqueda);
+  btnBuscarCerrarEl.addEventListener('click', mapaController_cerrarPanelBusqueda);
+
+  // Primer keystroke con intencion de buscar: repinta YA con lo que haya
+  // (wellId siempre disponible, sin fetch) y, en paralelo, si hace falta
+  // el indice de NC16+titular y todavia no esta, lo pide UNA sola vez -
+  // cuando resuelve, solo repinta si el input sigue diciendo lo mismo
+  // (evita pisar una busqueda mas nueva con una respuesta vieja).
+  inputBuscarEl.addEventListener('input', function () {
+    var contexto = mapaEstado.contextoActual;
+    if (!contexto) {
+      return;
+    }
+    var query = inputBuscarEl.value;
+    mapaController_renderResultadosBusqueda(query, contexto);
+
+    if (contexto.permisos && contexto.permisos.datos && !mapaEstado.indiceBusqueda) {
+      mapaController_asegurarIndiceBusqueda(contexto).then(function () {
+        if (inputBuscarEl.value === query) {
+          mapaController_renderResultadosBusqueda(query, contexto);
+        }
+      });
     }
   });
 

@@ -1027,3 +1027,108 @@ describe('handleGetMapaNE', () => {
     expect(result.code).toBe('SERVICE_UNAVAILABLE');
   });
 });
+
+// Indice de busqueda por titular de Pozos Provincia (Etapa 1A): mismo
+// patron que handleGetMapaNE, pero gateado por "datos" - el caso central
+// es que "ubicacion" (el permiso que SI alcanza para pedir getMapaPozos)
+// nunca alcanza aca. Un usuario con ubicacion=SI/datos=NO ve el mapa
+// pero nunca puede pedir titulares.
+describe('handleGetIndiceBusquedaProvincia', () => {
+  test('sessionToken invalido: UNAUTHORIZED, no consulta el servicio', () => {
+    global.verifySessionToken.mockReturnValue({ valid: false, reason: 'expirado' });
+
+    const result = Api.handleGetIndiceBusquedaProvincia('token-vencido');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('UNAUTHORIZED');
+    expect(global.mapaService_getIndiceBusqueda).not.toHaveBeenCalled();
+  });
+
+  test('usuario deshabilitado: USER_DISABLED', () => {
+    global.verifySessionToken.mockReturnValue({ valid: true, email: 'user@example.com' });
+    global.isUserActive.mockReturnValue(false);
+
+    const result = Api.handleGetIndiceBusquedaProvincia('token-valido');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('USER_DISABLED');
+  });
+
+  // Caso central del diseño: ubicacion=SI (el permiso del mapa) NUNCA
+  // alcanza por si solo - solo "datos" habilita este indice.
+  test('ubicacion=SI pero datos=NO: PERMISSION_DENIED, no consulta el servicio', () => {
+    mockValidSession();
+    global.hasPermission.mockImplementation((email, modulo) => modulo === 'ubicacion');
+
+    const result = Api.handleGetIndiceBusquedaProvincia('token-valido');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('PERMISSION_DENIED');
+    expect(global.mapaService_getIndiceBusqueda).not.toHaveBeenCalled();
+  });
+
+  test('datos=SI con ubicacion=NO: OK, funciona sin necesitar el permiso "ubicacion"', () => {
+    mockValidSession();
+    global.hasPermission.mockImplementation((email, modulo) => modulo === 'datos');
+    global.mapaService_getIndiceBusqueda.mockReturnValue({
+      found: true,
+      pozos: [{ wellId: '04-0263', nc16: '0101230020000036', titular: 'PEREZ, JUAN' }]
+    });
+
+    const result = Api.handleGetIndiceBusquedaProvincia('token-valido');
+
+    expect(result.status).toBe('ok');
+    expect(result.data.pozos.length).toBe(1);
+  });
+
+  test('dataset encontrado: OK con los puntos tal cual los devuelve el service', () => {
+    mockValidSession();
+    const pozos = [
+      { wellId: '04-0263', nc16: '0101230020000036', titular: 'PEREZ, JUAN' },
+      { wellId: '05-0001', nc16: null, titular: null }
+    ];
+    global.mapaService_getIndiceBusqueda.mockReturnValue({ found: true, pozos });
+
+    const result = Api.handleGetIndiceBusquedaProvincia('token-valido');
+
+    expect(result).toEqual({ status: 'ok', data: { pozos } });
+  });
+
+  // NC16 viaja en el MISMO indice que titular, gateado por el mismo
+  // permiso "datos" - caso central de la decision de arquitectura
+  // aprobada (nunca un dataset separado gateado por "ubicacion" para
+  // NC16, ver MapaService.js).
+  test('dataset sin campos sensibles en la respuesta del handler (solo wellId/nc16/titular)', () => {
+    mockValidSession();
+    global.mapaService_getIndiceBusqueda.mockReturnValue({
+      found: true,
+      pozos: [{ wellId: '04-0263', nc16: '0101230020000036', titular: 'PEREZ, JUAN' }]
+    });
+
+    const result = Api.handleGetIndiceBusquedaProvincia('token-valido');
+
+    expect(Object.keys(result.data.pozos[0]).sort()).toEqual(['nc16', 'titular', 'wellId']);
+  });
+
+  test('pozos_busqueda.json inexistente: MAPA_BUSQUEDA_NOT_FOUND', () => {
+    mockValidSession();
+    global.mapaService_getIndiceBusqueda.mockReturnValue({ found: false });
+
+    const result = Api.handleGetIndiceBusquedaProvincia('token-valido');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('MAPA_BUSQUEDA_NOT_FOUND');
+  });
+
+  test('error del service/Drive: SERVICE_UNAVAILABLE', () => {
+    mockValidSession();
+    global.mapaService_getIndiceBusqueda.mockImplementation(() => {
+      throw new Error('Drive no disponible');
+    });
+
+    const result = Api.handleGetIndiceBusquedaProvincia('token-valido');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('SERVICE_UNAVAILABLE');
+  });
+});

@@ -32,6 +32,8 @@ function doPost(e) {
         response = handleGetWellSummary(body.sessionToken, body.wellId);
       } else if (body.action === 'getMapaNE') {
         response = handleGetMapaNE(body.sessionToken);
+      } else if (body.action === 'getIndiceBusquedaProvincia') {
+        response = handleGetIndiceBusquedaProvincia(body.sessionToken);
       } else {
         response = { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'accion desconocida: ' + body.action };
       }
@@ -432,6 +434,40 @@ function handleGetMapaNE(sessionToken) {
   return { status: 'ok', data: { puntos: result.puntos } };
 }
 
+// Indice de busqueda por titular de Pozos Provincia (Etapa 1A): dataset
+// SEPARADO de getMapaPozos, gateado EXCLUSIVAMENTE por "datos" - nunca
+// "ubicacion". Un usuario con ubicacion=SI, datos=NO puede ver el mapa
+// pero nunca este indice (mismo criterio que handleGetWellSummary, que
+// ya requiere "datos" para exponer titular - esto extiende esa misma
+// regla a la busqueda en vez de abrir una puerta nueva gateada distinto).
+// No es una accion por-wellId, no se audita por wellId en Historial
+// (mismo criterio que getMapaPozos/getMapaNE).
+function handleGetIndiceBusquedaProvincia(sessionToken) {
+  var validation = validateSession(sessionToken, 'getIndiceBusquedaProvincia');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var permiso = validarPermiso(session, 'getIndiceBusquedaProvincia', null, 'datos');
+  if (!permiso.ok) {
+    return permiso.response;
+  }
+
+  var result;
+  try {
+    result = mapaService_getIndiceBusqueda();
+  } catch (err) {
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+
+  if (!result.found) {
+    return { status: 'error', code: 'MAPA_BUSQUEDA_NOT_FOUND', message: 'no se encontro pozos_busqueda.json' };
+  }
+
+  return { status: 'ok', data: { pozos: result.pozos } };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     doPost,
@@ -444,6 +480,7 @@ if (typeof module !== 'undefined' && module.exports) {
     handleGetMapaPozos,
     handleGetWellSummary,
     handleGetMapaNE,
+    handleGetIndiceBusquedaProvincia,
     validarPermiso,
     validateSession,
     validateSessionAndWellId

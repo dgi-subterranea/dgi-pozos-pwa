@@ -27,12 +27,20 @@
   var contadorEl = document.getElementById('mapa-ne-contador');
   var capaBaseChipsEls = Array.prototype.slice.call(document.querySelectorAll('.mapa-ne-capa-chip'));
   var btnReintentar = document.getElementById('btn-mapa-ne-reintentar');
+  var btnBuscarToggleEl = document.getElementById('btn-mapa-ne-buscar-toggle');
+  var panelBuscarEl = document.getElementById('mapa-ne-buscar-panel');
+  var inputBuscarEl = document.getElementById('mapa-ne-buscar-input');
+  var btnBuscarCerrarEl = document.getElementById('btn-mapa-ne-buscar-cerrar');
+  var resultadosBuscarEl = document.getElementById('mapa-ne-buscar-resultados');
 
   var mapaNEEstado = {
     mapa: null,           // instancia L.Map PROPIA (nunca la misma que Pozos Provincia)
     capaPuntos: null,     // L.layerGroup con los 405 markers NE - sin cluster (dataset chico, ver adjustment de la Etapa v2.2.0)
     capasBase: null,
     capaBaseActual: null,
+    puntos: null,               // ultimo dataset de getMapaNE ya recibido (para buscar sin refetch, ver Etapa 1A)
+    markersPorMonitoringId: {}, // se reconstruye en cada renderPuntos() - permite centrar+abrir popup de un resultado de busqueda
+    busquedaActiva: false,
     contextoActual: null,
     aperturaId: 0
   };
@@ -58,9 +66,13 @@
   }
 
   function mapaNEController_renderPuntos(puntos, contexto) {
+    mapaNEEstado.puntos = puntos;
     mapaNEEstado.capaPuntos.clearLayers();
+    mapaNEEstado.markersPorMonitoringId = {};
     var markers = puntos.map(function (p) {
-      return mapaShared_crearMarkerNE(p, contexto);
+      var marker = mapaShared_crearMarkerNE(p, contexto);
+      mapaNEEstado.markersPorMonitoringId[p.monitoringId] = marker;
+      return marker;
     });
     markers.forEach(function (m) { mapaNEEstado.capaPuntos.addLayer(m); });
 
@@ -70,6 +82,103 @@
     if (markers.length > 0) {
       mapaNEEstado.mapa.fitBounds(mapaNEEstado.capaPuntos.getBounds().pad(0.05));
     }
+  }
+
+  // --- Buscador en el mapa NE (Etapa 1A) ---
+  // 100% local sobre mapaNEEstado.puntos (ya cargado) - sin filtros que
+  // puedan ocultar un resultado en esta etapa, asi que a diferencia de
+  // Pozos Provincia nunca hace falta el aviso "fuera del filtro": todo
+  // resultado de busqueda SIEMPRE tiene un marker vivo en el mapa.
+  var MAPA_NE_ZOOM_BUSQUEDA = 13;
+
+  function mapaNEController_centrarYAbrirPopup(marker) {
+    var zoomObjetivo = Math.max(mapaNEEstado.mapa.getZoom(), MAPA_NE_ZOOM_BUSQUEDA);
+    var yaEstaAhi = mapaNEEstado.mapa.getZoom() === zoomObjetivo &&
+      mapaNEEstado.mapa.getCenter().distanceTo(marker.getLatLng()) < 1;
+    if (yaEstaAhi) {
+      marker.openPopup();
+    } else {
+      mapaNEEstado.mapa.once('moveend', function () {
+        marker.openPopup();
+      });
+      mapaNEEstado.mapa.setView(marker.getLatLng(), zoomObjetivo);
+    }
+  }
+
+  function mapaNEController_cerrarPanelBusqueda() {
+    mapaNEEstado.busquedaActiva = false;
+    btnBuscarToggleEl.classList.remove('active');
+    btnBuscarToggleEl.setAttribute('aria-pressed', 'false');
+    btnBuscarToggleEl.setAttribute('aria-expanded', 'false');
+    panelBuscarEl.hidden = true;
+    inputBuscarEl.value = '';
+    resultadosBuscarEl.innerHTML = '';
+  }
+
+  function mapaNEController_toggleBusqueda() {
+    if (mapaNEEstado.busquedaActiva) {
+      mapaNEController_cerrarPanelBusqueda();
+      return;
+    }
+    mapaNEEstado.busquedaActiva = true;
+    btnBuscarToggleEl.classList.add('active');
+    btnBuscarToggleEl.setAttribute('aria-pressed', 'true');
+    btnBuscarToggleEl.setAttribute('aria-expanded', 'true');
+    panelBuscarEl.hidden = false;
+    inputBuscarEl.value = '';
+    resultadosBuscarEl.innerHTML = '';
+    inputBuscarEl.focus();
+  }
+
+  function mapaNEController_buscarSeleccionar(resultado) {
+    mapaNEController_cerrarPanelBusqueda();
+    var marker = mapaNEEstado.markersPorMonitoringId[resultado.monitoringId];
+    if (marker) {
+      mapaNEController_centrarYAbrirPopup(marker);
+    }
+  }
+
+  function mapaNEController_renderResultadosBusqueda(query) {
+    resultadosBuscarEl.innerHTML = '';
+    if (!query || !query.trim()) {
+      return;
+    }
+
+    var resultados = mapaLogic_buscarPuntosNE(mapaNEEstado.puntos || [], query, 6);
+    if (resultados.length === 0) {
+      var vacio = document.createElement('p');
+      vacio.className = 'mapa-buscar-sin-resultados';
+      vacio.textContent = 'Sin resultados.';
+      resultadosBuscarEl.appendChild(vacio);
+      return;
+    }
+
+    resultados.forEach(function (r) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'mapa-buscar-resultado';
+
+      var idEl = document.createElement('span');
+      idEl.className = 'mapa-buscar-resultado-id';
+      idEl.textContent = r.wellId || mapaLogic_nombrePuntoNE(r);
+      btn.appendChild(idEl);
+
+      // Punto con wellId y nombreOriginal, o punto especial identificado
+      // por nombreOriginal: la sub-linea muestra lo que el titulo no dijo
+      // ya - nunca inventa nada que no venga del dataset.
+      var sub = r.wellId ? r.nombreOriginal : (r.nombreOriginal ? r.monitoringId : null);
+      if (sub) {
+        var subEl = document.createElement('span');
+        subEl.className = 'mapa-buscar-resultado-sub';
+        subEl.textContent = sub;
+        btn.appendChild(subEl);
+      }
+
+      btn.addEventListener('click', function () {
+        mapaNEController_buscarSeleccionar(r);
+      });
+      resultadosBuscarEl.appendChild(btn);
+    });
   }
 
   function mapaNEController_mostrarError(aperturaId, mensaje) {
@@ -108,6 +217,7 @@
     errorEl.hidden = true;
     mapaEl.hidden = true;
     contadorEl.hidden = true;
+    mapaNEController_cerrarPanelBusqueda();
 
     if (!contexto.permisos || !contexto.permisos.ne) {
       // Defensa en profundidad: el acceso a esta pantalla ya deberia
@@ -163,6 +273,12 @@
     if (mapaNEEstado.contextoActual) {
       mapaNEController_abrir(mapaNEEstado.contextoActual);
     }
+  });
+
+  btnBuscarToggleEl.addEventListener('click', mapaNEController_toggleBusqueda);
+  btnBuscarCerrarEl.addEventListener('click', mapaNEController_cerrarPanelBusqueda);
+  inputBuscarEl.addEventListener('input', function () {
+    mapaNEController_renderResultadosBusqueda(inputBuscarEl.value);
   });
 
   window.mapaNEController_abrir = mapaNEController_abrir;

@@ -11,7 +11,11 @@ const {
   mapaLogic_nombrePuntoNE,
   mapaLogic_setWellIdNE,
   mapaLogic_filtrarPorNE,
-  mapaLogic_determinarAccesoMapas
+  mapaLogic_determinarAccesoMapas,
+  mapaLogic_normalizarTexto,
+  mapaLogic_indiceBusquedaPorWellId,
+  mapaLogic_buscarPozosProvincia,
+  mapaLogic_buscarPuntosNE
 } = require('./mapaLogic');
 
 function punto(wellId, estado) {
@@ -338,5 +342,192 @@ describe('mapaLogic_determinarAccesoMapas', () => {
   test('permisos ausente/null -> "ninguno", no rompe', () => {
     expect(mapaLogic_determinarAccesoMapas(undefined)).toBe('ninguno');
     expect(mapaLogic_determinarAccesoMapas(null)).toBe('ninguno');
+  });
+});
+
+describe('mapaLogic_normalizarTexto', () => {
+  test('minusculiza, quita tildes y colapsa espacios', () => {
+    expect(mapaLogic_normalizarTexto('PÉREZ,   Juan')).toBe('perez, juan');
+  });
+
+  test('trim de espacios al principio/final', () => {
+    expect(mapaLogic_normalizarTexto('  San Martín  ')).toBe('san martin');
+  });
+
+  test('eñe se conserva (no es un acento a quitar)', () => {
+    expect(mapaLogic_normalizarTexto('Malargüe')).toBe('malargue');
+  });
+
+  test('valor ausente/vacio -> string vacio, no rompe', () => {
+    expect(mapaLogic_normalizarTexto(undefined)).toBe('');
+    expect(mapaLogic_normalizarTexto(null)).toBe('');
+    expect(mapaLogic_normalizarTexto('')).toBe('');
+  });
+});
+
+describe('mapaLogic_indiceBusquedaPorWellId', () => {
+  test('arma el mapa wellId -> {nc16, titular}', () => {
+    const indice = [
+      { wellId: '04-0263', nc16: '0101230020000036', titular: 'PEREZ, JUAN' },
+      { wellId: '05-0001', nc16: null, titular: null }
+    ];
+    expect(mapaLogic_indiceBusquedaPorWellId(indice)).toEqual({
+      '04-0263': { nc16: '0101230020000036', titular: 'PEREZ, JUAN' },
+      '05-0001': { nc16: null, titular: null }
+    });
+  });
+
+  test('lista vacia/ausente -> objeto vacio, no rompe', () => {
+    expect(mapaLogic_indiceBusquedaPorWellId([])).toEqual({});
+    expect(mapaLogic_indiceBusquedaPorWellId(undefined)).toEqual({});
+    expect(mapaLogic_indiceBusquedaPorWellId(null)).toEqual({});
+  });
+});
+
+describe('mapaLogic_buscarPozosProvincia', () => {
+  const pozos = [
+    { wellId: '04-0263', lat: -32.8, lon: -68.7, estado: 'C' },
+    { wellId: '04-0264', lat: -32.9, lon: -68.8, estado: 'D' },
+    { wellId: '05-0001', lat: -33.1, lon: -68.5, estado: 'C' }
+  ];
+  const indiceBusqueda = {
+    '04-0263': { nc16: '0101230020000036', titular: 'PEREZ, JUAN' },
+    '04-0264': { nc16: '0101230020000037', titular: 'MUNICIPALIDAD DE LA CAPITAL' },
+    '05-0001': { nc16: null, titular: null }
+  };
+
+  test('busca por wellId (substring, sin indice de busqueda)', () => {
+    const r = mapaLogic_buscarPozosProvincia(pozos, null, '04-026', 6);
+    expect(r.map((x) => x.wellId)).toEqual(['04-0263', '04-0264']);
+    expect(r[0].titular).toBeNull();
+    expect(r[0].nc16).toBeNull();
+    expect(r[0].matchNc16).toBe(false);
+  });
+
+  test('con indice cargado, tambien busca por titular', () => {
+    const r = mapaLogic_buscarPozosProvincia(pozos, indiceBusqueda, 'municipalidad', 6);
+    expect(r.map((x) => x.wellId)).toEqual(['04-0264']);
+    expect(r[0].titular).toBe('MUNICIPALIDAD DE LA CAPITAL');
+    expect(r[0].matchTitular).toBe(true);
+    expect(r[0].matchNc16).toBe(false);
+  });
+
+  // Caso central del pedido (NC16): buscar el numero completo de 16
+  // digitos encuentra el pozo, y marca matchNc16 para que la UI sepa
+  // mostrar "NC16: ..." en la sugerencia.
+  test('busca por NC16 completo (16 digitos) - match exacto', () => {
+    const r = mapaLogic_buscarPozosProvincia(pozos, indiceBusqueda, '0101230020000036', 6);
+    expect(r.map((x) => x.wellId)).toEqual(['04-0263']);
+    expect(r[0].nc16).toBe('0101230020000036');
+    expect(r[0].matchNc16).toBe(true);
+    expect(r[0].matchTitular).toBe(false);
+  });
+
+  test('busca por NC16 parcial mientras se escribe', () => {
+    const r = mapaLogic_buscarPozosProvincia(pozos, indiceBusqueda, '010123002000003', 6);
+    expect(r.map((x) => x.wellId).sort()).toEqual(['04-0263', '04-0264']);
+    r.forEach((x) => expect(x.matchNc16).toBe(true));
+  });
+
+  // Caso central de seguridad: sin el indice cargado (ej. datos=NO, o
+  // todavia no se pidio), buscar por NC16 o por un nombre nunca devuelve
+  // nada - nunca "cae" a revisar esos campos igual (fail-closed, NC16
+  // viaja en el MISMO indice/permiso que titular).
+  test('sin indice cargado (null), NC16 y titular nunca matchean aunque existan en el dataset', () => {
+    expect(mapaLogic_buscarPozosProvincia(pozos, null, 'municipalidad', 6)).toEqual([]);
+    expect(mapaLogic_buscarPozosProvincia(pozos, null, '0101230020000036', 6)).toEqual([]);
+  });
+
+  test('normaliza tildes/mayusculas en la busqueda por titular', () => {
+    const r = mapaLogic_buscarPozosProvincia(pozos, indiceBusqueda, 'PEREZ', 6);
+    expect(r.map((x) => x.wellId)).toEqual(['04-0263']);
+  });
+
+  test('respeta el limite maximo de resultados', () => {
+    const muchos = [];
+    for (let i = 0; i < 20; i++) muchos.push({ wellId: '04-' + String(i).padStart(4, '0'), lat: 0, lon: 0, estado: 'C' });
+    const r = mapaLogic_buscarPozosProvincia(muchos, null, '04-', 6);
+    expect(r.length).toBe(6);
+  });
+
+  test('query vacia -> sin resultados, no rompe', () => {
+    expect(mapaLogic_buscarPozosProvincia(pozos, indiceBusqueda, '', 6)).toEqual([]);
+    expect(mapaLogic_buscarPozosProvincia(pozos, indiceBusqueda, '   ', 6)).toEqual([]);
+  });
+
+  test('sin match -> lista vacia', () => {
+    expect(mapaLogic_buscarPozosProvincia(pozos, indiceBusqueda, 'zzzzz', 6)).toEqual([]);
+  });
+
+  // NC16 con cero inicial: nunca se pierde en la comparacion (viaja como
+  // string en todo momento, jamas se convierte a Number).
+  test('encuentra NC16 con cero inicial', () => {
+    const indiceConCero = { '06-0714': { nc16: '0604882300420023', titular: null } };
+    const pozosConCero = [{ wellId: '06-0714', lat: -33, lon: -68, estado: 'D' }];
+    const r = mapaLogic_buscarPozosProvincia(pozosConCero, indiceConCero, '0604882300420023', 6);
+    expect(r.length).toBe(1);
+    expect(r[0].nc16).toBe('0604882300420023');
+  });
+
+  // NC16 duplicada entre varios wellId (real, medido: hasta 24 pozos
+  // comparten una misma NC16 - parcela con multiples perforaciones) -
+  // la busqueda devuelve TODOS los que matchean, nunca colapsa a uno.
+  test('NC16 duplicada entre varios wellId - devuelve todos los que matchean', () => {
+    const pozosDup = [
+      { wellId: '10-0121', lat: -33, lon: -68, estado: 'D' },
+      { wellId: '10-0123', lat: -33, lon: -68, estado: 'D' }
+    ];
+    const indiceDup = {
+      '10-0121': { nc16: '1099001500510800', titular: 'A' },
+      '10-0123': { nc16: '1099001500510800', titular: 'B' }
+    };
+    const r = mapaLogic_buscarPozosProvincia(pozosDup, indiceDup, '1099001500510800', 6);
+    expect(r.map((x) => x.wellId)).toEqual(['10-0121', '10-0123']);
+  });
+});
+
+describe('mapaLogic_buscarPuntosNE', () => {
+  const puntos = [
+    { monitoringId: '04-0263', wellId: '04-0263', lat: -32.8, lon: -68.7, nombreOriginal: null },
+    { monitoringId: 'INA 2055', wellId: null, lat: -32.9, lon: -68.9, nombreOriginal: 'Jofre Puesto San Vicente' },
+    { monitoringId: '6 RTR7', wellId: null, lat: -33.0, lon: -69.0, nombreOriginal: 'PASNOA' }
+  ];
+
+  test('busca por wellId', () => {
+    const r = mapaLogic_buscarPuntosNE(puntos, '04-026', 6);
+    expect(r.map((p) => p.monitoringId)).toEqual(['04-0263']);
+  });
+
+  test('busca por monitoringId', () => {
+    const r = mapaLogic_buscarPuntosNE(puntos, 'ina 20', 6);
+    expect(r.map((p) => p.monitoringId)).toEqual(['INA 2055']);
+  });
+
+  // Caso central del pedido: encontrar puntos especiales (sin wellId) por
+  // su nombreOriginal, igual que un pozo registrado.
+  test('busca por nombreOriginal, incluso en puntos especiales sin wellId', () => {
+    const r = mapaLogic_buscarPuntosNE(puntos, 'jofre', 6);
+    expect(r.map((p) => p.monitoringId)).toEqual(['INA 2055']);
+    expect(r[0].wellId).toBeNull();
+  });
+
+  test('normaliza tildes/mayusculas', () => {
+    const r = mapaLogic_buscarPuntosNE(puntos, 'PASNOA', 6);
+    expect(r.map((p) => p.monitoringId)).toEqual(['6 RTR7']);
+  });
+
+  test('respeta el limite maximo de resultados', () => {
+    const muchos = [];
+    for (let i = 0; i < 20; i++) muchos.push({ monitoringId: '04-' + String(i).padStart(4, '0'), wellId: '04-' + String(i).padStart(4, '0'), lat: 0, lon: 0, nombreOriginal: null });
+    const r = mapaLogic_buscarPuntosNE(muchos, '04-', 6);
+    expect(r.length).toBe(6);
+  });
+
+  test('query vacia -> sin resultados, no rompe', () => {
+    expect(mapaLogic_buscarPuntosNE(puntos, '', 6)).toEqual([]);
+  });
+
+  test('sin match -> lista vacia', () => {
+    expect(mapaLogic_buscarPuntosNE(puntos, 'zzzzz', 6)).toEqual([]);
   });
 });

@@ -23,6 +23,23 @@ function mapaRepository_getPozos() {
   return { found: true, pozos: pozos };
 }
 
+// Indice de busqueda por titular (Etapa 1A) - archivo SEPARADO de
+// pozos.json a proposito, en la MISMA carpeta de Drive (lo genera el
+// mismo reindex_mapa.py). Nunca se cachea aca por el mismo motivo que
+// mapaRepository_getPozos (pesa varios cientos de KB) - el gating real
+// de seguridad esta en Api.js (requiere "datos", nunca "ubicacion"), no
+// en esta funcion, que solo sabe leer el archivo.
+function mapaRepository_getPozosBusqueda() {
+  var folder = DriveApp.getFolderById(getMapaFolderId());
+  var files = folder.getFilesByName('pozos_busqueda.json');
+  if (!files.hasNext()) {
+    return { found: false };
+  }
+  var file = files.next();
+  var pozos = JSON.parse(file.getBlob().getDataAsString('UTF-8'));
+  return { found: true, pozos: pozos };
+}
+
 // metadata.json es chico (fecha de generacion + conteos) y cambia solo
 // cuando se re-corre el indexador - se cachea entero, mismo criterio que
 // registryRepository_getMetadata.
@@ -49,5 +66,5 @@ function mapaRepository_getMetadata() {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { mapaRepository_getPozos, mapaRepository_getMetadata };
+  module.exports = { mapaRepository_getPozos, mapaRepository_getPozosBusqueda, mapaRepository_getMetadata };
 }
