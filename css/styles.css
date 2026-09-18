@@ -1510,7 +1510,8 @@ table.ne-table tr:last-child td {
   flex-wrap: wrap;
   gap: 6px;
 }
-.mapa-depto-chip {
+.mapa-depto-chip,
+.mapa-ne-campo-chip {
   min-height: 34px;
   padding: 6px 14px;
   font-size: 0.8rem;
@@ -1521,13 +1522,39 @@ table.ne-table tr:last-child td {
   border: 1.5px solid var(--color-border);
   box-shadow: none;
 }
-.mapa-depto-chip:hover {
+.mapa-depto-chip:hover,
+.mapa-ne-campo-chip:hover {
   background: var(--color-primary-tint);
 }
-.mapa-depto-chip.active {
+.mapa-depto-chip.active,
+.mapa-ne-campo-chip.active {
   background: var(--color-primary);
   color: #fff;
   border-color: var(--color-primary);
+}
+
+/* Chips multi-toggle del mapa NE (Estado/Medición 2026/Histórico/Tipo,
+   Etapa 1B) - mismo color activo que el marker diamante/el chip "Tiene:
+   Niveles estáticos" de Provincia (--color-primary-dark), coherente con
+   que esta pantalla es toda de la red NE. */
+.mapa-ne-toggle-chip {
+  min-height: 34px;
+  padding: 6px 14px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text-soft);
+  border: 1.5px solid var(--color-border);
+  box-shadow: none;
+}
+.mapa-ne-toggle-chip:hover {
+  background: var(--color-primary-tint);
+}
+.mapa-ne-toggle-chip.active {
+  background: var(--color-primary-dark);
+  color: #fff;
+  border-color: var(--color-primary-dark);
 }
 .mapa-expandir-btn {
   align-self: flex-start;

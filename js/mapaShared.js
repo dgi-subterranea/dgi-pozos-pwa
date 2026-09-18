@@ -70,6 +70,28 @@ function mapaShared_cargarLibrerias() {
   return mapaLibreriasPromise;
 }
 
+// Contenedor recien destapado (hidden -> visible en el mismo tick) +
+// fitBounds()/setView() basado en tamano = bug real encontrado en la
+// primera apertura de AMBOS mapas (Provincia y NE): con el contenedor
+// todavia en 0x0 en el momento del calculo, Leaflet devuelve un zoom
+// degenerado (encuadra el mundo entero en vez de los puntos). Un solo
+// invalidateSize() sincronico, pegado al cambio de "hidden", no alcanza
+// siempre - el navegador puede no haber hecho el layout/paint todavia en
+// ese mismo tick. Doble requestAnimationFrame (no un setTimeout con un
+// numero arbitrario) espera exactamente a que ese layout ya haya
+// ocurrido antes de dejar correr cualquier fitBounds()/setView() -
+// mapa.js y mapaNE.js llaman esto UNA vez, envolviendo TODO lo que mida
+// el contenedor (render de puntos, enfoque puntual/Cerca Mio incluido).
+function mapaShared_alMostrarMapa(mapa, callback) {
+  mapa.invalidateSize();
+  requestAnimationFrame(function () {
+    requestAnimationFrame(function () {
+      mapa.invalidateSize();
+      callback();
+    });
+  });
+}
+
 // Crea las 2 capas base sobre una instancia de L.Map ya creada y agrega
 // la default - la otra queda lista sin pedir tiles hasta que se cambie a
 // ella (Leaflet no descarga nada de una capa no agregada al mapa).
@@ -148,6 +170,15 @@ function mapaShared_crearMarkerNE(punto, contexto) {
   tagEl.className = 'mapa-popup-estado';
   tagEl.textContent = 'Niveles estáticos';
   el.appendChild(tagEl);
+
+  // Una sola linea compacta con lo que un usuario de campo necesita
+  // decidir si vale la pena acercarse (Etapa 1B, punto 7) - cuenca/zona
+  // quedan afuera a proposito, ya estan disponibles como filtro.
+  var infoEl = document.createElement('p');
+  infoEl.className = 'mapa-popup-sub';
+  infoEl.textContent = mapaLogic_estadoMonitoreoLabel(punto.estadoMonitoreo) +
+    ' · ' + (punto.tieneMedicion2026 ? 'Con medición 2026' : 'Sin medición 2026');
+  el.appendChild(infoEl);
 
   // Punto especial (sin wellId) con nombreOriginal: la linea de arriba
   // ya muestra el nombre - aca se agrega el monitoringId tecnico como

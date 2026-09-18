@@ -674,42 +674,47 @@
 
       mapaEstado.puntosCrudos = result.data.pozos;
 
-      // El contenedor tiene que estar visible y con su tamano real ANTES
-      // de fitBounds() (dentro de renderPuntos): con el contenedor todavia
-      // [hidden] (0x0), Leaflet calcula un zoom degenerado (todo el
-      // mundo) en vez de encuadrar los puntos. invalidateSize() primero,
-      // renderPuntos() despues - en ese orden.
       loadingEl.hidden = true;
       mapaEl.hidden = false;
-      mapaEstado.mapa.invalidateSize();
 
-      // Si vinimos a mostrar un pozo puntual (enfoque:{tipo:'pozo'}), los
-      // filtros de departamento, estado Y "Tiene: Niveles estáticos"
-      // tienen que estar sin restringir ANTES de renderizar - si no, un
-      // filtro previo (ej. "solo Confirmada", un departamento distinto o
-      // el filtro NE activo con ese wellId fuera del Set) podria dejar
-      // ese wellId afuera y mapaController_aplicarEnfoque no lo
-      // encontraria.
-      if (contexto.enfoque && contexto.enfoque.tipo === 'pozo') {
-        mapaEstado.departamentoActual = 'todos';
-        mapaEstado.estadosActivos = { C: true, D: true };
-        estadoChipsEls.forEach(function (chip) {
-          chip.classList.add('active');
-          chip.setAttribute('aria-pressed', 'true');
-        });
-        mapaEstado.neActivo = false;
-        chipNEEl.classList.remove('active');
-        chipNEEl.setAttribute('aria-pressed', 'false');
-      }
+      // El contenedor tiene que estar visible y con su tamano real ANTES
+      // de cualquier fitBounds()/setView() (dentro de renderPuntos Y de
+      // aplicarEnfoque - Cerca Mio tambien encuadra por tamano) - ver
+      // mapaShared_alMostrarMapa en js/mapaShared.js para el detalle del
+      // bug que esto evita.
+      mapaShared_alMostrarMapa(mapaEstado.mapa, function () {
+        if (aperturaId !== mapaEstado.aperturaId) {
+          return;
+        }
 
-      mapaController_poblarChipsDepartamento(mapaEstado.puntosCrudos);
-      mapaController_renderPuntos(contexto, !!contexto.enfoque);
-      // markersPorWellId ya esta poblado en este punto (renderPuntos lo
-      // arma de forma sincronica, ANTES de pasarle los markers a
-      // clusterGroup.addLayers - no hace falta esperar a que termine el
-      // chunked loading de addLayers para encontrar el marker de un
-      // wellId puntual).
-      mapaController_aplicarEnfoque(contexto);
+        // Si vinimos a mostrar un pozo puntual (enfoque:{tipo:'pozo'}), los
+        // filtros de departamento, estado Y "Tiene: Niveles estáticos"
+        // tienen que estar sin restringir ANTES de renderizar - si no, un
+        // filtro previo (ej. "solo Confirmada", un departamento distinto o
+        // el filtro NE activo con ese wellId fuera del Set) podria dejar
+        // ese wellId afuera y mapaController_aplicarEnfoque no lo
+        // encontraria.
+        if (contexto.enfoque && contexto.enfoque.tipo === 'pozo') {
+          mapaEstado.departamentoActual = 'todos';
+          mapaEstado.estadosActivos = { C: true, D: true };
+          estadoChipsEls.forEach(function (chip) {
+            chip.classList.add('active');
+            chip.setAttribute('aria-pressed', 'true');
+          });
+          mapaEstado.neActivo = false;
+          chipNEEl.classList.remove('active');
+          chipNEEl.setAttribute('aria-pressed', 'false');
+        }
+
+        mapaController_poblarChipsDepartamento(mapaEstado.puntosCrudos);
+        mapaController_renderPuntos(contexto, !!contexto.enfoque);
+        // markersPorWellId ya esta poblado en este punto (renderPuntos lo
+        // arma de forma sincronica, ANTES de pasarle los markers a
+        // clusterGroup.addLayers - no hace falta esperar a que termine el
+        // chunked loading de addLayers para encontrar el marker de un
+        // wellId puntual).
+        mapaController_aplicarEnfoque(contexto);
+      });
     }).catch(function () {
       mapaController_mostrarError(aperturaId, 'No se pudo cargar el mapa. Revisá tu conexión.');
     });

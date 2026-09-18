@@ -288,6 +288,102 @@ function mapaLogic_buscarPuntosNE(puntos, query, limite) {
   return resultados;
 }
 
+// --- Filtros del mapa Niveles Estaticos (Etapa 1B) ---
+
+var MAPA_NE_ESTADO_LABEL = { ACTIVO: 'Activo', INACTIVO: 'Inactivo' };
+
+// null/ausente -> "Sin dato", nunca se inventa un estado - mismo
+// criterio que mapaLogic_estadoLabel, pero con un default explicito para
+// el caso sin dato (71/405 puntos reales, ver diagnostico Etapa 1B).
+function mapaLogic_estadoMonitoreoLabel(estado) {
+  return estado ? (MAPA_NE_ESTADO_LABEL[estado] || estado) : 'Sin dato';
+}
+
+// Generico: opciones de un filtro de un solo campo (cuenca o
+// zonaNormalizada) - SOLO los valores que realmente aparecen en el
+// dataset recibido (mismo criterio que
+// mapaLogic_construirOpcionesDepartamento: listar un valor sin ningun
+// punto es ruido, no informacion). Orden alfabetico ('es'), igual que
+// departamento. Puntos con el campo null/vacio no cuentan para ninguna
+// opcion (quedan afuera del filtro especifico, visibles solo bajo
+// "todos" - ver mapaLogic_filtrarPorCampoNE).
+function mapaLogic_construirOpcionesCampoNE(puntos, campo) {
+  var conteos = {};
+  (puntos || []).forEach(function (p) {
+    var v = p && p[campo];
+    if (v) {
+      conteos[v] = (conteos[v] || 0) + 1;
+    }
+  });
+  var opciones = Object.keys(conteos).map(function (v) {
+    return { valor: v, cantidad: conteos[v] };
+  });
+  opciones.sort(function (a, b) { return a.valor.localeCompare(b.valor, 'es'); });
+  return opciones;
+}
+
+// Generico: filtro de seleccion UNICA sobre un campo (cuenca o
+// zonaNormalizada) - 'todos'/vacio/ausente devuelve el dataset completo
+// sin tocar (mismo criterio que mapaLogic_filtrarPorDepartamento).
+function mapaLogic_filtrarPorCampoNE(puntos, campo, valorActivo) {
+  if (!valorActivo || valorActivo === 'todos') {
+    return puntos;
+  }
+  return puntos.filter(function (p) { return p[campo] === valorActivo; });
+}
+
+// Estado de monitoreo: a diferencia de cuenca/zona (dinamico, muchos
+// valores posibles) este es un filtro de 3 categorias FIJAS
+// (Activo/Inactivo/Sin dato) - los chips son estaticos en el HTML, esta
+// funcion solo calcula el conteo real de cada uno para mostrarlo en la
+// etiqueta (ej. "Activo (274)").
+function mapaLogic_construirConteoEstadoMonitoreo(puntos) {
+  var conteo = { ACTIVO: 0, INACTIVO: 0, SIN_DATO: 0 };
+  (puntos || []).forEach(function (p) {
+    if (p && p.estadoMonitoreo === 'ACTIVO') {
+      conteo.ACTIVO++;
+    } else if (p && p.estadoMonitoreo === 'INACTIVO') {
+      conteo.INACTIVO++;
+    } else {
+      conteo.SIN_DATO++;
+    }
+  });
+  return conteo;
+}
+
+// Filtro multi-toggle de 3 estados - mismo criterio que
+// mapaLogic_filtrarPorEstado (Provincia): 0 activos se interpreta como
+// "sin filtro" (nunca una lista vacia ambigua), nunca deja el mapa en un
+// estado confuso.
+function mapaLogic_filtrarPorEstadoMonitoreo(puntos, activos) {
+  var activo = !!(activos && activos.ACTIVO);
+  var inactivo = !!(activos && activos.INACTIVO);
+  var sinDato = !!(activos && activos.SIN_DATO);
+  if (!activo && !inactivo && !sinDato) {
+    return puntos;
+  }
+  return puntos.filter(function (p) {
+    if (p.estadoMonitoreo === 'ACTIVO') { return activo; }
+    if (p.estadoMonitoreo === 'INACTIVO') { return inactivo; }
+    return sinDato;
+  });
+}
+
+// Generico para los 3 filtros binarios derivados de un campo booleano
+// del punto (tieneMedicion2026, tieneHistorico, esEspecial) - mismo
+// criterio de "0 activos = sin filtro" que el resto. mostrarTrue/
+// mostrarFalse son los 2 toggles independientes del grupo (ej. "Con
+// medición"/"Sin medición"), nunca acoplados a un nombre de campo
+// especifico para poder reusar la misma funcion en los 3 grupos.
+function mapaLogic_filtrarPorFlagNE(puntos, campo, mostrarTrue, mostrarFalse) {
+  if (!mostrarTrue && !mostrarFalse) {
+    return puntos;
+  }
+  return puntos.filter(function (p) {
+    return (p[campo] && mostrarTrue) || (!p[campo] && mostrarFalse);
+  });
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MAPA_DEPARTAMENTOS,
@@ -308,6 +404,13 @@ if (typeof module !== 'undefined' && module.exports) {
     mapaLogic_normalizarTexto,
     mapaLogic_indiceBusquedaPorWellId,
     mapaLogic_buscarPozosProvincia,
-    mapaLogic_buscarPuntosNE
+    mapaLogic_buscarPuntosNE,
+    MAPA_NE_ESTADO_LABEL,
+    mapaLogic_estadoMonitoreoLabel,
+    mapaLogic_construirOpcionesCampoNE,
+    mapaLogic_filtrarPorCampoNE,
+    mapaLogic_construirConteoEstadoMonitoreo,
+    mapaLogic_filtrarPorEstadoMonitoreo,
+    mapaLogic_filtrarPorFlagNE
   };
 }

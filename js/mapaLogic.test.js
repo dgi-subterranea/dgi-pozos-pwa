@@ -15,7 +15,13 @@ const {
   mapaLogic_normalizarTexto,
   mapaLogic_indiceBusquedaPorWellId,
   mapaLogic_buscarPozosProvincia,
-  mapaLogic_buscarPuntosNE
+  mapaLogic_buscarPuntosNE,
+  mapaLogic_estadoMonitoreoLabel,
+  mapaLogic_construirOpcionesCampoNE,
+  mapaLogic_filtrarPorCampoNE,
+  mapaLogic_construirConteoEstadoMonitoreo,
+  mapaLogic_filtrarPorEstadoMonitoreo,
+  mapaLogic_filtrarPorFlagNE
 } = require('./mapaLogic');
 
 function punto(wellId, estado) {
@@ -529,5 +535,183 @@ describe('mapaLogic_buscarPuntosNE', () => {
 
   test('sin match -> lista vacia', () => {
     expect(mapaLogic_buscarPuntosNE(puntos, 'zzzzz', 6)).toEqual([]);
+  });
+});
+
+// --- Etapa 1B: filtros del mapa Niveles Estaticos ---
+
+function puntoNE(overrides) {
+  return Object.assign({
+    monitoringId: '04-0263', wellId: '04-0263', lat: -32.8, lon: -68.7, nombreOriginal: null,
+    cuenca: 'MI', zona: 'Norte', zonaNormalizada: 'Norte', estadoMonitoreo: 'ACTIVO',
+    tieneMedicion2026: true, tieneHistorico: true, esEspecial: false
+  }, overrides);
+}
+
+describe('mapaLogic_estadoMonitoreoLabel', () => {
+  test('ACTIVO -> Activo, INACTIVO -> Inactivo', () => {
+    expect(mapaLogic_estadoMonitoreoLabel('ACTIVO')).toBe('Activo');
+    expect(mapaLogic_estadoMonitoreoLabel('INACTIVO')).toBe('Inactivo');
+  });
+
+  test('null/ausente -> "Sin dato", nunca se inventa un estado', () => {
+    expect(mapaLogic_estadoMonitoreoLabel(null)).toBe('Sin dato');
+    expect(mapaLogic_estadoMonitoreoLabel(undefined)).toBe('Sin dato');
+  });
+
+  test('valor desconocido -> se devuelve tal cual, no rompe', () => {
+    expect(mapaLogic_estadoMonitoreoLabel('X')).toBe('X');
+  });
+});
+
+describe('mapaLogic_construirOpcionesCampoNE', () => {
+  test('cuenta puntos por valor de un campo, ordena alfabeticamente', () => {
+    const puntos = [
+      puntoNE({ monitoringId: 'a', cuenca: 'MI' }),
+      puntoNE({ monitoringId: 'b', cuenca: 'MD' }),
+      puntoNE({ monitoringId: 'c', cuenca: 'MI' })
+    ];
+    expect(mapaLogic_construirOpcionesCampoNE(puntos, 'cuenca')).toEqual([
+      { valor: 'MD', cantidad: 1 },
+      { valor: 'MI', cantidad: 2 }
+    ]);
+  });
+
+  // Real: 1 punto sin cuenca (null) - nunca aparece como opcion "null"
+  // ni cuenta para ninguna opcion existente.
+  test('puntos con el campo null/vacio no generan una opcion, ni se cuentan en otra', () => {
+    const puntos = [puntoNE({ monitoringId: 'a', cuenca: null }), puntoNE({ monitoringId: 'b', cuenca: 'MI' })];
+    expect(mapaLogic_construirOpcionesCampoNE(puntos, 'cuenca')).toEqual([{ valor: 'MI', cantidad: 1 }]);
+  });
+
+  test('MD9 queda separado de MD, nunca se fusiona', () => {
+    const puntos = [puntoNE({ monitoringId: 'a', cuenca: 'MD' }), puntoNE({ monitoringId: 'b', cuenca: 'MD9' })];
+    const opciones = mapaLogic_construirOpcionesCampoNE(puntos, 'cuenca');
+    expect(opciones).toEqual([{ valor: 'MD', cantidad: 1 }, { valor: 'MD9', cantidad: 1 }]);
+  });
+
+  test('lista vacia/ausente -> lista vacia, no rompe', () => {
+    expect(mapaLogic_construirOpcionesCampoNE([], 'cuenca')).toEqual([]);
+    expect(mapaLogic_construirOpcionesCampoNE(undefined, 'cuenca')).toEqual([]);
+  });
+});
+
+describe('mapaLogic_filtrarPorCampoNE', () => {
+  const puntos = [
+    puntoNE({ monitoringId: 'a', cuenca: 'MI' }),
+    puntoNE({ monitoringId: 'b', cuenca: 'MD' }),
+    puntoNE({ monitoringId: 'c', cuenca: 'MI' })
+  ];
+
+  test('"todos" devuelve el dataset completo sin tocar', () => {
+    expect(mapaLogic_filtrarPorCampoNE(puntos, 'cuenca', 'todos')).toEqual(puntos);
+  });
+
+  test('valor vacio/ausente se trata igual que "todos"', () => {
+    expect(mapaLogic_filtrarPorCampoNE(puntos, 'cuenca', undefined)).toEqual(puntos);
+    expect(mapaLogic_filtrarPorCampoNE(puntos, 'cuenca', '')).toEqual(puntos);
+  });
+
+  test('filtra solo los puntos con ese valor', () => {
+    const r = mapaLogic_filtrarPorCampoNE(puntos, 'cuenca', 'MI');
+    expect(r.map((p) => p.monitoringId)).toEqual(['a', 'c']);
+  });
+
+  test('valor sin puntos -> lista vacia, no rompe', () => {
+    expect(mapaLogic_filtrarPorCampoNE(puntos, 'cuenca', 'Este')).toEqual([]);
+  });
+
+  // MD9 y MD son valores DISTINTOS - filtrar por "MD" nunca devuelve los
+  // puntos de "MD9".
+  test('MD9 y MD nunca se mezclan en el filtro', () => {
+    const conMD9 = puntos.concat([puntoNE({ monitoringId: 'd', cuenca: 'MD9' })]);
+    expect(mapaLogic_filtrarPorCampoNE(conMD9, 'cuenca', 'MD').map((p) => p.monitoringId)).toEqual(['b']);
+    expect(mapaLogic_filtrarPorCampoNE(conMD9, 'cuenca', 'MD9').map((p) => p.monitoringId)).toEqual(['d']);
+  });
+});
+
+describe('mapaLogic_construirConteoEstadoMonitoreo', () => {
+  test('cuenta ACTIVO/INACTIVO/SIN_DATO (null cuenta como SIN_DATO)', () => {
+    const puntos = [
+      puntoNE({ monitoringId: 'a', estadoMonitoreo: 'ACTIVO' }),
+      puntoNE({ monitoringId: 'b', estadoMonitoreo: 'INACTIVO' }),
+      puntoNE({ monitoringId: 'c', estadoMonitoreo: null }),
+      puntoNE({ monitoringId: 'd', estadoMonitoreo: 'ACTIVO' })
+    ];
+    expect(mapaLogic_construirConteoEstadoMonitoreo(puntos)).toEqual({ ACTIVO: 2, INACTIVO: 1, SIN_DATO: 1 });
+  });
+
+  test('lista vacia/ausente -> todos en 0, no rompe', () => {
+    expect(mapaLogic_construirConteoEstadoMonitoreo([])).toEqual({ ACTIVO: 0, INACTIVO: 0, SIN_DATO: 0 });
+    expect(mapaLogic_construirConteoEstadoMonitoreo(undefined)).toEqual({ ACTIVO: 0, INACTIVO: 0, SIN_DATO: 0 });
+  });
+});
+
+describe('mapaLogic_filtrarPorEstadoMonitoreo', () => {
+  const puntos = [
+    puntoNE({ monitoringId: 'a', estadoMonitoreo: 'ACTIVO' }),
+    puntoNE({ monitoringId: 'b', estadoMonitoreo: 'INACTIVO' }),
+    puntoNE({ monitoringId: 'c', estadoMonitoreo: null })
+  ];
+
+  test('los 3 activos -> dataset completo', () => {
+    expect(mapaLogic_filtrarPorEstadoMonitoreo(puntos, { ACTIVO: true, INACTIVO: true, SIN_DATO: true })).toEqual(puntos);
+  });
+
+  test('solo Activo', () => {
+    const r = mapaLogic_filtrarPorEstadoMonitoreo(puntos, { ACTIVO: true, INACTIVO: false, SIN_DATO: false });
+    expect(r.map((p) => p.monitoringId)).toEqual(['a']);
+  });
+
+  test('solo Sin dato', () => {
+    const r = mapaLogic_filtrarPorEstadoMonitoreo(puntos, { ACTIVO: false, INACTIVO: false, SIN_DATO: true });
+    expect(r.map((p) => p.monitoringId)).toEqual(['c']);
+  });
+
+  // Mismo criterio que mapaLogic_filtrarPorEstado (Provincia): 0 activos
+  // nunca es una lista vacia ambigua, se interpreta como "todos".
+  test('los 3 apagados -> se interpreta como "todos", nunca lista vacia', () => {
+    expect(mapaLogic_filtrarPorEstadoMonitoreo(puntos, { ACTIVO: false, INACTIVO: false, SIN_DATO: false })).toEqual(puntos);
+  });
+
+  test('activos ausente/null -> se interpreta como "todos"', () => {
+    expect(mapaLogic_filtrarPorEstadoMonitoreo(puntos, undefined)).toEqual(puntos);
+    expect(mapaLogic_filtrarPorEstadoMonitoreo(puntos, null)).toEqual(puntos);
+  });
+});
+
+describe('mapaLogic_filtrarPorFlagNE', () => {
+  const puntos = [
+    puntoNE({ monitoringId: 'a', tieneMedicion2026: true }),
+    puntoNE({ monitoringId: 'b', tieneMedicion2026: false }),
+    puntoNE({ monitoringId: 'c', tieneMedicion2026: true })
+  ];
+
+  test('ambos activos -> dataset completo', () => {
+    expect(mapaLogic_filtrarPorFlagNE(puntos, 'tieneMedicion2026', true, true)).toEqual(puntos);
+  });
+
+  test('solo "con" (mostrarTrue)', () => {
+    const r = mapaLogic_filtrarPorFlagNE(puntos, 'tieneMedicion2026', true, false);
+    expect(r.map((p) => p.monitoringId)).toEqual(['a', 'c']);
+  });
+
+  test('solo "sin" (mostrarFalse)', () => {
+    const r = mapaLogic_filtrarPorFlagNE(puntos, 'tieneMedicion2026', false, true);
+    expect(r.map((p) => p.monitoringId)).toEqual(['b']);
+  });
+
+  test('ambos apagados -> se interpreta como "todos", nunca lista vacia', () => {
+    expect(mapaLogic_filtrarPorFlagNE(puntos, 'tieneMedicion2026', false, false)).toEqual(puntos);
+  });
+
+  // Reusado para "Tipo" (Pozo registrado/Punto especial) sobre esEspecial.
+  test('reusable para el filtro Tipo (esEspecial)', () => {
+    const mixto = [
+      puntoNE({ monitoringId: 'reg', esEspecial: false }),
+      puntoNE({ monitoringId: 'esp', esEspecial: true })
+    ];
+    const soloEspeciales = mapaLogic_filtrarPorFlagNE(mixto, 'esEspecial', true, false);
+    expect(soloEspeciales.map((p) => p.monitoringId)).toEqual(['esp']);
   });
 });

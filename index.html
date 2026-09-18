@@ -323,11 +323,15 @@
 
   <!-- Mapa Niveles Estáticos: mapa independiente y completo de la red
        NE (v2.2.0, ver js/mapaNE.js) - gateado EXCLUSIVAMENTE por ne=SI
-       (nunca por "ubicacion", requisito central). Muestra los 405 puntos
-       de getMapaNE (371 con wellId + 34 especiales), nunca los puntos
+       (nunca por "ubicacion", requisito central). Muestra los puntos de
+       getMapaNE (405 con coordenadas validas al momento de escribir
+       esto: 371 con wellId + 34 especiales - nunca hardcodeado, el
+       contador siempre usa el total real recibido), nunca los puntos
        del padron general debajo. Sin Departamento/Confirmada-Disponible
        (esos estados son del padron, no de la red NE) ni Cerca Mio en
-       esta etapa (fuera de alcance, pedido explicito). -->
+       esta etapa (fuera de alcance, pedido explicito). Etapa 1B agrega
+       filtros propios de la red NE (Cuenca/Zona/Estado/Medición 2026/
+       Histórico/Tipo) - ver js/mapaNE.js. -->
   <div id="screen-mapa-ne" class="screen" hidden>
     <div class="tv-topbar">
       <button type="button" id="btn-mapa-ne-volver" class="tv-volver">
@@ -344,10 +348,19 @@
     <div class="mapa-capas-base" role="group" aria-label="Tipo de mapa">
       <button type="button" class="mapa-ne-capa-chip active" data-capa="calle" aria-pressed="true">Mapa</button>
       <button type="button" class="mapa-ne-capa-chip" data-capa="satelite" aria-pressed="false">Satélite</button>
-      <!-- Buscador NE (Etapa 1A): 100% local sobre el dataset ya cargado
-           (wellId/monitoringId/nombreOriginal), sin filtros que puedan
-           ocultar un resultado en esta etapa - por eso no hace falta el
-           aviso "fuera del filtro" que si tiene Provincia. -->
+      <!-- Filtros (Etapa 1B): colapsado por default en cualquier ancho -
+           nunca ocupa espacio en reposo, ni en mobile ni en desktop (el
+           panel puede ser largo con 6 grupos, asi que se prioriza no
+           robarle espacio al mapa por sobre "desktop mas abierto" -
+           mismo criterio de interaccion que el buscador, ya aprobado). -->
+      <button type="button" id="btn-mapa-ne-filtros-toggle" class="mapa-buscar-toggle" aria-pressed="false" aria-label="Filtros" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 6h16M7 12h10M10 18h4" stroke-linecap="round"/></svg>
+      </button>
+      <!-- Buscador NE (Etapa 1A/1B): 100% local sobre el dataset ya
+           cargado (wellId/monitoringId/nombreOriginal). Desde 1B, un
+           resultado puede quedar fuera de los filtros activos - mismo
+           patron "aviso + Mostrarlo igual" ya aprobado en Provincia (ver
+           mapaNEController_buscarSeleccionar en js/mapaNE.js). -->
       <button type="button" id="btn-mapa-ne-buscar-toggle" class="mapa-buscar-toggle" aria-pressed="false" aria-label="Buscar en el mapa" aria-expanded="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/></svg>
       </button>
@@ -359,6 +372,65 @@
         <button type="button" id="btn-mapa-ne-buscar-cerrar" class="mapa-buscar-cerrar" aria-label="Cerrar búsqueda">&times;</button>
       </div>
       <div id="mapa-ne-buscar-resultados" class="mapa-buscar-resultados"></div>
+    </div>
+
+    <!-- Filtros NE (Etapa 1B) - se combinan con AND entre grupos (ver
+         mapaNEController_aplicarFiltros en js/mapaNE.js). Cuenca/Zona:
+         seleccion UNICA con "Todos" (mismo patron que Departamento en
+         Provincia, chips dinamicos segun los datos reales). Estado/
+         Medición 2026/Histórico/Tipo: multi-toggle, ambos activos por
+         default = sin filtro (mismo patron que Confirmada/Disponible en
+         Provincia) - nunca quedan los 2/3 apagados a la vez. -->
+    <div class="mapa-filtros" id="mapa-ne-filtros-panel" hidden>
+      <div class="mapa-filtro-grupo">
+        <p class="mapa-filtro-label">Cuenca</p>
+        <div id="mapa-ne-cuenca-chips" class="mapa-chips-wrap">
+          <button type="button" class="mapa-ne-campo-chip active" data-campo="cuenca" data-valor="todos" aria-pressed="true">Todos</button>
+        </div>
+      </div>
+
+      <div class="mapa-filtro-grupo">
+        <p class="mapa-filtro-label">Zona</p>
+        <div id="mapa-ne-zona-chips" class="mapa-chips-wrap">
+          <button type="button" class="mapa-ne-campo-chip active" data-campo="zona" data-valor="todos" aria-pressed="true">Todos</button>
+        </div>
+        <button type="button" id="btn-mapa-ne-zona-expandir" class="mapa-expandir-btn" hidden></button>
+      </div>
+
+      <div class="mapa-filtro-grupo">
+        <p class="mapa-filtro-label">Estado</p>
+        <div class="mapa-chips-wrap">
+          <button type="button" class="mapa-ne-toggle-chip active" data-grupo="estado" data-valor="ACTIVO" aria-pressed="true">Activo</button>
+          <button type="button" class="mapa-ne-toggle-chip active" data-grupo="estado" data-valor="INACTIVO" aria-pressed="true">Inactivo</button>
+          <button type="button" class="mapa-ne-toggle-chip active" data-grupo="estado" data-valor="SIN_DATO" aria-pressed="true">Sin dato</button>
+        </div>
+      </div>
+
+      <div class="mapa-filtro-grupo">
+        <p class="mapa-filtro-label">Medición 2026</p>
+        <div class="mapa-chips-wrap">
+          <button type="button" class="mapa-ne-toggle-chip active" data-grupo="medicion" data-valor="CON" aria-pressed="true">Con medición</button>
+          <button type="button" class="mapa-ne-toggle-chip active" data-grupo="medicion" data-valor="SIN" aria-pressed="true">Sin medición</button>
+        </div>
+      </div>
+
+      <div class="mapa-filtro-grupo">
+        <p class="mapa-filtro-label">Histórico</p>
+        <div class="mapa-chips-wrap">
+          <button type="button" class="mapa-ne-toggle-chip active" data-grupo="historico" data-valor="CON" aria-pressed="true">Con histórico</button>
+          <button type="button" class="mapa-ne-toggle-chip active" data-grupo="historico" data-valor="SIN" aria-pressed="true">Sin histórico</button>
+        </div>
+      </div>
+
+      <div class="mapa-filtro-grupo">
+        <p class="mapa-filtro-label">Tipo</p>
+        <div class="mapa-chips-wrap">
+          <button type="button" class="mapa-ne-toggle-chip active" data-grupo="tipo" data-valor="REGISTRADO" aria-pressed="true">Pozo registrado</button>
+          <button type="button" class="mapa-ne-toggle-chip active" data-grupo="tipo" data-valor="ESPECIAL" aria-pressed="true">Punto especial</button>
+        </div>
+      </div>
+
+      <button type="button" id="btn-mapa-ne-limpiar-filtros" class="mapa-expandir-btn">Limpiar filtros</button>
     </div>
 
     <div id="mapa-ne-contador" class="mapa-contador" hidden></div>
