@@ -21,7 +21,10 @@ const {
   mapaLogic_filtrarPorCampoNE,
   mapaLogic_construirConteoEstadoMonitoreo,
   mapaLogic_filtrarPorEstadoMonitoreo,
-  mapaLogic_filtrarPorFlagNE
+  mapaLogic_filtrarPorFlagNE,
+  mapaLogic_filtrarPorCampoMultipleNE,
+  mapaLogic_construirOpcionesCampoCondicionadoNE,
+  mapaLogic_valorSigueDisponible
 } = require('./mapaLogic');
 
 function punto(wellId, estado) {
@@ -713,5 +716,111 @@ describe('mapaLogic_filtrarPorFlagNE', () => {
     ];
     const soloEspeciales = mapaLogic_filtrarPorFlagNE(mixto, 'esEspecial', true, false);
     expect(soloEspeciales.map((p) => p.monitoringId)).toEqual(['esp']);
+  });
+});
+
+describe('mapaLogic_filtrarPorCampoMultipleNE (Etapa 1B.1 - Cuenca multiseleccion)', () => {
+  const puntos = [
+    puntoNE({ monitoringId: 'a', cuenca: 'MI' }),
+    puntoNE({ monitoringId: 'b', cuenca: 'MD' }),
+    puntoNE({ monitoringId: 'c', cuenca: 'VdU' }),
+    puntoNE({ monitoringId: 'd', cuenca: null })
+  ];
+
+  test('una sola cuenca activa -> solo esos puntos', () => {
+    const r = mapaLogic_filtrarPorCampoMultipleNE(puntos, 'cuenca', { MI: true, MD: false, VdU: false });
+    expect(r.map((p) => p.monitoringId)).toEqual(['a']);
+  });
+
+  test('varias cuencas activas -> OR dentro del grupo', () => {
+    const r = mapaLogic_filtrarPorCampoMultipleNE(puntos, 'cuenca', { MI: true, MD: true, VdU: false });
+    expect(r.map((p) => p.monitoringId)).toEqual(['a', 'b']);
+  });
+
+  test('todas activas -> sin filtro, dataset completo (incluye cuenca null)', () => {
+    const r = mapaLogic_filtrarPorCampoMultipleNE(puntos, 'cuenca', { MI: true, MD: true, VdU: true });
+    expect(r).toEqual(puntos);
+  });
+
+  test('ninguna activa -> sin filtro (fail-safe), nunca lista vacia', () => {
+    const r = mapaLogic_filtrarPorCampoMultipleNE(puntos, 'cuenca', { MI: false, MD: false, VdU: false });
+    expect(r).toEqual(puntos);
+  });
+
+  test('con un subconjunto activo, el punto con cuenca null queda afuera', () => {
+    const r = mapaLogic_filtrarPorCampoMultipleNE(puntos, 'cuenca', { MI: true, MD: false, VdU: false });
+    expect(r.some((p) => p.monitoringId === 'd')).toBe(false);
+  });
+});
+
+describe('mapaLogic_construirOpcionesCampoCondicionadoNE (Etapa 1B.1 - Zona dependiente de Cuenca)', () => {
+  const puntosCompletos = [
+    puntoNE({ monitoringId: 'a', cuenca: 'MI', zonaNormalizada: 'Norte' }),
+    puntoNE({ monitoringId: 'b', cuenca: 'MI', zonaNormalizada: 'Sur' }),
+    puntoNE({ monitoringId: 'c', cuenca: 'MD', zonaNormalizada: 'Este' }),
+    puntoNE({ monitoringId: 'd', cuenca: 'VdU', zonaNormalizada: 'Valle de Uco' })
+  ];
+
+  test('sin restriccion (universo = dataset completo) -> mismos conteos que la version sin condicionar', () => {
+    const opciones = mapaLogic_construirOpcionesCampoCondicionadoNE(puntosCompletos, puntosCompletos, 'zonaNormalizada');
+    expect(opciones).toEqual([
+      { valor: 'Este', cantidad: 1 },
+      { valor: 'Norte', cantidad: 1 },
+      { valor: 'Sur', cantidad: 1 },
+      { valor: 'Valle de Uco', cantidad: 1 }
+    ]);
+  });
+
+  test('universo reducido (ej. solo cuenca MI) -> zonas fuera del universo quedan en la lista con cantidad:0', () => {
+    const universoMI = puntosCompletos.filter((p) => p.cuenca === 'MI');
+    const opciones = mapaLogic_construirOpcionesCampoCondicionadoNE(puntosCompletos, universoMI, 'zonaNormalizada');
+    expect(opciones).toEqual([
+      { valor: 'Este', cantidad: 0 },
+      { valor: 'Norte', cantidad: 1 },
+      { valor: 'Sur', cantidad: 1 },
+      { valor: 'Valle de Uco', cantidad: 0 }
+    ]);
+  });
+
+  test('union de 2 cuencas -> conteos combinados, resto en 0', () => {
+    const universoMIoMD = puntosCompletos.filter((p) => p.cuenca === 'MI' || p.cuenca === 'MD');
+    const opciones = mapaLogic_construirOpcionesCampoCondicionadoNE(puntosCompletos, universoMIoMD, 'zonaNormalizada');
+    expect(opciones).toEqual([
+      { valor: 'Este', cantidad: 1 },
+      { valor: 'Norte', cantidad: 1 },
+      { valor: 'Sur', cantidad: 1 },
+      { valor: 'Valle de Uco', cantidad: 0 }
+    ]);
+  });
+
+  test('nunca elimina un valor del DOM: la cantidad de opciones es siempre la del dataset completo', () => {
+    const universoVacio = [];
+    const opciones = mapaLogic_construirOpcionesCampoCondicionadoNE(puntosCompletos, universoVacio, 'zonaNormalizada');
+    expect(opciones).toHaveLength(4);
+    expect(opciones.every((o) => o.cantidad === 0)).toBe(true);
+  });
+});
+
+describe('mapaLogic_valorSigueDisponible (Etapa 1B.1 - punto C)', () => {
+  const opciones = [
+    { valor: 'Norte', cantidad: 3 },
+    { valor: 'Sur', cantidad: 0 }
+  ];
+
+  test('"todos" siempre disponible, sin importar el universo', () => {
+    expect(mapaLogic_valorSigueDisponible(opciones, 'todos')).toBe(true);
+    expect(mapaLogic_valorSigueDisponible([], 'todos')).toBe(true);
+  });
+
+  test('valor con cantidad > 0 -> sigue disponible', () => {
+    expect(mapaLogic_valorSigueDisponible(opciones, 'Norte')).toBe(true);
+  });
+
+  test('valor con cantidad 0 -> ya no esta disponible (hay que deseleccionarlo)', () => {
+    expect(mapaLogic_valorSigueDisponible(opciones, 'Sur')).toBe(false);
+  });
+
+  test('valor que ni siquiera aparece en las opciones -> no disponible', () => {
+    expect(mapaLogic_valorSigueDisponible(opciones, 'Este')).toBe(false);
   });
 });

@@ -13,12 +13,21 @@
 // la Etapa 5B/5C). Una futura capa de mapa para la red NE seria un
 // dataset/endpoint completamente aparte, gateado por el permiso "ne", con
 // sus propias coordenadas - nunca mezclado con este.
+//
+// cuenca (Etapa 1C) se agrega a esta lista estructural igual que los
+// otros 4 campos - scripts/reindex_mapa.py ya la calculo offline
+// (point-in-polygon contra Cuencas/WGS84/vm_cuencas_provincia.shp, ver
+// scripts/cuenca_utils.py) y la escribio en pozos.json; este servicio
+// solo la reenvia, nunca la recalcula. null si el pozo cayo fuera de las
+// 6 cuencas conocidas (0 casos en el dataset real, pero el campo nunca
+// se inventa un valor).
 function mapaService_sanitizarPunto(punto) {
   return {
     wellId: punto.wellId,
     lat: punto.lat,
     lon: punto.lon,
-    estado: punto.estado
+    estado: punto.estado,
+    cuenca: punto.cuenca !== undefined ? punto.cuenca : null
   };
 }
 

@@ -18,12 +18,12 @@ describe('mapaService_getPozos', () => {
     expect(result).toEqual({ found: false });
   });
 
-  test('encontrado -> found:true con los puntos y la metadata', () => {
+  test('encontrado -> found:true con los puntos (incluida cuenca) y la metadata', () => {
     global.mapaRepository_getPozos.mockReturnValue({
       found: true,
       pozos: [
-        { wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C' },
-        { wellId: '05-0001', lat: -33.1, lon: -68.5, estado: 'D' }
+        { wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza' },
+        { wellId: '05-0001', lat: -33.1, lon: -68.5, estado: 'D', cuenca: 'Río Tunuyán Inferior' }
       ]
     });
     global.mapaRepository_getMetadata.mockReturnValue({
@@ -36,8 +36,8 @@ describe('mapaService_getPozos', () => {
 
     expect(result.found).toBe(true);
     expect(result.pozos).toEqual([
-      { wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C' },
-      { wellId: '05-0001', lat: -33.1, lon: -68.5, estado: 'D' }
+      { wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza' },
+      { wellId: '05-0001', lat: -33.1, lon: -68.5, estado: 'D', cuenca: 'Río Tunuyán Inferior' }
     ]);
     expect(result.metadata).toEqual({ generadoEl: '2026-09-15T13:33:58-03:00', totalPuntos: 13804 });
   });
@@ -53,7 +53,7 @@ describe('mapaService_getPozos', () => {
       found: true,
       pozos: [
         {
-          wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C',
+          wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza',
           ne: true, titular: 'JUAN PEREZ', departamento: 'GUAYMALLEN', distrito: 'X', uso: 'Agricola'
         }
       ]
@@ -62,8 +62,8 @@ describe('mapaService_getPozos', () => {
 
     const result = MapaService.mapaService_getPozos();
 
-    expect(result.pozos).toEqual([{ wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C' }]);
-    expect(Object.keys(result.pozos[0]).sort()).toEqual(['estado', 'lat', 'lon', 'wellId']);
+    expect(result.pozos).toEqual([{ wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza' }]);
+    expect(Object.keys(result.pozos[0]).sort()).toEqual(['cuenca', 'estado', 'lat', 'lon', 'wellId']);
   });
 
   test('metadata correcta - solo generadoEl y totalPuntos, aunque el archivo traiga mas campos', () => {
@@ -101,12 +101,29 @@ describe('mapaService_getPozos', () => {
 });
 
 describe('mapaService_sanitizarPunto', () => {
-  test('conserva solo wellId/lat/lon/estado, en ese orden de claves', () => {
+  test('conserva wellId/lat/lon/estado/cuenca, en ese orden de claves', () => {
     const sanitizado = MapaService.mapaService_sanitizarPunto({
-      wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', ne: true, titular: 'X'
+      wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza', ne: true, titular: 'X'
     });
-    expect(sanitizado).toEqual({ wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C' });
-    expect(Object.keys(sanitizado)).toEqual(['wellId', 'lat', 'lon', 'estado']);
+    expect(sanitizado).toEqual({ wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza' });
+    expect(Object.keys(sanitizado)).toEqual(['wellId', 'lat', 'lon', 'estado', 'cuenca']);
+  });
+
+  // Etapa 1C: 0 casos reales (los 13.804 pozos caen dentro de una de las
+  // 6 cuencas segun el diagnostico), pero el campo nunca inventa un
+  // valor si algun dia hubiera uno fuera de los poligonos.
+  test('cuenca ausente en la fuente -> null, no rompe', () => {
+    const sanitizado = MapaService.mapaService_sanitizarPunto({
+      wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C'
+    });
+    expect(sanitizado.cuenca).toBeNull();
+  });
+
+  test('cuenca null explicito en la fuente -> se preserva null', () => {
+    const sanitizado = MapaService.mapaService_sanitizarPunto({
+      wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: null
+    });
+    expect(sanitizado.cuenca).toBeNull();
   });
 });
 

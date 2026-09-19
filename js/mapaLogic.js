@@ -384,6 +384,70 @@ function mapaLogic_filtrarPorFlagNE(puntos, campo, mostrarTrue, mostrarFalse) {
   });
 }
 
+// --- Etapa 1B.1: Cuenca multi-seleccion (OR dentro del grupo) ---
+
+// Generico: filtro OR multi-seleccion sobre un campo dinamico (Cuenca en
+// NE, Cuenca en Provincia mas adelante) - activos es {valor: boolean}.
+// "Sin filtro" pasa en 2 casos, ambos tratados igual a proposito (ver
+// pedido explicito de la Etapa 1B.1, "interpretar todas activas como sin
+// filtro"): 0 activos (fail-safe, mismo criterio que el resto de los
+// filtros multi-toggle) O TODAS activas (equivalente matematicamente,
+// pero ademas evita que un punto con el campo null/vacio - que no
+// coincide con ningun valor real - quede afuera solo porque "todas las
+// cuencas conocidas" no incluye "sin cuenca").
+function mapaLogic_filtrarPorCampoMultipleNE(puntos, campo, activos) {
+  var claves = Object.keys(activos || {});
+  var activas = claves.filter(function (k) { return activos[k]; });
+  if (activas.length === 0 || activas.length === claves.length) {
+    return puntos;
+  }
+  return puntos.filter(function (p) { return !!activos[p[campo]]; });
+}
+
+// Opciones de un campo dinamico CONDICIONADAS por un universo mas chico
+// (ej. Zona condicionada por la Cuenca activa) - a diferencia de
+// mapaLogic_construirOpcionesCampoNE, esta SIEMPRE lista todos los
+// valores que existen en puntosCompletos (nunca se saca un valor del DOM
+// solo porque el universo actual lo dejo en 0 - pedido explicito: "no
+// eliminarla del DOM, mostrarla deshabilitada"), pero cuenta cada uno
+// SOLO contra puntosUniverso. Un valor con cantidad:0 es candidato a
+// deshabilitarse en la UI - lo decide el controlador, esta funcion solo
+// da el numero real.
+function mapaLogic_construirOpcionesCampoCondicionadoNE(puntosCompletos, puntosUniverso, campo) {
+  var valores = {};
+  (puntosCompletos || []).forEach(function (p) {
+    var v = p && p[campo];
+    if (v) {
+      valores[v] = true;
+    }
+  });
+  var conteoUniverso = {};
+  (puntosUniverso || []).forEach(function (p) {
+    var v = p && p[campo];
+    if (v) {
+      conteoUniverso[v] = (conteoUniverso[v] || 0) + 1;
+    }
+  });
+  var opciones = Object.keys(valores).map(function (v) {
+    return { valor: v, cantidad: conteoUniverso[v] || 0 };
+  });
+  opciones.sort(function (a, b) { return a.valor.localeCompare(b.valor, 'es'); });
+  return opciones;
+}
+
+// Un valor seleccionado (ej. zonaActiva) sigue siendo aplicable despues
+// de recalcular sus opciones condicionadas (ej. tras cambiar Cuenca) -
+// 'todos' siempre es valido (nunca depende del universo). Se usa para
+// decidir si hay que deseleccionar automaticamente (ver Etapa 1B.1,
+// punto C: "no dejar filtros invisibles/imposibles activos").
+function mapaLogic_valorSigueDisponible(opciones, valor) {
+  if (!valor || valor === 'todos') {
+    return true;
+  }
+  var opcion = (opciones || []).filter(function (o) { return o.valor === valor; })[0];
+  return !!(opcion && opcion.cantidad > 0);
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MAPA_DEPARTAMENTOS,
@@ -411,6 +475,9 @@ if (typeof module !== 'undefined' && module.exports) {
     mapaLogic_filtrarPorCampoNE,
     mapaLogic_construirConteoEstadoMonitoreo,
     mapaLogic_filtrarPorEstadoMonitoreo,
-    mapaLogic_filtrarPorFlagNE
+    mapaLogic_filtrarPorFlagNE,
+    mapaLogic_filtrarPorCampoMultipleNE,
+    mapaLogic_construirOpcionesCampoCondicionadoNE,
+    mapaLogic_valorSigueDisponible
   };
 }

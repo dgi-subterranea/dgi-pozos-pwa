@@ -1511,7 +1511,8 @@ table.ne-table tr:last-child td {
   gap: 6px;
 }
 .mapa-depto-chip,
-.mapa-ne-campo-chip {
+.mapa-ne-campo-chip,
+.mapa-cuenca-chip {
   min-height: 34px;
   padding: 6px 14px;
   font-size: 0.8rem;
@@ -1523,14 +1524,29 @@ table.ne-table tr:last-child td {
   box-shadow: none;
 }
 .mapa-depto-chip:hover,
-.mapa-ne-campo-chip:hover {
+.mapa-ne-campo-chip:hover,
+.mapa-cuenca-chip:hover {
   background: var(--color-primary-tint);
 }
 .mapa-depto-chip.active,
-.mapa-ne-campo-chip.active {
+.mapa-ne-campo-chip.active,
+.mapa-cuenca-chip.active {
   background: var(--color-primary);
   color: #fff;
   border-color: var(--color-primary);
+}
+/* Zona sin ningun punto dentro de las cuencas activas (Etapa 1B.1,
+   punto B) - queda visible (nunca se saca del DOM) pero sin poder
+   tocarse: opacidad reducida + cursor "no permitido", nunca el mismo
+   estilo que "active" para que la diferencia sea inequivoca. */
+.mapa-ne-campo-chip.disabled,
+.mapa-ne-campo-chip:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.mapa-ne-campo-chip.disabled:hover,
+.mapa-ne-campo-chip:disabled:hover {
+  background: var(--color-surface);
 }
 
 /* Chips multi-toggle del mapa NE (Estado/Medición 2026/Histórico/Tipo,

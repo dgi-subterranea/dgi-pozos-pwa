@@ -265,6 +265,20 @@
     </div>
 
     <div class="mapa-filtros">
+      <!-- Cuenca (Etapa 1C): point-in-polygon offline contra
+           Cuencas/WGS84/vm_cuencas_provincia.shp, calculado UNA sola vez
+           por scripts/reindex_mapa.py y guardado en pozos.json - nunca se
+           recalcula en el cliente. Multi-seleccion OR (mismo patron que
+           Cuenca en el mapa NE, Etapa 1B.1), combina por AND con el resto
+           de los grupos - ver mapaController_renderPuntos en js/mapa.js.
+           Solo 6 valores posibles, nunca necesita "+N mas". -->
+      <div class="mapa-filtro-grupo">
+        <p class="mapa-filtro-label">Cuenca</p>
+        <div id="mapa-cuenca-chips" class="mapa-chips-wrap">
+          <button type="button" class="mapa-cuenca-chip active" data-valor="todos" aria-pressed="true">Todas</button>
+        </div>
+      </div>
+
       <div class="mapa-filtro-grupo">
         <p class="mapa-filtro-label">Departamento</p>
         <div id="mapa-deptos-chips" class="mapa-chips-wrap">
@@ -306,6 +320,8 @@
           <button type="button" class="mapa-ne-chip" id="mapa-chip-ne" aria-pressed="false">Niveles estáticos</button>
         </div>
       </div>
+
+      <button type="button" id="btn-mapa-limpiar-filtros" class="mapa-expandir-btn">Limpiar filtros</button>
     </div>
     <div id="mapa-contador" class="mapa-contador" hidden></div>
     <div class="mapa-viewport">

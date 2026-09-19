@@ -27,9 +27,13 @@ var MAPA_TILE_PROVIDERS = {
 var MAPA_CAPA_BASE_DEFAULT = 'calle';
 
 // Mismo tono que --color-primary-dark (no un color nuevo) - la
-// diferencia con los pozos del padron es la FORMA del marker (diamante
-// con linea), no el color.
+// diferencia con los pozos del padron es la FORMA del marker, no el
+// color.
 var MAPA_COLOR_NE = '#073e54';
+// Mismo tono que --color-mapa-disponible (el celeste ya usado en
+// Provincia) - el "agua" dentro del icono-gauge de NE (Etapa 1B.2),
+// nunca un color nuevo sin relacion con la paleta existente.
+var MAPA_COLOR_NE_NIVEL = '#4fa3c4';
 
 function mapaShared_cargarScript(src) {
   return new Promise(function (resolve, reject) {
@@ -135,17 +139,35 @@ function mapaShared_cambiarCapaBase(estado, id, capaBaseChipsEls) {
   });
 }
 
-// Icono especifico de monitoreo: un diamante con una linea horizontal
-// (evoca una regla/gauge de nivel), NO otro circulo de otro color -
-// pedido explicito para que se distinga de un vistazo de los pozos del
-// padron. Usado SOLO por el mapa NE independiente (mapaNE.js) - dentro
-// de Pozos Provincia, el filtro "Tiene: Niveles estáticos" muestra
-// pozos reales del padron con su marker normal (circleMarker teal), ver
-// mapaController_crearMarker en mapa.js.
+// Icono "gauge de nivel" (Etapa 1B.2, reemplaza el rombo original): un
+// circulo (punto de monitoreo, nunca un pin - se pidio explicitamente
+// evitar la silueta de pin de Google Maps) con su parte inferior en un
+// celeste mas claro, separada por una linea blanca - el mismo lenguaje
+// visual que un indicador de nivel/bateria, la lectura mas directa de
+// "nivel estatico medido dentro de un pozo" a este tamano. Se probaron
+// 3 alternativas mas (circulo+onda tipo reloj, gota con punto central,
+// capsula tipo pastilla) contra fondos Mapa/Satelite antes de elegir
+// esta - las otras 3 se leian como reloj/pin/pastilla en vez de
+// "nivel". El circulo (relleno solido + borde blanco, SIN el corte de
+// nivel) sigue siendo bien distinto de un circleMarker chico y liso de
+// Pozos Provincia (ver mapaController_crearMarker en mapa.js) - nunca
+// se confunden a simple vista. Sin animacion (no aplica
+// prefers-reduced-motion aca). Usado SOLO por el mapa NE independiente.
+var mapaShared_iconoNEContador = 0;
+
 function mapaShared_iconoNE() {
-  var svg = '<svg width="22" height="22" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">' +
-    '<rect x="5" y="5" width="12" height="12" rx="2.5" transform="rotate(45 11 11)" fill="' + MAPA_COLOR_NE + '" stroke="#ffffff" stroke-width="2"/>' +
-    '<line x1="7" y1="11" x2="15" y2="11" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round"/>' +
+  // id de clipPath UNICO por marker: hay hasta ~405 SVG de estos en el
+  // mismo documento (uno por punto), y un id duplicado en <clipPath> es
+  // HTML invalido - aunque los 405 circulos clipeados sean geometricamente
+  // identicos, no vale la pena depender de que el navegador lo resuelva
+  // "bien" igual.
+  mapaShared_iconoNEContador += 1;
+  var clipId = 'mapaNEClipNivel' + mapaShared_iconoNEContador;
+  var svg = '<svg width="22" height="22" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">' +
+    '<defs><clipPath id="' + clipId + '"><circle cx="12" cy="12" r="8.2"/></clipPath></defs>' +
+    '<circle cx="12" cy="12" r="9" fill="' + MAPA_COLOR_NE + '" stroke="#ffffff" stroke-width="1.6"/>' +
+    '<rect x="3" y="14" width="18" height="8" fill="' + MAPA_COLOR_NE_NIVEL + '" clip-path="url(#' + clipId + ')"/>' +
+    '<line x1="4" y1="14" x2="20" y2="14" stroke="#ffffff" stroke-width="1.3" clip-path="url(#' + clipId + ')"/>' +
     '</svg>';
   return L.divIcon({ className: 'mapa-ne-icono', html: svg, iconSize: [22, 22], iconAnchor: [11, 11] });
 }

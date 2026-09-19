@@ -7,12 +7,28 @@ Uso:
   python scripts/reindex_mapa.py --registro scripts/out/registro --out scripts/out/mapa
 
 Produce, en el directorio --out:
-  pozos.json          - lista de puntos [{wellId, lat, lon, estado}], SOLO
-                  esos 4 campos (nunca titular/distrito/uso/NE/ningun otro
-                  dato registral - ver adjustment #1 de la Etapa 5B/5C: el
-                  dataset general del mapa no debe permitir inferir
-                  membresia a la red NE ni exponer nada que dependa de
-                  "datos", solo de "ubicacion").
+  pozos.json          - lista de puntos [{wellId, lat, lon, estado, cuenca}],
+                  SOLO esos 5 campos (nunca titular/distrito/uso/NE/ningun
+                  otro dato registral - ver adjustment #1 de la Etapa
+                  5B/5C: el dataset general del mapa no debe permitir
+                  inferir membresia a la red NE ni exponer nada que
+                  dependa de "datos", solo de "ubicacion"). cuenca
+                  (Etapa 1C) se calcula UNA sola vez aca, offline, via
+                  point-in-polygon contra Cuencas/WGS84/
+                  vm_cuencas_provincia.shp (ver scripts/cuenca_utils.py) -
+                  nunca se recalcula en el backend/frontend, que solo leen
+                  este campo ya resuelto.
+  cuenca_limite_100m.json - diagnostico (Etapa 1C, "mantener documentados,
+                  nunca reasignar por proximidad"): {criterio, umbralMetros,
+                  cantidad, pozos:[...]} - los pozos clasificados a menos
+                  de 100m de un limite INTERNO entre 2 cuencas (nunca el
+                  borde externo del area de estudio completa, que no es
+                  ambiguedad real) - se genera siempre, incluso si queda
+                  vacio. Vive SOLO en scripts/out/ (gitignored), nunca en
+                  el repo - el conteo/criterio tambien quedan en
+                  metadata.json (cuenca.cercaDelLimite100m/
+                  cercaDelLimiteCriterio) para quien no tenga ese archivo
+                  local a mano.
   pozos_busqueda.json - lista [{wellId, titular}] para los MISMOS pozos de
                   pozos.json (mismo orden, misma cantidad) - indice
                   SEPARADO a proposito (Etapa 1A, arquitectura de
@@ -36,10 +52,11 @@ futura sin una decision explicita nueva):
   "dudosoLeve", "revisar", "revisarGrave" (fuentes en desacuerdo - nunca
     se promedia ni se elige una al azar) y "sinCoordenadas".
 
-No requiere pyproj: lat/lon ya vienen resueltos en ubicacionResuelta (los
-calculo coord_utils.gk_faja2_a_wgs84 ya corrio en reindex_pozos.py) - este
-script solo lee, filtra y reproyecta el JSON, no hace ninguna conversion
-de coordenadas.
+No requiere pyproj para lat/lon: ya vienen resueltos en ubicacionResuelta
+(el calculo coord_utils.gk_faja2_a_wgs84 ya corrio en reindex_pozos.py) -
+este script no convierte coordenadas de pozos. La clasificacion por
+cuenca SI requiere geopandas/shapely/pyproj (ver scripts/cuenca_utils.py
+y coord_utils.py sobre que interprete usarlos).
 """
 import argparse
 import glob
@@ -52,6 +69,21 @@ import time
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+
+from cuenca_utils import (
+    cuenca_utils_cargar_poligonos,
+    cuenca_utils_clasificar,
+    cuenca_utils_distancia_al_limite_m,
+    cuenca_utils_calcular_limite_externo,
+    cuenca_utils_es_limite_interno,
+    cuenca_utils_verificar_shapefile,
+    CRITERIO_CERCA_LIMITE,
+)
+
+CUENCAS_SHP_DEFAULT = 'Cuencas/WGS84/vm_cuencas_provincia.shp'
+# Umbral del reporte "cerca del limite" (Etapa 1C, nunca se reasigna por
+# esto - solo se documenta).
+CUENCA_LIMITE_METROS = 100
 
 ESTADO_A_CODIGO = {
     'corroborada': 'C',
@@ -154,7 +186,60 @@ def _write_json_compacto(path, data):
         json.dump(data, f, ensure_ascii=False, indent=None, separators=(',', ':'))
 
 
-def generar(registro_dir, out_dir, umbral_particion_ignorado=None):
+# Point-in-polygon offline (Etapa 1C) - corre UNA vez aca, nunca en
+# runtime. warnings acumula cualquier caso fuera de lo esperado (0
+# esperado para fuera-de-poligono y ambiguos, segun el diagnostico
+# previo) - nunca se resuelve en silencio ni se infiere por departamento.
+def clasificar_cuencas(puntos, cuencas_shp, warnings):
+    poligonos, reparaciones = cuenca_utils_cargar_poligonos(cuencas_shp)
+    limite_externo = cuenca_utils_calcular_limite_externo(poligonos)
+    poligono_por_nombre = {p['nombre']: p for p in poligonos}
+
+    for r in reparaciones:
+        despreciable = 'despreciable' if r['diferenciaDespreciable'] else 'NO despreciable - revisar'
+        warnings.append(
+            f'Geometria de "{r["cuenca"]}" era invalida en el shapefile fuente (self-intersection) - '
+            f'reparada con shapely.make_valid() SOLO en memoria (el .shp en disco no se toco). '
+            f'Diferencia de area: {r["diferenciaRelativa"] * 100:.6f}% ({despreciable}).'
+        )
+
+    conteo = Counter()
+    fuera = []
+    ambiguos = []
+    cerca_limite = []
+
+    for p in puntos:
+        nombre, ambiguo = cuenca_utils_clasificar(p['lat'], p['lon'], poligonos)
+        p['cuenca'] = nombre
+        if nombre is None:
+            fuera.append(p['wellId'])
+            continue
+        conteo[nombre] += 1
+        if ambiguo:
+            ambiguos.append(p['wellId'])
+
+        distancia_m = cuenca_utils_distancia_al_limite_m(p['lat'], p['lon'], poligono_por_nombre[nombre])
+        if distancia_m < CUENCA_LIMITE_METROS and cuenca_utils_es_limite_interno(p['lat'], p['lon'], distancia_m, limite_externo):
+            cerca_limite.append({'wellId': p['wellId'], 'cuenca': nombre, 'distanciaMetros': round(distancia_m, 1)})
+
+    if fuera:
+        warnings.append(f'{len(fuera)} pozo(s) fuera de las 6 cuencas conocidas (cuenca:null, nunca se infiere por cercania/departamento): {", ".join(fuera[:10])}{"..." if len(fuera) > 10 else ""}')
+    if ambiguos:
+        warnings.append(f'{len(ambiguos)} pozo(s) cayeron dentro de 2 poligonos a la vez (resuelto por prioridad fija, ver ORDEN_PRIORIDAD_IDS): {", ".join(ambiguos[:10])}{"..." if len(ambiguos) > 10 else ""}')
+
+    cerca_limite.sort(key=lambda r: r['distanciaMetros'])
+    return {
+        'conteo': dict(conteo),
+        'fuera': fuera,
+        'ambiguos': ambiguos,
+        'cercaLimite': cerca_limite,
+        'criterioCercaLimite': CRITERIO_CERCA_LIMITE,
+        'umbralCercaLimiteMetros': CUENCA_LIMITE_METROS,
+        'reparacionesGeometricas': reparaciones,
+    }
+
+
+def generar(registro_dir, out_dir, umbral_particion_ignorado=None, cuencas_shp=CUENCAS_SHP_DEFAULT):
     warnings = []
     t0 = time.perf_counter()
 
@@ -172,6 +257,8 @@ def generar(registro_dir, out_dir, umbral_particion_ignorado=None):
     # puntos_busqueda_fuente en el futuro no se filtre por default a este
     # archivo publico.
     puntos = [{'wellId': p['wellId'], 'lat': p['lat'], 'lon': p['lon'], 'estado': p['estado']} for p in puntos_busqueda_fuente]
+
+    diagnostico_cuenca = clasificar_cuencas(puntos, cuencas_shp, warnings)
 
     con_titular = sum(1 for p in puntos_busqueda_fuente if p['titular'])
     sin_titular = len(puntos_busqueda_fuente) - con_titular
@@ -195,6 +282,22 @@ def generar(registro_dir, out_dir, umbral_particion_ignorado=None):
     puntos_busqueda = [{'wellId': p['wellId'], 'nc16': p['nc16'], 'titular': p['titular']} for p in puntos_busqueda_fuente]
     _write_json_compacto(pozos_busqueda_path, puntos_busqueda)
 
+    # Diagnostico Etapa 1C - "mantener documentados, nunca reasignar por
+    # proximidad": se escribe SIEMPRE (aunque quede vacio), nunca solo se
+    # imprime por consola (eso se pierde en la proxima corrida). Vive
+    # SOLO en scripts/out/ (gitignored) - nunca en el repo, mismo criterio
+    # que el resto de scripts/out/. Con criterio/umbral en el propio
+    # archivo para que sea autocontenido si alguien lo abre sin el
+    # contexto de metadata.json.
+    cuenca_limite_path = out_dir / 'cuenca_limite_100m.json'
+    with open(cuenca_limite_path, 'w', encoding='utf-8') as f:
+        json.dump({
+            'criterio': CRITERIO_CERCA_LIMITE,
+            'umbralMetros': CUENCA_LIMITE_METROS,
+            'cantidad': len(diagnostico_cuenca['cercaLimite']),
+            'pozos': diagnostico_cuenca['cercaLimite'],
+        }, f, ensure_ascii=False, indent=2)
+
     tiempo_generacion_s = time.perf_counter() - t0
 
     metadata = {
@@ -207,6 +310,15 @@ def generar(registro_dir, out_dir, umbral_particion_ignorado=None):
         'distribucion': {
             'confirmada': distribucion.get('C', 0),
             'disponible': distribucion.get('D', 0),
+        },
+        'cuenca': {
+            'conteo': diagnostico_cuenca['conteo'],
+            'fueraDePoligonos': len(diagnostico_cuenca['fuera']),
+            'ambiguos': len(diagnostico_cuenca['ambiguos']),
+            'cercaDelLimite100m': len(diagnostico_cuenca['cercaLimite']),
+            'cercaDelLimiteCriterio': diagnostico_cuenca['criterioCercaLimite'],
+            'cercaDelLimiteUmbralMetros': diagnostico_cuenca['umbralCercaLimiteMetros'],
+            'reparacionesGeometricas': diagnostico_cuenca['reparacionesGeometricas'],
         },
         'excluidos': dict(excluidos),
         'busqueda': {
@@ -229,6 +341,8 @@ def generar(registro_dir, out_dir, umbral_particion_ignorado=None):
         'pozosPath': str(pozos_path),
         'pozosBusquedaPath': str(pozos_busqueda_path),
         'metadataPath': str(metadata_path),
+        'cuencaLimitePath': str(cuenca_limite_path),
+        'diagnosticoCuenca': diagnostico_cuenca,
         'tiempoGeneracionSegundos': tiempo_generacion_s,
     }
 
@@ -248,13 +362,27 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--registro', default='scripts/out/registro', help='directorio con la salida de reindex_pozos.py (default: scripts/out/registro)')
     parser.add_argument('--out', default='scripts/out/mapa', help='directorio de salida (default: scripts/out/mapa)')
+    parser.add_argument('--cuencas-shp', default=CUENCAS_SHP_DEFAULT, help=f'shapefile de cuencas, WGS84 (default: {CUENCAS_SHP_DEFAULT})')
     args = parser.parse_args(argv)
 
     if not os.path.isdir(args.registro):
         print(f'ERROR: no existe el directorio {args.registro} - corre reindex_pozos.py primero', file=sys.stderr)
         return 1
 
-    resultado = generar(args.registro, args.out)
+    # La capa de cuencas no se versiona en el repo (Etapa 1C, decision
+    # explicita: se mantiene fuera hasta decidir como versionar/publicar
+    # fuentes GIS) - falla rapido y claro ANTES de tocar registro/, sin
+    # ningun fallback (nunca por departamento, nunca cuenca:null para
+    # todo el dataset en silencio). cuenca_utils_verificar_shapefile es
+    # la misma verificacion que corre generar() mas abajo - se llama
+    # tambien aca para un mensaje de error limpio en vez de un traceback.
+    try:
+        cuenca_utils_verificar_shapefile(args.cuencas_shp)
+    except FileNotFoundError as e:
+        print(f'ERROR: {e}', file=sys.stderr)
+        return 1
+
+    resultado = generar(args.registro, args.out, cuencas_shp=args.cuencas_shp)
 
     raw_bytes, gzip_bytes = medir_gzip(resultado['pozosPath'])
     raw_bytes_busqueda, gzip_bytes_busqueda = medir_gzip(resultado['pozosBusquedaPath'])
@@ -271,6 +399,17 @@ def main(argv=None):
     print(f'Excluidos: {resultado["metadata"]["excluidos"]}')
     print(f'Busqueda - con titular: {resultado["metadata"]["busqueda"]["conTitular"]}, sin titular: {resultado["metadata"]["busqueda"]["sinTitular"]}')
     print(f'Busqueda - con NC16 valida: {resultado["metadata"]["busqueda"]["conNc16"]}, sin NC16: {resultado["metadata"]["busqueda"]["sinNc16"]}')
+    print()
+    print('Cuenca (Etapa 1C):')
+    for nombre, cantidad in sorted(resultado['metadata']['cuenca']['conteo'].items(), key=lambda kv: -kv[1]):
+        print(f'  {nombre}: {cantidad}')
+    print(f'  fuera de poligonos: {resultado["metadata"]["cuenca"]["fueraDePoligonos"]}')
+    print(f'  ambiguos (2+ poligonos): {resultado["metadata"]["cuenca"]["ambiguos"]}')
+    print(f'  cerca del limite interno (<100m): {resultado["metadata"]["cuenca"]["cercaDelLimite100m"]} -> {resultado["cuencaLimitePath"]}')
+    if resultado['metadata']['cuenca']['reparacionesGeometricas']:
+        print('  Geometrias reparadas (make_valid, solo en memoria):')
+        for r in resultado['metadata']['cuenca']['reparacionesGeometricas']:
+            print(f'    - {r["cuenca"]}: diferencia de area {r["diferenciaRelativa"] * 100:.6f}% ({"despreciable" if r["diferenciaDespreciable"] else "NO despreciable"})')
     print()
     print(f'Tamano pozos.json: {raw_bytes} bytes ({formatear_kb(raw_bytes)})')
     print(f'Tamano gzip (nivel 9): {gzip_bytes} bytes ({formatear_kb(gzip_bytes)}) - {gzip_bytes / raw_bytes * 100:.1f}% del original')

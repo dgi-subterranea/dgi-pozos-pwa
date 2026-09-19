@@ -59,10 +59,10 @@
     marcadorBusquedaTemporal: null, // marker de "Mostrarlo igual" para un resultado de busqueda que los filtros activos esconden - se saca en cuanto cambia cualquier filtro o se abre una busqueda nueva
     busquedaActiva: false,
     filtrosActivo: false,     // true = el panel de filtros esta desplegado
-    opcionesCuenca: [],       // ultimo resultado de mapaLogic_construirOpcionesCampoNE sobre 'cuenca'
-    opcionesZona: [],         // idem sobre 'zonaNormalizada'
-    cuencaActiva: 'todos',    // seleccion UNICA (mismo patron que Departamento en Provincia)
-    zonaActiva: 'todos',
+    opcionesCuenca: [],       // ultimo resultado de mapaLogic_construirOpcionesCampoNE sobre 'cuenca' (conteo GLOBAL, nunca condicionado)
+    opcionesZona: [],         // mapaLogic_construirOpcionesCampoCondicionadoNE sobre 'zonaNormalizada' - conteo condicionado por cuencaActivos (Etapa 1B.1)
+    cuencaActivos: {},        // multi-seleccion OR (Etapa 1B.1) - {valor: boolean}, se puebla en poblarOpcionesFiltros
+    zonaActiva: 'todos',      // sigue seleccion UNICA (mismo patron que Departamento en Provincia)
     zonaExpandida: false,     // true = "+N mas" de Zona ya tocado
     estadoActivos: { ACTIVO: true, INACTIVO: true, SIN_DATO: true }, // multi-toggle - los 3 activos por default = sin filtro
     medicionActivos: { CON: true, SIN: true },
@@ -129,7 +129,7 @@
         mapaLogic_filtrarPorFlagNE(
           mapaLogic_filtrarPorEstadoMonitoreo(
             mapaLogic_filtrarPorCampoNE(
-              mapaLogic_filtrarPorCampoNE(mapaNEEstado.puntos, 'cuenca', mapaNEEstado.cuencaActiva),
+              mapaLogic_filtrarPorCampoMultipleNE(mapaNEEstado.puntos, 'cuenca', mapaNEEstado.cuencaActivos),
               'zonaNormalizada', mapaNEEstado.zonaActiva
             ),
             mapaNEEstado.estadoActivos
@@ -144,22 +144,55 @@
     mapaNEController_renderPuntosFiltrados(filtrados, contexto);
   }
 
-  function mapaNEController_construirChipCampo(campo, valor, etiqueta, activo) {
+  function mapaNEController_construirChipCampo(campo, valor, etiqueta, activo, deshabilitado) {
     var chip = document.createElement('button');
     chip.type = 'button';
-    chip.className = 'mapa-ne-campo-chip' + (activo ? ' active' : '');
+    chip.className = 'mapa-ne-campo-chip' + (activo ? ' active' : '') + (deshabilitado ? ' disabled' : '');
     chip.setAttribute('data-campo', campo);
     chip.setAttribute('data-valor', valor);
     chip.setAttribute('aria-pressed', activo ? 'true' : 'false');
+    // disabled nativo (no solo la clase): bloquea el click en el
+    // navegador sin que el listener tenga que acordarse de chequearlo -
+    // una Zona sin ningun punto en el universo de Cuenca activo queda
+    // visible (nunca se saca del DOM) pero no se puede tocar.
+    if (deshabilitado) {
+      chip.disabled = true;
+      chip.setAttribute('aria-disabled', 'true');
+    }
     chip.textContent = etiqueta;
     return chip;
   }
 
+  // Puntos dentro de alguna de las cuencas activas (mismo filtro que
+  // aplicarFiltros usa para cuenca) - es el "universo" contra el que se
+  // condicionan las opciones de Zona (Etapa 1B.1, punto B).
+  function mapaNEController_puntosUniversoCuenca() {
+    return mapaLogic_filtrarPorCampoMultipleNE(mapaNEEstado.puntos, 'cuenca', mapaNEEstado.cuencaActivos);
+  }
+
+  // Recalcula las opciones de Zona contra el universo de Cuenca activo y
+  // deselecciona automaticamente la Zona activa si dejo de tener ningun
+  // punto compatible (Etapa 1B.1, punto C - "no dejar filtros invisibles/
+  // imposibles activos"). Se llama cada vez que cambia la seleccion de
+  // Cuenca, nunca al reves.
+  function mapaNEController_recalcularOpcionesZona() {
+    var universo = mapaNEController_puntosUniversoCuenca();
+    mapaNEEstado.opcionesZona = mapaLogic_construirOpcionesCampoCondicionadoNE(mapaNEEstado.puntos, universo, 'zonaNormalizada');
+    if (!mapaLogic_valorSigueDisponible(mapaNEEstado.opcionesZona, mapaNEEstado.zonaActiva)) {
+      mapaNEEstado.zonaActiva = 'todos';
+    }
+  }
+
+  // "Todas" (data-valor 'todos') es un ATAJO que reactiva las 6 cuencas,
+  // nunca un valor de estado propio - su apariencia "active" se DERIVA
+  // de si las 6 estan activas, no se guarda por separado (evita 2
+  // fuentes de verdad para lo mismo).
   function mapaNEController_renderChipsCuenca() {
+    var todasActivas = mapaNEEstado.opcionesCuenca.every(function (o) { return !!mapaNEEstado.cuencaActivos[o.valor]; });
     cuencaChipsEl.innerHTML = '';
-    cuencaChipsEl.appendChild(mapaNEController_construirChipCampo('cuenca', 'todos', 'Todos', mapaNEEstado.cuencaActiva === 'todos'));
+    cuencaChipsEl.appendChild(mapaNEController_construirChipCampo('cuenca', 'todos', 'Todas', todasActivas));
     mapaNEEstado.opcionesCuenca.forEach(function (o) {
-      cuencaChipsEl.appendChild(mapaNEController_construirChipCampo('cuenca', o.valor, o.valor + ' (' + o.cantidad + ')', mapaNEEstado.cuencaActiva === o.valor));
+      cuencaChipsEl.appendChild(mapaNEController_construirChipCampo('cuenca', o.valor, o.valor + ' (' + o.cantidad + ')', !!mapaNEEstado.cuencaActivos[o.valor]));
     });
   }
 
@@ -169,16 +202,18 @@
 
   // "+N mas" - reusa mapaLogic_dividirChipsDepartamento (generica, no
   // depende del nombre del campo) para no duplicar esa logica de
-  // paginado de chips.
+  // paginado de chips. Las opciones ya vienen condicionadas por Cuenca
+  // (ver mapaNEController_recalcularOpcionesZona) - una opcion con
+  // cantidad:0 se pinta deshabilitada, nunca se saca de la lista.
   function mapaNEController_renderChipsZona() {
     var division = mapaLogic_dividirChipsDepartamento(mapaNEEstado.opcionesZona, mapaNEController_cantidadChipsZonaIniciales());
     var hayMasQueMostrar = division.ocultos.length > 0;
     var visibles = (mapaNEEstado.zonaExpandida || !hayMasQueMostrar) ? mapaNEEstado.opcionesZona : division.visibles;
 
     zonaChipsEl.innerHTML = '';
-    zonaChipsEl.appendChild(mapaNEController_construirChipCampo('zona', 'todos', 'Todos', mapaNEEstado.zonaActiva === 'todos'));
+    zonaChipsEl.appendChild(mapaNEController_construirChipCampo('zona', 'todos', 'Todos', mapaNEEstado.zonaActiva === 'todos', false));
     visibles.forEach(function (o) {
-      zonaChipsEl.appendChild(mapaNEController_construirChipCampo('zona', o.valor, o.valor + ' (' + o.cantidad + ')', mapaNEEstado.zonaActiva === o.valor));
+      zonaChipsEl.appendChild(mapaNEController_construirChipCampo('zona', o.valor, o.valor + ' (' + o.cantidad + ')', mapaNEEstado.zonaActiva === o.valor, o.cantidad === 0));
     });
 
     if (hayMasQueMostrar) {
@@ -223,7 +258,9 @@
   // Provincia.
   function mapaNEController_poblarOpcionesFiltros() {
     mapaNEEstado.opcionesCuenca = mapaLogic_construirOpcionesCampoNE(mapaNEEstado.puntos, 'cuenca');
-    mapaNEEstado.opcionesZona = mapaLogic_construirOpcionesCampoNE(mapaNEEstado.puntos, 'zonaNormalizada');
+    mapaNEEstado.cuencaActivos = {};
+    mapaNEEstado.opcionesCuenca.forEach(function (o) { mapaNEEstado.cuencaActivos[o.valor] = true; });
+    mapaNEController_recalcularOpcionesZona();
     mapaNEController_renderChipsCuenca();
     mapaNEController_renderChipsZona();
     mapaNEController_actualizarEtiquetasToggle();
@@ -253,13 +290,14 @@
   // que al abrir el mapa) y re-renderiza - nunca cierra el panel solo,
   // el usuario puede seguir ajustando filtros despues de limpiar.
   function mapaNEController_limpiarFiltros() {
-    mapaNEEstado.cuencaActiva = 'todos';
+    mapaNEEstado.opcionesCuenca.forEach(function (o) { mapaNEEstado.cuencaActivos[o.valor] = true; });
     mapaNEEstado.zonaActiva = 'todos';
     mapaNEEstado.estadoActivos = { ACTIVO: true, INACTIVO: true, SIN_DATO: true };
     mapaNEEstado.medicionActivos = { CON: true, SIN: true };
     mapaNEEstado.historicoActivos = { CON: true, SIN: true };
     mapaNEEstado.tipoActivos = { REGISTRADO: true, ESPECIAL: true };
 
+    mapaNEController_recalcularOpcionesZona();
     mapaNEController_renderChipsCuenca();
     mapaNEController_renderChipsZona();
     toggleChipsEls.forEach(function (chip) {
@@ -504,7 +542,6 @@
         // criterio que busqueda/temporal - no hace falta persistirlos
         // entre aperturas, pedido explicito de la Etapa 1B).
         mapaNEEstado.puntos = result.data.puntos;
-        mapaNEEstado.cuencaActiva = 'todos';
         mapaNEEstado.zonaActiva = 'todos';
         mapaNEEstado.zonaExpandida = false;
         mapaNEEstado.estadoActivos = { ACTIVO: true, INACTIVO: true, SIN_DATO: true };
@@ -558,23 +595,41 @@
   // recrean enteros en cada renderChipsCuenca/renderChipsZona, un
   // listener por boton se perderia/duplicaria en cada repintado (mismo
   // criterio que deptosChipsEl en Provincia).
+  //
+  // Cuenca es multi-seleccion OR (Etapa 1B.1) - "Todas" (data-valor
+  // 'todos') reactiva las 6, nunca las apaga (no hay "estado apagado"
+  // para ese chip). Un valor especifico se togglea, con el mismo
+  // fail-safe "nunca apagar el ultimo activo" que Estado/Medicion/
+  // Historico/Tipo. Cualquier cambio de Cuenca recalcula las opciones de
+  // Zona (dependen de que cuencas estan activas, ver punto B) y puede
+  // deseleccionar la Zona activa si dejo de ser valida (punto C).
   cuencaChipsEl.addEventListener('click', function (e) {
     var chip = e.target.closest ? e.target.closest('.mapa-ne-campo-chip') : null;
-    if (!chip || !mapaNEEstado.contextoActual || !mapaNEEstado.puntos) {
+    if (!chip || chip.disabled || !mapaNEEstado.contextoActual || !mapaNEEstado.puntos) {
       return;
     }
-    var nuevoValor = chip.getAttribute('data-valor');
-    if (nuevoValor === mapaNEEstado.cuencaActiva) {
-      return;
+    var valor = chip.getAttribute('data-valor');
+
+    if (valor === 'todos') {
+      mapaNEEstado.opcionesCuenca.forEach(function (o) { mapaNEEstado.cuencaActivos[o.valor] = true; });
+    } else {
+      var estaActiva = mapaNEEstado.cuencaActivos[valor];
+      var cantidadActivas = mapaNEEstado.opcionesCuenca.filter(function (o) { return mapaNEEstado.cuencaActivos[o.valor]; }).length;
+      if (estaActiva && cantidadActivas === 1) {
+        return;
+      }
+      mapaNEEstado.cuencaActivos[valor] = !estaActiva;
     }
-    mapaNEEstado.cuencaActiva = nuevoValor;
+
+    mapaNEController_recalcularOpcionesZona();
     mapaNEController_renderChipsCuenca();
+    mapaNEController_renderChipsZona();
     mapaNEController_aplicarFiltros(mapaNEEstado.contextoActual);
   });
 
   zonaChipsEl.addEventListener('click', function (e) {
     var chip = e.target.closest ? e.target.closest('.mapa-ne-campo-chip') : null;
-    if (!chip || !mapaNEEstado.contextoActual || !mapaNEEstado.puntos) {
+    if (!chip || chip.disabled || !mapaNEEstado.contextoActual || !mapaNEEstado.puntos) {
       return;
     }
     var nuevoValor = chip.getAttribute('data-valor');
