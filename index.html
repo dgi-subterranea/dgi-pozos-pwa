@@ -244,6 +244,12 @@
     <div class="mapa-capas-base" role="group" aria-label="Tipo de mapa">
       <button type="button" class="mapa-capa-chip active" data-capa="calle" aria-pressed="true">Mapa</button>
       <button type="button" class="mapa-capa-chip" data-capa="satelite" aria-pressed="false">Satélite</button>
+      <!-- Filtros: mismo boton/panel colapsable que el mapa NE (unificacion
+           de UX entre los 2 mapas) - oculto por default en cualquier
+           ancho, nunca ocupa espacio en reposo. -->
+      <button type="button" id="btn-mapa-filtros-toggle" class="mapa-buscar-toggle" aria-pressed="false" aria-label="Filtros" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 6h16M7 12h10M10 18h4" stroke-linecap="round"/></svg>
+      </button>
       <!-- Buscador en el mapa (Etapa 1A): lupa que despliega un panel
            compacto (no una barra fija - pedido explicito de no robarle
            espacio al mapa en reposo). El panel decide solo, al abrirse,
@@ -264,14 +270,21 @@
       <div id="mapa-buscar-resultados" class="mapa-buscar-resultados"></div>
     </div>
 
-    <div class="mapa-filtros">
+    <!-- Filtros (unificacion de UX con el mapa NE): panel colapsado por
+         default, se abre/cierra con btn-mapa-filtros-toggle (ver
+         mapaController_toggleFiltrosPanel en js/mapa.js). Todo grupo
+         multi-seleccion arranca con SOLO "Todos"/"Todas" activo - los
+         valores individuales se pintan sin la clase "active" (el estado
+         real vive en JS, mapaEstado.*Activos empieza vacio {} en cada
+         apertura, ver mapaController_poblarChips* y
+         mapaLogic_toggleFiltroMultiple). -->
+    <div class="mapa-filtros" id="mapa-filtros-panel" hidden>
       <!-- Cuenca (Etapa 1C): point-in-polygon offline contra
            Cuencas/WGS84/vm_cuencas_provincia.shp, calculado UNA sola vez
            por scripts/reindex_mapa.py y guardado en pozos.json - nunca se
-           recalcula en el cliente. Multi-seleccion OR (mismo patron que
-           Cuenca en el mapa NE, Etapa 1B.1), combina por AND con el resto
-           de los grupos - ver mapaController_renderPuntos en js/mapa.js.
-           Solo 6 valores posibles, nunca necesita "+N mas". -->
+           recalcula en el cliente. Multi-seleccion OR, combina por AND
+           con el resto de los grupos - ver mapaController_renderPuntos en
+           js/mapa.js. Solo 6 valores posibles, nunca necesita "+N mas". -->
       <div class="mapa-filtro-grupo">
         <p class="mapa-filtro-label">Cuenca</p>
         <div id="mapa-cuenca-chips" class="mapa-chips-wrap">
@@ -289,14 +302,17 @@
 
       <!-- Ubicacion: chips que son filtro real por estado C/D del dataset
            (nunca por membresia a la red NE - ver adjustment #1 de la
-           Etapa 5B/5C, sigue vigente). Arrancan ambos activos; el click
-           que apagaria el ultimo activo se ignora (ver mapa.js) - nunca
-           quedan los 2 apagados a la vez. -->
+           Etapa 5B/5C, sigue vigente). "Todos" activo por default, C/D
+           se suman como cualquier otro grupo multi-seleccion (ver
+           mapaLogic_toggleFiltroMultiple) - en la practica, activar los
+           2 individuales da el mismo resultado que "Todos", es solo el
+           estado visual el que difiere. -->
       <div class="mapa-filtro-grupo">
         <p class="mapa-filtro-label">Ubicación</p>
-        <div class="mapa-chips-wrap">
-          <button type="button" class="mapa-estado-chip mapa-estado-chip-confirmada active" data-estado="C" aria-pressed="true">Confirmada</button>
-          <button type="button" class="mapa-estado-chip mapa-estado-chip-disponible active" data-estado="D" aria-pressed="true">Disponible</button>
+        <div id="mapa-estado-chips" class="mapa-chips-wrap">
+          <button type="button" class="mapa-estado-chip active" data-estado="todos" aria-pressed="true">Todos</button>
+          <button type="button" class="mapa-estado-chip mapa-estado-chip-confirmada" data-estado="C" aria-pressed="false">Confirmada</button>
+          <button type="button" class="mapa-estado-chip mapa-estado-chip-disponible" data-estado="D" aria-pressed="false">Disponible</button>
         </div>
       </div>
 
@@ -307,7 +323,9 @@
            exclusivamente por ne=SI - el grupo entero empieza hidden y
            mapaController_abrir lo desoculta solo si el usuario tiene el
            permiso (ver mapaLogic_debeMostrarChipNE en js/mapaLogic.js).
-           Se combina con AND junto a Departamento/Ubicacion (ver
+           Un solo booleano ON/OFF, no un grupo de valores - NO aplica el
+           patron "Todos" (no hay nada que "Todos" agregue sobre un
+           toggle de 2 estados). Se combina con AND junto al resto (ver
            mapaController_renderPuntos en js/mapa.js), y nunca dispara el
            fetch de getMapaNE hasta que el usuario lo activa (carga
            diferida real, cache COMPARTIDA con el mapa Niveles Estaticos
@@ -319,6 +337,31 @@
         <div class="mapa-chips-wrap">
           <button type="button" class="mapa-ne-chip" id="mapa-chip-ne" aria-pressed="false">Niveles estáticos</button>
         </div>
+      </div>
+
+      <!-- Profundidad DEL POZO (tecnicas.profundidadTotal del padron, ver
+           scripts/reindex_mapa.py) - Desde/Hasta, AND con el resto,
+           ambos vacios = sin filtro. Un pozo sin profundidad queda
+           excluido si CUALQUIER extremo esta activo (ver
+           mapaLogic_filtrarPorRangoProfundidad). Etiqueta explicita "del
+           pozo" (nunca solo "Profundidad") a pedido explicito - en el
+           mapa NE existe otro numero con el que se podria confundir
+           (nivel estatico, la profundidad del AGUA dentro del pozo, no
+           la profundidad de la perforacion en si). -->
+      <div class="mapa-filtro-grupo">
+        <p class="mapa-filtro-label">Profundidad del pozo</p>
+        <div class="mapa-profundidad-rango">
+          <label class="mapa-profundidad-campo">
+            Desde
+            <input type="number" id="mapa-profundidad-desde" class="mapa-profundidad-input" min="0" step="any" inputmode="decimal" placeholder="m">
+          </label>
+          <label class="mapa-profundidad-campo">
+            Hasta
+            <input type="number" id="mapa-profundidad-hasta" class="mapa-profundidad-input" min="0" step="any" inputmode="decimal" placeholder="m">
+          </label>
+          <button type="button" id="btn-mapa-profundidad-limpiar" class="mapa-expandir-btn">Limpiar</button>
+        </div>
+        <p id="mapa-profundidad-error" class="mapa-profundidad-error" hidden></p>
       </div>
 
       <button type="button" id="btn-mapa-limpiar-filtros" class="mapa-expandir-btn">Limpiar filtros</button>
@@ -393,10 +436,12 @@
     <!-- Filtros NE (Etapa 1B) - se combinan con AND entre grupos (ver
          mapaNEController_aplicarFiltros en js/mapaNE.js). Cuenca/Zona:
          seleccion UNICA con "Todos" (mismo patron que Departamento en
-         Provincia, chips dinamicos segun los datos reales). Estado/
-         Medición 2026/Histórico/Tipo: multi-toggle, ambos activos por
-         default = sin filtro (mismo patron que Confirmada/Disponible en
-         Provincia) - nunca quedan los 2/3 apagados a la vez. -->
+         Provincia, chips dinamicos segun los datos reales, multi-
+         seleccion). Estado/Medición 2026/Histórico/Tipo: mismo patron
+         "Todos" + individuales multi-seleccion (unificacion de UX) -
+         "Todos" activo por default, nunca los 2-3 valores individuales
+         activos a la vez con "Todos" tambien activo (ver
+         mapaLogic_toggleFiltroMultiple en js/mapaLogic.js). -->
     <div class="mapa-filtros" id="mapa-ne-filtros-panel" hidden>
       <div class="mapa-filtro-grupo">
         <p class="mapa-filtro-label">Cuenca</p>
@@ -415,35 +460,64 @@
 
       <div class="mapa-filtro-grupo">
         <p class="mapa-filtro-label">Estado</p>
-        <div class="mapa-chips-wrap">
-          <button type="button" class="mapa-ne-toggle-chip active" data-grupo="estado" data-valor="ACTIVO" aria-pressed="true">Activo</button>
-          <button type="button" class="mapa-ne-toggle-chip active" data-grupo="estado" data-valor="INACTIVO" aria-pressed="true">Inactivo</button>
-          <button type="button" class="mapa-ne-toggle-chip active" data-grupo="estado" data-valor="SIN_DATO" aria-pressed="true">Sin dato</button>
+        <div id="mapa-ne-estado-chips" class="mapa-chips-wrap">
+          <button type="button" class="mapa-ne-toggle-chip active" data-grupo="estado" data-valor="todos" aria-pressed="true">Todos</button>
+          <button type="button" class="mapa-ne-toggle-chip" data-grupo="estado" data-valor="ACTIVO" aria-pressed="false">Activo</button>
+          <button type="button" class="mapa-ne-toggle-chip" data-grupo="estado" data-valor="INACTIVO" aria-pressed="false">Inactivo</button>
+          <button type="button" class="mapa-ne-toggle-chip" data-grupo="estado" data-valor="SIN_DATO" aria-pressed="false">Sin dato</button>
         </div>
       </div>
 
       <div class="mapa-filtro-grupo">
         <p class="mapa-filtro-label">Medición 2026</p>
-        <div class="mapa-chips-wrap">
-          <button type="button" class="mapa-ne-toggle-chip active" data-grupo="medicion" data-valor="CON" aria-pressed="true">Con medición</button>
-          <button type="button" class="mapa-ne-toggle-chip active" data-grupo="medicion" data-valor="SIN" aria-pressed="true">Sin medición</button>
+        <div id="mapa-ne-medicion-chips" class="mapa-chips-wrap">
+          <button type="button" class="mapa-ne-toggle-chip active" data-grupo="medicion" data-valor="todos" aria-pressed="true">Todos</button>
+          <button type="button" class="mapa-ne-toggle-chip" data-grupo="medicion" data-valor="CON" aria-pressed="false">Con medición</button>
+          <button type="button" class="mapa-ne-toggle-chip" data-grupo="medicion" data-valor="SIN" aria-pressed="false">Sin medición</button>
         </div>
       </div>
 
       <div class="mapa-filtro-grupo">
         <p class="mapa-filtro-label">Histórico</p>
-        <div class="mapa-chips-wrap">
-          <button type="button" class="mapa-ne-toggle-chip active" data-grupo="historico" data-valor="CON" aria-pressed="true">Con histórico</button>
-          <button type="button" class="mapa-ne-toggle-chip active" data-grupo="historico" data-valor="SIN" aria-pressed="true">Sin histórico</button>
+        <div id="mapa-ne-historico-chips" class="mapa-chips-wrap">
+          <button type="button" class="mapa-ne-toggle-chip active" data-grupo="historico" data-valor="todos" aria-pressed="true">Todos</button>
+          <button type="button" class="mapa-ne-toggle-chip" data-grupo="historico" data-valor="CON" aria-pressed="false">Con histórico</button>
+          <button type="button" class="mapa-ne-toggle-chip" data-grupo="historico" data-valor="SIN" aria-pressed="false">Sin histórico</button>
         </div>
       </div>
 
       <div class="mapa-filtro-grupo">
         <p class="mapa-filtro-label">Tipo</p>
-        <div class="mapa-chips-wrap">
-          <button type="button" class="mapa-ne-toggle-chip active" data-grupo="tipo" data-valor="REGISTRADO" aria-pressed="true">Pozo registrado</button>
-          <button type="button" class="mapa-ne-toggle-chip active" data-grupo="tipo" data-valor="ESPECIAL" aria-pressed="true">Punto especial</button>
+        <div id="mapa-ne-tipo-chips" class="mapa-chips-wrap">
+          <button type="button" class="mapa-ne-toggle-chip active" data-grupo="tipo" data-valor="todos" aria-pressed="true">Todos</button>
+          <button type="button" class="mapa-ne-toggle-chip" data-grupo="tipo" data-valor="REGISTRADO" aria-pressed="false">Pozo registrado</button>
+          <button type="button" class="mapa-ne-toggle-chip" data-grupo="tipo" data-valor="ESPECIAL" aria-pressed="false">Punto especial</button>
         </div>
+      </div>
+
+      <!-- Profundidad DEL POZO: NE no tiene campo propio, se cruza por
+           wellId contra el padron (ver reindex_niveles_estaticos.py) -
+           un punto especial (sin wellId) nunca puede tener profundidad,
+           queda excluido SOLO si el filtro esta activo, igual que
+           cualquier otro pozo sin el dato (visible normalmente si el
+           filtro esta vacio). Etiqueta explicita "del pozo" (nunca solo
+           "Profundidad") a pedido explicito - en este mapa existe
+           Nivel Estatico (profundidad del AGUA, ver popup/mapaShared.js),
+           un numero distinto con el que se podria confundir. -->
+      <div class="mapa-filtro-grupo">
+        <p class="mapa-filtro-label">Profundidad del pozo</p>
+        <div class="mapa-profundidad-rango">
+          <label class="mapa-profundidad-campo">
+            Desde
+            <input type="number" id="mapa-ne-profundidad-desde" class="mapa-profundidad-input" min="0" step="any" inputmode="decimal" placeholder="m">
+          </label>
+          <label class="mapa-profundidad-campo">
+            Hasta
+            <input type="number" id="mapa-ne-profundidad-hasta" class="mapa-profundidad-input" min="0" step="any" inputmode="decimal" placeholder="m">
+          </label>
+          <button type="button" id="btn-mapa-ne-profundidad-limpiar" class="mapa-expandir-btn">Limpiar</button>
+        </div>
+        <p id="mapa-ne-profundidad-error" class="mapa-profundidad-error" hidden></p>
       </div>
 
       <button type="button" id="btn-mapa-ne-limpiar-filtros" class="mapa-expandir-btn">Limpiar filtros</button>

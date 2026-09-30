@@ -48,10 +48,15 @@
     capaBaseActual: MAPA_CAPA_BASE_DEFAULT,
     puntosCrudos: null,      // ultimo dataset recibido de getMapaPozos (para filtrar sin refetch)
     opcionesDepartamento: [],// ultimo resultado de mapaLogic_construirOpcionesDepartamento (cache: expandir/contraer "+N mas" no recalcula nada)
-    departamentoActual: 'todos',
-    opcionesCuenca: [],      // mapaLogic_construirOpcionesCampoNE sobre 'cuenca' (Etapa 1C - reusa la funcion generica ya usada para Cuenca/Zona en el mapa NE, Etapa 1B.1, nunca la duplica)
-    cuencaActivos: {},       // multi-seleccion OR (mismo patron que Cuenca en NE) - PERSISTE entre aperturas normales, igual que departamentoActual/estadosActivos (solo se resetea con enfoque:{tipo:'pozo'}, ver mapaController_abrir)
-    estadosActivos: { C: true, D: true }, // chips Ubicacion (Confirmada/Disponible) - arrancan ambos activos (sin filtrar)
+    // Unificacion UX (con el mapa NE): TODO grupo multi-seleccion usa el
+    // mismo modelo - mapa disperso {valor: true}, vacio == "Todos" (ver
+    // mapaLogic_toggleFiltroMultiple en js/mapaLogic.js). PERSISTEN entre
+    // aperturas normales (solo se resetean con enfoque:{tipo:'pozo'}, ver
+    // mapaController_abrir).
+    departamentoActivos: {},
+    opcionesCuenca: [],      // mapaLogic_construirOpcionesCampoNE sobre 'cuenca' (reusa la funcion generica ya usada para Cuenca/Zona en el mapa NE, nunca la duplica)
+    cuencaActivos: {},
+    estadosActivos: {},      // chips Ubicacion (Confirmada/Disponible)
     deptosExpandido: false,  // true = "+N mas" ya tocado, se ven todos los chips de departamento
     markersPorWellId: {},    // se reconstruye en cada renderPuntos() - permite ubicar el marker de un wellId puntual para enfoque:{tipo:'pozo'}
     miUbicacionMarker: null, // marcador "Tu ubicacion" (enfoque:{tipo:'ubicacion'}) - se saca en cada apertura que no lo pida, para no dejar uno viejo colgado
@@ -59,6 +64,9 @@
     neActivo: false,         // estado del filtro "Tiene: Niveles estáticos" (v2.2.0: filtro sobre el padron, NO una capa aparte - ver mapaController_renderPuntos, que lo combina con AND junto a departamento/estado)
     indiceBusqueda: null,    // mapa wellId->{nc16,titular} (mapaLogic_indiceBusquedaPorWellId sobre getIndiceBusquedaProvincia) - se arma UNA sola vez, la PRIMERA vez que el usuario escribe algo en el buscador (Etapa 1A, carga diferida real, nunca al abrir el mapa). NC16 y titular viajan juntos, gateados por "datos" - ver decision de arquitectura en MapaService.js
     busquedaActiva: false,   // true = el panel del buscador esta desplegado
+    filtrosActivo: false,    // true = el panel de filtros esta desplegado (unificacion UX con el mapa NE - oculto por default)
+    profundidadDesde: null,  // numero o null (sin filtro ese extremo)
+    profundidadHasta: null,
     marcadorBusquedaTemporal: null, // marker de "Mostrarlo igual" para un resultado de busqueda que los filtros activos esconden - se saca en cuanto cambia cualquier filtro o se abre una busqueda nueva, nunca sobrevive a eso
     contextoActual: null,    // {sessionToken, permisos, onAbrirPozo, enfoque} de la apertura en curso
     aperturaId: 0             // se incrementa en cada apertura/cierre - una respuesta de red de una apertura vieja se descarta si ya cambio (mismo patron de staleness que buscarPozo en app.js)
@@ -72,6 +80,8 @@
   var deptosChipsEl = document.getElementById('mapa-deptos-chips');
   var btnDeptosExpandirEl = document.getElementById('btn-mapa-deptos-expandir');
   var cuencaChipsEl = document.getElementById('mapa-cuenca-chips');
+  var btnFiltrosToggleEl = document.getElementById('btn-mapa-filtros-toggle');
+  var panelFiltrosEl = document.getElementById('mapa-filtros-panel');
   var btnLimpiarFiltrosEl = document.getElementById('btn-mapa-limpiar-filtros');
   var estadoChipsEls = Array.prototype.slice.call(document.querySelectorAll('.mapa-estado-chip'));
   var capaBaseChipsEls = Array.prototype.slice.call(document.querySelectorAll('.mapa-capa-chip'));
@@ -83,6 +93,10 @@
   var inputBuscarEl = document.getElementById('mapa-buscar-input');
   var btnBuscarCerrarEl = document.getElementById('btn-mapa-buscar-cerrar');
   var resultadosBuscarEl = document.getElementById('mapa-buscar-resultados');
+  var inputProfundidadDesdeEl = document.getElementById('mapa-profundidad-desde');
+  var inputProfundidadHastaEl = document.getElementById('mapa-profundidad-hasta');
+  var errorProfundidadEl = document.getElementById('mapa-profundidad-error');
+  var btnProfundidadLimpiarEl = document.getElementById('btn-mapa-profundidad-limpiar');
 
   function mapaController_crearMapaSiHaceFalta() {
     if (mapaEstado.mapa) {
@@ -445,11 +459,12 @@
     var division = mapaLogic_dividirChipsDepartamento(mapaEstado.opcionesDepartamento, mapaController_cantidadChipsIniciales());
     var hayMasQueMostrar = division.ocultos.length > 0;
     var visibles = (mapaEstado.deptosExpandido || !hayMasQueMostrar) ? mapaEstado.opcionesDepartamento : division.visibles;
+    var sinSeleccion = Object.keys(mapaEstado.departamentoActivos).length === 0;
 
     deptosChipsEl.innerHTML = '';
-    deptosChipsEl.appendChild(mapaController_construirChipDepartamento('todos', 'Todos (' + totalPozos + ')', mapaEstado.departamentoActual === 'todos'));
+    deptosChipsEl.appendChild(mapaController_construirChipDepartamento('todos', 'Todos (' + totalPozos + ')', sinSeleccion));
     visibles.forEach(function (o) {
-      deptosChipsEl.appendChild(mapaController_construirChipDepartamento(o.codigo, o.nombre + ' (' + o.cantidad + ')', mapaEstado.departamentoActual === o.codigo));
+      deptosChipsEl.appendChild(mapaController_construirChipDepartamento(o.codigo, o.nombre + ' (' + o.cantidad + ')', !!mapaEstado.departamentoActivos[o.codigo]));
     });
 
     if (hayMasQueMostrar) {
@@ -462,24 +477,22 @@
 
   function mapaController_poblarChipsDepartamento(pozos) {
     mapaEstado.opcionesDepartamento = mapaLogic_construirOpcionesDepartamento(pozos);
-    // Si el departamento activo ya no existe en el dataset (no deberia
-    // pasar en la practica - el dataset es el mismo entre aperturas -
-    // pero mismo criterio defensivo que tenia el <select> anterior),
-    // vuelve a "todos" en vez de quedar en un filtro invisible.
-    var sigueValido = mapaEstado.departamentoActual === 'todos' ||
-      mapaEstado.opcionesDepartamento.some(function (o) { return o.codigo === mapaEstado.departamentoActual; });
-    if (!sigueValido) {
-      mapaEstado.departamentoActual = 'todos';
-    }
+    // Defensivo (no deberia pasar en la practica, el dataset es el mismo
+    // entre aperturas): saca de departamentoActivos cualquier codigo que
+    // dejo de tener puntos, en vez de dejar un filtro invisible.
+    mapaEstado.departamentoActivos = mapaLogic_limpiarActivosInvalidos(
+      mapaEstado.departamentoActivos,
+      mapaEstado.opcionesDepartamento.map(function (o) { return { valor: o.codigo, cantidad: o.cantidad }; })
+    );
     mapaController_renderChipsDepartamento(pozos.length);
   }
 
   // --- Cuenca (Etapa 1C) ---
-  // Multi-seleccion OR, mismo patron que Cuenca en el mapa NE (Etapa
-  // 1B.1): "Todas" (data-valor 'todos') reactiva las 6, nunca las apaga
-  // - su apariencia "active" se DERIVA de si las 6 estan activas. Solo 6
-  // valores posibles, nunca necesita "+N mas" (a diferencia de
-  // Departamento).
+  // Multi-seleccion OR (unificacion UX con el mapa NE): "Todas" (data-
+  // valor 'todos') limpia la seleccion, nunca un valor de estado propio
+  // - su apariencia "active" se DERIVA de si el mapa de activos esta
+  // vacio. Solo 6 valores posibles, nunca necesita "+N mas" (a
+  // diferencia de Departamento).
   function mapaController_construirChipCuenca(valor, etiqueta, activo) {
     var chip = document.createElement('button');
     chip.type = 'button';
@@ -491,57 +504,109 @@
   }
 
   function mapaController_renderChipsCuenca() {
-    var todasActivas = mapaEstado.opcionesCuenca.every(function (o) { return !!mapaEstado.cuencaActivos[o.valor]; });
+    var sinSeleccion = Object.keys(mapaEstado.cuencaActivos).length === 0;
     cuencaChipsEl.innerHTML = '';
-    cuencaChipsEl.appendChild(mapaController_construirChipCuenca('todos', 'Todas', todasActivas));
+    cuencaChipsEl.appendChild(mapaController_construirChipCuenca('todos', 'Todas', sinSeleccion));
     mapaEstado.opcionesCuenca.forEach(function (o) {
       cuencaChipsEl.appendChild(mapaController_construirChipCuenca(o.valor, o.valor + ' (' + o.cantidad + ')', !!mapaEstado.cuencaActivos[o.valor]));
     });
   }
 
-  // A diferencia de Departamento (que persiste como un solo valor
-  // string, se revalida solo si dejo de existir), cuencaActivos es un
-  // mapa - se preserva la seleccion previa cuenca por cuenca entre
-  // aperturas (mismo criterio de "los filtros de Provincia persisten
-  // entre aperturas normales"), pero la PRIMERA vez que se puebla (o
-  // cuando mapaController_abrir la vacia explicitamente para un
-  // enfoque:pozo) arranca con las 6 activas.
+  // cuencaActivos (igual que departamentoActivos) persiste entre
+  // aperturas normales - las 6 cuencas no cambian de un dataset a otro,
+  // asi que no hace falta revalidar nada aca (a diferencia de
+  // Departamento, cuyos codigos si podrian variar en teoria).
   function mapaController_poblarChipsCuenca(pozos) {
     mapaEstado.opcionesCuenca = mapaLogic_construirOpcionesCampoNE(pozos, 'cuenca');
-    var esPrimeraVez = Object.keys(mapaEstado.cuencaActivos).length === 0;
-    var nuevosActivos = {};
-    mapaEstado.opcionesCuenca.forEach(function (o) {
-      nuevosActivos[o.valor] = esPrimeraVez || mapaEstado.cuencaActivos[o.valor] === undefined
-        ? true
-        : mapaEstado.cuencaActivos[o.valor];
-    });
-    // Fail-safe: nunca dejar las 6 en false (mismo criterio "0 activos
-    // ambiguo" del resto de los filtros multi-toggle de la app).
-    var hayAlgunaActiva = Object.keys(nuevosActivos).some(function (k) { return nuevosActivos[k]; });
-    if (!hayAlgunaActiva) {
-      Object.keys(nuevosActivos).forEach(function (k) { nuevosActivos[k] = true; });
-    }
-    mapaEstado.cuencaActivos = nuevosActivos;
     mapaController_renderChipsCuenca();
   }
 
-  // "Limpiar filtros" (Etapa 1C): vuelve TODOS los grupos a "sin filtro"
-  // - Cuenca (todas activas), Departamento ('todos'), Ubicacion (C+D
-  // activos), "Tiene: Niveles estáticos" (apagado) - mismo criterio que
-  // "Limpiar filtros" en el mapa NE, nunca cierra ningun panel solo.
-  function mapaController_limpiarFiltros() {
-    mapaEstado.opcionesCuenca.forEach(function (o) { mapaEstado.cuencaActivos[o.valor] = true; });
-    mapaEstado.departamentoActual = 'todos';
-    mapaEstado.estadosActivos = { C: true, D: true };
+  // --- Ubicacion (Confirmada/Disponible) ---
+  // Multi-seleccion OR, mismo modelo que el resto (unificacion UX) -
+  // "Todos" (estatico en el HTML, data-estado='todos') activo cuando el
+  // grupo esta vacio. Nunca se le agrega conteo a estos 3 chips (ya eran
+  // asi antes de esta etapa, no se agrega ruido nuevo).
+  function mapaController_actualizarChipsEstado() {
+    var sinSeleccion = Object.keys(mapaEstado.estadosActivos).length === 0;
     estadoChipsEls.forEach(function (chip) {
-      chip.classList.add('active');
-      chip.setAttribute('aria-pressed', 'true');
+      var valor = chip.getAttribute('data-estado');
+      var activo = valor === 'todos' ? sinSeleccion : !!mapaEstado.estadosActivos[valor];
+      chip.classList.toggle('active', activo);
+      chip.setAttribute('aria-pressed', activo ? 'true' : 'false');
     });
+  }
+
+  // --- Filtros: panel colapsable (unificacion UX con el mapa NE) ---
+  function mapaController_cerrarPanelFiltros() {
+    mapaEstado.filtrosActivo = false;
+    btnFiltrosToggleEl.classList.remove('active');
+    btnFiltrosToggleEl.setAttribute('aria-pressed', 'false');
+    btnFiltrosToggleEl.setAttribute('aria-expanded', 'false');
+    panelFiltrosEl.hidden = true;
+  }
+
+  function mapaController_toggleFiltrosPanel() {
+    if (mapaEstado.filtrosActivo) {
+      mapaController_cerrarPanelFiltros();
+      return;
+    }
+    mapaEstado.filtrosActivo = true;
+    btnFiltrosToggleEl.classList.add('active');
+    btnFiltrosToggleEl.setAttribute('aria-pressed', 'true');
+    btnFiltrosToggleEl.setAttribute('aria-expanded', 'true');
+    panelFiltrosEl.hidden = false;
+  }
+
+  // --- Profundidad (Desde/Hasta) ---
+  // Validacion en vivo (cada input) - nunca aplica un rango invalido
+  // (Desde > Hasta, negativos, texto no numerico): muestra el error y NO
+  // toca mapaEstado.profundidadDesde/Hasta hasta que el rango sea valido
+  // de nuevo.
+  function mapaController_aplicarProfundidad() {
+    var resultado = mapaLogic_validarRangoProfundidad(inputProfundidadDesdeEl.value, inputProfundidadHastaEl.value);
+    if (!resultado.valido) {
+      errorProfundidadEl.textContent = resultado.error;
+      errorProfundidadEl.hidden = false;
+      return;
+    }
+    errorProfundidadEl.hidden = true;
+    mapaEstado.profundidadDesde = resultado.desde;
+    mapaEstado.profundidadHasta = resultado.hasta;
+    if (mapaEstado.contextoActual && mapaEstado.puntosCrudos) {
+      mapaController_renderPuntos(mapaEstado.contextoActual);
+    }
+  }
+
+  function mapaController_limpiarProfundidad() {
+    inputProfundidadDesdeEl.value = '';
+    inputProfundidadHastaEl.value = '';
+    errorProfundidadEl.hidden = true;
+    mapaEstado.profundidadDesde = null;
+    mapaEstado.profundidadHasta = null;
+    if (mapaEstado.contextoActual && mapaEstado.puntosCrudos) {
+      mapaController_renderPuntos(mapaEstado.contextoActual);
+    }
+  }
+
+  // "Limpiar filtros": vuelve TODOS los grupos a "Todos"/vacio - Cuenca,
+  // Departamento, Ubicacion, Profundidad, "Tiene: Niveles estáticos"
+  // (apagado) - mismo criterio que "Limpiar filtros" en el mapa NE,
+  // nunca cierra ningun panel solo.
+  function mapaController_limpiarFiltros() {
+    mapaEstado.cuencaActivos = {};
+    mapaEstado.departamentoActivos = {};
+    mapaEstado.estadosActivos = {};
     mapaEstado.neActivo = false;
     chipNEEl.classList.remove('active');
     chipNEEl.setAttribute('aria-pressed', 'false');
+    mapaEstado.profundidadDesde = null;
+    mapaEstado.profundidadHasta = null;
+    inputProfundidadDesdeEl.value = '';
+    inputProfundidadHastaEl.value = '';
+    errorProfundidadEl.hidden = true;
 
     mapaController_renderChipsCuenca();
+    mapaController_actualizarChipsEstado();
     if (mapaEstado.puntosCrudos) {
       mapaController_renderChipsDepartamento(mapaEstado.puntosCrudos.length);
     }
@@ -566,27 +631,29 @@
     mapaController_limpiarMarcadorBusquedaTemporal();
 
     // cuenca AND departamento AND estado AND "Tiene: Niveles estáticos"
-    // (Etapa 1C agrega cuenca al frente de la cadena ya existente desde
-    // v2.2.0): se encadenan 4 filtros puros de mapaLogic.js, cada uno
-    // responsable de un solo criterio. cuenca usa
-    // mapaLogic_filtrarPorCampoMultipleNE - la misma funcion generica de
-    // la Etapa 1B.1 (Cuenca/Zona en el mapa NE), reusada tal cual pese al
-    // sufijo "NE" del nombre (no es especifica de ese mapa, ver su
-    // comentario en mapaLogic.js). El filtro NE reduce el padron a la
-    // interseccion con la red NE (ver mapaLogic_filtrarPorNE) - nunca
-    // agrega puntos que no esten ya en getMapaPozos, y nunca muestra los
-    // 34 puntos NE especiales (sin wellId no pueden estar en el Set - ver
+    // AND profundidad: se encadenan 5 filtros puros de mapaLogic.js, cada
+    // uno responsable de un solo criterio. cuenca/departamento son
+    // multi-seleccion OR (mapaLogic_filtrarPorCampoMultipleNE/
+    // mapaLogic_filtrarPorDepartamentoMultiple - la primera es generica,
+    // reusada tal cual pese al sufijo "NE" del nombre, ver su comentario
+    // en mapaLogic.js). El filtro NE reduce el padron a la interseccion
+    // con la red NE (ver mapaLogic_filtrarPorNE) - nunca agrega puntos
+    // que no esten ya en getMapaPozos, y nunca muestra los 34 puntos NE
+    // especiales (sin wellId no pueden estar en el Set - ver
     // mapaLogic_setWellIdNE).
-    var filtrados = mapaLogic_filtrarPorNE(
-      mapaLogic_filtrarPorEstado(
-        mapaLogic_filtrarPorDepartamento(
-          mapaLogic_filtrarPorCampoMultipleNE(mapaEstado.puntosCrudos, 'cuenca', mapaEstado.cuencaActivos),
-          mapaEstado.departamentoActual
+    var filtrados = mapaLogic_filtrarPorRangoProfundidad(
+      mapaLogic_filtrarPorNE(
+        mapaLogic_filtrarPorEstado(
+          mapaLogic_filtrarPorDepartamentoMultiple(
+            mapaLogic_filtrarPorCampoMultipleNE(mapaEstado.puntosCrudos, 'cuenca', mapaEstado.cuencaActivos),
+            mapaEstado.departamentoActivos
+          ),
+          mapaEstado.estadosActivos
         ),
-        mapaEstado.estadosActivos
+        mapaEstado.neWellIdSet,
+        mapaEstado.neActivo
       ),
-      mapaEstado.neWellIdSet,
-      mapaEstado.neActivo
+      mapaEstado.profundidadDesde, mapaEstado.profundidadHasta, 'profundidad'
     );
 
     mapaEstado.clusterGroup.clearLayers();
@@ -703,6 +770,7 @@
     mapaEl.hidden = true;
     contadorEl.hidden = true;
     mapaController_cerrarPanelBusqueda();
+    mapaController_cerrarPanelFiltros();
     mapaController_limpiarMarcadorBusquedaTemporal();
 
     // El placeholder del buscador nunca insinua que se puede buscar por
@@ -784,20 +852,18 @@
         // ese wellId afuera y mapaController_aplicarEnfoque no lo
         // encontraria.
         if (contexto.enfoque && contexto.enfoque.tipo === 'pozo') {
-          mapaEstado.departamentoActual = 'todos';
-          mapaEstado.estadosActivos = { C: true, D: true };
-          estadoChipsEls.forEach(function (chip) {
-            chip.classList.add('active');
-            chip.setAttribute('aria-pressed', 'true');
-          });
+          mapaEstado.departamentoActivos = {};
+          mapaEstado.cuencaActivos = {};
+          mapaEstado.estadosActivos = {};
+          mapaController_actualizarChipsEstado();
           mapaEstado.neActivo = false;
           chipNEEl.classList.remove('active');
           chipNEEl.setAttribute('aria-pressed', 'false');
-          // Vacio a proposito: mapaController_poblarChipsCuenca trata un
-          // mapa vacio como "primera vez" y arranca las 6 cuencas
-          // activas - mismo efecto que el reset de arriba, sin duplicar
-          // esa logica de "todas activas" en 2 lugares distintos.
-          mapaEstado.cuencaActivos = {};
+          mapaEstado.profundidadDesde = null;
+          mapaEstado.profundidadHasta = null;
+          inputProfundidadDesdeEl.value = '';
+          inputProfundidadHastaEl.value = '';
+          errorProfundidadEl.hidden = true;
         }
 
         mapaController_poblarChipsDepartamento(mapaEstado.puntosCrudos);
@@ -831,36 +897,20 @@
     if (!chip || !mapaEstado.contextoActual || !mapaEstado.puntosCrudos) {
       return;
     }
-    var nuevoDepto = chip.getAttribute('data-depto');
-    if (nuevoDepto === mapaEstado.departamentoActual) {
-      return;
-    }
-    mapaEstado.departamentoActual = nuevoDepto;
+    mapaEstado.departamentoActivos = mapaLogic_toggleFiltroMultiple(mapaEstado.departamentoActivos, chip.getAttribute('data-depto'));
     mapaController_renderChipsDepartamento(mapaEstado.puntosCrudos.length);
     mapaController_renderPuntos(mapaEstado.contextoActual);
   });
 
-  // Cuenca (Etapa 1C) - multi-seleccion OR, mismo criterio que el
-  // fail-safe "nunca apagar el ultimo activo" de estadoChipsEls/Cuenca en
-  // NE. "Todas" reactiva las 6, nunca las apaga.
+  // Cuenca - multi-seleccion OR (unificacion UX con el mapa NE). "Todas"
+  // limpia la seleccion del grupo (mapaLogic_toggleFiltroMultiple ya
+  // devuelve {} en ese caso).
   cuencaChipsEl.addEventListener('click', function (e) {
     var chip = e.target.closest ? e.target.closest('.mapa-cuenca-chip') : null;
     if (!chip || !mapaEstado.contextoActual || !mapaEstado.puntosCrudos) {
       return;
     }
-    var valor = chip.getAttribute('data-valor');
-
-    if (valor === 'todos') {
-      mapaEstado.opcionesCuenca.forEach(function (o) { mapaEstado.cuencaActivos[o.valor] = true; });
-    } else {
-      var estaActiva = mapaEstado.cuencaActivos[valor];
-      var cantidadActivas = mapaEstado.opcionesCuenca.filter(function (o) { return mapaEstado.cuencaActivos[o.valor]; }).length;
-      if (estaActiva && cantidadActivas === 1) {
-        return;
-      }
-      mapaEstado.cuencaActivos[valor] = !estaActiva;
-    }
-
+    mapaEstado.cuencaActivos = mapaLogic_toggleFiltroMultiple(mapaEstado.cuencaActivos, chip.getAttribute('data-valor'));
     mapaController_renderChipsCuenca();
     mapaController_renderPuntos(mapaEstado.contextoActual);
   });
@@ -872,26 +922,19 @@
     }
   });
 
+  btnFiltrosToggleEl.addEventListener('click', mapaController_toggleFiltrosPanel);
   btnLimpiarFiltrosEl.addEventListener('click', mapaController_limpiarFiltros);
+  inputProfundidadDesdeEl.addEventListener('input', mapaController_aplicarProfundidad);
+  inputProfundidadHastaEl.addEventListener('input', mapaController_aplicarProfundidad);
+  btnProfundidadLimpiarEl.addEventListener('click', mapaController_limpiarProfundidad);
 
-  // Chips Ubicacion (Confirmada/Disponible - estaticos en el HTML, no se
-  // recrean nunca, por eso un listener por chip alcanza). Nunca se deja
-  // apagar el ultimo chip activo: evita el estado ambiguo "0 activos" en
-  // la UI directamente (mapaLogic_filtrarPorEstado igual lo interpretaria
-  // como "sin filtro" si alguna vez llegara ahi, pero la UI ni lo
-  // permite - ver punto 1 de la Etapa v2.1.0, "nunca dejar el mapa en un
-  // estado ambiguo").
+  // Chips Ubicacion (Confirmada/Disponible + Todos - estaticos en el
+  // HTML, no se recrean nunca, por eso un listener por chip alcanza) -
+  // mismo reducer que Cuenca/Departamento (mapaLogic_toggleFiltroMultiple).
   estadoChipsEls.forEach(function (chip) {
     chip.addEventListener('click', function () {
-      var estado = chip.getAttribute('data-estado');
-      var estaActivo = mapaEstado.estadosActivos[estado];
-      var cantidadActivos = (mapaEstado.estadosActivos.C ? 1 : 0) + (mapaEstado.estadosActivos.D ? 1 : 0);
-      if (estaActivo && cantidadActivos === 1) {
-        return;
-      }
-      mapaEstado.estadosActivos[estado] = !estaActivo;
-      chip.classList.toggle('active', mapaEstado.estadosActivos[estado]);
-      chip.setAttribute('aria-pressed', mapaEstado.estadosActivos[estado] ? 'true' : 'false');
+      mapaEstado.estadosActivos = mapaLogic_toggleFiltroMultiple(mapaEstado.estadosActivos, chip.getAttribute('data-estado'));
+      mapaController_actualizarChipsEstado();
       if (mapaEstado.contextoActual && mapaEstado.puntosCrudos) {
         mapaController_renderPuntos(mapaEstado.contextoActual);
       }

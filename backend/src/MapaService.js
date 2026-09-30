@@ -21,13 +21,21 @@
 // solo la reenvia, nunca la recalcula. null si el pozo cayo fuera de las
 // 6 cuencas conocidas (0 casos en el dataset real, pero el campo nunca
 // se inventa un valor).
+//
+// profundidad (filtro de profundidad): copia de tecnicas.profundidadTotal
+// del padron - el UNICO campo de "tecnicas" verificado como profundidad
+// TOTAL de la perforacion (profundidadBomba/profundidadAntepozo son
+// conceptos distintos, nunca se usan como fuente aca, ver diagnostico en
+// scripts/reindex_mapa.py). Cobertura real: 83.9% de los pozos mapeados -
+// null en el resto, nunca inventado ni derivado de otro campo.
 function mapaService_sanitizarPunto(punto) {
   return {
     wellId: punto.wellId,
     lat: punto.lat,
     lon: punto.lon,
     estado: punto.estado,
-    cuenca: punto.cuenca !== undefined ? punto.cuenca : null
+    cuenca: punto.cuenca !== undefined ? punto.cuenca : null,
+    profundidad: punto.profundidadTotal !== undefined ? punto.profundidadTotal : null
   };
 }
 

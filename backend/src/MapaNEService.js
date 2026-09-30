@@ -22,6 +22,14 @@
 // (booleanos, nunca se exponen los arrays campana2026[]/historico[]
 // completos - esos arrays traen fecha/persona/observacion, mas detalle
 // del necesario para un filtro de mapa, y quedan fuera a proposito).
+//
+// profundidad (filtro de profundidad): NE no tiene un campo de
+// profundidad propio (nivelEstatico/cinta son sobre el NIVEL DE AGUA, no
+// la perforacion) - reindex_niveles_estaticos.py lo cruza por wellId
+// contra el padron (tecnicas.profundidadTotal, mismo campo fuente que
+// Pozos Provincia) y lo deja en profundidadTotal. Un punto especial (sin
+// wellId) NUNCA puede tenerlo - no tiene registro en el padron, no es un
+// bug. Cobertura real sobre los puntos con wellId: 83.5%.
 function mapaNEService_sanitizarPunto(punto, monitoringId) {
   var wellId = punto.wellId !== undefined ? punto.wellId : null;
   return {
@@ -36,7 +44,8 @@ function mapaNEService_sanitizarPunto(punto, monitoringId) {
     estadoMonitoreo: punto.estadoMonitoreo !== undefined ? punto.estadoMonitoreo : null,
     tieneMedicion2026: !!(punto.campana2026 && punto.campana2026.length > 0),
     tieneHistorico: !!(punto.historico && punto.historico.length > 0),
-    esEspecial: !wellId
+    esEspecial: !wellId,
+    profundidad: punto.profundidadTotal !== undefined ? punto.profundidadTotal : null
   };
 }
 

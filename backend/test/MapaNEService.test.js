@@ -20,6 +20,7 @@ function puntoConWellId(overrides) {
     estadoMonitoreo: 'ACTIVO',
     campana2026: [{ fecha: '2026-07-08', nivel: -12 }],
     historico: [{ anio: 2020, nivel: -10 }],
+    profundidadTotal: 154, // cruzado por wellId contra el padron, ver reindex_niveles_estaticos.py
     propietario: 'PEREZ, JUAN', // nunca debe sobrevivir la sanitizacion
     estadisticas: { media: -10 } // idem
   }, overrides);
@@ -35,7 +36,8 @@ function puntoEspecial(overrides) {
     zona: 'Libre-Confinado',
     estadoMonitoreo: null,
     campana2026: [],
-    historico: []
+    historico: [],
+    profundidadTotal: null // sin wellId -> nunca tiene registro en el padron
   }, overrides);
 }
 
@@ -48,7 +50,7 @@ describe('mapaNEService_getPuntos', () => {
     expect(result).toEqual({ found: false });
   });
 
-  test('punto con wellId -> found:true con los 12 campos esperados (Etapa 1B)', () => {
+  test('punto con wellId -> found:true con los 13 campos esperados', () => {
     global.nivelesEstaticosRepository_getTodosLosPuntos.mockReturnValue({
       found: true,
       puntos: { '04-0263': puntoConWellId() }
@@ -60,11 +62,11 @@ describe('mapaNEService_getPuntos', () => {
     expect(result.puntos).toEqual([{
       monitoringId: '04-0263', wellId: '04-0263', lat: -32.86865, lon: -68.7507, nombreOriginal: null,
       cuenca: 'MI', zona: 'NORTE', zonaNormalizada: 'Norte', estadoMonitoreo: 'ACTIVO',
-      tieneMedicion2026: true, tieneHistorico: true, esEspecial: false
+      tieneMedicion2026: true, tieneHistorico: true, esEspecial: false, profundidad: 154
     }]);
   });
 
-  test('punto especial (sin wellId) -> wellId:null, nombreOriginal presente, esEspecial:true', () => {
+  test('punto especial (sin wellId) -> wellId:null, nombreOriginal presente, esEspecial:true, profundidad:null', () => {
     global.nivelesEstaticosRepository_getTodosLosPuntos.mockReturnValue({
       found: true,
       puntos: { 'INA 2055': puntoEspecial() }
@@ -75,7 +77,7 @@ describe('mapaNEService_getPuntos', () => {
     expect(result.puntos).toEqual([{
       monitoringId: 'INA 2055', wellId: null, lat: -32.9, lon: -68.9, nombreOriginal: 'Jofre Puesto San Vicente',
       cuenca: null, zona: 'Libre-Confinado', zonaNormalizada: 'Libre-Confinado', estadoMonitoreo: null,
-      tieneMedicion2026: false, tieneHistorico: false, esEspecial: true
+      tieneMedicion2026: false, tieneHistorico: false, esEspecial: true, profundidad: null
     }]);
   });
 
@@ -96,7 +98,7 @@ describe('mapaNEService_getPuntos', () => {
 
     expect(Object.keys(result.puntos[0]).sort()).toEqual([
       'cuenca', 'esEspecial', 'estadoMonitoreo', 'lat', 'lon', 'monitoringId',
-      'nombreOriginal', 'tieneHistorico', 'tieneMedicion2026', 'wellId', 'zona', 'zonaNormalizada'
+      'nombreOriginal', 'profundidad', 'tieneHistorico', 'tieneMedicion2026', 'wellId', 'zona', 'zonaNormalizada'
     ]);
   });
 
@@ -187,6 +189,31 @@ describe('mapaNEService_getPuntos', () => {
     expect(result.puntos[0].zona).toBeNull();
     expect(result.puntos[0].zonaNormalizada).toBeNull();
     expect(result.puntos[0].estadoMonitoreo).toBeNull();
+  });
+
+  // Filtro de profundidad: NE no tiene campo propio, se cruza por wellId
+  // contra el padron (ver reindex_niveles_estaticos.py) - un punto
+  // especial (sin wellId) nunca puede tenerlo.
+  test('profundidadTotal ausente en la fuente -> profundidad:null, no rompe', () => {
+    global.nivelesEstaticosRepository_getTodosLosPuntos.mockReturnValue({
+      found: true,
+      puntos: { x: puntoConWellId({ monitoringId: 'x', profundidadTotal: undefined }) }
+    });
+
+    const result = MapaNEService.mapaNEService_getPuntos();
+
+    expect(result.puntos[0].profundidad).toBeNull();
+  });
+
+  test('profundidadTotal decimal se preserva tal cual', () => {
+    global.nivelesEstaticosRepository_getTodosLosPuntos.mockReturnValue({
+      found: true,
+      puntos: { x: puntoConWellId({ monitoringId: 'x', profundidadTotal: 87.5 }) }
+    });
+
+    const result = MapaNEService.mapaNEService_getPuntos();
+
+    expect(result.puntos[0].profundidad).toBe(87.5);
   });
 });
 

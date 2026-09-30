@@ -24,7 +24,13 @@ const {
   mapaLogic_filtrarPorFlagNE,
   mapaLogic_filtrarPorCampoMultipleNE,
   mapaLogic_construirOpcionesCampoCondicionadoNE,
-  mapaLogic_valorSigueDisponible
+  mapaLogic_valorSigueDisponible,
+  mapaLogic_toggleFiltroMultiple,
+  mapaLogic_filtrarPorCampoDerivadoMultiple,
+  mapaLogic_filtrarPorDepartamentoMultiple,
+  mapaLogic_limpiarActivosInvalidos,
+  mapaLogic_validarRangoProfundidad,
+  mapaLogic_filtrarPorRangoProfundidad
 } = require('./mapaLogic');
 
 function punto(wellId, estado) {
@@ -737,9 +743,16 @@ describe('mapaLogic_filtrarPorCampoMultipleNE (Etapa 1B.1 - Cuenca multiseleccio
     expect(r.map((p) => p.monitoringId)).toEqual(['a', 'b']);
   });
 
-  test('todas activas -> sin filtro, dataset completo (incluye cuenca null)', () => {
+  // Cambio de semantica deliberado (unificacion UX): con el modelo
+  // disperso actual (solo se guardan claves activas, ver
+  // mapaLogic_toggleFiltroMultiple), "todas las cuencas conocidas
+  // activas a mano" SI filtra - ya no es un sinonimo de "sin filtro" (a
+  // diferencia de una version anterior de esta funcion). Solo el mapa
+  // vacio {} significa "Todos" - por eso el punto con cuenca null SI
+  // queda afuera aca, aunque las 3 cuencas reales esten todas activas.
+  test('las 3 cuencas reales activas a mano -> SI filtra, el punto con cuenca null queda afuera', () => {
     const r = mapaLogic_filtrarPorCampoMultipleNE(puntos, 'cuenca', { MI: true, MD: true, VdU: true });
-    expect(r).toEqual(puntos);
+    expect(r.map((p) => p.monitoringId)).toEqual(['a', 'b', 'c']);
   });
 
   test('ninguna activa -> sin filtro (fail-safe), nunca lista vacia', () => {
@@ -822,5 +835,179 @@ describe('mapaLogic_valorSigueDisponible (Etapa 1B.1 - punto C)', () => {
 
   test('valor que ni siquiera aparece en las opciones -> no disponible', () => {
     expect(mapaLogic_valorSigueDisponible(opciones, 'Este')).toBe(false);
+  });
+});
+
+describe('mapaLogic_toggleFiltroMultiple (unificacion UX de filtros)', () => {
+  test('estado inicial vacio + tocar un valor -> queda solo ese activo', () => {
+    expect(mapaLogic_toggleFiltroMultiple({}, 'MI')).toEqual({ MI: true });
+  });
+
+  test('tocar un 2do valor -> se suma (OR), no reemplaza al primero', () => {
+    const r = mapaLogic_toggleFiltroMultiple({ MI: true }, 'MD');
+    expect(r).toEqual({ MI: true, MD: true });
+  });
+
+  test('tocar un valor ya activo -> se apaga (toggle)', () => {
+    const r = mapaLogic_toggleFiltroMultiple({ MI: true, MD: true }, 'MD');
+    expect(r).toEqual({ MI: true });
+  });
+
+  test('apagar el ultimo valor activo -> queda vacio (equivale a "Todos")', () => {
+    expect(mapaLogic_toggleFiltroMultiple({ MI: true }, 'MI')).toEqual({});
+  });
+
+  test('tocar "todos" -> limpia cualquier seleccion previa, sin importar cuantos habia activos', () => {
+    expect(mapaLogic_toggleFiltroMultiple({ MI: true, MD: true, VdU: true }, 'todos')).toEqual({});
+  });
+
+  test('tocar "todos" con el grupo ya vacio -> sigue vacio, no rompe', () => {
+    expect(mapaLogic_toggleFiltroMultiple({}, 'todos')).toEqual({});
+  });
+
+  test('no muta el objeto activos original (inmutable)', () => {
+    const original = { MI: true };
+    const r = mapaLogic_toggleFiltroMultiple(original, 'MD');
+    expect(original).toEqual({ MI: true });
+    expect(r).toEqual({ MI: true, MD: true });
+  });
+});
+
+describe('mapaLogic_filtrarPorDepartamentoMultiple', () => {
+  const puntos = [
+    { wellId: '04-0001' }, // Guaymallen
+    { wellId: '05-0001' }, // Godoy Cruz
+    { wellId: '04-0002' }  // Guaymallen
+  ];
+
+  test('activos vacio -> "Todos", dataset completo', () => {
+    expect(mapaLogic_filtrarPorDepartamentoMultiple(puntos, {})).toEqual(puntos);
+  });
+
+  test('un departamento activo -> solo esos wellId', () => {
+    const r = mapaLogic_filtrarPorDepartamentoMultiple(puntos, { '04': true });
+    expect(r.map((p) => p.wellId)).toEqual(['04-0001', '04-0002']);
+  });
+
+  test('varios departamentos activos -> OR', () => {
+    const r = mapaLogic_filtrarPorDepartamentoMultiple(puntos, { '04': true, '05': true });
+    expect(r.map((p) => p.wellId)).toEqual(['04-0001', '05-0001', '04-0002']);
+  });
+});
+
+describe('mapaLogic_limpiarActivosInvalidos (Etapa 1B.1/C - multi-select)', () => {
+  const opcionesCondicionadas = [
+    { valor: 'Norte', cantidad: 5 },
+    { valor: 'Sur', cantidad: 0 },
+    { valor: 'Este', cantidad: 3 }
+  ];
+
+  test('saca del set solo los valores que quedaron en cantidad 0, preserva el resto', () => {
+    const r = mapaLogic_limpiarActivosInvalidos({ Norte: true, Sur: true }, opcionesCondicionadas);
+    expect(r).toEqual({ Norte: true });
+  });
+
+  test('si el unico activo deja de ser valido, el resultado queda vacio (= Todos)', () => {
+    const r = mapaLogic_limpiarActivosInvalidos({ Sur: true }, opcionesCondicionadas);
+    expect(r).toEqual({});
+  });
+
+  test('todos los activos siguen validos -> no cambia nada', () => {
+    const r = mapaLogic_limpiarActivosInvalidos({ Norte: true, Este: true }, opcionesCondicionadas);
+    expect(r).toEqual({ Norte: true, Este: true });
+  });
+
+  test('activos vacio -> sigue vacio', () => {
+    expect(mapaLogic_limpiarActivosInvalidos({}, opcionesCondicionadas)).toEqual({});
+  });
+});
+
+describe('mapaLogic_validarRangoProfundidad', () => {
+  test('ambos vacios -> valido, desde/hasta null (sin filtro)', () => {
+    expect(mapaLogic_validarRangoProfundidad('', '')).toEqual({ valido: true, error: null, desde: null, hasta: null });
+  });
+
+  test('solo Desde -> valido', () => {
+    expect(mapaLogic_validarRangoProfundidad('50', '')).toEqual({ valido: true, error: null, desde: 50, hasta: null });
+  });
+
+  test('solo Hasta -> valido', () => {
+    expect(mapaLogic_validarRangoProfundidad('', '120')).toEqual({ valido: true, error: null, desde: null, hasta: 120 });
+  });
+
+  test('rango completo -> valido', () => {
+    expect(mapaLogic_validarRangoProfundidad('50', '120')).toEqual({ valido: true, error: null, desde: 50, hasta: 120 });
+  });
+
+  test('Desde = Hasta -> valido (rango de un solo valor)', () => {
+    expect(mapaLogic_validarRangoProfundidad('100', '100')).toEqual({ valido: true, error: null, desde: 100, hasta: 100 });
+  });
+
+  test('Desde > Hasta -> invalido, error amigable, nunca aplica el filtro', () => {
+    const r = mapaLogic_validarRangoProfundidad('150', '80');
+    expect(r.valido).toBe(false);
+    expect(r.error).toMatch(/Desde.*Hasta/);
+  });
+
+  test('decimales -> valido, preserva el decimal', () => {
+    expect(mapaLogic_validarRangoProfundidad('12.5', '87.5')).toEqual({ valido: true, error: null, desde: 12.5, hasta: 87.5 });
+  });
+
+  test('negativo en Desde -> invalido (la fuente real nunca tiene negativos)', () => {
+    const r = mapaLogic_validarRangoProfundidad('-10', '');
+    expect(r.valido).toBe(false);
+  });
+
+  test('negativo en Hasta -> invalido', () => {
+    const r = mapaLogic_validarRangoProfundidad('', '-5');
+    expect(r.valido).toBe(false);
+  });
+
+  test('texto no numerico -> invalido', () => {
+    expect(mapaLogic_validarRangoProfundidad('abc', '').valido).toBe(false);
+  });
+});
+
+describe('mapaLogic_filtrarPorRangoProfundidad', () => {
+  const puntos = [
+    { wellId: 'a', profundidad: 50 },
+    { wellId: 'b', profundidad: 100 },
+    { wellId: 'c', profundidad: 150 },
+    { wellId: 'd', profundidad: null }
+  ];
+
+  test('ambos null -> sin filtro, dataset completo (incluye sin profundidad)', () => {
+    expect(mapaLogic_filtrarPorRangoProfundidad(puntos, null, null)).toEqual(puntos);
+  });
+
+  test('solo Desde -> profundidad >= Desde', () => {
+    const r = mapaLogic_filtrarPorRangoProfundidad(puntos, 100, null);
+    expect(r.map((p) => p.wellId)).toEqual(['b', 'c']);
+  });
+
+  test('solo Hasta -> profundidad <= Hasta', () => {
+    const r = mapaLogic_filtrarPorRangoProfundidad(puntos, null, 100);
+    expect(r.map((p) => p.wellId)).toEqual(['a', 'b']);
+  });
+
+  test('rango completo -> Desde <= profundidad <= Hasta', () => {
+    const r = mapaLogic_filtrarPorRangoProfundidad(puntos, 60, 120);
+    expect(r.map((p) => p.wellId)).toEqual(['b']);
+  });
+
+  test('pozo sin profundidad queda excluido si hay CUALQUIER extremo activo', () => {
+    const r = mapaLogic_filtrarPorRangoProfundidad(puntos, 0, null);
+    expect(r.some((p) => p.wellId === 'd')).toBe(false);
+  });
+
+  test('extremos inclusivos: un punto exactamente en el limite entra', () => {
+    const r = mapaLogic_filtrarPorRangoProfundidad(puntos, 50, 50);
+    expect(r.map((p) => p.wellId)).toEqual(['a']);
+  });
+
+  test('campo parametrizable (reusable para Provincia y NE, mismo nombre de campo en la practica)', () => {
+    const otros = [{ wellId: 'x', profundidadOtroNombre: 30 }];
+    const r = mapaLogic_filtrarPorRangoProfundidad(otros, 10, 50, 'profundidadOtroNombre');
+    expect(r).toEqual(otros);
   });
 });

@@ -18,12 +18,12 @@ describe('mapaService_getPozos', () => {
     expect(result).toEqual({ found: false });
   });
 
-  test('encontrado -> found:true con los puntos (incluida cuenca) y la metadata', () => {
+  test('encontrado -> found:true con los puntos (incluida cuenca/profundidad) y la metadata', () => {
     global.mapaRepository_getPozos.mockReturnValue({
       found: true,
       pozos: [
-        { wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza' },
-        { wellId: '05-0001', lat: -33.1, lon: -68.5, estado: 'D', cuenca: 'Río Tunuyán Inferior' }
+        { wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza', profundidadTotal: 154 },
+        { wellId: '05-0001', lat: -33.1, lon: -68.5, estado: 'D', cuenca: 'Río Tunuyán Inferior', profundidadTotal: null }
       ]
     });
     global.mapaRepository_getMetadata.mockReturnValue({
@@ -36,8 +36,8 @@ describe('mapaService_getPozos', () => {
 
     expect(result.found).toBe(true);
     expect(result.pozos).toEqual([
-      { wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza' },
-      { wellId: '05-0001', lat: -33.1, lon: -68.5, estado: 'D', cuenca: 'Río Tunuyán Inferior' }
+      { wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza', profundidad: 154 },
+      { wellId: '05-0001', lat: -33.1, lon: -68.5, estado: 'D', cuenca: 'Río Tunuyán Inferior', profundidad: null }
     ]);
     expect(result.metadata).toEqual({ generadoEl: '2026-09-15T13:33:58-03:00', totalPuntos: 13804 });
   });
@@ -53,7 +53,7 @@ describe('mapaService_getPozos', () => {
       found: true,
       pozos: [
         {
-          wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza',
+          wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza', profundidadTotal: 154,
           ne: true, titular: 'JUAN PEREZ', departamento: 'GUAYMALLEN', distrito: 'X', uso: 'Agricola'
         }
       ]
@@ -62,8 +62,8 @@ describe('mapaService_getPozos', () => {
 
     const result = MapaService.mapaService_getPozos();
 
-    expect(result.pozos).toEqual([{ wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza' }]);
-    expect(Object.keys(result.pozos[0]).sort()).toEqual(['cuenca', 'estado', 'lat', 'lon', 'wellId']);
+    expect(result.pozos).toEqual([{ wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza', profundidad: 154 }]);
+    expect(Object.keys(result.pozos[0]).sort()).toEqual(['cuenca', 'estado', 'lat', 'lon', 'profundidad', 'wellId']);
   });
 
   test('metadata correcta - solo generadoEl y totalPuntos, aunque el archivo traiga mas campos', () => {
@@ -101,12 +101,12 @@ describe('mapaService_getPozos', () => {
 });
 
 describe('mapaService_sanitizarPunto', () => {
-  test('conserva wellId/lat/lon/estado/cuenca, en ese orden de claves', () => {
+  test('conserva wellId/lat/lon/estado/cuenca/profundidad, en ese orden de claves', () => {
     const sanitizado = MapaService.mapaService_sanitizarPunto({
-      wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza', ne: true, titular: 'X'
+      wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza', profundidadTotal: 154, ne: true, titular: 'X'
     });
-    expect(sanitizado).toEqual({ wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza' });
-    expect(Object.keys(sanitizado)).toEqual(['wellId', 'lat', 'lon', 'estado', 'cuenca']);
+    expect(sanitizado).toEqual({ wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza', profundidad: 154 });
+    expect(Object.keys(sanitizado)).toEqual(['wellId', 'lat', 'lon', 'estado', 'cuenca', 'profundidad']);
   });
 
   // Etapa 1C: 0 casos reales (los 13.804 pozos caen dentro de una de las
@@ -124,6 +124,23 @@ describe('mapaService_sanitizarPunto', () => {
       wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: null
     });
     expect(sanitizado.cuenca).toBeNull();
+  });
+
+  // Filtro de profundidad: campoFuente es tecnicas.profundidadTotal (ver
+  // scripts/reindex_mapa.py) - 16.1% de los pozos mapeados no lo tienen,
+  // nunca se inventa ni se deriva de profundidadBomba/profundidadAntepozo.
+  test('profundidadTotal ausente en la fuente -> profundidad:null, no rompe', () => {
+    const sanitizado = MapaService.mapaService_sanitizarPunto({
+      wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C'
+    });
+    expect(sanitizado.profundidad).toBeNull();
+  });
+
+  test('profundidadTotal decimal se preserva tal cual', () => {
+    const sanitizado = MapaService.mapaService_sanitizarPunto({
+      wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', profundidadTotal: 12.5
+    });
+    expect(sanitizado.profundidad).toBe(12.5);
   });
 });
 

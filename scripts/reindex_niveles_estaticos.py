@@ -34,10 +34,22 @@ Identidad de cada punto (monitoringId):
 
 Requiere pyproj (ver coord_utils.py) para convertir x/y (POSGAR94 Faja 2)
 a lat/lon.
+
+profundidadTotal (Etapa "unificacion UX + filtro profundidad"): NE no
+tiene un campo de profundidad propio (cinta/nivel son sobre el NIVEL DE
+AGUA, no la profundidad de la perforacion) - se cruza por wellId contra
+scripts/out/registro/*.json (mismo padron que usa reindex_mapa.py,
+campo tecnicas.profundidadTotal), OPCIONAL: si --registro no existe o no
+se pasa, el reindex sigue funcionando igual que antes, solo que ningun
+punto lleva profundidadTotal (nunca rompe el pipeline de NE, que no
+dependia de esto). Los 35 puntos especiales (sin wellId) nunca pueden
+tener profundidadTotal - no tienen registro en el padron, no es un bug.
 """
 import argparse
 import csv
+import glob
 import json
+import os
 import re
 import sys
 from collections import Counter
@@ -404,9 +416,41 @@ def build_metadata(puntos, filas_por_archivo, warnings):
     }
 
 
+# --- Cruce de profundidadTotal contra el padron (opcional) -----------------
+
+def cruzar_profundidad(puntos, registro_dir, warnings):
+    """Setea punto['profundidadTotal'] para los puntos con wellId que
+    tengan tecnicas.profundidadTotal en el padron (scripts/out/registro/
+    *.json, el mismo que usa reindex_mapa.py) - NUNCA se inventa un valor
+    para un punto sin wellId ni para un wellId sin ese dato en el padron
+    (queda None, igual que cualquier otro campo faltante aca)."""
+    if not registro_dir or not os.path.isdir(registro_dir):
+        warnings.append(f'--registro "{registro_dir}" no existe - profundidadTotal queda ausente en todos los puntos (nunca bloquea el reindex de NE, que no depende de esto)')
+        return 0
+
+    profundidad_por_wellid = {}
+    for path in sorted(glob.glob(os.path.join(registro_dir, '*.json'))):
+        if os.path.basename(path) == 'metadata.json':
+            continue
+        with open(path, encoding='utf-8') as f:
+            shard = json.load(f)
+        for well_id, record in shard.items():
+            tecnicas = record.get('tecnicas') or {}
+            profundidad_por_wellid[well_id] = tecnicas.get('profundidadTotal')
+
+    con_profundidad = 0
+    for punto in puntos.values():
+        well_id = punto.get('wellId')
+        valor = profundidad_por_wellid.get(well_id) if well_id else None
+        punto['profundidadTotal'] = valor
+        if valor is not None:
+            con_profundidad += 1
+    return con_profundidad
+
+
 # --- Pipeline principal ------------------------------------------------------
 
-def reindex(path_general, path_historico, path_mediciones_2026, out_dir):
+def reindex(path_general, path_historico, path_mediciones_2026, out_dir, registro_dir=None):
     warnings = []
     puntos = {}
 
@@ -418,11 +462,14 @@ def reindex(path_general, path_historico, path_mediciones_2026, out_dir):
     for punto in puntos.values():
         calcular_estadisticas(punto)
 
+    con_profundidad = cruzar_profundidad(puntos, registro_dir, warnings)
+
     metadata = build_metadata(puntos, {
         'NE_General_2026.csv': n_general,
         'NE_Historico_hasta_2025.csv': n_historico,
         'NE_Mediciones_2026.csv': n_mediciones,
     }, warnings)
+    metadata['puntosConProfundidadTotal'] = con_profundidad
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -440,15 +487,17 @@ def main(argv=None):
     parser.add_argument('historico_csv', help='NE_Historico_hasta_2025.csv')
     parser.add_argument('mediciones_2026_csv', help='NE_Mediciones_2026.csv')
     parser.add_argument('--out', default='scripts/out/niveles_estaticos', help='directorio de salida')
+    parser.add_argument('--registro', default='scripts/out/registro', help='directorio con la salida de reindex_pozos.py, para cruzar profundidadTotal por wellId (opcional - si no existe, el reindex sigue igual sin ese campo)')
     args = parser.parse_args(argv)
 
-    metadata, warnings = reindex(args.general_csv, args.historico_csv, args.mediciones_2026_csv, args.out)
+    metadata, warnings = reindex(args.general_csv, args.historico_csv, args.mediciones_2026_csv, args.out, registro_dir=args.registro)
 
     print(f'OK - {metadata["puntosTotales"]} puntos de monitoreo en {args.out}/')
     print(f'  con wellId (padron): {metadata["puntosConWellId"]}')
     print(f'  especiales (sin padron): {metadata["puntosEspeciales"]}')
     print(f'  filas por archivo: {metadata["filasPorArchivo"]}')
     print(f'  con coordenadas propias: {metadata["puntosConCoordenadas"]}')
+    print(f'  con profundidadTotal (cruzado por wellId contra el padron): {metadata["puntosConProfundidadTotal"]}')
     if warnings:
         print(f'\n{len(warnings)} advertencia(s):', file=sys.stderr)
         for w in warnings:

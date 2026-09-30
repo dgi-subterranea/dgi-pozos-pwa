@@ -384,21 +384,20 @@ function mapaLogic_filtrarPorFlagNE(puntos, campo, mostrarTrue, mostrarFalse) {
   });
 }
 
-// --- Etapa 1B.1: Cuenca multi-seleccion (OR dentro del grupo) ---
+// --- Cuenca/Departamento/etc: multi-seleccion (OR dentro del grupo) ---
 
 // Generico: filtro OR multi-seleccion sobre un campo dinamico (Cuenca en
-// NE, Cuenca en Provincia mas adelante) - activos es {valor: boolean}.
-// "Sin filtro" pasa en 2 casos, ambos tratados igual a proposito (ver
-// pedido explicito de la Etapa 1B.1, "interpretar todas activas como sin
-// filtro"): 0 activos (fail-safe, mismo criterio que el resto de los
-// filtros multi-toggle) O TODAS activas (equivalente matematicamente,
-// pero ademas evita que un punto con el campo null/vacio - que no
-// coincide con ningun valor real - quede afuera solo porque "todas las
-// cuencas conocidas" no incluye "sin cuenca").
+// NE y Provincia, etc.) - activos es un mapa DISPERSO {valor: true} (ver
+// mapaLogic_toggleFiltroMultiple: solo se guardan las claves activas,
+// nunca claves en false). Vacio == "Todos"/sin filtro - ese es el UNICO
+// caso de "sin filtro" (a diferencia de una version anterior de esta
+// funcion, que tambien trataba "todas activas" como sin filtro; con el
+// modelo disperso actual esa rama quedaria SIEMPRE verdadera para
+// cualquier seleccion no vacia, porque toda clave presente ya esta en
+// true por construccion - hubiera sido un bug real, no dead code).
 function mapaLogic_filtrarPorCampoMultipleNE(puntos, campo, activos) {
-  var claves = Object.keys(activos || {});
-  var activas = claves.filter(function (k) { return activos[k]; });
-  if (activas.length === 0 || activas.length === claves.length) {
+  var activas = Object.keys(activos || {}).filter(function (k) { return activos[k]; });
+  if (activas.length === 0) {
     return puntos;
   }
   return puntos.filter(function (p) { return !!activos[p[campo]]; });
@@ -440,12 +439,145 @@ function mapaLogic_construirOpcionesCampoCondicionadoNE(puntosCompletos, puntosU
 // 'todos' siempre es valido (nunca depende del universo). Se usa para
 // decidir si hay que deseleccionar automaticamente (ver Etapa 1B.1,
 // punto C: "no dejar filtros invisibles/imposibles activos").
+// NOTA: pensada para el patron single-select original de Zona - para el
+// patron multi-select actual (Etapa "unificacion UX"), ver
+// mapaLogic_limpiarActivosInvalidos, que hace lo mismo pero sobre un
+// conjunto de valores en vez de uno solo.
 function mapaLogic_valorSigueDisponible(opciones, valor) {
   if (!valor || valor === 'todos') {
     return true;
   }
   var opcion = (opciones || []).filter(function (o) { return o.valor === valor; })[0];
   return !!(opcion && opcion.cantidad > 0);
+}
+
+// --- Unificacion UX de filtros (ambos mapas) ---
+//
+// Modelo unico para TODO grupo de chips multi-seleccion en Provincia y
+// NE (Cuenca, Departamento, Ubicacion, Zona, Estado, Medicion 2026,
+// Historico, Tipo): 'activos' es un mapa disperso {valor: true} que
+// SOLO contiene las claves activas (nunca claves en false - una clave
+// ausente YA significa "no activa", no hace falta guardarla explicita).
+// Vacio ({}) siempre significa "Todos" (sin filtro de este grupo) - esa
+// equivalencia es la base de toda la semantica pedida:
+//   - tocar un valor individual estando en "Todos" -> dejo de estar
+//     vacio, por lo tanto "Todos" se desactiva SOLO (nunca hace falta
+//     codigo aparte para "apagar Todos").
+//   - tocar mas valores -> se van sumando (OR dentro del grupo).
+//   - apagar el ultimo valor activo -> el mapa vuelve a quedar vacio,
+//     por lo tanto "Todos" se reactiva SOLO.
+//   - tocar "Todos" -> se limpian todos los valores individuales.
+function mapaLogic_toggleFiltroMultiple(activos, valor) {
+  if (!valor || valor === 'todos') {
+    return {};
+  }
+  var nuevo = Object.assign({}, activos);
+  if (nuevo[valor]) {
+    delete nuevo[valor];
+  } else {
+    nuevo[valor] = true;
+  }
+  return nuevo;
+}
+
+// Generico: filtro OR multi-seleccion sobre un campo DERIVADO (no un
+// campo literal del punto) - Departamento no vive como string en el
+// punto, se deriva del wellId (ver mapaLogic_departamentoDeWellId).
+// Mismo criterio "vacio = sin filtro" que el resto.
+function mapaLogic_filtrarPorCampoDerivadoMultiple(puntos, derivar, activos) {
+  var claves = Object.keys(activos || {}).filter(function (k) { return activos[k]; });
+  if (claves.length === 0) {
+    return puntos;
+  }
+  return puntos.filter(function (p) { return !!activos[derivar(p)]; });
+}
+
+function mapaLogic_filtrarPorDepartamentoMultiple(puntos, activos) {
+  return mapaLogic_filtrarPorCampoDerivadoMultiple(puntos, function (p) {
+    return mapaLogic_departamentoDeWellId(p.wellId);
+  }, activos);
+}
+
+// Limpia de 'activos' (mapa disperso) cualquier valor que ya no figure
+// con cantidad>0 en 'opciones' condicionadas (ej. Zona tras cambiar
+// Cuenca - Etapa 1B.1/C) - version MULTI-valor de
+// mapaLogic_valorSigueDisponible: si alguno de los valores activos dejo
+// de ser valido, se saca SOLO ese (los demas activos que sigan siendo
+// validos se preservan). Si el resultado queda vacio, es exactamente
+// "Todos" (mismo criterio de todo el modulo) - no hace falta un caso
+// especial para eso.
+function mapaLogic_limpiarActivosInvalidos(activos, opciones) {
+  var cantidadPorValor = {};
+  (opciones || []).forEach(function (o) { cantidadPorValor[o.valor] = o.cantidad; });
+  var nuevo = {};
+  Object.keys(activos || {}).forEach(function (k) {
+    if (activos[k] && cantidadPorValor[k] > 0) {
+      nuevo[k] = true;
+    }
+  });
+  return nuevo;
+}
+
+// --- Filtro por profundidad (Desde/Hasta) ---
+//
+// Validacion pura del rango ingresado por el usuario - nunca acepta
+// negativos (la fuente real, tecnicas.profundidadTotal, no tiene ningun
+// valor negativo: 0 casos medidos sobre 19.076 valores reales) y nunca
+// aplica un rango invertido (Desde > Hasta) - en vez de "corregirlo"
+// solo, devuelve un error amigable para que la UI lo muestre y NO
+// aplique el filtro, tal como se pidio.
+function mapaLogic_validarRangoProfundidad(desdeTexto, hastaTexto) {
+  var desdeVacio = desdeTexto === '' || desdeTexto === null || desdeTexto === undefined;
+  var hastaVacio = hastaTexto === '' || hastaTexto === null || hastaTexto === undefined;
+
+  var desde = desdeVacio ? null : Number(desdeTexto);
+  var hasta = hastaVacio ? null : Number(hastaTexto);
+
+  if (!desdeVacio && isNaN(desde)) {
+    return { valido: false, error: 'Desde debe ser un número.', desde: null, hasta: null };
+  }
+  if (!hastaVacio && isNaN(hasta)) {
+    return { valido: false, error: 'Hasta debe ser un número.', desde: null, hasta: null };
+  }
+  if (desde !== null && desde < 0) {
+    return { valido: false, error: 'Desde no puede ser negativo.', desde: null, hasta: null };
+  }
+  if (hasta !== null && hasta < 0) {
+    return { valido: false, error: 'Hasta no puede ser negativo.', desde: null, hasta: null };
+  }
+  if (desde !== null && hasta !== null && desde > hasta) {
+    return { valido: false, error: 'Desde no puede ser mayor que Hasta.', desde: null, hasta: null };
+  }
+  return { valido: true, error: null, desde: desde, hasta: hasta };
+}
+
+// Filtro puro Desde<=profundidad<=Hasta (cualquiera de los 2 extremos
+// puede faltar) - campo parametrizable porque el nombre sanitizado es el
+// mismo en ambos mapas ('profundidad', ver MapaService.js/
+// MapaNEService.js), pero la funcion no asume ningun nombre fijo.
+// Ambos vacios (desde=null Y hasta=null) -> sin filtro, dataset
+// completo. Un punto sin profundidad (null/undefined) SIEMPRE queda
+// excluido si hay CUALQUIER extremo activo (decision explicita: un dato
+// ausente no puede "pasar" un filtro numerico que si esta pidiendo un
+// rango) - y aparece normalmente si el filtro esta vacio.
+function mapaLogic_filtrarPorRangoProfundidad(puntos, desde, hasta, campo) {
+  var campoReal = campo || 'profundidad';
+  if (desde === null && hasta === null) {
+    return puntos;
+  }
+  return puntos.filter(function (p) {
+    var v = p[campoReal];
+    if (v === null || v === undefined) {
+      return false;
+    }
+    if (desde !== null && v < desde) {
+      return false;
+    }
+    if (hasta !== null && v > hasta) {
+      return false;
+    }
+    return true;
+  });
 }
 
 if (typeof module !== 'undefined' && module.exports) {
@@ -478,6 +610,12 @@ if (typeof module !== 'undefined' && module.exports) {
     mapaLogic_filtrarPorFlagNE,
     mapaLogic_filtrarPorCampoMultipleNE,
     mapaLogic_construirOpcionesCampoCondicionadoNE,
-    mapaLogic_valorSigueDisponible
+    mapaLogic_valorSigueDisponible,
+    mapaLogic_toggleFiltroMultiple,
+    mapaLogic_filtrarPorCampoDerivadoMultiple,
+    mapaLogic_filtrarPorDepartamentoMultiple,
+    mapaLogic_limpiarActivosInvalidos,
+    mapaLogic_validarRangoProfundidad,
+    mapaLogic_filtrarPorRangoProfundidad
   };
 }

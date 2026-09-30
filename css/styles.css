@@ -1587,6 +1587,43 @@ table.ne-table tr:last-child td {
   text-decoration: underline;
 }
 
+/* Filtro Profundidad (Desde/Hasta) - mismo grupo visual que el resto
+   (.mapa-filtro-grupo), pero con inputs numericos en vez de chips. */
+.mapa-profundidad-rango {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.mapa-profundidad-campo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--color-text-soft);
+}
+.mapa-profundidad-input {
+  width: 92px;
+  min-height: 34px;
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  border-radius: 10px;
+  border: 1.5px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: none;
+}
+.mapa-profundidad-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+.mapa-profundidad-error {
+  margin: 6px 0 0;
+  font-size: 0.76rem;
+  color: var(--color-error);
+}
+
 /* Los chips de estado toman su color activo de los MISMOS tokens que
    los puntos del mapa (--color-mapa-confirmada/disponible) - hacen de
    filtro Y de leyenda a la vez, reemplazan la leyenda pasiva que tenia
@@ -1604,6 +1641,14 @@ table.ne-table tr:last-child td {
 }
 .mapa-estado-chip:hover {
   background: var(--color-primary-tint);
+}
+/* "Todos" (unificacion UX): el unico chip de este grupo sin sufijo
+   -confirmada/-disponible, nunca toma su color especifico - color
+   generico igual que Cuenca/Departamento. */
+.mapa-estado-chip.active {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
 }
 .mapa-estado-chip-confirmada.active {
   background: var(--color-mapa-confirmada);
