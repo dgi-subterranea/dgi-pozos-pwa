@@ -30,7 +30,9 @@ const {
   mapaLogic_filtrarPorDepartamentoMultiple,
   mapaLogic_limpiarActivosInvalidos,
   mapaLogic_validarRangoProfundidad,
-  mapaLogic_filtrarPorRangoProfundidad
+  mapaLogic_filtrarPorRangoProfundidad,
+  mapaLogic_tramoIntersectaRango,
+  mapaLogic_filtrarPorTramoFiltrante
 } = require('./mapaLogic');
 
 function punto(wellId, estado) {
@@ -1009,5 +1011,103 @@ describe('mapaLogic_filtrarPorRangoProfundidad', () => {
     const otros = [{ wellId: 'x', profundidadOtroNombre: 30 }];
     const r = mapaLogic_filtrarPorRangoProfundidad(otros, 10, 50, 'profundidadOtroNombre');
     expect(r).toEqual(otros);
+  });
+});
+
+describe('mapaLogic_tramoIntersectaRango', () => {
+  test('tramo completamente adentro del rango -> intersecta', () => {
+    expect(mapaLogic_tramoIntersectaRango({ desde: 100, hasta: 120 }, 80, 150)).toBe(true);
+  });
+
+  test('tramo se solapa parcialmente por la izquierda -> intersecta (ejemplo del pedido)', () => {
+    // Filtro1: 80-110, busqueda 100-150 -> 110>=100 y 80<=150
+    expect(mapaLogic_tramoIntersectaRango({ desde: 80, hasta: 110 }, 100, 150)).toBe(true);
+  });
+
+  test('tramo se solapa parcialmente por la derecha -> intersecta', () => {
+    expect(mapaLogic_tramoIntersectaRango({ desde: 145, hasta: 170 }, 100, 150)).toBe(true);
+  });
+
+  test('tramo totalmente afuera (mas superficial) -> no intersecta', () => {
+    expect(mapaLogic_tramoIntersectaRango({ desde: 10, hasta: 50 }, 100, 150)).toBe(false);
+  });
+
+  test('tramo totalmente afuera (mas profundo) -> no intersecta', () => {
+    expect(mapaLogic_tramoIntersectaRango({ desde: 200, hasta: 250 }, 100, 150)).toBe(false);
+  });
+
+  test('tramo que contiene todo el rango (envuelve) -> intersecta', () => {
+    expect(mapaLogic_tramoIntersectaRango({ desde: 0, hasta: 300 }, 100, 150)).toBe(true);
+  });
+
+  test('extremos exactamente tocando el limite -> intersecta (inclusivo)', () => {
+    expect(mapaLogic_tramoIntersectaRango({ desde: 50, hasta: 100 }, 100, 150)).toBe(true);
+  });
+
+  test('solo Desde del filtro (Hasta null) -> no acota por ese lado', () => {
+    expect(mapaLogic_tramoIntersectaRango({ desde: 200, hasta: 250 }, 100, null)).toBe(true);
+    expect(mapaLogic_tramoIntersectaRango({ desde: 10, hasta: 50 }, 100, null)).toBe(false);
+  });
+
+  test('solo Hasta del filtro (Desde null) -> no acota por ese lado', () => {
+    expect(mapaLogic_tramoIntersectaRango({ desde: 10, hasta: 50 }, null, 100)).toBe(true);
+    expect(mapaLogic_tramoIntersectaRango({ desde: 200, hasta: 250 }, null, 100)).toBe(false);
+  });
+
+  test('tramo con desde/hasta null (dato incompleto) -> nunca intersecta', () => {
+    expect(mapaLogic_tramoIntersectaRango({ desde: null, hasta: 100 }, 50, 150)).toBe(false);
+    expect(mapaLogic_tramoIntersectaRango({ desde: 50, hasta: null }, 50, 150)).toBe(false);
+  });
+});
+
+describe('mapaLogic_filtrarPorTramoFiltrante (filtro "Profundidad de filtros")', () => {
+  const puntos = [
+    { wellId: 'a', tramosFiltrantes: [{ desde: 80, hasta: 110 }, { desde: 145, hasta: 170 }] }, // multiples tramos, el ejemplo del pedido
+    { wellId: 'b', tramosFiltrantes: [{ desde: 20, hasta: 40 }] }, // un solo tramo
+    { wellId: 'c', tramosFiltrantes: [] }, // sin tramos (dato ausente)
+    { wellId: 'd', tramosFiltrantes: [{ desde: 300, hasta: 320 }] } // fuera de cualquier rango de prueba
+  ];
+
+  test('ambos vacios -> sin filtro, dataset completo (incluye pozos sin tramos)', () => {
+    expect(mapaLogic_filtrarPorTramoFiltrante(puntos, null, null)).toEqual(puntos);
+  });
+
+  test('ejemplo del pedido: Desde 100 Hasta 150 incluye el pozo por interseccion con UNO de sus 2 tramos', () => {
+    const r = mapaLogic_filtrarPorTramoFiltrante(puntos, 100, 150);
+    expect(r.map((p) => p.wellId)).toEqual(['a']);
+  });
+
+  test('solo Desde -> algun tramo con hasta >= Desde', () => {
+    const r = mapaLogic_filtrarPorTramoFiltrante(puntos, 150, null);
+    expect(r.map((p) => p.wellId)).toEqual(['a', 'd']);
+  });
+
+  test('solo Hasta -> algun tramo con desde <= Hasta', () => {
+    const r = mapaLogic_filtrarPorTramoFiltrante(puntos, null, 50);
+    expect(r.map((p) => p.wellId)).toEqual(['b']);
+  });
+
+  test('rango que no intersecta ningun tramo de ningun pozo -> lista vacia (nunca "sin filtro")', () => {
+    const r = mapaLogic_filtrarPorTramoFiltrante(puntos, 500, 600);
+    expect(r).toEqual([]);
+  });
+
+  test('pozo sin tramos queda excluido en cuanto el filtro esta activo', () => {
+    const r = mapaLogic_filtrarPorTramoFiltrante(puntos, 0, 1000);
+    expect(r.some((p) => p.wellId === 'c')).toBe(false);
+  });
+
+  test('campo parametrizable', () => {
+    const otros = [{ wellId: 'x', otroCampo: [{ desde: 10, hasta: 20 }] }];
+    const r = mapaLogic_filtrarPorTramoFiltrante(otros, 15, 15, 'otroCampo');
+    expect(r).toEqual(otros);
+  });
+
+  // Validacion del rango: se reusa mapaLogic_validarRangoProfundidad tal
+  // cual (mismas reglas Desde>Hasta/negativos/decimales) - no hace falta
+  // una funcion de validacion nueva para este filtro.
+  test('reusa mapaLogic_validarRangoProfundidad para validar el rango ingresado', () => {
+    expect(mapaLogic_validarRangoProfundidad('150', '80').valido).toBe(false);
+    expect(mapaLogic_validarRangoProfundidad('80', '150').valido).toBe(true);
   });
 });

@@ -364,6 +364,52 @@
         <p id="mapa-profundidad-error" class="mapa-profundidad-error" hidden></p>
       </div>
 
+      <!-- Profundidad DE FILTROS (tramos filtrantes/ranurados de la
+           perforacion, construccion.filtros[] del padron - CONCEPTO
+           DISTINTO de "Profundidad del pozo" de arriba, nunca
+           mezclarlos visualmente, por eso van en grupos separados con
+           su propio id). Un pozo pasa si AL MENOS UNO de sus tramos
+           intersecta el rango pedido (ver mapaLogic_filtrarPorTramoFiltrante
+           en js/mapaLogic.js) - mismas reglas Desde/Hasta/error que el
+           filtro de arriba (reusa mapaLogic_validarRangoProfundidad tal
+           cual). Cobertura real: 72.7% de los pozos mapeados, hasta 5
+           tramos por pozo. -->
+      <div class="mapa-filtro-grupo">
+        <p class="mapa-filtro-label">Profundidad de filtros</p>
+        <div class="mapa-profundidad-rango">
+          <label class="mapa-profundidad-campo">
+            Desde
+            <input type="number" id="mapa-tramo-desde" class="mapa-profundidad-input" min="0" step="any" inputmode="decimal" placeholder="m">
+          </label>
+          <label class="mapa-profundidad-campo">
+            Hasta
+            <input type="number" id="mapa-tramo-hasta" class="mapa-profundidad-input" min="0" step="any" inputmode="decimal" placeholder="m">
+          </label>
+          <button type="button" id="btn-mapa-tramo-limpiar" class="mapa-expandir-btn">Limpiar</button>
+        </div>
+        <p id="mapa-tramo-error" class="mapa-profundidad-error" hidden></p>
+      </div>
+
+      <!-- Tipo de pozo (tecnicas.surgencia del padron) - campo CATEGORICO
+           unico medido con 3 valores reales (Profundo/SemiSurgente/
+           Natural), NUNCA 2 booleanos independientes "profundo"+
+           "surgente" que puedan coexistir (ver diagnostico). Decision del
+           usuario: el VALOR de filtro/dataset queda igual al de la fuente
+           (data-valor sigue siendo Profundo/SemiSurgente/Natural - esto es
+           lo que mapaLogic_filtrarPorCampoMultipleNE compara), solo la
+           ETIQUETA visible se traduce (Natural -> "Surgente", SemiSurgente
+           -> "Semisurgente") via mapaController_etiquetaTipoPozo en
+           js/mapa.js - mapeo PURAMENTE de presentacion. Mismo patron
+           Todos+multiseleccion que el resto (reusa
+           mapaLogic_construirOpcionesCampoNE/mapaLogic_filtrarPorCampoMultipleNE,
+           ya genericas). -->
+      <div class="mapa-filtro-grupo">
+        <p class="mapa-filtro-label">Tipo de pozo</p>
+        <div id="mapa-condicion-chips" class="mapa-chips-wrap">
+          <button type="button" class="mapa-condicion-chip active" data-valor="todos" aria-pressed="true">Todos</button>
+        </div>
+      </div>
+
       <button type="button" id="btn-mapa-limpiar-filtros" class="mapa-expandir-btn">Limpiar filtros</button>
     </div>
     <div id="mapa-contador" class="mapa-contador" hidden></div>
@@ -554,8 +600,19 @@
     <div class="tv-header">
       <div>
         <p class="mapa-titulo">Pozos cerca mío</p>
-        <p class="tv-header-label">Según tu ubicación actual</p>
+        <p id="cercamio-header-label" class="tv-header-label">Según tu ubicación actual</p>
       </div>
+    </div>
+
+    <!-- Referencia (item B de la etapa siguiente): "Mi ubicacion" mantiene
+         el comportamiento EXACTO previo (navigator.geolocation). "Elegir en
+         mapa" permite elegir un punto sin estar fisicamente ahi - ese punto
+         vive SOLO en memoria del navegador (estado.puntoElegido en
+         js/cercaMio.js), igual que la ubicacion GPS: nunca Apps Script, ni
+         Sheets, ni Historial, ni Busquedas, ni Telegram. -->
+    <div class="cercamio-referencia" role="group" aria-label="Referencia de búsqueda">
+      <button type="button" id="btn-cercamio-ref-ubicacion" class="cercamio-referencia-chip active" aria-pressed="true">Mi ubicación</button>
+      <button type="button" id="btn-cercamio-ref-mapa" class="cercamio-referencia-chip" aria-pressed="false">Elegir en mapa</button>
     </div>
 
     <div class="cercamio-radios" role="group" aria-label="Radio de búsqueda">
@@ -563,6 +620,14 @@
       <button type="button" class="cercamio-radio-chip" data-radio="1000" aria-pressed="false">1 km</button>
       <button type="button" class="cercamio-radio-chip active" data-radio="2000" aria-pressed="true">2 km</button>
       <button type="button" class="cercamio-radio-chip" data-radio="5000" aria-pressed="false">5 km</button>
+      <button type="button" class="cercamio-radio-chip" data-radio="personalizado" aria-pressed="false">Personalizado</button>
+    </div>
+
+    <div id="cercamio-radio-personalizado" class="cercamio-radio-personalizado" hidden>
+      <label for="input-cercamio-radio-km">Radio</label>
+      <input type="number" id="input-cercamio-radio-km" inputmode="decimal" min="0.1" max="100" step="0.1" placeholder="km">
+      <span>km</span>
+      <p id="cercamio-radio-personalizado-error" class="mapa-profundidad-error" hidden></p>
     </div>
 
     <div class="cercamio-viewport">
@@ -583,6 +648,16 @@
       <div id="cercamio-error" class="cercamio-estado" hidden>
         <p id="cercamio-error-mensaje">No pudimos obtener tu ubicación.</p>
         <button type="button" class="button-secondary btn-cercamio-reintentar">Reintentar</button>
+      </div>
+
+      <!-- Elegir en mapa (item B/G): mapa Leaflet chico, independiente del
+           mapa Provincia/NE (misma infra compartida de js/mapaShared.js -
+           carga diferida de Leaflet, nunca duplicada). Instruccion breve +
+           boton de confirmacion explicito, como pide la etapa. -->
+      <div id="cercamio-eligiendo-punto" class="cercamio-estado cercamio-picker" hidden>
+        <p class="cercamio-picker-instruccion">Tocá el mapa para elegir el centro de búsqueda</p>
+        <div id="cercamio-picker-mapa"></div>
+        <button type="button" id="btn-cercamio-buscar-desde-punto" class="button" disabled>Buscar desde este punto</button>
       </div>
 
       <div id="cercamio-sin-resultados" class="cercamio-estado" hidden>

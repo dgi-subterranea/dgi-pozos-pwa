@@ -13,8 +13,9 @@
 //
 // enfoque (opcional, usado por "Ver en mapa"/"Ver todos en el mapa" de
 // Cerca Mio - ver js/cercaMio.js):
-//   {tipo: 'pozo', wellId}                    - centra y abre el popup de ESE pozo
-//   {tipo: 'ubicacion', lat, lon, radioMetros} - centra en esas coordenadas (la posicion del usuario, que SOLO viaja de app.js a aca en memoria - nunca se manda a ningun backend) y agrega el marcador "Tu ubicacion"
+//   {tipo: 'pozo', wellId}                        - centra y abre el popup de ESE pozo
+//   {tipo: 'ubicacion', lat, lon, radioMetros}     - centra en esas coordenadas (la posicion GPS del usuario, que SOLO viaja de app.js a aca en memoria - nunca se manda a ningun backend) y agrega el marcador "Tu ubicacion"
+//   {tipo: 'puntoBusqueda', lat, lon, radioMetros} - idem, pero para un punto elegido a mano en el mapa (Etapa siguiente, item B/D) en vez de GPS: marcador y circulo de radio con otro color (mapaShared_iconoPuntoBusqueda), misma garantia de privacidad (solo memoria, nunca a ningun backend)
 (function () {
   var MAPA_COLOR_CONFIRMADA = '#0b5a7a';
   var MAPA_COLOR_DISPONIBLE = '#4fa3c4';
@@ -59,14 +60,19 @@
     estadosActivos: {},      // chips Ubicacion (Confirmada/Disponible)
     deptosExpandido: false,  // true = "+N mas" ya tocado, se ven todos los chips de departamento
     markersPorWellId: {},    // se reconstruye en cada renderPuntos() - permite ubicar el marker de un wellId puntual para enfoque:{tipo:'pozo'}
-    miUbicacionMarker: null, // marcador "Tu ubicacion" (enfoque:{tipo:'ubicacion'}) - se saca en cada apertura que no lo pida, para no dejar uno viejo colgado
+    miUbicacionMarker: null, // marcador "Tu ubicacion" (enfoque:{tipo:'ubicacion'}) O "Punto de busqueda" (enfoque:{tipo:'puntoBusqueda'}) - un solo marker a la vez, se saca en cada apertura que no lo pida, para no dejar uno viejo colgado
+    radioCirculo: null,      // L.circle del radio de busqueda (solo enfoque:{tipo:'puntoBusqueda'}, item D) - mismo ciclo de vida que miUbicacionMarker
     neWellIdSet: null,       // Set de wellId de la red NE (mapaLogic_setWellIdNE sobre getMapaNE) - se arma UNA sola vez, la PRIMERA vez que se activa el filtro "Tiene: Niveles estáticos" (carga diferida real)
     neActivo: false,         // estado del filtro "Tiene: Niveles estáticos" (v2.2.0: filtro sobre el padron, NO una capa aparte - ver mapaController_renderPuntos, que lo combina con AND junto a departamento/estado)
     indiceBusqueda: null,    // mapa wellId->{nc16,titular} (mapaLogic_indiceBusquedaPorWellId sobre getIndiceBusquedaProvincia) - se arma UNA sola vez, la PRIMERA vez que el usuario escribe algo en el buscador (Etapa 1A, carga diferida real, nunca al abrir el mapa). NC16 y titular viajan juntos, gateados por "datos" - ver decision de arquitectura en MapaService.js
     busquedaActiva: false,   // true = el panel del buscador esta desplegado
     filtrosActivo: false,    // true = el panel de filtros esta desplegado (unificacion UX con el mapa NE - oculto por default)
-    profundidadDesde: null,  // numero o null (sin filtro ese extremo)
+    profundidadDesde: null,  // numero o null (sin filtro ese extremo) - "Profundidad DEL POZO" (profundidadTotal)
     profundidadHasta: null,
+    tramoDesde: null,        // "Profundidad DE FILTROS" (tramosFiltrantes) - CONCEPTO DISTINTO del de arriba, nunca mezclar
+    tramoHasta: null,
+    opcionesCondicion: [],   // mapaLogic_construirOpcionesCampoNE sobre 'surgencia' (reusa la misma funcion generica, sin duplicar)
+    condicionActivos: {},    // multi-seleccion OR, mismo modelo que el resto
     marcadorBusquedaTemporal: null, // marker de "Mostrarlo igual" para un resultado de busqueda que los filtros activos esconden - se saca en cuanto cambia cualquier filtro o se abre una busqueda nueva, nunca sobrevive a eso
     contextoActual: null,    // {sessionToken, permisos, onAbrirPozo, enfoque} de la apertura en curso
     aperturaId: 0             // se incrementa en cada apertura/cierre - una respuesta de red de una apertura vieja se descarta si ya cambio (mismo patron de staleness que buscarPozo en app.js)
@@ -97,6 +103,11 @@
   var inputProfundidadHastaEl = document.getElementById('mapa-profundidad-hasta');
   var errorProfundidadEl = document.getElementById('mapa-profundidad-error');
   var btnProfundidadLimpiarEl = document.getElementById('btn-mapa-profundidad-limpiar');
+  var inputTramoDesdeEl = document.getElementById('mapa-tramo-desde');
+  var inputTramoHastaEl = document.getElementById('mapa-tramo-hasta');
+  var errorTramoEl = document.getElementById('mapa-tramo-error');
+  var btnTramoLimpiarEl = document.getElementById('btn-mapa-tramo-limpiar');
+  var condicionChipsEl = document.getElementById('mapa-condicion-chips');
 
   function mapaController_crearMapaSiHaceFalta() {
     if (mapaEstado.mapa) {
@@ -588,14 +599,88 @@
     }
   }
 
+  // --- Profundidad DE FILTROS (tramos filtrantes) ---
+  // CONCEPTO DISTINTO de "Profundidad del pozo" de arriba - mismo patron
+  // de validacion (reusa mapaLogic_validarRangoProfundidad tal cual, las
+  // reglas Desde/Hasta/negativos/error son identicas), pero el filtro en
+  // si es mapaLogic_filtrarPorTramoFiltrante (interseccion con AL MENOS
+  // UNO de los tramos del pozo, nunca "el pozo entero adentro").
+  function mapaController_aplicarTramo() {
+    var resultado = mapaLogic_validarRangoProfundidad(inputTramoDesdeEl.value, inputTramoHastaEl.value);
+    if (!resultado.valido) {
+      errorTramoEl.textContent = resultado.error;
+      errorTramoEl.hidden = false;
+      return;
+    }
+    errorTramoEl.hidden = true;
+    mapaEstado.tramoDesde = resultado.desde;
+    mapaEstado.tramoHasta = resultado.hasta;
+    if (mapaEstado.contextoActual && mapaEstado.puntosCrudos) {
+      mapaController_renderPuntos(mapaEstado.contextoActual);
+    }
+  }
+
+  function mapaController_limpiarTramo() {
+    inputTramoDesdeEl.value = '';
+    inputTramoHastaEl.value = '';
+    errorTramoEl.hidden = true;
+    mapaEstado.tramoDesde = null;
+    mapaEstado.tramoHasta = null;
+    if (mapaEstado.contextoActual && mapaEstado.puntosCrudos) {
+      mapaController_renderPuntos(mapaEstado.contextoActual);
+    }
+  }
+
+  // --- Condicion (tecnicas.surgencia) ---
+  // Mapeo de presentacion decidido por el usuario (Etapa siguiente,
+  // cierre): el VALOR real (Profundo/SemiSurgente/Natural, el que usa
+  // data-valor y mapaLogic_filtrarPorCampoMultipleNE para filtrar) NUNCA
+  // cambia - solo la ETIQUETA que ve el usuario en el chip. "Natural" se
+  // muestra como "Surgente" (era la pregunta abierta del diagnostico A2,
+  // ya confirmada), "SemiSurgente" como "Semisurgente" (capitalizacion
+  // legible). Un valor sin mapeo explicito se muestra tal cual (defensivo,
+  // no deberia pasar con los 3 valores reales conocidos).
+  var MAPA_ETIQUETAS_TIPO_POZO = { Profundo: 'Profundo', SemiSurgente: 'Semisurgente', Natural: 'Surgente' };
+  function mapaController_etiquetaTipoPozo(valor) {
+    return MAPA_ETIQUETAS_TIPO_POZO[valor] || valor;
+  }
+
+  // Multi-seleccion OR, mismo patron que Cuenca (chips dinamicos segun
+  // los valores reales del dataset - Profundo/SemiSurgente/Natural, ver
+  // diagnostico: es un campo categorico unico, nunca 2 booleanos).
+  function mapaController_construirChipCondicion(valor, etiqueta, activo) {
+    var chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'mapa-condicion-chip' + (activo ? ' active' : '');
+    chip.setAttribute('data-valor', valor);
+    chip.setAttribute('aria-pressed', activo ? 'true' : 'false');
+    chip.textContent = etiqueta;
+    return chip;
+  }
+
+  function mapaController_renderChipsCondicion() {
+    var sinSeleccion = Object.keys(mapaEstado.condicionActivos).length === 0;
+    condicionChipsEl.innerHTML = '';
+    condicionChipsEl.appendChild(mapaController_construirChipCondicion('todos', 'Todos', sinSeleccion));
+    mapaEstado.opcionesCondicion.forEach(function (o) {
+      condicionChipsEl.appendChild(mapaController_construirChipCondicion(o.valor, mapaController_etiquetaTipoPozo(o.valor) + ' (' + o.cantidad + ')', !!mapaEstado.condicionActivos[o.valor]));
+    });
+  }
+
+  function mapaController_poblarChipsCondicion(pozos) {
+    mapaEstado.opcionesCondicion = mapaLogic_construirOpcionesCampoNE(pozos, 'surgencia');
+    mapaController_renderChipsCondicion();
+  }
+
   // "Limpiar filtros": vuelve TODOS los grupos a "Todos"/vacio - Cuenca,
-  // Departamento, Ubicacion, Profundidad, "Tiene: Niveles estáticos"
-  // (apagado) - mismo criterio que "Limpiar filtros" en el mapa NE,
-  // nunca cierra ningun panel solo.
+  // Departamento, Ubicacion, Condicion, Profundidad del pozo, Profundidad
+  // de filtros, "Tiene: Niveles estáticos" (apagado) - mismo criterio
+  // que "Limpiar filtros" en el mapa NE, nunca cierra ningun panel solo.
   function mapaController_limpiarFiltros() {
     mapaEstado.cuencaActivos = {};
     mapaEstado.departamentoActivos = {};
     mapaEstado.estadosActivos = {};
+    mapaEstado.condicionActivos = {};
     mapaEstado.neActivo = false;
     chipNEEl.classList.remove('active');
     chipNEEl.setAttribute('aria-pressed', 'false');
@@ -604,8 +689,14 @@
     inputProfundidadDesdeEl.value = '';
     inputProfundidadHastaEl.value = '';
     errorProfundidadEl.hidden = true;
+    mapaEstado.tramoDesde = null;
+    mapaEstado.tramoHasta = null;
+    inputTramoDesdeEl.value = '';
+    inputTramoHastaEl.value = '';
+    errorTramoEl.hidden = true;
 
     mapaController_renderChipsCuenca();
+    mapaController_renderChipsCondicion();
     mapaController_actualizarChipsEstado();
     if (mapaEstado.puntosCrudos) {
       mapaController_renderChipsDepartamento(mapaEstado.puntosCrudos.length);
@@ -630,9 +721,10 @@
     // mapaController_mostrarResultadoTemporalmente).
     mapaController_limpiarMarcadorBusquedaTemporal();
 
-    // cuenca AND departamento AND estado AND "Tiene: Niveles estáticos"
-    // AND profundidad: se encadenan 5 filtros puros de mapaLogic.js, cada
-    // uno responsable de un solo criterio. cuenca/departamento son
+    // cuenca AND departamento AND estado AND condicion AND "Tiene:
+    // Niveles estáticos" AND profundidad del pozo AND profundidad de
+    // filtros: se encadenan 7 filtros puros de mapaLogic.js, cada uno
+    // responsable de un solo criterio. cuenca/departamento/condicion son
     // multi-seleccion OR (mapaLogic_filtrarPorCampoMultipleNE/
     // mapaLogic_filtrarPorDepartamentoMultiple - la primera es generica,
     // reusada tal cual pese al sufijo "NE" del nombre, ver su comentario
@@ -640,20 +732,29 @@
     // con la red NE (ver mapaLogic_filtrarPorNE) - nunca agrega puntos
     // que no esten ya en getMapaPozos, y nunca muestra los 34 puntos NE
     // especiales (sin wellId no pueden estar en el Set - ver
-    // mapaLogic_setWellIdNE).
-    var filtrados = mapaLogic_filtrarPorRangoProfundidad(
-      mapaLogic_filtrarPorNE(
-        mapaLogic_filtrarPorEstado(
-          mapaLogic_filtrarPorDepartamentoMultiple(
-            mapaLogic_filtrarPorCampoMultipleNE(mapaEstado.puntosCrudos, 'cuenca', mapaEstado.cuencaActivos),
-            mapaEstado.departamentoActivos
+    // mapaLogic_setWellIdNE). profundidad de filtros usa
+    // mapaLogic_filtrarPorTramoFiltrante (interseccion con al menos un
+    // tramo) - CONCEPTO DISTINTO de profundidad del pozo, nunca
+    // confundir aunque ambos usen el mismo tipo de input Desde/Hasta.
+    var filtrados = mapaLogic_filtrarPorTramoFiltrante(
+      mapaLogic_filtrarPorRangoProfundidad(
+        mapaLogic_filtrarPorCampoMultipleNE(
+          mapaLogic_filtrarPorNE(
+            mapaLogic_filtrarPorEstado(
+              mapaLogic_filtrarPorDepartamentoMultiple(
+                mapaLogic_filtrarPorCampoMultipleNE(mapaEstado.puntosCrudos, 'cuenca', mapaEstado.cuencaActivos),
+                mapaEstado.departamentoActivos
+              ),
+              mapaEstado.estadosActivos
+            ),
+            mapaEstado.neWellIdSet,
+            mapaEstado.neActivo
           ),
-          mapaEstado.estadosActivos
+          'surgencia', mapaEstado.condicionActivos
         ),
-        mapaEstado.neWellIdSet,
-        mapaEstado.neActivo
+        mapaEstado.profundidadDesde, mapaEstado.profundidadHasta, 'profundidad'
       ),
-      mapaEstado.profundidadDesde, mapaEstado.profundidadHasta, 'profundidad'
+      mapaEstado.tramoDesde, mapaEstado.tramoHasta, 'tramosFiltrantes'
     );
 
     mapaEstado.clusterGroup.clearLayers();
@@ -696,6 +797,10 @@
       mapaEstado.mapa.removeLayer(mapaEstado.miUbicacionMarker);
       mapaEstado.miUbicacionMarker = null;
     }
+    if (mapaEstado.radioCirculo) {
+      mapaEstado.mapa.removeLayer(mapaEstado.radioCirculo);
+      mapaEstado.radioCirculo = null;
+    }
 
     var enfoque = contexto.enfoque;
     if (!enfoque) {
@@ -709,6 +814,27 @@
 
       var bbox = cercaMioLogic_boundingBox(enfoque.lat, enfoque.lon, enfoque.radioMetros || CERCA_MIO_RADIO_DEFAULT_METROS);
       mapaEstado.mapa.fitBounds([[bbox.latMin, bbox.lonMin], [bbox.latMax, bbox.lonMax]], { padding: [20, 20] });
+    } else if (enfoque.tipo === 'puntoBusqueda') {
+      // "Ver todos en el mapa" cuando la referencia de Cerca Mio fue un
+      // punto elegido a mano (item D) - mismo flujo que 'ubicacion' pero
+      // con el icono/popup distinto (mapaShared_iconoPuntoBusqueda, color
+      // MAPA_COLOR_PUNTO_BUSQUEDA) y un circulo visual del radio pedido
+      // (liviano: un L.circle, no vuelve a pedir nada a Apps Script).
+      mapaEstado.miUbicacionMarker = L.marker([enfoque.lat, enfoque.lon], { icon: mapaShared_iconoPuntoBusqueda() })
+        .bindPopup('Punto de búsqueda');
+      mapaEstado.miUbicacionMarker.addTo(mapaEstado.mapa);
+
+      var radioMetrosCirculo = enfoque.radioMetros || CERCA_MIO_RADIO_DEFAULT_METROS;
+      mapaEstado.radioCirculo = L.circle([enfoque.lat, enfoque.lon], {
+        radius: radioMetrosCirculo,
+        color: MAPA_COLOR_PUNTO_BUSQUEDA,
+        weight: 1.5,
+        fillColor: MAPA_COLOR_PUNTO_BUSQUEDA,
+        fillOpacity: 0.08
+      }).addTo(mapaEstado.mapa);
+
+      var bboxPunto = cercaMioLogic_boundingBox(enfoque.lat, enfoque.lon, radioMetrosCirculo);
+      mapaEstado.mapa.fitBounds([[bboxPunto.latMin, bboxPunto.lonMin], [bboxPunto.latMax, bboxPunto.lonMax]], { padding: [20, 20] });
     } else if (enfoque.tipo === 'pozo') {
       // NO se usa clusterGroup.zoomToShowLayer(): su heuristica interna
       // (¿el marker ya esta "visible" segun sus bounds actuales? ¿hace
@@ -855,6 +981,7 @@
           mapaEstado.departamentoActivos = {};
           mapaEstado.cuencaActivos = {};
           mapaEstado.estadosActivos = {};
+          mapaEstado.condicionActivos = {};
           mapaController_actualizarChipsEstado();
           mapaEstado.neActivo = false;
           chipNEEl.classList.remove('active');
@@ -864,10 +991,16 @@
           inputProfundidadDesdeEl.value = '';
           inputProfundidadHastaEl.value = '';
           errorProfundidadEl.hidden = true;
+          mapaEstado.tramoDesde = null;
+          mapaEstado.tramoHasta = null;
+          inputTramoDesdeEl.value = '';
+          inputTramoHastaEl.value = '';
+          errorTramoEl.hidden = true;
         }
 
         mapaController_poblarChipsDepartamento(mapaEstado.puntosCrudos);
         mapaController_poblarChipsCuenca(mapaEstado.puntosCrudos);
+        mapaController_poblarChipsCondicion(mapaEstado.puntosCrudos);
         mapaController_renderPuntos(contexto, !!contexto.enfoque);
         // markersPorWellId ya esta poblado en este punto (renderPuntos lo
         // arma de forma sincronica, ANTES de pasarle los markers a
@@ -915,6 +1048,17 @@
     mapaController_renderPuntos(mapaEstado.contextoActual);
   });
 
+  // Condicion - mismo patron que Cuenca (chips dinamicos, multi-seleccion OR).
+  condicionChipsEl.addEventListener('click', function (e) {
+    var chip = e.target.closest ? e.target.closest('.mapa-condicion-chip') : null;
+    if (!chip || !mapaEstado.contextoActual || !mapaEstado.puntosCrudos) {
+      return;
+    }
+    mapaEstado.condicionActivos = mapaLogic_toggleFiltroMultiple(mapaEstado.condicionActivos, chip.getAttribute('data-valor'));
+    mapaController_renderChipsCondicion();
+    mapaController_renderPuntos(mapaEstado.contextoActual);
+  });
+
   btnDeptosExpandirEl.addEventListener('click', function () {
     mapaEstado.deptosExpandido = !mapaEstado.deptosExpandido;
     if (mapaEstado.puntosCrudos) {
@@ -927,6 +1071,9 @@
   inputProfundidadDesdeEl.addEventListener('input', mapaController_aplicarProfundidad);
   inputProfundidadHastaEl.addEventListener('input', mapaController_aplicarProfundidad);
   btnProfundidadLimpiarEl.addEventListener('click', mapaController_limpiarProfundidad);
+  inputTramoDesdeEl.addEventListener('input', mapaController_aplicarTramo);
+  inputTramoHastaEl.addEventListener('input', mapaController_aplicarTramo);
+  btnTramoLimpiarEl.addEventListener('click', mapaController_limpiarTramo);
 
   // Chips Ubicacion (Confirmada/Disponible + Todos - estaticos en el
   // HTML, no se recrean nunca, por eso un listener por chip alcanza) -

@@ -22,12 +22,33 @@
 // 6 cuencas conocidas (0 casos en el dataset real, pero el campo nunca
 // se inventa un valor).
 //
-// profundidad (filtro de profundidad): copia de tecnicas.profundidadTotal
-// del padron - el UNICO campo de "tecnicas" verificado como profundidad
-// TOTAL de la perforacion (profundidadBomba/profundidadAntepozo son
-// conceptos distintos, nunca se usan como fuente aca, ver diagnostico en
-// scripts/reindex_mapa.py). Cobertura real: 83.9% de los pozos mapeados -
-// null en el resto, nunca inventado ni derivado de otro campo.
+// profundidad (filtro "Profundidad del pozo"): copia de
+// tecnicas.profundidadTotal del padron - el UNICO campo de "tecnicas"
+// verificado como profundidad TOTAL de la perforacion
+// (profundidadBomba/profundidadAntepozo son conceptos distintos, nunca
+// se usan como fuente aca, ver diagnostico en scripts/reindex_mapa.py).
+// Cobertura real: 83.9% de los pozos mapeados - null en el resto, nunca
+// inventado ni derivado de otro campo.
+//
+// tramosFiltrantes (filtro "Profundidad de filtros" - CONCEPTO DISTINTO
+// de profundidad, nunca mezclar): copia estructural de
+// construccion.filtros[] (ya solo trae desde/hasta, diametro se
+// descarta desde reindex_mapa.py) - cada tramo se reconstruye campo por
+// campo igual que el punto completo, nunca "tal cual viene". Cobertura
+// real: 72.7% de los pozos mapeados, hasta 5 tramos por pozo.
+//
+// surgencia (filtro "Condicion"): copia de tecnicas.surgencia - UN campo
+// categorico (Profundo/SemiSurgente/Natural/null), nunca 2 booleanos
+// independientes "profundo"+"surgente" (ver diagnostico: la fuente real
+// no tiene esa forma). Se reenvia tal cual viene, nunca se re-etiqueta
+// ni se infiere un valor nuevo.
+function mapaService_sanitizarTramoFiltrante(tramo) {
+  return {
+    desde: tramo.desde !== undefined ? tramo.desde : null,
+    hasta: tramo.hasta !== undefined ? tramo.hasta : null
+  };
+}
+
 function mapaService_sanitizarPunto(punto) {
   return {
     wellId: punto.wellId,
@@ -35,7 +56,9 @@ function mapaService_sanitizarPunto(punto) {
     lon: punto.lon,
     estado: punto.estado,
     cuenca: punto.cuenca !== undefined ? punto.cuenca : null,
-    profundidad: punto.profundidadTotal !== undefined ? punto.profundidadTotal : null
+    profundidad: punto.profundidadTotal !== undefined ? punto.profundidadTotal : null,
+    tramosFiltrantes: (punto.tramosFiltrantes || []).map(mapaService_sanitizarTramoFiltrante),
+    surgencia: punto.surgencia !== undefined ? punto.surgencia : null
   };
 }
 
@@ -91,5 +114,5 @@ function mapaService_getIndiceBusqueda() {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { mapaService_getPozos, mapaService_sanitizarPunto, mapaService_getIndiceBusqueda, mapaService_sanitizarPuntoBusqueda };
+  module.exports = { mapaService_getPozos, mapaService_sanitizarPunto, mapaService_sanitizarTramoFiltrante, mapaService_getIndiceBusqueda, mapaService_sanitizarPuntoBusqueda };
 }

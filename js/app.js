@@ -1385,11 +1385,12 @@
     showScreen(accesoMapas() === 'selector' ? 'mapaSelector' : 'main');
   });
 
-  // La posicion del usuario (lat/lon) le llega a cercaMioController_abrir
-  // desde js/cercaMio.js via navigator.geolocation - app.js nunca la lee
-  // ni la reenvia a ningun lado, solo la deja pasar hacia
-  // abrirMapaDesde()/mapaController_abrir (que tampoco la manda a ningun
-  // backend, ver comentario al inicio de js/mapa.js).
+  // La posicion de referencia (lat/lon) le llega a cercaMioController_abrir
+  // desde js/cercaMio.js - via navigator.geolocation ("Mi ubicacion") o via
+  // un tap en el mini-mapa ("Elegir en mapa", Etapa siguiente item B) -
+  // app.js nunca la lee ni la reenvia a ningun lado, solo la deja pasar
+  // hacia abrirMapaDesde()/mapaController_abrir (que tampoco la manda a
+  // ningun backend, ver comentario al inicio de js/mapa.js).
   document.getElementById('btn-abrir-cerca-mio').addEventListener('click', function () {
     showScreen('cercaMio');
     cercaMioController_abrir({
@@ -1402,8 +1403,8 @@
       onVerEnMapa: function (wellId) {
         abrirMapaDesde({ tipo: 'pozo', wellId: wellId });
       },
-      onVerTodosEnMapa: function (lat, lon, radioMetros) {
-        abrirMapaDesde({ tipo: 'ubicacion', lat: lat, lon: lon, radioMetros: radioMetros });
+      onVerTodosEnMapa: function (lat, lon, radioMetros, tipoReferencia) {
+        abrirMapaDesde({ tipo: tipoReferencia === 'elegirMapa' ? 'puntoBusqueda' : 'ubicacion', lat: lat, lon: lon, radioMetros: radioMetros });
       }
     });
   });

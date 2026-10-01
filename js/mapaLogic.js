@@ -580,6 +580,55 @@ function mapaLogic_filtrarPorRangoProfundidad(puntos, desde, hasta, campo) {
   });
 }
 
+// --- Filtro "Profundidad de filtros" (tramos filtrantes/ranurados) ---
+//
+// CONCEPTO DISTINTO de "Profundidad del pozo" (mapaLogic_filtrarPorRangoProfundidad,
+// que compara contra un solo numero) - aca cada pozo trae una LISTA de
+// tramos {desde,hasta} (0 a 5 reales, ver diagnostico), y la semantica
+// pedida es "interseccion con al menos un tramo", no "el pozo entero
+// cae dentro del rango". La VALIDACION del rango ingresado (negativos,
+// Desde>Hasta, texto no numerico) se reusa tal cual de
+// mapaLogic_validarRangoProfundidad - son las mismas reglas, un solo
+// lugar que las define.
+
+// Un tramo {desde,hasta} intersecta [desde,hasta] del filtro si se
+// solapan en algun punto - equivalente a NO estar completamente afuera
+// a ningun lado. null en cualquier extremo del filtro = ese lado no
+// acota (comparacion siempre pasa de ese lado).
+function mapaLogic_tramoIntersectaRango(tramo, desde, hasta) {
+  if (!tramo || tramo.desde === null || tramo.desde === undefined || tramo.hasta === null || tramo.hasta === undefined) {
+    return false;
+  }
+  if (desde !== null && tramo.hasta < desde) {
+    return false;
+  }
+  if (hasta !== null && tramo.desde > hasta) {
+    return false;
+  }
+  return true;
+}
+
+// Un pozo pasa si CUALQUIERA de sus tramos intersecta el rango pedido
+// (ver ejemplo del pedido: Filtro1 80-110 + Filtro2 145-170, busqueda
+// 100-150 -> pasa por Filtro1 solo, 100<=110 y 80<=150). Ambos vacios =
+// sin filtro. Un pozo sin tramos (lista vacia/ausente) SIEMPRE queda
+// excluido si el filtro esta activo - mismo criterio que
+// mapaLogic_filtrarPorRangoProfundidad, un dato ausente no puede
+// "pasar" un filtro que si esta pidiendo algo.
+function mapaLogic_filtrarPorTramoFiltrante(puntos, desde, hasta, campo) {
+  var campoReal = campo || 'tramosFiltrantes';
+  if (desde === null && hasta === null) {
+    return puntos;
+  }
+  return puntos.filter(function (p) {
+    var tramos = p[campoReal];
+    if (!tramos || tramos.length === 0) {
+      return false;
+    }
+    return tramos.some(function (t) { return mapaLogic_tramoIntersectaRango(t, desde, hasta); });
+  });
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MAPA_DEPARTAMENTOS,
@@ -616,6 +665,8 @@ if (typeof module !== 'undefined' && module.exports) {
     mapaLogic_filtrarPorDepartamentoMultiple,
     mapaLogic_limpiarActivosInvalidos,
     mapaLogic_validarRangoProfundidad,
-    mapaLogic_filtrarPorRangoProfundidad
+    mapaLogic_filtrarPorRangoProfundidad,
+    mapaLogic_tramoIntersectaRango,
+    mapaLogic_filtrarPorTramoFiltrante
   };
 }

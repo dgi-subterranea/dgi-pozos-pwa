@@ -11,6 +11,18 @@
 var CERCA_MIO_RADIOS_METROS = [500, 1000, 2000, 5000];
 var CERCA_MIO_RADIO_DEFAULT_METROS = 2000;
 var CERCA_MIO_MAX_RESULTADOS = 30;
+// Rango del radio "Personalizado" (Etapa siguiente, item C - CONFIRMADO
+// por el usuario tras el reporte de diagnostico: maximo 100km en vez de
+// los 50km propuestos, justamente para habilitar explorar zonas rurales
+// con "Elegir en mapa" sin estar fisicamente ahi). Medido con datos reales
+// (script ad-hoc, centro denso en capital Mendoza): 10km=718 pozos,
+// 20km=2811, 50km=8617 (62% de los 13804 mapeados) - el costo de CALCULAR
+// nunca fue el limite (bounding box + Haversine sobre ~14000 puntos es
+// trivial, y CERCA_MIO_MAX_RESULTADOS ya recorta la lista final a 30 sin
+// importar cuantos candidatos haya). El minimo (0.1km = 100m) evita un
+// radio degenerado que no tiene sentido practico.
+var CERCA_MIO_RADIO_PERSONALIZADO_MIN_KM = 0.1;
+var CERCA_MIO_RADIO_PERSONALIZADO_MAX_KM = 100;
 
 var RADIO_TIERRA_METROS = 6371000;
 // Constante estandar (WGS84 esferico, suficiente para esta escala - no
@@ -92,14 +104,62 @@ function cercaMioLogic_buscarCercanos(pozos, lat, lon, radioMetros, maxResultado
   return conDistancia.slice(0, max);
 }
 
+// Cuenta cuantos pozos hay DENTRO del radio exacto, sin ordenar ni
+// recortar a maxResultados - mismo bounding box + Haversine que
+// cercaMioLogic_buscarCercanos, pero mas liviano (no arma objetos nuevos).
+// Uso: cuando buscarCercanos devuelve exactamente CERCA_MIO_MAX_RESULTADOS,
+// esto le permite a js/cercaMio.js distinguir "justo 30 en el radio" de
+// "hay mas de 30, se estan recortando" para mostrar el mensaje explicito
+// pedido por el usuario ("Se muestran los 30 pozos mas cercanos...").
+function cercaMioLogic_contarDentroDeRadio(pozos, lat, lon, radioMetros) {
+  var bbox = cercaMioLogic_boundingBox(lat, lon, radioMetros);
+  var total = 0;
+  for (var i = 0; i < pozos.length; i++) {
+    var p = pozos[i];
+    if (p.lat < bbox.latMin || p.lat > bbox.latMax || p.lon < bbox.lonMin || p.lon > bbox.lonMax) {
+      continue;
+    }
+    if (cercaMioLogic_haversineMetros(lat, lon, p.lat, p.lon) <= radioMetros) {
+      total++;
+    }
+  }
+  return total;
+}
+
+// Valida el input de texto del campo "Radio [___] km" (Personalizado).
+// Acepta decimales (coma o punto, HTML number input siempre entrega punto)
+// - nunca pide de nuevo ubicacion/dataset, es un recalculo local (ver
+// js/cercaMio.js). Mismo criterio de mensajes amigables que
+// mapaLogic_validarRangoProfundidad en js/mapaLogic.js.
+function cercaMioLogic_validarRadioPersonalizadoKm(valorStr) {
+  if (valorStr === null || valorStr === undefined || String(valorStr).trim() === '') {
+    return { valido: false, error: 'Ingresá un radio.' };
+  }
+  var n = Number(String(valorStr).replace(',', '.'));
+  if (isNaN(n) || !isFinite(n)) {
+    return { valido: false, error: 'El radio debe ser un número.' };
+  }
+  if (n < CERCA_MIO_RADIO_PERSONALIZADO_MIN_KM) {
+    return { valido: false, error: 'El radio mínimo es ' + CERCA_MIO_RADIO_PERSONALIZADO_MIN_KM + ' km.' };
+  }
+  if (n > CERCA_MIO_RADIO_PERSONALIZADO_MAX_KM) {
+    return { valido: false, error: 'El radio máximo es ' + CERCA_MIO_RADIO_PERSONALIZADO_MAX_KM + ' km.' };
+  }
+  return { valido: true, metros: Math.round(n * 1000) };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     CERCA_MIO_RADIOS_METROS,
     CERCA_MIO_RADIO_DEFAULT_METROS,
     CERCA_MIO_MAX_RESULTADOS,
+    CERCA_MIO_RADIO_PERSONALIZADO_MIN_KM,
+    CERCA_MIO_RADIO_PERSONALIZADO_MAX_KM,
     cercaMioLogic_haversineMetros,
     cercaMioLogic_boundingBox,
     cercaMioLogic_formatearDistancia,
-    cercaMioLogic_buscarCercanos
+    cercaMioLogic_buscarCercanos,
+    cercaMioLogic_contarDentroDeRadio,
+    cercaMioLogic_validarRadioPersonalizadoKm
   };
 }

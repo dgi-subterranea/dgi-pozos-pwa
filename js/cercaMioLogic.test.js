@@ -2,10 +2,14 @@ const {
   CERCA_MIO_RADIOS_METROS,
   CERCA_MIO_RADIO_DEFAULT_METROS,
   CERCA_MIO_MAX_RESULTADOS,
+  CERCA_MIO_RADIO_PERSONALIZADO_MIN_KM,
+  CERCA_MIO_RADIO_PERSONALIZADO_MAX_KM,
   cercaMioLogic_haversineMetros,
   cercaMioLogic_boundingBox,
   cercaMioLogic_formatearDistancia,
-  cercaMioLogic_buscarCercanos
+  cercaMioLogic_buscarCercanos,
+  cercaMioLogic_contarDentroDeRadio,
+  cercaMioLogic_validarRadioPersonalizadoKm
 } = require('./cercaMioLogic');
 
 // Punto de referencia real del dataset (04-0263, ya usado en otros
@@ -163,6 +167,92 @@ describe('cercaMioLogic_buscarCercanos', () => {
     const r = cercaMioLogic_buscarCercanos(pozos, LAT_REF, LON_REF, 2000);
     expect(r[0]).toMatchObject({ wellId: '04-0263', estado: 'C' });
     expect(typeof r[0].distanciaMetros).toBe('number');
+  });
+});
+
+describe('cercaMioLogic_contarDentroDeRadio', () => {
+  function pozo(wellId, deltaLatGrados) {
+    return { wellId: wellId, lat: LAT_REF + deltaLatGrados, lon: LON_REF, estado: 'D' };
+  }
+
+  test('cuenta exacto, sin recortar a CERCA_MIO_MAX_RESULTADOS', () => {
+    const pozos = [];
+    for (let i = 0; i < 50; i++) {
+      pozos.push(pozo('w-' + i, 0.0001 * i)); // todos dentro de ~500m
+    }
+    expect(cercaMioLogic_contarDentroDeRadio(pozos, LAT_REF, LON_REF, 5000)).toBe(50);
+  });
+
+  test('coincide con buscarCercanos cuando el total es menor al maximo', () => {
+    const pozos = [pozo('a', 0.001), pozo('b', 0.005), pozo('lejos', 1)];
+    const r = cercaMioLogic_buscarCercanos(pozos, LAT_REF, LON_REF, 2000);
+    expect(cercaMioLogic_contarDentroDeRadio(pozos, LAT_REF, LON_REF, 2000)).toBe(r.length);
+  });
+
+  test('sin candidatos -> 0', () => {
+    expect(cercaMioLogic_contarDentroDeRadio([pozo('lejos', 1)], LAT_REF, LON_REF, 2000)).toBe(0);
+  });
+
+  test('dataset vacio -> 0', () => {
+    expect(cercaMioLogic_contarDentroDeRadio([], LAT_REF, LON_REF, 2000)).toBe(0);
+  });
+});
+
+describe('cercaMioLogic_validarRadioPersonalizadoKm (item C, radio "Personalizado")', () => {
+  test('vacio o solo espacios -> invalido, pide ingresar un radio', () => {
+    expect(cercaMioLogic_validarRadioPersonalizadoKm('').valido).toBe(false);
+    expect(cercaMioLogic_validarRadioPersonalizadoKm('   ').valido).toBe(false);
+    expect(cercaMioLogic_validarRadioPersonalizadoKm(null).valido).toBe(false);
+    expect(cercaMioLogic_validarRadioPersonalizadoKm(undefined).valido).toBe(false);
+  });
+
+  test('no numerico -> invalido', () => {
+    expect(cercaMioLogic_validarRadioPersonalizadoKm('abc').valido).toBe(false);
+  });
+
+  test('cero o negativo -> invalido (menor al minimo)', () => {
+    expect(cercaMioLogic_validarRadioPersonalizadoKm('0').valido).toBe(false);
+    expect(cercaMioLogic_validarRadioPersonalizadoKm('-3').valido).toBe(false);
+  });
+
+  test('menor al minimo (0.1km) -> invalido', () => {
+    const r = cercaMioLogic_validarRadioPersonalizadoKm('0.05');
+    expect(r.valido).toBe(false);
+    expect(r.error).toContain('0.1 km');
+  });
+
+  test('exactamente el minimo (0.1km) -> valido', () => {
+    const r = cercaMioLogic_validarRadioPersonalizadoKm(String(CERCA_MIO_RADIO_PERSONALIZADO_MIN_KM));
+    expect(r.valido).toBe(true);
+    expect(r.metros).toBe(100);
+  });
+
+  test('mayor al maximo (100km) -> invalido', () => {
+    const r = cercaMioLogic_validarRadioPersonalizadoKm('101');
+    expect(r.valido).toBe(false);
+    expect(r.error).toContain('100 km');
+  });
+
+  test('exactamente el maximo -> valido', () => {
+    const r = cercaMioLogic_validarRadioPersonalizadoKm(String(CERCA_MIO_RADIO_PERSONALIZADO_MAX_KM));
+    expect(r.valido).toBe(true);
+    expect(r.metros).toBe(CERCA_MIO_RADIO_PERSONALIZADO_MAX_KM * 1000);
+  });
+
+  test('50km (limite anterior, ya no es el maximo) -> sigue siendo valido', () => {
+    expect(cercaMioLogic_validarRadioPersonalizadoKm('50').valido).toBe(true);
+  });
+
+  test('entero valido -> metros = km*1000', () => {
+    expect(cercaMioLogic_validarRadioPersonalizadoKm('7').metros).toBe(7000);
+  });
+
+  test('decimal con punto -> acepta y convierte bien', () => {
+    expect(cercaMioLogic_validarRadioPersonalizadoKm('2.5').metros).toBe(2500);
+  });
+
+  test('decimal con coma -> acepta igual (input numerico de HTML siempre manda punto, pero por las dudas)', () => {
+    expect(cercaMioLogic_validarRadioPersonalizadoKm('2,5').metros).toBe(2500);
   });
 });
 

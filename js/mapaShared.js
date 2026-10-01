@@ -35,6 +35,15 @@ var MAPA_COLOR_NE = '#073e54';
 // nunca un color nuevo sin relacion con la paleta existente.
 var MAPA_COLOR_NE_NIVEL = '#4fa3c4';
 
+// "Punto de busqueda" (Etapa siguiente, item D - Cerca Mio con punto
+// elegido en el mapa, en vez de GPS). Mismo tono que --color-warn (ya
+// usado en chips de advertencia en otras pantallas) - deliberadamente
+// NO el teal de los pozos (Confirmada/Disponible/NE) ni el terracota de
+// --color-accent (ya es "Tu ubicacion", ver mapa-mi-ubicacion-punto en
+// css/styles.css): con 2 referencias posibles sobre el mismo mapa (GPS vs
+// punto elegido), tienen que poder distinguirse a simple vista.
+var MAPA_COLOR_PUNTO_BUSQUEDA = '#8a5a12';
+
 function mapaShared_cargarScript(src) {
   return new Promise(function (resolve, reject) {
     var script = document.createElement('script');
@@ -229,4 +238,22 @@ function mapaShared_crearMarkerNE(punto, contexto) {
 
   marker.bindPopup(el);
   return marker;
+}
+
+// Icono "pin" (SVG inline, sin imagenes vendorizadas) para "Punto de
+// busqueda" (Etapa siguiente, item D) - una forma de gota/pin clasica a
+// proposito: es justo la lectura que se evito para NE ("nunca la silueta
+// de pin de Google Maps", ver mapaShared_iconoNE) porque aca el
+// significado es distinto - no es un pozo ni un punto de monitoreo, es
+// "un lugar que el usuario toco en el mapa", y un pin es la forma mas
+// reconocible para eso. Nunca se confunde con los circleMarker de pozos
+// (son circulos chicos y lisos) ni con el circulo-pulso de "Tu ubicacion"
+// (mapaController_iconoMiUbicacion en js/mapa.js, color --color-accent) -
+// ver MAPA_COLOR_PUNTO_BUSQUEDA arriba.
+function mapaShared_iconoPuntoBusqueda() {
+  var svg = '<svg width="30" height="38" viewBox="0 0 30 38" xmlns="http://www.w3.org/2000/svg">' +
+    '<path d="M15 1C7.8 1 2 6.8 2 14c0 10 13 23 13 23s13-13 13-23C28 6.8 22.2 1 15 1z" fill="' + MAPA_COLOR_PUNTO_BUSQUEDA + '" stroke="#ffffff" stroke-width="2"/>' +
+    '<circle cx="15" cy="14" r="5" fill="#ffffff"/>' +
+    '</svg>';
+  return L.divIcon({ className: 'mapa-punto-busqueda-icono', html: svg, iconSize: [30, 38], iconAnchor: [15, 36] });
 }

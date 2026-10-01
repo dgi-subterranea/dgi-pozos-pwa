@@ -18,12 +18,12 @@ describe('mapaService_getPozos', () => {
     expect(result).toEqual({ found: false });
   });
 
-  test('encontrado -> found:true con los puntos (incluida cuenca/profundidad) y la metadata', () => {
+  test('encontrado -> found:true con los puntos (incluida cuenca/profundidad/tramosFiltrantes/surgencia) y la metadata', () => {
     global.mapaRepository_getPozos.mockReturnValue({
       found: true,
       pozos: [
-        { wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza', profundidadTotal: 154 },
-        { wellId: '05-0001', lat: -33.1, lon: -68.5, estado: 'D', cuenca: 'Río Tunuyán Inferior', profundidadTotal: null }
+        { wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza', profundidadTotal: 154, tramosFiltrantes: [{ desde: 80, hasta: 110 }], surgencia: 'Profundo' },
+        { wellId: '05-0001', lat: -33.1, lon: -68.5, estado: 'D', cuenca: 'Río Tunuyán Inferior', profundidadTotal: null, tramosFiltrantes: [], surgencia: null }
       ]
     });
     global.mapaRepository_getMetadata.mockReturnValue({
@@ -36,8 +36,8 @@ describe('mapaService_getPozos', () => {
 
     expect(result.found).toBe(true);
     expect(result.pozos).toEqual([
-      { wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza', profundidad: 154 },
-      { wellId: '05-0001', lat: -33.1, lon: -68.5, estado: 'D', cuenca: 'Río Tunuyán Inferior', profundidad: null }
+      { wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza', profundidad: 154, tramosFiltrantes: [{ desde: 80, hasta: 110 }], surgencia: 'Profundo' },
+      { wellId: '05-0001', lat: -33.1, lon: -68.5, estado: 'D', cuenca: 'Río Tunuyán Inferior', profundidad: null, tramosFiltrantes: [], surgencia: null }
     ]);
     expect(result.metadata).toEqual({ generadoEl: '2026-09-15T13:33:58-03:00', totalPuntos: 13804 });
   });
@@ -62,8 +62,8 @@ describe('mapaService_getPozos', () => {
 
     const result = MapaService.mapaService_getPozos();
 
-    expect(result.pozos).toEqual([{ wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza', profundidad: 154 }]);
-    expect(Object.keys(result.pozos[0]).sort()).toEqual(['cuenca', 'estado', 'lat', 'lon', 'profundidad', 'wellId']);
+    expect(result.pozos).toEqual([{ wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza', profundidad: 154, tramosFiltrantes: [], surgencia: null }]);
+    expect(Object.keys(result.pozos[0]).sort()).toEqual(['cuenca', 'estado', 'lat', 'lon', 'profundidad', 'surgencia', 'tramosFiltrantes', 'wellId']);
   });
 
   test('metadata correcta - solo generadoEl y totalPuntos, aunque el archivo traiga mas campos', () => {
@@ -101,12 +101,16 @@ describe('mapaService_getPozos', () => {
 });
 
 describe('mapaService_sanitizarPunto', () => {
-  test('conserva wellId/lat/lon/estado/cuenca/profundidad, en ese orden de claves', () => {
+  test('conserva wellId/lat/lon/estado/cuenca/profundidad/tramosFiltrantes/surgencia, en ese orden de claves', () => {
     const sanitizado = MapaService.mapaService_sanitizarPunto({
-      wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza', profundidadTotal: 154, ne: true, titular: 'X'
+      wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza', profundidadTotal: 154,
+      tramosFiltrantes: [{ desde: 80, hasta: 110 }], surgencia: 'Profundo', ne: true, titular: 'X'
     });
-    expect(sanitizado).toEqual({ wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza', profundidad: 154 });
-    expect(Object.keys(sanitizado)).toEqual(['wellId', 'lat', 'lon', 'estado', 'cuenca', 'profundidad']);
+    expect(sanitizado).toEqual({
+      wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza', profundidad: 154,
+      tramosFiltrantes: [{ desde: 80, hasta: 110 }], surgencia: 'Profundo'
+    });
+    expect(Object.keys(sanitizado)).toEqual(['wellId', 'lat', 'lon', 'estado', 'cuenca', 'profundidad', 'tramosFiltrantes', 'surgencia']);
   });
 
   // Etapa 1C: 0 casos reales (los 13.804 pozos caen dentro de una de las
@@ -141,6 +145,62 @@ describe('mapaService_sanitizarPunto', () => {
       wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', profundidadTotal: 12.5
     });
     expect(sanitizado.profundidad).toBe(12.5);
+  });
+
+  // Filtro "Profundidad de filtros" (distinto de "Profundidad del
+  // pozo"): campoFuente construccion.filtros[], ver scripts/reindex_mapa.py.
+  test('tramosFiltrantes ausente en la fuente -> [], no rompe', () => {
+    const sanitizado = MapaService.mapaService_sanitizarPunto({
+      wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C'
+    });
+    expect(sanitizado.tramosFiltrantes).toEqual([]);
+  });
+
+  test('tramosFiltrantes con multiples tramos se reconstruyen campo por campo (descarta diametro u otro campo extra)', () => {
+    const sanitizado = MapaService.mapaService_sanitizarPunto({
+      wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C',
+      tramosFiltrantes: [{ desde: 80, hasta: 110, diametro: 10 }, { desde: 145, hasta: 170, diametro: 8 }]
+    });
+    expect(sanitizado.tramosFiltrantes).toEqual([{ desde: 80, hasta: 110 }, { desde: 145, hasta: 170 }]);
+    expect(Object.keys(sanitizado.tramosFiltrantes[0])).toEqual(['desde', 'hasta']);
+  });
+
+  // surgencia: campo CATEGORICO unico (ver diagnostico, nunca 2
+  // booleanos independientes) - se reenvia tal cual, nunca se re-etiqueta.
+  test('surgencia ausente en la fuente -> null, no rompe', () => {
+    const sanitizado = MapaService.mapaService_sanitizarPunto({
+      wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C'
+    });
+    expect(sanitizado.surgencia).toBeNull();
+  });
+
+  test('surgencia con cada valor real se preserva tal cual (Profundo/SemiSurgente/Natural)', () => {
+    ['Profundo', 'SemiSurgente', 'Natural'].forEach((valor) => {
+      const sanitizado = MapaService.mapaService_sanitizarPunto({
+        wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', surgencia: valor
+      });
+      expect(sanitizado.surgencia).toBe(valor);
+    });
+  });
+});
+
+describe('mapaService_sanitizarTramoFiltrante', () => {
+  test('conserva solo desde/hasta', () => {
+    const sanitizado = MapaService.mapaService_sanitizarTramoFiltrante({ desde: 80, hasta: 110, diametro: 10 });
+    expect(sanitizado).toEqual({ desde: 80, hasta: 110 });
+    expect(Object.keys(sanitizado)).toEqual(['desde', 'hasta']);
+  });
+
+  test('desde/hasta ausentes -> null, no rompe', () => {
+    const sanitizado = MapaService.mapaService_sanitizarTramoFiltrante({});
+    expect(sanitizado).toEqual({ desde: null, hasta: null });
+  });
+
+  // Real: 19 tramos con desde=0 (filtro desde la superficie) - 0 es un
+  // valor legitimo, nunca se trata como "ausente".
+  test('desde:0 (real, filtro desde la superficie) se preserva, no se confunde con ausente', () => {
+    const sanitizado = MapaService.mapaService_sanitizarTramoFiltrante({ desde: 0, hasta: 50 });
+    expect(sanitizado.desde).toBe(0);
   });
 });
 

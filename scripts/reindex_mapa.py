@@ -8,23 +8,29 @@ Uso:
 
 Produce, en el directorio --out:
   pozos.json          - lista de puntos [{wellId, lat, lon, estado, cuenca,
-                  profundidadTotal}], SOLO esos 6 campos (nunca titular/
-                  distrito/uso/NE/ningun otro dato registral - ver
-                  adjustment #1 de la Etapa 5B/5C: el dataset general del
-                  mapa no debe permitir inferir membresia a la red NE ni
-                  exponer nada que dependa de "datos", solo de
-                  "ubicacion"). cuenca (Etapa 1C) se calcula UNA sola vez
-                  aca, offline, via point-in-polygon contra Cuencas/WGS84/
-                  vm_cuencas_provincia.shp (ver scripts/cuenca_utils.py).
-                  profundidadTotal se copia tal cual de
-                  tecnicas.profundidadTotal del padron (unico campo de
-                  profundidad verificado como "profundidad total de la
-                  perforacion" - profundidadBomba/profundidadAntepozo son
-                  conceptos distintos, nunca se usan aca) - None si el
-                  padron no lo tiene (83.9% de cobertura medida sobre los
-                  puntos mapeados). Ninguno de los 2 se recalcula en el
-                  backend/frontend, que solo leen estos campos ya
-                  resueltos.
+                  profundidadTotal, tramosFiltrantes, surgencia}], SOLO
+                  esos 8 campos (nunca titular/distrito/uso/NE/ningun otro
+                  dato registral - ver adjustment #1 de la Etapa 5B/5C: el
+                  dataset general del mapa no debe permitir inferir
+                  membresia a la red NE ni exponer nada que dependa de
+                  "datos", solo de "ubicacion"). cuenca (Etapa 1C) se
+                  calcula UNA sola vez aca, offline, via point-in-polygon
+                  contra Cuencas/WGS84/vm_cuencas_provincia.shp (ver
+                  scripts/cuenca_utils.py). profundidadTotal se copia tal
+                  cual de tecnicas.profundidadTotal del padron (unico
+                  campo de profundidad verificado como "profundidad total
+                  de la perforacion" - profundidadBomba/profundidadAntepozo
+                  son conceptos distintos, nunca se usan aca). tramosFiltrantes
+                  (filtro "Profundidad de filtros", Etapa siguiente) es
+                  construccion.filtros[] con SOLO {desde,hasta} por tramo
+                  (diametro no se copia, no hace falta para filtrar) - un
+                  pozo puede tener 0 a 5 tramos reales. surgencia es un
+                  campo CATEGORICO unico (Profundo/SemiSurgente/Natural/
+                  None, tal cual viene de tecnicas.surgencia) - NUNCA 2
+                  booleanos independientes, ver diagnostico de esa etapa.
+                  Ninguno de estos campos se recalcula en el backend/
+                  frontend, que solo leen lo que ya viene resuelto del
+                  padron.
   cuenca_limite_100m.json - diagnostico (Etapa 1C, "mantener documentados,
                   nunca reasignar por proximidad"): {criterio, umbralMetros,
                   cantidad, pozos:[...]} - los pozos clasificados a menos
@@ -183,6 +189,21 @@ def construir_dataset(registro_dir, warnings):
             titularidad = record.get('titularidad') or {}
             identificacion = record.get('identificacion') or {}
             tecnicas = record.get('tecnicas') or {}
+            construccion = record.get('construccion') or {}
+            # tramosFiltrantes (filtro "Profundidad de filtros", distinto de
+            # "Profundidad del pozo"): construccion.filtros[] ya viene
+            # parseado por reindex_pozos.py desde las columnas CSV "Filtro
+            # 1".."Filtro 5" ("190,00-220,00 (Diam.8,00)" -> {desde,hasta,
+            # diametro}, sentinela "0,00-0,00" ya excluido ahi). Solo se
+            # copian desde/hasta - diametro no hace falta para filtrar y no
+            # vale la pena el payload. Cobertura real: 72.7% de los puntos
+            # mapeados (10032/13804), hasta 5 tramos por pozo (3517 pozos
+            # con 2+). None/lista vacia si el padron no tiene datos de
+            # construccion - nunca se inventa.
+            tramos_filtrantes = [
+                {'desde': f['desde'], 'hasta': f['hasta']}
+                for f in (construccion.get('filtros') or [])
+            ]
             puntos.append({
                 'wellId': well_id, 'lat': lat, 'lon': lon, 'estado': codigo,
                 'titular': titularidad.get('titular') or None,
@@ -195,6 +216,15 @@ def construir_dataset(registro_dir, warnings):
                 # mapeados (11578/13804). None si el padron no lo tiene -
                 # nunca se inventa ni se deriva de otro campo.
                 'profundidadTotal': tecnicas.get('profundidadTotal'),
+                'tramosFiltrantes': tramos_filtrantes,
+                # surgencia (filtro "Condicion"): campo UNICO de 4 valores
+                # reales medidos (Profundo/SemiSurgente/Natural/None) - NO
+                # son 2 booleanos independientes "Profundo"+"Surgente" que
+                # puedan coexistir, es una sola clasificacion categorica de
+                # la columna CSV "Surgencia", tal cual viene (nunca se
+                # renombra "Natural" a "Surgente" ni se inventa un umbral
+                # de profundidad para derivar "Profundo" - ver diagnostico).
+                'surgencia': tecnicas.get('surgencia'),
             })
 
     if sin_ubicacion_resuelta:
@@ -279,7 +309,10 @@ def generar(registro_dir, out_dir, umbral_particion_ignorado=None, cuencas_shp=C
     # titular/nc16") para que agregar un campo nuevo a
     # puntos_busqueda_fuente en el futuro no se filtre por default a este
     # archivo publico.
-    puntos = [{'wellId': p['wellId'], 'lat': p['lat'], 'lon': p['lon'], 'estado': p['estado'], 'profundidadTotal': p['profundidadTotal']} for p in puntos_busqueda_fuente]
+    puntos = [{
+        'wellId': p['wellId'], 'lat': p['lat'], 'lon': p['lon'], 'estado': p['estado'],
+        'profundidadTotal': p['profundidadTotal'], 'tramosFiltrantes': p['tramosFiltrantes'], 'surgencia': p['surgencia'],
+    } for p in puntos_busqueda_fuente]
 
     diagnostico_cuenca = clasificar_cuencas(puntos, cuencas_shp, warnings)
 
@@ -353,6 +386,26 @@ def generar(registro_dir, out_dir, umbral_particion_ignorado=None, cuencas_shp=C
             # (pedido explicito). Ver PROFUNDIDAD_OUTLIER_METROS.
             'outliersUmbralMetros': PROFUNDIDAD_OUTLIER_METROS,
             'outliersMayoresA': sum(1 for p in puntos if p['profundidadTotal'] is not None and p['profundidadTotal'] > PROFUNDIDAD_OUTLIER_METROS),
+        },
+        'tramosFiltrantes': {
+            'campoFuente': 'construccion.filtros[] (CSV: columnas "Filtro 1".."Filtro 5")',
+            'conTramos': sum(1 for p in puntos if p['tramosFiltrantes']),
+            'sinTramos': sum(1 for p in puntos if not p['tramosFiltrantes']),
+            'con2OMasTramos': sum(1 for p in puntos if len(p['tramosFiltrantes']) >= 2),
+            # Mismo criterio que profundidad: solo se cuentan y documentan,
+            # nunca se corrige el dato fuente ni se usa para una escala
+            # automatica.
+            'outliersUmbralMetros': PROFUNDIDAD_OUTLIER_METROS,
+            'outliersMayoresA': sum(1 for p in puntos for t in p['tramosFiltrantes'] if t['hasta'] is not None and t['hasta'] > PROFUNDIDAD_OUTLIER_METROS),
+        },
+        'surgencia': {
+            'campoFuente': 'tecnicas.surgencia (CSV: columna "Surgencia")',
+            # Campo CATEGORICO unico, no 2 booleanos - se documenta la
+            # distribucion real tal cual (ver nota en construir_dataset).
+            # 'sinDato' en vez de clave None - json.dump(sort_keys=True)
+            # no puede ordenar un dict con una clave None mezclada con
+            # claves string (TypeError real, encontrado generando esto).
+            'conteo': dict(Counter((p['surgencia'] or 'sinDato') for p in puntos)),
         },
         'excluidos': dict(excluidos),
         'busqueda': {
@@ -447,6 +500,9 @@ def main(argv=None):
     print()
     print(f'Profundidad (tecnicas.profundidadTotal): con dato {resultado["metadata"]["profundidad"]["conProfundidad"]}, sin dato {resultado["metadata"]["profundidad"]["sinProfundidad"]}')
     print(f'  outliers (>{resultado["metadata"]["profundidad"]["outliersUmbralMetros"]}m, documentados - dato fuente sin tocar, nunca define escalas automaticas): {resultado["metadata"]["profundidad"]["outliersMayoresA"]}')
+    print(f'Tramos filtrantes (construccion.filtros[]): con dato {resultado["metadata"]["tramosFiltrantes"]["conTramos"]}, sin dato {resultado["metadata"]["tramosFiltrantes"]["sinTramos"]}, con 2+ tramos {resultado["metadata"]["tramosFiltrantes"]["con2OMasTramos"]}')
+    print(f'  outliers (>{resultado["metadata"]["tramosFiltrantes"]["outliersUmbralMetros"]}m): {resultado["metadata"]["tramosFiltrantes"]["outliersMayoresA"]}')
+    print(f'Surgencia (tecnicas.surgencia): {resultado["metadata"]["surgencia"]["conteo"]}')
     print()
     print(f'Tamano pozos.json: {raw_bytes} bytes ({formatear_kb(raw_bytes)})')
     print(f'Tamano gzip (nivel 9): {gzip_bytes} bytes ({formatear_kb(gzip_bytes)}) - {gzip_bytes / raw_bytes * 100:.1f}% del original')

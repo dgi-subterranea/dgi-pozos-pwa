@@ -1512,7 +1512,8 @@ table.ne-table tr:last-child td {
 }
 .mapa-depto-chip,
 .mapa-ne-campo-chip,
-.mapa-cuenca-chip {
+.mapa-cuenca-chip,
+.mapa-condicion-chip {
   min-height: 34px;
   padding: 6px 14px;
   font-size: 0.8rem;
@@ -1525,12 +1526,14 @@ table.ne-table tr:last-child td {
 }
 .mapa-depto-chip:hover,
 .mapa-ne-campo-chip:hover,
-.mapa-cuenca-chip:hover {
+.mapa-cuenca-chip:hover,
+.mapa-condicion-chip:hover {
   background: var(--color-primary-tint);
 }
 .mapa-depto-chip.active,
 .mapa-ne-campo-chip.active,
-.mapa-cuenca-chip.active {
+.mapa-cuenca-chip.active,
+.mapa-condicion-chip.active {
   background: var(--color-primary);
   color: #fff;
   border-color: var(--color-primary);
@@ -1834,6 +1837,99 @@ table.ne-table tr:last-child td {
 
 /* --- Pozos Cerca Mio: chips de radio + lista de resultados + estados
    (pidiendo permiso/denegado/no disponible/error/sin resultados) --- */
+
+/* Referencia (item B): mismo lenguaje visual que .cercamio-radio-chip,
+   grupo separado arriba de los chips de radio. */
+.cercamio-referencia {
+  display: flex;
+  gap: 8px;
+  padding: 14px 18px 0;
+}
+.cercamio-referencia-chip {
+  flex: 1;
+  min-height: 40px;
+  padding: 8px 16px;
+  border-radius: 10px;
+  font-size: 0.92rem;
+  font-weight: 600;
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1.5px solid var(--color-border);
+  box-shadow: none;
+}
+.cercamio-referencia-chip:hover {
+  background: var(--color-primary-tint);
+}
+.cercamio-referencia-chip.active {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+
+/* Radio "Personalizado" (item C): mismo campo numerico + error que
+   .mapa-profundidad-campo/.mapa-profundidad-error del panel de Provincia,
+   reusado tal cual para consistencia visual. */
+.cercamio-radio-personalizado {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 18px 14px;
+}
+.cercamio-radio-personalizado label {
+  font-size: 0.88rem;
+  color: var(--color-text-soft);
+}
+.cercamio-radio-personalizado input {
+  width: 90px;
+  min-height: 38px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1.5px solid var(--color-border);
+  font-size: 0.95rem;
+}
+.cercamio-radio-personalizado span {
+  font-size: 0.88rem;
+  color: var(--color-text-soft);
+}
+.cercamio-radio-personalizado .mapa-profundidad-error {
+  flex-basis: 100%;
+}
+
+/* Elegir en mapa (item B/G): mini-mapa Leaflet + instruccion + boton de
+   confirmacion. Alto fijo generoso en mobile (pantalla tactil, necesita
+   espacio para tocar con precision), igual que .mapa-leaflet-wrap. */
+.cercamio-picker {
+  width: 100%;
+  align-items: stretch;
+}
+.cercamio-picker-instruccion {
+  text-align: center;
+  font-size: 0.9rem;
+  color: var(--color-text-soft);
+  margin: 0 0 10px;
+}
+#cercamio-picker-mapa {
+  width: 100%;
+  height: 320px;
+  border-radius: 12px;
+  border: 1.5px solid var(--color-border-soft);
+  margin-bottom: 14px;
+}
+.cercamio-picker .button {
+  align-self: center;
+}
+
+/* Marcador "Punto de busqueda" (item D, mapa Provincia): pin triangular en
+   --color-primary (distinto a proposito del circulo-pulso celeste/accent
+   de "Tu ubicacion" - mapaController_iconoMiUbicacion - nunca se confunden
+   a simple vista). Mismo truco background/border:none que el resto de los
+   divIcon (ver comentario de .mapa-mi-ubicacion-icono). */
+.mapa-punto-busqueda-icono {
+  background: none;
+  border: none;
+}
+
 .cercamio-radios {
   display: flex;
   gap: 8px;
@@ -2129,8 +2225,14 @@ table.ne-table tr:last-child td {
   #screen-cerca-mio .tv-header {
     padding: 22px 34px 18px;
   }
+  .cercamio-referencia {
+    padding: 18px 34px 0;
+  }
   .cercamio-radios {
     padding: 14px 34px;
+  }
+  .cercamio-radio-personalizado {
+    padding: 0 34px 14px;
   }
   .cercamio-viewport {
     padding: 26px 34px 32px;
