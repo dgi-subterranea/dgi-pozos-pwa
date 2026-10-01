@@ -74,8 +74,20 @@
     opcionesCondicion: [],   // mapaLogic_construirOpcionesCampoNE sobre 'surgencia' (reusa la misma funcion generica, sin duplicar)
     condicionActivos: {},    // multi-seleccion OR, mismo modelo que el resto
     marcadorBusquedaTemporal: null, // marker de "Mostrarlo igual" para un resultado de busqueda que los filtros activos esconden - se saca en cuanto cambia cualquier filtro o se abre una busqueda nueva, nunca sobrevive a eso
-    contextoActual: null,    // {sessionToken, permisos, onAbrirPozo, enfoque} de la apertura en curso
-    aperturaId: 0             // se incrementa en cada apertura/cierre - una respuesta de red de una apertura vieja se descarta si ya cambio (mismo patron de staleness que buscarPozo en app.js)
+    contextoActual: null,    // {sessionToken, permisos, onAbrirPozo, onSeleccionarPorRadio, enfoque} de la apertura en curso
+    aperturaId: 0,            // se incrementa en cada apertura/cierre - una respuesta de red de una apertura vieja se descarta si ya cambio (mismo patron de staleness que buscarPozo en app.js)
+
+    // Etapa "seleccion multiple + lote" (item C/J): estado del dibujo de
+    // poligono, PURAMENTE local a esta pantalla - nunca sale de aca salvo
+    // como lista de wellId (ver mapaController_usarSeleccionPoligono ->
+    // seleccionController_proponerSeleccion).
+    dibujando: false,
+    verticesPoligono: [],        // [{lat,lon}] en el orden en que se tocaron
+    marcadoresVerticesLayer: null, // L.LayerGroup con un circleMarker por vertice + L.Polyline provisional
+    poligonoCerradoLayer: null,   // L.Polygon semitransparente, solo mientras se revisa el resultado ANTES de "Usar seleccion"
+    poligonoSeleccionLayer: null, // L.Polygon persistente de la seleccion ACTUAL (item 12) - se dibuja/saca via mapaController_actualizarPoligonoSeleccionPersistente
+    ultimosWellIdsPoligono: [],   // resultado de seleccionLogic_filtrarPorPoligono del ultimo "Cerrar área", listo para "Usar selección"
+    verSoloSeleccionados: false   // toggle (item J), nunca un filtro permanente - se resetea en cada apertura
   };
 
   var loadingEl = document.getElementById('mapa-loading');
@@ -108,6 +120,21 @@
   var errorTramoEl = document.getElementById('mapa-tramo-error');
   var btnTramoLimpiarEl = document.getElementById('btn-mapa-tramo-limpiar');
   var condicionChipsEl = document.getElementById('mapa-condicion-chips');
+  var btnSeleccionarToggleEl = document.getElementById('btn-mapa-seleccionar-toggle');
+  var seleccionarMenuEl = document.getElementById('mapa-seleccionar-menu');
+  var btnSeleccionarRadioEl = document.getElementById('btn-mapa-seleccionar-radio');
+  var btnSeleccionarPoligonoEl = document.getElementById('btn-mapa-seleccionar-poligono');
+  var btnVerSoloSeleccionadosEl = document.getElementById('btn-mapa-ver-solo-seleccionados');
+  var dibujoPanelEl = document.getElementById('mapa-dibujo-panel');
+  var dibujoMensajeEl = document.getElementById('mapa-dibujo-mensaje');
+  var dibujoAccionesDibujandoEl = document.getElementById('mapa-dibujo-acciones-dibujando');
+  var dibujoAccionesCerradoEl = document.getElementById('mapa-dibujo-acciones-cerrado');
+  var btnDibujoDeshacerEl = document.getElementById('btn-mapa-dibujo-deshacer');
+  var btnDibujoCerrarEl = document.getElementById('btn-mapa-dibujo-cerrar');
+  var btnDibujoCancelarEl = document.getElementById('btn-mapa-dibujo-cancelar');
+  var btnDibujoUsarEl = document.getElementById('btn-mapa-dibujo-usar');
+  var btnDibujoRedibujarEl = document.getElementById('btn-mapa-dibujo-redibujar');
+  var btnDibujoCancelar2El = document.getElementById('btn-mapa-dibujo-cancelar-2');
 
   function mapaController_crearMapaSiHaceFalta() {
     if (mapaEstado.mapa) {
@@ -123,6 +150,17 @@
       disableClusteringAtZoom: MAPA_ZOOM_INDIVIDUAL
     });
     mapaEstado.mapa.addLayer(mapaEstado.clusterGroup);
+
+    // Item C: UN solo listener de click en el mapa, vive toda la vida de
+    // la instancia - solo actua si mapaEstado.dibujando esta activo. Los
+    // clicks sobre un marker individual no llegan aca (Leaflet no
+    // propaga el click del marker al mapa), asi que tocar un pozo
+    // mientras se dibuja no agrega un vertice por accidente.
+    mapaEstado.mapa.on('click', function (e) {
+      if (mapaEstado.dibujando) {
+        mapaController_agregarVerticePoligono(e.latlng.lat, e.latlng.lng);
+      }
+    });
   }
 
   // Nunca recarga el dataset ni toca clusterGroup/markers/vista - ver
@@ -173,10 +211,18 @@
   // dispara el fetch (ver mapaLogic_debeConsultarSummary).
   function mapaController_crearMarker(punto, contexto) {
     var color = punto.estado === 'C' ? MAPA_COLOR_CONFIRMADA : MAPA_COLOR_DISPONIBLE;
+    // Item J: pozo seleccionado se distingue con un borde mas grueso en
+    // MAPA_COLOR_PUNTO_BUSQUEDA (misma familia de color que el resto de
+    // "accion de seleccion geografica" de esta etapa) - el relleno sigue
+    // mostrando Confirmada/Disponible, nunca se pierde esa info. Mismo
+    // L.circleMarker de siempre (no se agrega una capa aparte), asi que
+    // el markercluster nunca se entera de la diferencia.
+    var seleccionado = typeof seleccionController_obtenerSeleccionSet === 'function' &&
+      seleccionController_obtenerSeleccionSet().has(punto.wellId);
     var marker = L.circleMarker([punto.lat, punto.lon], {
-      radius: 7,
-      color: '#ffffff',
-      weight: 1.5,
+      radius: seleccionado ? 9 : 7,
+      color: seleccionado ? MAPA_COLOR_PUNTO_BUSQUEDA : '#ffffff',
+      weight: seleccionado ? 3 : 1.5,
       fillColor: color,
       fillOpacity: 0.9
     });
@@ -757,6 +803,14 @@
       mapaEstado.tramoDesde, mapaEstado.tramoHasta, 'tramosFiltrantes'
     );
 
+    // "Ver solo seleccionados" (item J): toggle, no un filtro permanente -
+    // se aplica DESPUES de los 7 filtros normales (AND con todos), nunca
+    // se guarda como parte de ellos ("Limpiar filtros" no lo toca).
+    if (mapaEstado.verSoloSeleccionados && typeof seleccionController_obtenerSeleccionSet === 'function') {
+      var setSeleccionados = seleccionController_obtenerSeleccionSet();
+      filtrados = filtrados.filter(function (p) { return setSeleccionados.has(p.wellId); });
+    }
+
     mapaEstado.clusterGroup.clearLayers();
     mapaEstado.markersPorWellId = {};
     var markers = filtrados.map(function (p) {
@@ -772,6 +826,9 @@
     if (filtrados.length > 0 && !saltarAutoFit) {
       mapaEstado.mapa.fitBounds(mapaEstado.clusterGroup.getBounds().pad(0.05));
     }
+
+    mapaController_actualizarPoligonoSeleccionPersistente();
+    mapaController_actualizarBotonVerSoloSeleccionados();
   }
 
   // Icono div (sin imagenes vendorizadas, igual que los circleMarker de
@@ -855,7 +912,229 @@
         // contempla ese caso (mismo helper que usa el buscador).
         mapaController_centrarYAbrirPopup(marker);
       }
+    } else if (enfoque.tipo === 'seleccion') {
+      // "Ver en mapa" desde la bandeja de seleccion (item D): ajusta la
+      // vista a los markers seleccionados que esten actualmente
+      // visibles (respetando los filtros activos) - el resaltado en si
+      // ya lo hace mapaController_crearMarker, aca solo falta encuadrar.
+      var bounds = [];
+      Object.keys(mapaEstado.markersPorWellId).forEach(function (wellId) {
+        if (enfoque.wellIds.indexOf(wellId) !== -1) {
+          bounds.push(mapaEstado.markersPorWellId[wellId].getLatLng());
+        }
+      });
+      if (bounds.length > 0) {
+        mapaEstado.mapa.fitBounds(L.latLngBounds(bounds).pad(0.1));
+      }
     }
+  }
+
+  // --- Seleccion de pozos (Etapa "seleccion multiple + lote") ---
+
+  // Icono del vertice de poligono - circulo chico solido, mismo
+  // mecanismo que mapaController_iconoMiUbicacion (anula el fondo/borde
+  // default de .leaflet-div-icon).
+  function mapaController_iconoVerticePoligono() {
+    return L.divIcon({
+      className: 'mapa-vertice-poligono-icono',
+      html: '<span class="mapa-vertice-poligono-punto"></span>',
+      iconSize: [14, 14],
+      iconAnchor: [7, 7]
+    });
+  }
+
+  // Item C/G del cierre: "Seleccionar pozos" (Por radio navega a Cerca
+  // Mio via contexto.onSeleccionarPorRadio - app.js es quien decide
+  // sessionToken/permisos frescos, mapa.js nunca llama a showScreen
+  // directo; Dibujar área activa el modo local de abajo).
+  btnSeleccionarToggleEl.addEventListener('click', function () {
+    var abriendo = seleccionarMenuEl.hidden;
+    seleccionarMenuEl.hidden = !abriendo;
+    btnSeleccionarToggleEl.setAttribute('aria-expanded', abriendo ? 'true' : 'false');
+  });
+  btnSeleccionarRadioEl.addEventListener('click', function () {
+    seleccionarMenuEl.hidden = true;
+    if (mapaEstado.contextoActual && mapaEstado.contextoActual.onSeleccionarPorRadio) {
+      mapaEstado.contextoActual.onSeleccionarPorRadio();
+    }
+  });
+  btnSeleccionarPoligonoEl.addEventListener('click', function () {
+    seleccionarMenuEl.hidden = true;
+    mapaController_activarDibujo();
+  });
+
+  function mapaController_activarDibujo() {
+    mapaEstado.dibujando = true;
+    mapaEstado.verticesPoligono = [];
+    mapaController_limpiarCapasDibujo();
+    dibujoPanelEl.hidden = false;
+    dibujoMensajeEl.textContent = 'Tocá el mapa para marcar los vértices del área';
+    dibujoAccionesDibujandoEl.hidden = false;
+    dibujoAccionesCerradoEl.hidden = true;
+    btnDibujoDeshacerEl.disabled = true;
+    btnDibujoCerrarEl.disabled = true;
+  }
+
+  function mapaController_limpiarCapasDibujo() {
+    if (mapaEstado.marcadoresVerticesLayer) {
+      mapaEstado.mapa.removeLayer(mapaEstado.marcadoresVerticesLayer);
+      mapaEstado.marcadoresVerticesLayer = null;
+    }
+    if (mapaEstado.poligonoCerradoLayer) {
+      mapaEstado.mapa.removeLayer(mapaEstado.poligonoCerradoLayer);
+      mapaEstado.poligonoCerradoLayer = null;
+    }
+  }
+
+  // Redibuja los vertices sueltos + la linea provisional que los conecta
+  // (item C: "cada toque agrega un vertice visible"/"mostrar lineas
+  // entre vertices") - se reconstruye entera en cada toque, barato para
+  // la cantidad de vertices que un usuario puede tocar a mano.
+  function mapaController_redibujarVerticesSueltos() {
+    mapaController_limpiarCapasDibujo();
+    if (mapaEstado.verticesPoligono.length === 0) {
+      return;
+    }
+    var layer = L.layerGroup();
+    mapaEstado.verticesPoligono.forEach(function (v) {
+      L.marker([v.lat, v.lon], { icon: mapaController_iconoVerticePoligono() }).addTo(layer);
+    });
+    if (mapaEstado.verticesPoligono.length >= 2) {
+      var latlngs = mapaEstado.verticesPoligono.map(function (v) { return [v.lat, v.lon]; });
+      L.polyline(latlngs, { color: MAPA_COLOR_PUNTO_BUSQUEDA, weight: 2, dashArray: '6 6' }).addTo(layer);
+    }
+    layer.addTo(mapaEstado.mapa);
+    mapaEstado.marcadoresVerticesLayer = layer;
+  }
+
+  function mapaController_agregarVerticePoligono(lat, lon) {
+    mapaEstado.verticesPoligono.push({ lat: lat, lon: lon });
+    mapaController_redibujarVerticesSueltos();
+    dibujoMensajeEl.textContent = mapaEstado.verticesPoligono.length + ' vértice' + (mapaEstado.verticesPoligono.length === 1 ? '' : 's') +
+      ' marcado' + (mapaEstado.verticesPoligono.length === 1 ? '' : 's') + ' - tocá el mapa para seguir';
+    btnDibujoDeshacerEl.disabled = false;
+    btnDibujoCerrarEl.disabled = mapaEstado.verticesPoligono.length < 3;
+  }
+
+  // "Deshacer último punto" (pedido explicito del cierre: "en celular es
+  // muy facil tocar mal").
+  btnDibujoDeshacerEl.addEventListener('click', function () {
+    mapaEstado.verticesPoligono.pop();
+    mapaController_redibujarVerticesSueltos();
+    var n = mapaEstado.verticesPoligono.length;
+    dibujoMensajeEl.textContent = n > 0
+      ? (n + ' vértice' + (n === 1 ? '' : 's') + ' marcado' + (n === 1 ? '' : 's') + ' - tocá el mapa para seguir')
+      : 'Tocá el mapa para marcar los vértices del área';
+    btnDibujoDeshacerEl.disabled = n === 0;
+    btnDibujoCerrarEl.disabled = n < 3;
+  });
+
+  // "Cerrar área" (desde 3 puntos): calcula localmente contra los
+  // 13.804 pozos (seleccionLogic_filtrarPorPoligono, bounding box +
+  // point-in-polygon-or-boundary) y muestra el poligono semitransparente
+  // + el conteo - NUNCA manda la geometria a ningun lado.
+  btnDibujoCerrarEl.addEventListener('click', function () {
+    if (mapaEstado.verticesPoligono.length < 3) {
+      return;
+    }
+    var latlngs = mapaEstado.verticesPoligono.map(function (v) { return [v.lat, v.lon]; });
+    mapaEstado.poligonoCerradoLayer = L.polygon(latlngs, {
+      color: MAPA_COLOR_PUNTO_BUSQUEDA,
+      weight: 2,
+      fillColor: MAPA_COLOR_PUNTO_BUSQUEDA,
+      fillOpacity: 0.18
+    }).addTo(mapaEstado.mapa);
+
+    var wellIdsDentro = mapaEstado.puntosCrudos
+      ? seleccionLogic_filtrarPorPoligono(mapaEstado.puntosCrudos, mapaEstado.verticesPoligono)
+      : [];
+    mapaEstado.ultimosWellIdsPoligono = wellIdsDentro;
+
+    dibujoMensajeEl.textContent = wellIdsDentro.length + ' pozo' + (wellIdsDentro.length === 1 ? '' : 's') + ' dentro del área';
+    dibujoAccionesDibujandoEl.hidden = true;
+    dibujoAccionesCerradoEl.hidden = false;
+  });
+
+  function mapaController_salirDeDibujo() {
+    mapaEstado.dibujando = false;
+    mapaEstado.verticesPoligono = [];
+    mapaController_limpiarCapasDibujo();
+    dibujoPanelEl.hidden = true;
+  }
+
+  btnDibujoUsarEl.addEventListener('click', function () {
+    var vertices = mapaEstado.verticesPoligono.slice();
+    var wellIds = mapaEstado.ultimosWellIdsPoligono || [];
+    mapaController_salirDeDibujo();
+    seleccionController_proponerSeleccion(wellIds, 'poligono', { vertices: vertices });
+  });
+  btnDibujoRedibujarEl.addEventListener('click', function () {
+    mapaController_activarDibujo();
+  });
+  btnDibujoCancelarEl.addEventListener('click', mapaController_salirDeDibujo);
+  btnDibujoCancelar2El.addEventListener('click', mapaController_salirDeDibujo);
+
+  // Item 12 del cierre: mientras la seleccion ACTUAL venga de un
+  // poligono, se conserva ese poligono dibujado sobre el mapa (sin
+  // interaccion, solo visual) cada vez que se renderizan los puntos -
+  // nunca el historial completo de poligonos usados, solo el mas
+  // reciente (seleccionController_obtenerGeometria ya solo guarda ese).
+  function mapaController_actualizarPoligonoSeleccionPersistente() {
+    if (mapaEstado.poligonoSeleccionLayer) {
+      mapaEstado.mapa.removeLayer(mapaEstado.poligonoSeleccionLayer);
+      mapaEstado.poligonoSeleccionLayer = null;
+    }
+    if (typeof seleccionController_obtenerGeometria !== 'function') {
+      return;
+    }
+    var info = seleccionController_obtenerGeometria();
+    if (!info || info.origen !== 'poligono' || !info.geometria || !info.geometria.vertices) {
+      return;
+    }
+    var latlngs = info.geometria.vertices.map(function (v) { return [v.lat, v.lon]; });
+    mapaEstado.poligonoSeleccionLayer = L.polygon(latlngs, {
+      color: MAPA_COLOR_PUNTO_BUSQUEDA,
+      weight: 1.5,
+      fillColor: MAPA_COLOR_PUNTO_BUSQUEDA,
+      fillOpacity: 0.1,
+      interactive: false
+    }).addTo(mapaEstado.mapa);
+  }
+
+  // El chip "Ver solo seleccionados" (item J) solo tiene sentido con
+  // seleccion activa - oculto el resto del tiempo, nunca un filtro que
+  // el usuario pueda dejar prendido "colgado" sin saber por que no ve
+  // pozos.
+  function mapaController_actualizarBotonVerSoloSeleccionados() {
+    var hay = typeof seleccionController_tieneSeleccion === 'function' && seleccionController_tieneSeleccion();
+    btnVerSoloSeleccionadosEl.hidden = !hay;
+    if (!hay && mapaEstado.verSoloSeleccionados) {
+      mapaEstado.verSoloSeleccionados = false;
+      btnVerSoloSeleccionadosEl.setAttribute('aria-pressed', 'false');
+      btnVerSoloSeleccionadosEl.classList.remove('active');
+    }
+  }
+
+  btnVerSoloSeleccionadosEl.addEventListener('click', function () {
+    mapaEstado.verSoloSeleccionados = !mapaEstado.verSoloSeleccionados;
+    btnVerSoloSeleccionadosEl.classList.toggle('active', mapaEstado.verSoloSeleccionados);
+    btnVerSoloSeleccionadosEl.setAttribute('aria-pressed', mapaEstado.verSoloSeleccionados ? 'true' : 'false');
+    if (mapaEstado.contextoActual && mapaEstado.puntosCrudos) {
+      mapaController_renderPuntos(mapaEstado.contextoActual);
+    }
+  });
+
+  // mapa.js nunca pregunta por la seleccion por su cuenta en cada
+  // render salvo que YA haya pozos renderizados - esta suscripcion
+  // vuelve a pintar (resaltado + poligono persistente) cuando la
+  // seleccion cambia desde OTRA pantalla (ej. "Limpiar" o "Quitar" en la
+  // tabla) sin que el usuario haya vuelto a tocar ningun filtro aca.
+  if (typeof seleccionController_registrarListener === 'function') {
+    seleccionController_registrarListener(function () {
+      if (mapaEstado.contextoActual && mapaEstado.puntosCrudos) {
+        mapaController_renderPuntos(mapaEstado.contextoActual, true);
+      }
+    });
   }
 
   function mapaController_mostrarError(aperturaId, mensaje) {
@@ -898,6 +1177,13 @@
     mapaController_cerrarPanelBusqueda();
     mapaController_cerrarPanelFiltros();
     mapaController_limpiarMarcadorBusquedaTemporal();
+    seleccionarMenuEl.hidden = true;
+    // Una apertura nueva nunca arranca a mitad de un dibujo viejo -
+    // "ver solo seleccionados" SI persiste (no es parte del dibujo, es
+    // un toggle de visualizacion de una seleccion que sigue viva).
+    if (mapaEstado.dibujando) {
+      mapaController_salirDeDibujo();
+    }
 
     // El placeholder del buscador nunca insinua que se puede buscar por
     // NC16/titular sin el permiso "datos" - NC16 esta gateado por

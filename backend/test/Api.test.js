@@ -1132,3 +1132,320 @@ describe('handleGetIndiceBusquedaProvincia', () => {
     expect(result.code).toBe('SERVICE_UNAVAILABLE');
   });
 });
+
+describe('handleGetItfAvailability', () => {
+  test('sessionToken invalido: UNAUTHORIZED, no consulta el servicio', () => {
+    global.verifySessionToken.mockReturnValue({ valid: false, reason: 'expirado' });
+
+    const result = Api.handleGetItfAvailability('token-vencido', ['01-0012']);
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('UNAUTHORIZED');
+    expect(global.profileService_checkDisponibilidad).not.toHaveBeenCalled();
+  });
+
+  test('usuario deshabilitado: USER_DISABLED', () => {
+    global.verifySessionToken.mockReturnValue({ valid: true, email: 'user@example.com' });
+    global.isUserActive.mockReturnValue(false);
+
+    const result = Api.handleGetItfAvailability('token-valido', ['01-0012']);
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('USER_DISABLED');
+  });
+
+  test('wellIds vacio: INVALID_REQUEST, no consulta el servicio', () => {
+    mockValidSession();
+
+    const result = Api.handleGetItfAvailability('token-valido', []);
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('INVALID_REQUEST');
+    expect(global.profileService_checkDisponibilidad).not.toHaveBeenCalled();
+  });
+
+  test('wellIds no es array: INVALID_REQUEST', () => {
+    mockValidSession();
+
+    const result = Api.handleGetItfAvailability('token-valido', '01-0012');
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('INVALID_REQUEST');
+  });
+
+  test('un wellId con formato invalido dentro del lote: INVALID_REQUEST, no consulta el servicio', () => {
+    mockValidSession();
+
+    const result = Api.handleGetItfAvailability('token-valido', ['01-0012', '01-ABCD']);
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('INVALID_REQUEST');
+    expect(global.profileService_checkDisponibilidad).not.toHaveBeenCalled();
+  });
+
+  test('lote mayor al maximo permitido: INVALID_REQUEST, no consulta el servicio', () => {
+    mockValidSession();
+    const wellIdsGrande = Array.from({ length: 501 }, (_, i) => '01-' + String(i).padStart(4, '0'));
+
+    const result = Api.handleGetItfAvailability('token-valido', wellIdsGrande);
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('INVALID_REQUEST');
+    expect(global.profileService_checkDisponibilidad).not.toHaveBeenCalled();
+  });
+
+  // Caso central del diseño: gateado EXCLUSIVAMENTE por "perfil" - ni
+  // "datos" ni "ubicacion" alcanzan por si solos (mismo criterio que
+  // getProfile).
+  test('datos=SI pero perfil=NO: PERMISSION_DENIED, no consulta el servicio', () => {
+    mockValidSession();
+    global.hasPermission.mockImplementation((email, modulo) => modulo === 'datos');
+
+    const result = Api.handleGetItfAvailability('token-valido', ['01-0012']);
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('PERMISSION_DENIED');
+    expect(global.profileService_checkDisponibilidad).not.toHaveBeenCalled();
+  });
+
+  test('perfil=SI: OK, devuelve el mapa tal cual lo arma el service', () => {
+    mockValidSession();
+    global.hasPermission.mockImplementation((email, modulo) => modulo === 'perfil');
+    global.profileService_checkDisponibilidad.mockReturnValue({ '01-0012': true, '01-0013': false });
+
+    const result = Api.handleGetItfAvailability('token-valido', ['01-0012', '01-0013']);
+
+    expect(result).toEqual({ status: 'ok', data: { '01-0012': true, '01-0013': false } });
+  });
+
+  test('error del service/Drive: SERVICE_UNAVAILABLE', () => {
+    mockValidSession();
+    global.hasPermission.mockReturnValue(true);
+    global.profileService_checkDisponibilidad.mockImplementation(() => {
+      throw new Error('Drive no disponible');
+    });
+
+    const result = Api.handleGetItfAvailability('token-valido', ['01-0012']);
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('SERVICE_UNAVAILABLE');
+  });
+
+  // Privacidad: la respuesta nunca debe llevar mas que booleanos por
+  // wellId (ni Drive id, ni url, ni nombre de archivo).
+  test('la respuesta no contiene mas campos que los wellId pedidos, todos booleanos', () => {
+    mockValidSession();
+    global.hasPermission.mockReturnValue(true);
+    global.profileService_checkDisponibilidad.mockReturnValue({ '01-0012': true });
+
+    const result = Api.handleGetItfAvailability('token-valido', ['01-0012']);
+
+    expect(Object.keys(result.data)).toEqual(['01-0012']);
+    expect(typeof result.data['01-0012']).toBe('boolean');
+  });
+
+  // Auditoria revisada (item 1 del cierre): "Consulta disponibilidad ITF"
+  // va a Historial en CADA llamada real a este endpoint - nunca a
+  // Telegram. Como el frontend solo llama aca cuando su propio cache esta
+  // vencido/vacio, esto ya es "material" sin logica extra.
+  test('llamada exitosa: se audita en Historial como OK, nunca se manda Telegram', () => {
+    mockValidSession('juan@example.com');
+    global.hasPermission.mockReturnValue(true);
+    global.profileService_checkDisponibilidad.mockReturnValue({ '01-0012': true });
+
+    Api.handleGetItfAvailability('token-valido', ['01-0012']);
+
+    expect(global.logHistoryEvent).toHaveBeenCalledWith('juan@example.com', 'getItfAvailability', null, 'OK');
+    expect(global.notificationService_notifyDescargaItf).not.toHaveBeenCalled();
+  });
+
+  test('error del service: se audita en Historial como SERVICE_UNAVAILABLE', () => {
+    mockValidSession('juan@example.com');
+    global.hasPermission.mockReturnValue(true);
+    global.profileService_checkDisponibilidad.mockImplementation(() => {
+      throw new Error('Drive no disponible');
+    });
+
+    Api.handleGetItfAvailability('token-valido', ['01-0012']);
+
+    expect(global.logHistoryEvent).toHaveBeenCalledWith('juan@example.com', 'getItfAvailability', null, 'SERVICE_UNAVAILABLE');
+  });
+});
+
+describe('handleRegisterDescargaItf', () => {
+  function mockAccess(nombre) {
+    global.getUserAccess.mockReturnValue({
+      active: true,
+      permisos: { perfil: true, datos: true, ubicacion: true, ne: true },
+      nombre: nombre === undefined ? 'Juan Pérez' : nombre
+    });
+  }
+
+  function resumenValido(overrides) {
+    return Object.assign({
+      totalSeleccionados: 10,
+      solicitados: 10,
+      descargados: 9,
+      fallidos: 1,
+      wellIds: ['01-0012', '02-0005']
+    }, overrides || {});
+  }
+
+  test('sessionToken invalido: UNAUTHORIZED, no notifica', () => {
+    global.verifySessionToken.mockReturnValue({ valid: false, reason: 'expirado' });
+
+    const result = Api.handleRegisterDescargaItf('token-vencido', resumenValido());
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('UNAUTHORIZED');
+    expect(global.notificationService_notifyDescargaItf).not.toHaveBeenCalled();
+  });
+
+  test('usuario deshabilitado: USER_DISABLED, no notifica', () => {
+    global.verifySessionToken.mockReturnValue({ valid: true, email: 'user@example.com' });
+    global.isUserActive.mockReturnValue(false);
+
+    const result = Api.handleRegisterDescargaItf('token-valido', resumenValido());
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('USER_DISABLED');
+    expect(global.notificationService_notifyDescargaItf).not.toHaveBeenCalled();
+  });
+
+  test('resumen ausente: INVALID_REQUEST, no notifica', () => {
+    mockValidSession();
+    mockAccess();
+
+    const result = Api.handleRegisterDescargaItf('token-valido', null);
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('INVALID_REQUEST');
+    expect(global.notificationService_notifyDescargaItf).not.toHaveBeenCalled();
+  });
+
+  test.each(['totalSeleccionados', 'solicitados', 'descargados', 'fallidos'])(
+    'campo numerico faltante/invalido (%s): INVALID_REQUEST, no notifica',
+    (campo) => {
+      mockValidSession();
+      mockAccess();
+      const resumen = resumenValido({ [campo]: 'no-es-numero' });
+
+      const result = Api.handleRegisterDescargaItf('token-valido', resumen);
+
+      expect(result.status).toBe('error');
+      expect(result.code).toBe('INVALID_REQUEST');
+      expect(global.notificationService_notifyDescargaItf).not.toHaveBeenCalled();
+    }
+  );
+
+  test('wellIds vacio: INVALID_REQUEST, no notifica', () => {
+    mockValidSession();
+    mockAccess();
+
+    const result = Api.handleRegisterDescargaItf('token-valido', resumenValido({ wellIds: [] }));
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('INVALID_REQUEST');
+    expect(global.notificationService_notifyDescargaItf).not.toHaveBeenCalled();
+  });
+
+  test('wellId con formato invalido dentro del resumen: INVALID_REQUEST, no notifica', () => {
+    mockValidSession();
+    mockAccess();
+
+    const result = Api.handleRegisterDescargaItf('token-valido', resumenValido({ wellIds: ['01-ABCD'] }));
+
+    expect(result.status).toBe('error');
+    expect(result.code).toBe('INVALID_REQUEST');
+    expect(global.notificationService_notifyDescargaItf).not.toHaveBeenCalled();
+  });
+
+  // No requiere permiso de modulo - es auditoria, no acceso a datos
+  // (mismo criterio que registerWellSearch; el acceso real a cada imagen
+  // ya paso por getProfile, gateado por "perfil").
+  test('sin ningun permiso de modulo habilitado: igual funciona, no es un acceso a datos', () => {
+    mockValidSession();
+    mockAccess();
+    global.hasPermission.mockReturnValue(false);
+    global.notificationService_notifyDescargaItf.mockReturnValue({ sent: true });
+
+    const result = Api.handleRegisterDescargaItf('token-valido', resumenValido());
+
+    expect(result).toEqual({ status: 'ok' });
+  });
+
+  test('pasa el resumen completo (los 4 conteos + wellIds) a la notificacion', () => {
+    mockValidSession('juan@example.com');
+    mockAccess('Juan Pérez');
+    global.notificationService_notifyDescargaItf.mockReturnValue({ sent: true });
+    const resumen = resumenValido({ totalSeleccionados: 80, solicitados: 50, descargados: 47, fallidos: 3 });
+
+    Api.handleRegisterDescargaItf('token-valido', resumen);
+
+    expect(global.notificationService_notifyDescargaItf).toHaveBeenCalledWith('juan@example.com', 'Juan Pérez', resumen);
+  });
+
+  // Caso central de seguridad: la identidad SIEMPRE sale del
+  // sessionToken verificado, nunca de un email que mande el body.
+  test('la identidad usada es la del sessionToken verificado', () => {
+    mockValidSession('real@example.com');
+    mockAccess('Usuario Real');
+    global.notificationService_notifyDescargaItf.mockReturnValue({ sent: true });
+
+    Api.handleRegisterDescargaItf('token-valido', resumenValido());
+
+    expect(global.notificationService_notifyDescargaItf.mock.calls[0][0]).toBe('real@example.com');
+    expect(global.notificationService_notifyDescargaItf.mock.calls[0][1]).toBe('Usuario Real');
+  });
+
+  test('siempre devuelve status ok, incluso si Telegram falla (efecto secundario, no debe romper la respuesta)', () => {
+    mockValidSession();
+    mockAccess();
+    global.notificationService_notifyDescargaItf.mockReturnValue({ sent: false, reason: 'ERROR' });
+
+    const result = Api.handleRegisterDescargaItf('token-valido', resumenValido());
+
+    expect(result).toEqual({ status: 'ok' });
+  });
+
+  test('error inesperado del servicio de notificacion: no lanza, igual devuelve status ok', () => {
+    mockValidSession();
+    mockAccess();
+    global.notificationService_notifyDescargaItf.mockImplementation(() => {
+      throw new Error('fallo inesperado');
+    });
+
+    expect(() => {
+      Api.handleRegisterDescargaItf('token-valido', resumenValido());
+    }).not.toThrow();
+  });
+});
+
+// Privacidad end-to-end (item 10 de la etapa): ninguna de las 2 acciones
+// nuevas recibe ni reenvia lat/lon, poligono, centro/radio - solo
+// wellIds[] y conteos.
+describe('privacidad: seleccion geografica nunca llega al backend', () => {
+  test('handleGetItfAvailability nunca recibe ni reenvia lat/lon/poligono/radio', () => {
+    mockValidSession();
+    global.hasPermission.mockReturnValue(true);
+    global.profileService_checkDisponibilidad.mockReturnValue({ '01-0012': true });
+
+    Api.handleGetItfAvailability('token-valido', ['01-0012']);
+
+    const argsEnviados = JSON.stringify(global.profileService_checkDisponibilidad.mock.calls[0]);
+    expect(argsEnviados).not.toMatch(/lat|lon|radio|poligono|polygon|vertice/i);
+  });
+
+  test('handleRegisterDescargaItf nunca recibe ni reenvia lat/lon/poligono/radio', () => {
+    mockValidSession();
+    global.getUserAccess.mockReturnValue({ active: true, permisos: {}, nombre: 'Juan' });
+    global.notificationService_notifyDescargaItf.mockReturnValue({ sent: true });
+
+    Api.handleRegisterDescargaItf('token-valido', {
+      totalSeleccionados: 2, solicitados: 2, descargados: 2, fallidos: 0, wellIds: ['01-0012', '02-0005']
+    });
+
+    const argsEnviados = JSON.stringify(global.notificationService_notifyDescargaItf.mock.calls[0]);
+    expect(argsEnviados).not.toMatch(/lat|lon|radio|poligono|polygon|vertice/i);
+  });
+});

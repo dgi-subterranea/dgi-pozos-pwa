@@ -2238,3 +2238,358 @@ table.ne-table tr:last-child td {
     padding: 26px 34px 32px;
   }
 }
+
+/* --- Etapa "seleccion multiple + lote" --- */
+
+/* Seleccionar pozos: menu desplegable Por radio/Dibujar area, mismo
+   lenguaje que .mapa-buscar-panel (chico, flotante, sin robarle espacio
+   al mapa en reposo). */
+.mapa-seleccionar-wrap {
+  position: relative;
+}
+.mapa-seleccionar-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  background: var(--color-surface);
+  border: 1.5px solid var(--color-border);
+  border-radius: 12px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 160px;
+}
+.mapa-seleccionar-opcion {
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: none;
+  border: none;
+  box-shadow: none;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.mapa-seleccionar-opcion:hover {
+  background: var(--color-primary-tint);
+}
+
+/* Panel de dibujo de poligono (item C): bar en flujo normal, empuja el
+   mapa hacia abajo - igual que .mapa-buscar-panel, nunca un overlay con
+   z-index sobre el mapa (mas simple y mas comodo en mobile). */
+.mapa-dibujo-panel {
+  padding: 12px 18px;
+  border-bottom: 1.5px solid var(--color-border-soft);
+  background: var(--color-primary-tint);
+}
+.mapa-dibujo-mensaje {
+  margin: 0 0 10px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--color-primary-dark);
+}
+.mapa-dibujo-acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Marcador de vertice de poligono (item C) - circulo chico solido, color
+   MAPA_COLOR_PUNTO_BUSQUEDA (mismo "punto elegido a mano" que Cerca Mio -
+   coherencia visual entre los 2 flujos de referencia geografica manual). */
+.mapa-vertice-poligono-icono {
+  background: none;
+  border: none;
+}
+.mapa-vertice-poligono-punto {
+  position: absolute;
+  inset: 3px;
+  background: var(--color-warn);
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+/* Marcador "pozo seleccionado" (item J): anillo de acento alrededor del
+   circleMarker normal del pozo - visualmente distinto de
+   Confirmada/Disponible/Tu ubicacion/Punto de busqueda, SIN reemplazar
+   el circulo propio del pozo (se agrega como capa aparte, mismo patron
+   que el circulo de radio de Cerca Mio). */
+.mapa-seleccion-anillo-icono {
+  background: none;
+  border: none;
+}
+
+/* Bandeja de seleccion persistente (item D/I) */
+.seleccion-bandeja {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  background: var(--color-primary-dark);
+  color: #fff;
+  padding: 10px 18px;
+  padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.seleccion-bandeja-contador {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+.seleccion-bandeja-acciones {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+}
+.seleccion-bandeja-acciones .button-secondary {
+  flex: none;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.3);
+  min-height: 36px;
+  padding: 6px 14px;
+  font-size: 0.82rem;
+}
+.seleccion-bandeja-acciones .button-secondary:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+/* Reemplazar/Agregar/Cancelar (item 6) */
+.seleccion-confirmar-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(22, 33, 42, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+}
+.seleccion-confirmar-caja {
+  background: var(--color-surface);
+  border-radius: 16px;
+  padding: 22px;
+  max-width: 360px;
+  width: 100%;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+}
+.seleccion-confirmar-caja p {
+  margin: 0 0 16px;
+  font-size: 0.95rem;
+  color: var(--color-text);
+}
+.seleccion-confirmar-acciones {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Visor de ITF individual (item 3 del cierre) - mismo overlay que
+   Reemplazar/Agregar/Cancelar, caja mas ancha para la imagen. */
+.seleccion-itf-visor-caja {
+  background: var(--color-surface);
+  border-radius: 16px;
+  padding: 18px;
+  max-width: 420px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.seleccion-itf-visor-cerrar {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: none;
+  border: none;
+  box-shadow: none;
+  font-size: 1.5rem;
+  line-height: 1;
+  color: var(--color-text-faint);
+  padding: 4px 8px;
+  min-height: 0;
+}
+.seleccion-itf-visor-cerrar:hover {
+  color: var(--color-error);
+}
+
+/* Tabla/listado de "Pozos seleccionados" (item E) */
+.seleccion-tabla-barra {
+  display: flex;
+  gap: 8px;
+  padding: 12px 18px;
+  border-bottom: 1.5px solid var(--color-border-soft);
+  flex-wrap: wrap;
+}
+.seleccion-tabla-buscar-input {
+  flex: 1;
+  min-width: 160px;
+  min-height: 40px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1.5px solid var(--color-border);
+  font-size: 0.92rem;
+}
+.seleccion-tabla-orden-select {
+  min-height: 40px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1.5px solid var(--color-border);
+  font-size: 0.88rem;
+  background: var(--color-surface);
+}
+.seleccion-tabla-contenido {
+  padding: 0 18px 90px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Mobile: cards apiladas (una tabla horizontal incomoda en pantalla
+   chica, pedido explicito del usuario). */
+.seleccion-card {
+  border: 1.5px solid var(--color-border);
+  border-radius: 14px;
+  padding: 14px 16px;
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.seleccion-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.seleccion-card-id {
+  font-weight: 700;
+  font-size: 1rem;
+}
+.seleccion-card-quitar {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: var(--color-text-faint);
+  font-size: 1.3rem;
+  line-height: 1;
+  padding: 4px 8px;
+  min-height: 0;
+}
+.seleccion-card-quitar:hover {
+  color: var(--color-error);
+}
+.seleccion-card-campos {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 12px;
+  font-size: 0.82rem;
+  color: var(--color-text-soft);
+}
+.seleccion-card-campo-label {
+  color: var(--color-text-faint);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.seleccion-card-acciones {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.seleccion-card-acciones .button-secondary,
+.seleccion-card-acciones .button {
+  flex: none;
+  min-height: 34px;
+  padding: 6px 12px;
+  font-size: 0.8rem;
+}
+
+/* Cards en todos los anchos a proposito (nunca una tabla horizontal real
+   en desktop): cumple lo funcional pedido (ordenar/buscar/quitar/
+   detalle/ITF/mapa) sin mantener 2 layouts de renderizado. */
+
+/* ITF de la seleccion (item G/H) */
+.seleccion-itf-lotes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 14px 18px 0;
+}
+.seleccion-itf-lista {
+  padding: 14px 18px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.seleccion-itf-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1.5px solid var(--color-border-soft);
+  font-size: 0.88rem;
+}
+.seleccion-itf-item-disponible {
+  color: var(--color-primary-dark);
+}
+.seleccion-itf-item-no-disponible {
+  color: var(--color-text-faint);
+}
+.seleccion-itf-progreso {
+  padding: 16px 18px;
+}
+.seleccion-itf-progreso p {
+  margin: 0 0 8px;
+  font-size: 0.88rem;
+  color: var(--color-text-soft);
+}
+.seleccion-itf-progreso progress {
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.seleccion-itf-resultado {
+  padding: 16px 18px 90px;
+}
+.seleccion-itf-resultado p {
+  margin: 0 0 10px;
+  font-weight: 600;
+}
+
+@media (min-width: 640px) {
+  .seleccion-bandeja {
+    padding: 12px 34px;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+  .seleccion-bandeja-acciones {
+    overflow-x: visible;
+  }
+  .seleccion-tabla-barra,
+  .seleccion-itf-lotes,
+  .seleccion-itf-lista {
+    padding-left: 34px;
+    padding-right: 34px;
+  }
+  .seleccion-tabla-contenido {
+    padding: 0 34px 32px;
+  }
+  .seleccion-itf-resultado {
+    padding: 16px 34px 32px;
+  }
+}

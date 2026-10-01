@@ -34,6 +34,10 @@ function doPost(e) {
         response = handleGetMapaNE(body.sessionToken);
       } else if (body.action === 'getIndiceBusquedaProvincia') {
         response = handleGetIndiceBusquedaProvincia(body.sessionToken);
+      } else if (body.action === 'getItfAvailability') {
+        response = handleGetItfAvailability(body.sessionToken, body.wellIds);
+      } else if (body.action === 'registerDescargaItf') {
+        response = handleRegisterDescargaItf(body.sessionToken, body.resumen);
       } else {
         response = { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'accion desconocida: ' + body.action };
       }
@@ -468,6 +472,139 @@ function handleGetIndiceBusquedaProvincia(sessionToken) {
   return { status: 'ok', data: { pozos: result.pozos } };
 }
 
+// Etapa "seleccion multiple + lote": valida un ARRAY de wellId (no uno
+// solo, por eso no reusa validateSessionAndWellId) - mismo criterio de
+// formato/rango de departamento que esa funcion, pero sin loguear
+// Historial por item individual (seria un log por pozo del lote, lo que
+// el usuario explicitamente no quiere para acciones puramente
+// geograficas/de lote). Devuelve {ok:true} o {ok:false, response}.
+var SELECCION_LOTE_MAX_WELLIDS = 500;
+
+function validarLoteWellIds(wellIds) {
+  if (!Array.isArray(wellIds) || wellIds.length === 0) {
+    return { ok: false, response: { status: 'error', code: 'INVALID_REQUEST', message: 'wellIds vacio o invalido' } };
+  }
+  if (wellIds.length > SELECCION_LOTE_MAX_WELLIDS) {
+    return { ok: false, response: { status: 'error', code: 'INVALID_REQUEST', message: 'demasiados wellIds (maximo ' + SELECCION_LOTE_MAX_WELLIDS + ')' } };
+  }
+  for (var i = 0; i < wellIds.length; i++) {
+    if (!/^\d{2}-\d{4}$/.test(wellIds[i])) {
+      return { ok: false, response: { status: 'error', code: 'INVALID_REQUEST', message: 'wellId invalido: ' + wellIds[i] } };
+    }
+  }
+  return { ok: true };
+}
+
+// Disponibilidad de ITF para un LOTE de pozos (Etapa "seleccion multiple
+// + lote", item F/G): devuelve SOLO {wellId: boolean}, nunca ids ni URLs
+// de Drive (ver ItfAvailabilityService.js, que resuelve esto con un
+// indice cacheado por departamento en vez de recorrer Drive por cada
+// wellId). Gateado EXCLUSIVAMENTE por "perfil" - mismo permiso que
+// getProfile, coherente con que ambos exponen informacion sobre el ITF.
+//
+// Auditoria (item 1 del cierre, revisado): esta es la UNICA accion batch
+// "material" que se audita antes de la descarga - "Consulta disponibilidad
+// ITF" va a Historial (si realmente aporta un registro tecnico de quien
+// pregunto que ITF existen), pero deliberadamente SIN Telegram (decision
+// explicita del usuario: no mandar una notificacion solo por preguntar
+// disponibilidad). Se loguea UNA vez por llamada real a este endpoint -
+// como el frontend solo llama aca cuando su propio cache esta vencido o
+// vacio (ver asegurarDisponibilidadItf en js/seleccion.js), esto ya es
+// "material" por construccion, sin necesitar logica extra de "primera vez
+// por seleccion". Abrir la tabla/pantalla ITF en si NUNCA llama a este
+// handler si el frontend ya tiene el resultado en memoria - en ese caso
+// no hay llamada, y por lo tanto no hay nada que auditar (correcto: no se
+// audita "abrir una pantalla local").
+function handleGetItfAvailability(sessionToken, wellIds) {
+  var validation = validateSession(sessionToken, 'getItfAvailability');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var loteValidation = validarLoteWellIds(wellIds);
+  if (!loteValidation.ok) {
+    return loteValidation.response;
+  }
+
+  var permiso = validarPermiso(session, 'getItfAvailability', null, 'perfil');
+  if (!permiso.ok) {
+    return permiso.response;
+  }
+
+  var disponibilidad;
+  try {
+    disponibilidad = profileService_checkDisponibilidad(wellIds);
+  } catch (err) {
+    logHistoryEvent(session.email, 'getItfAvailability', null, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+
+  logHistoryEvent(session.email, 'getItfAvailability', null, 'OK');
+  return { status: 'ok', data: disponibilidad };
+}
+
+// Auditoria de la descarga ITF por lote (item 1 del cierre, revisado):
+// UN evento resumido (1 fila Historial + 1 Telegram) por cada descarga
+// real que el usuario arranca - nunca por pozo, nunca por el solo hecho
+// de seleccionar geograficamente o de ver la tabla/disponibilidad. El
+// frontend llama aca DESPUES de que la descarga (JSZip + getProfile en
+// el navegador) ya termino, con los conteos reales - por eso el payload
+// es un resumen (resultado), no solo wellIds. No requiere permiso de
+// modulo (es una accion de auditoria/metadata, no de acceso a datos -
+// mismo criterio que registerWellSearch): el acceso real a cada imagen
+// ya paso, individualmente, por getProfile (gateado por "perfil").
+var DESCARGA_ITF_MAX_WELLIDS = SELECCION_LOTE_MAX_WELLIDS;
+
+function validarResumenDescargaItf(resumen) {
+  if (!resumen || typeof resumen !== 'object') {
+    return { ok: false, response: { status: 'error', code: 'INVALID_REQUEST', message: 'resumen invalido' } };
+  }
+  var camposNumericos = ['totalSeleccionados', 'solicitados', 'descargados', 'fallidos'];
+  for (var i = 0; i < camposNumericos.length; i++) {
+    var v = resumen[camposNumericos[i]];
+    if (typeof v !== 'number' || v < 0 || !isFinite(v)) {
+      return { ok: false, response: { status: 'error', code: 'INVALID_REQUEST', message: 'campo invalido: ' + camposNumericos[i] } };
+    }
+  }
+  var loteValidation = validarLoteWellIds(resumen.wellIds);
+  if (!loteValidation.ok) {
+    return loteValidation;
+  }
+  if (resumen.wellIds.length > DESCARGA_ITF_MAX_WELLIDS) {
+    return { ok: false, response: { status: 'error', code: 'INVALID_REQUEST', message: 'demasiados wellIds (maximo ' + DESCARGA_ITF_MAX_WELLIDS + ')' } };
+  }
+  return { ok: true };
+}
+
+function handleRegisterDescargaItf(sessionToken, resumen) {
+  var validation = validateSession(sessionToken, 'registerDescargaItf');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var resumenValidation = validarResumenDescargaItf(resumen);
+  if (!resumenValidation.ok) {
+    return resumenValidation.response;
+  }
+
+  var access = getUserAccess(session.email);
+
+  try {
+    var resultado = notificationService_notifyDescargaItf(session.email, access.nombre, resumen);
+    if (!resultado.sent && resultado.reason === 'ERROR') {
+      logHistoryEvent(session.email, 'registerDescargaItf', null, 'TELEGRAM_ERROR');
+    } else {
+      logHistoryEvent(session.email, 'registerDescargaItf', null, 'OK');
+    }
+  } catch (err) {
+    logHistoryEvent(session.email, 'registerDescargaItf', null, 'TELEGRAM_ERROR');
+  }
+
+  return { status: 'ok' };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     doPost,
@@ -481,6 +618,8 @@ if (typeof module !== 'undefined' && module.exports) {
     handleGetWellSummary,
     handleGetMapaNE,
     handleGetIndiceBusquedaProvincia,
+    handleGetItfAvailability,
+    handleRegisterDescargaItf,
     validarPermiso,
     validateSession,
     validateSessionAndWellId

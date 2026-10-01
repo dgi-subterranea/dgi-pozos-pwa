@@ -86,3 +86,26 @@ function apiGetIndiceBusquedaProvincia(sessionToken) {
 function apiRegisterWellSearch(sessionToken, wellId, modulos) {
   return callBackend('registerWellSearch', { sessionToken: sessionToken, wellId: wellId, modulos: modulos }, { keepalive: true });
 }
+
+// Etapa "seleccion multiple + lote": disponibilidad de ITF para un LOTE
+// de wellId (solo booleanos, nunca ids/urls de Drive - ver
+// ItfAvailabilityService.js). Requiere perfil=SI del lado del backend.
+// Se audita del lado del backend (Historial, nunca Telegram) en CADA
+// llamada real - el frontend solo llama aca cuando su propio cache esta
+// vencido/vacio (ver asegurarDisponibilidadItf en js/seleccion.js), asi
+// que abrir una pantalla que ya tiene el resultado en memoria NUNCA
+// dispara esto.
+function apiGetItfAvailability(sessionToken, wellIds) {
+  return callBackend('getItfAvailability', { sessionToken: sessionToken, wellIds: wellIds });
+}
+
+// Auditoria de UNA descarga ITF real (cierre revisado del item K): UN
+// evento resumido por descarga, nunca por pozo - resumen =
+// {totalSeleccionados, solicitados, descargados, fallidos, wellIds}.
+// keepalive igual que registerWellSearch - fire-and-forget, nunca
+// bloquea la UI. Es la UNICA accion de esta etapa que genera Telegram;
+// seleccionar geograficamente o ver la tabla/disponibilidad nunca llega
+// aca.
+function apiRegisterDescargaItf(sessionToken, resumen) {
+  return callBackend('registerDescargaItf', { sessionToken: sessionToken, resumen: resumen }, { keepalive: true });
+}

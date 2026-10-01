@@ -32,6 +32,12 @@ function createFakeCache() {
     get: (key) => (Object.prototype.hasOwnProperty.call(store, key) ? store[key] : null),
     put: (key, value) => {
       store[key] = value;
+    },
+    // Mismo nombre que el metodo real de CacheService - usado en tests
+    // para simular una expulsion de CacheService (bajo presion de
+    // memoria puede sacar UNA entrada sin tocar las demas).
+    remove: (key) => {
+      delete store[key];
     }
   };
 }
@@ -86,6 +92,10 @@ function installAppsScriptFakes() {
   global.registryService_getWellSummary = jest.fn();
   global.nivelesEstaticosRepository_getTodosLosPuntos = jest.fn();
   global.mapaNEService_getPuntos = jest.fn();
+  global.driveProfileRepository_listarArchivosThumb = jest.fn();
+  global.itfAvailabilityService_checkDisponibilidad = jest.fn();
+  global.profileService_checkDisponibilidad = jest.fn();
+  global.notificationService_notifyDescargaItf = jest.fn();
 }
 
 module.exports = { installAppsScriptFakes };

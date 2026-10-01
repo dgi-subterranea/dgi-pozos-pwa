@@ -260,6 +260,45 @@
       <button type="button" id="btn-mapa-buscar-toggle" class="mapa-buscar-toggle" aria-pressed="false" aria-label="Buscar en el mapa" aria-expanded="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/></svg>
       </button>
+      <!-- Seleccionar pozos (Etapa "seleccion multiple + lote", item B):
+           "Por radio" navega a Cerca Mio (reusa esa arquitectura entera -
+           ver btn-cercamio-usar-seleccion en screen-cerca-mio, nunca un
+           flujo de radio separado); "Dibujar área" activa el modo de
+           dibujo de poligono sobre ESTE mapa (ver
+           mapaController_activarDibujo en js/mapa.js). -->
+      <div class="mapa-seleccionar-wrap">
+        <button type="button" id="btn-mapa-seleccionar-toggle" class="mapa-buscar-toggle" aria-pressed="false" aria-label="Seleccionar pozos" aria-expanded="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" stroke-linecap="round"/></svg>
+        </button>
+        <div id="mapa-seleccionar-menu" class="mapa-seleccionar-menu" hidden>
+          <button type="button" id="btn-mapa-seleccionar-radio" class="mapa-seleccionar-opcion">Por radio</button>
+          <button type="button" id="btn-mapa-seleccionar-poligono" class="mapa-seleccionar-opcion">Dibujar área</button>
+        </div>
+      </div>
+      <!-- Item J: toggle, no filtro permanente - solo visible/util si hay
+           una seleccion activa (ver mapaController_actualizarBotonVerSoloSeleccionados). -->
+      <button type="button" id="btn-mapa-ver-solo-seleccionados" class="mapa-buscar-toggle" aria-pressed="false" aria-label="Ver solo seleccionados" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" stroke-linejoin="round"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
+    </div>
+
+    <!-- Panel de dibujo de poligono (item C): en flujo normal (empuja el
+         mapa hacia abajo en vez de superponerse - mas simple/mobile-first
+         que un overlay con z-index). 2 sub-estados: dibujando (vertices
+         sueltos, "Cerrar área" habilitado desde 3 puntos) y cerrado
+         (poligono ya calculado, cuenta de pozos + accion final). -->
+    <div id="mapa-dibujo-panel" class="mapa-dibujo-panel" hidden>
+      <p id="mapa-dibujo-mensaje" class="mapa-dibujo-mensaje">Tocá el mapa para marcar los vértices del área</p>
+      <div id="mapa-dibujo-acciones-dibujando" class="mapa-dibujo-acciones">
+        <button type="button" id="btn-mapa-dibujo-deshacer" class="button-secondary" disabled>Deshacer último punto</button>
+        <button type="button" id="btn-mapa-dibujo-cerrar" class="button" disabled>Cerrar área</button>
+        <button type="button" id="btn-mapa-dibujo-cancelar" class="button-secondary">Cancelar</button>
+      </div>
+      <div id="mapa-dibujo-acciones-cerrado" class="mapa-dibujo-acciones" hidden>
+        <button type="button" id="btn-mapa-dibujo-usar" class="button">Usar selección</button>
+        <button type="button" id="btn-mapa-dibujo-redibujar" class="button-secondary">Redibujar</button>
+        <button type="button" id="btn-mapa-dibujo-cancelar-2" class="button-secondary">Cancelar</button>
+      </div>
     </div>
 
     <div class="mapa-buscar-panel" id="mapa-buscar-panel" hidden>
@@ -668,7 +707,11 @@
       <div id="cercamio-resultados" hidden>
         <p id="cercamio-contador" class="mapa-contador"></p>
         <div id="cercamio-lista" class="cercamio-lista"></div>
-        <button type="button" id="btn-cercamio-ver-todos-mapa" class="button cercamio-ver-todos-mapa">Ver todos en el mapa</button>
+        <button type="button" id="btn-cercamio-ver-todos-mapa" class="button-secondary cercamio-ver-todos-mapa">Ver todos en el mapa</button>
+        <!-- Item D del cierre: radio y poligono desembocan en la MISMA
+             seleccion - ver seleccionController_usarResultados en
+             js/seleccion.js, llamado con los wellId de la busqueda actual. -->
+        <button type="button" id="btn-cercamio-usar-seleccion" class="button cercamio-ver-todos-mapa">Usar estos pozos</button>
       </div>
     </div>
   </div>
@@ -692,6 +735,114 @@
     </div>
   </div>
 
+  <!-- Pozos seleccionados (Etapa "seleccion multiple + lote"): tabla/
+       listado conjunto - item E. Reusa pozos.json/pozos_busqueda.json/
+       nivelesEstaticos.json ya cacheados (item 7 del cierre: sin
+       getWellSummaries nuevo). -->
+  <div id="screen-seleccion-tabla" class="screen" hidden>
+    <div class="tv-topbar">
+      <button type="button" id="btn-seleccion-tabla-volver" class="tv-volver">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+        Volver
+      </button>
+    </div>
+    <div class="tv-header">
+      <div>
+        <p class="mapa-titulo">Pozos seleccionados</p>
+        <p id="seleccion-tabla-subtitulo" class="tv-header-label"></p>
+      </div>
+    </div>
+    <div class="seleccion-tabla-barra">
+      <input type="text" id="seleccion-tabla-buscar" class="seleccion-tabla-buscar-input" placeholder="Buscar en la selección..." autocomplete="off">
+      <select id="seleccion-tabla-orden" class="seleccion-tabla-orden-select">
+        <option value="wellId">Ordenar: Pozo</option>
+        <option value="departamento">Ordenar: Departamento</option>
+        <option value="cuenca">Ordenar: Cuenca</option>
+        <option value="profundidad">Ordenar: Profundidad</option>
+      </select>
+    </div>
+    <div id="seleccion-tabla-vacio" class="cercamio-estado" hidden>
+      <p>No tenés pozos seleccionados.</p>
+    </div>
+    <div id="seleccion-tabla-contenido" class="seleccion-tabla-contenido"></div>
+  </div>
+
+  <!-- ITF de la seleccion (item G/H): disponibilidad primero (1 llamada
+       liviana, solo booleanos), descarga en lotes de hasta 50 con
+       concurrencia controlada (3 a la vez) armando un ZIP en el
+       navegador (JSZip vendorizado, vendor/jszip/) - nunca un ZIP
+       generado en Apps Script. -->
+  <div id="screen-seleccion-itf" class="screen" hidden>
+    <div class="tv-topbar">
+      <button type="button" id="btn-seleccion-itf-volver" class="tv-volver">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+        Volver
+      </button>
+    </div>
+    <div class="tv-header">
+      <div>
+        <p class="mapa-titulo">ITF de la selección</p>
+        <p id="seleccion-itf-subtitulo" class="tv-header-label"></p>
+      </div>
+    </div>
+    <div id="seleccion-itf-loading" class="mapa-loading">
+      <span class="spinner" aria-hidden="true"></span>
+      <span>Verificando disponibilidad...</span>
+    </div>
+    <div id="seleccion-itf-contenido" hidden>
+      <div id="seleccion-itf-lotes" class="seleccion-itf-lotes"></div>
+      <div id="seleccion-itf-lista" class="seleccion-itf-lista"></div>
+      <div id="seleccion-itf-progreso" class="seleccion-itf-progreso" hidden>
+        <p id="seleccion-itf-progreso-texto"></p>
+        <progress id="seleccion-itf-progreso-barra" max="100" value="0"></progress>
+      </div>
+      <div id="seleccion-itf-resultado" class="seleccion-itf-resultado" hidden>
+        <p id="seleccion-itf-resultado-texto"></p>
+        <button type="button" id="btn-seleccion-itf-reintentar" class="button-secondary" hidden>Reintentar fallidos</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bandeja de seleccion (item D/I): persistente, fuera de cualquier
+       .screen a proposito - sobrevive la navegacion SPA completa. Solo
+       visible con seleccion.length > 0 (ver seleccionController en
+       js/seleccion.js). -->
+  <div id="seleccion-bandeja" class="seleccion-bandeja" hidden>
+    <p id="seleccion-bandeja-contador" class="seleccion-bandeja-contador"></p>
+    <div class="seleccion-bandeja-acciones">
+      <button type="button" id="btn-seleccion-info" class="button-secondary">Ver información</button>
+      <button type="button" id="btn-seleccion-itf" class="button-secondary">ITF</button>
+      <button type="button" id="btn-seleccion-ver-mapa" class="button-secondary">Ver en mapa</button>
+      <button type="button" id="btn-seleccion-limpiar" class="button-secondary">Limpiar</button>
+    </div>
+  </div>
+
+  <!-- Visor de ITF individual desde la tarjeta de seleccion (item 3 del
+       cierre): "Ver ITF" directo, sin pasar por Ver detalle -> Perfil.
+       Reusa apiGetProfile tal cual. -->
+  <div id="seleccion-itf-visor-overlay" class="seleccion-confirmar-overlay" hidden>
+    <div class="seleccion-itf-visor-caja">
+      <button type="button" id="btn-seleccion-itf-visor-cerrar" class="seleccion-itf-visor-cerrar" aria-label="Cerrar">&times;</button>
+      <p id="seleccion-itf-visor-id" class="mono"></p>
+      <img id="seleccion-itf-visor-img" class="profile-image" alt="ITF del pozo">
+      <a id="seleccion-itf-visor-guardar" class="button" download>Guardar / Compartir</a>
+    </div>
+  </div>
+
+  <!-- Reemplazar/Agregar/Cancelar (item 6 del cierre): aparece SOLO si ya
+       habia una seleccion activa cuando el usuario genera una nueva (por
+       radio o poligono). -->
+  <div id="seleccion-confirmar-overlay" class="seleccion-confirmar-overlay" hidden>
+    <div class="seleccion-confirmar-caja">
+      <p id="seleccion-confirmar-mensaje"></p>
+      <div class="seleccion-confirmar-acciones">
+        <button type="button" id="btn-seleccion-confirmar-reemplazar" class="button">Reemplazar selección</button>
+        <button type="button" id="btn-seleccion-confirmar-agregar" class="button-secondary">Agregar a selección</button>
+        <button type="button" id="btn-seleccion-confirmar-cancelar" class="button-secondary">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
   <script src="js/wellIdValidator.js"></script>
   <script src="js/errorMessages.js"></script>
   <script src="js/api.js"></script>
@@ -701,10 +852,12 @@
   <script src="js/mapaNEDataset.js"></script>
   <script src="js/busquedaProvinciaDataset.js"></script>
   <script src="js/cercaMioLogic.js"></script>
+  <script src="js/seleccionLogic.js"></script>
   <script src="js/mapaShared.js"></script>
   <script src="js/mapa.js"></script>
   <script src="js/mapaNE.js"></script>
   <script src="js/cercaMio.js"></script>
+  <script src="js/seleccion.js"></script>
   <script src="js/app.js"></script>
   <!-- Va DESPUES de app.js en el documento a proposito, para que
        onGsiLoaded/onGsiLoadError ya existan antes de que puedan

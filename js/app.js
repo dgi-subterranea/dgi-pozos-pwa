@@ -17,6 +17,8 @@
     mapa: document.getElementById('screen-mapa'),
     mapaNE: document.getElementById('screen-mapa-ne'),
     cercaMio: document.getElementById('screen-cerca-mio'),
+    seleccionTabla: document.getElementById('screen-seleccion-tabla'),
+    seleccionItf: document.getElementById('screen-seleccion-itf'),
     disabled: document.getElementById('screen-disabled'),
     offline: document.getElementById('screen-offline')
   };
@@ -1325,6 +1327,14 @@
         showScreen('main');
         buscarPozo(wellId);
       },
+      // "Seleccionar pozos" > "Por radio" (Etapa "seleccion multiple +
+      // lote", item B): reusa EXACTAMENTE el mismo flujo de
+      // btn-abrir-cerca-mio de abajo - mapa.js nunca llama a showScreen
+      // ni a cercaMioController_abrir por su cuenta, siempre via esta
+      // callback inyectada (mismo criterio que onAbrirPozo).
+      onSeleccionarPorRadio: function () {
+        abrirCercaMio();
+      },
       enfoque: enfoque
     });
   }
@@ -1387,11 +1397,15 @@
 
   // La posicion de referencia (lat/lon) le llega a cercaMioController_abrir
   // desde js/cercaMio.js - via navigator.geolocation ("Mi ubicacion") o via
-  // un tap en el mini-mapa ("Elegir en mapa", Etapa siguiente item B) -
-  // app.js nunca la lee ni la reenvia a ningun lado, solo la deja pasar
-  // hacia abrirMapaDesde()/mapaController_abrir (que tampoco la manda a
-  // ningun backend, ver comentario al inicio de js/mapa.js).
-  document.getElementById('btn-abrir-cerca-mio').addEventListener('click', function () {
+  // un tap en el mini-mapa ("Elegir en mapa") - app.js nunca la lee ni la
+  // reenvia a ningun lado, solo la deja pasar hacia abrirMapaDesde()/
+  // mapaController_abrir (que tampoco la manda a ningun backend, ver
+  // comentario al inicio de js/mapa.js). Factorizada en una funcion (en
+  // vez de vivir solo dentro del listener) porque "Seleccionar pozos" >
+  // "Por radio" en Pozos Provincia necesita EXACTAMENTE el mismo flujo
+  // (ver onSeleccionarPorRadio en abrirMapaDesde, Etapa "seleccion
+  // multiple + lote").
+  function abrirCercaMio() {
     showScreen('cercaMio');
     cercaMioController_abrir({
       sessionToken: sessionToken,
@@ -1407,10 +1421,60 @@
         abrirMapaDesde({ tipo: tipoReferencia === 'elegirMapa' ? 'puntoBusqueda' : 'ubicacion', lat: lat, lon: lon, radioMetros: radioMetros });
       }
     });
-  });
+  }
+
+  document.getElementById('btn-abrir-cerca-mio').addEventListener('click', abrirCercaMio);
 
   document.getElementById('btn-cercamio-volver').addEventListener('click', function () {
     cercaMioController_cerrar();
+    showScreen('main');
+  });
+
+  // Etapa "seleccion multiple + lote": seleccionController nunca llama a
+  // showScreen ni lee sessionToken/permisosActuales por su cuenta (mismo
+  // criterio que mapaController/cercaMioController) - obtenerContexto()
+  // le da SIEMPRE el valor fresco al momento en que de verdad hace
+  // falta (puede ser llamado desde cualquier pantalla, la bandeja es
+  // persistente).
+  seleccionController_inicializar(function () {
+    return {
+      sessionToken: sessionToken,
+      permisos: permisosActuales,
+      onAbrirPozo: function (wellId) {
+        showScreen('main');
+        buscarPozo(wellId);
+      },
+      onVerEnMapa: function (wellId) {
+        abrirMapaDesde({ tipo: 'pozo', wellId: wellId });
+      },
+      // Item 8 del cierre ("token de sesion expirado se maneja igual que
+      // el resto de la app"): mismo criterio que buscarPozo (ver chequeo
+      // de UNAUTHORIZED mas abajo) - getItfAvailability/getProfile/
+      // registerDescargaItf devuelven UNAUTHORIZED con la misma forma
+      // que cualquier otro endpoint, asi que seleccion.js llama aca en
+      // vez de tratarlo como un fallo silencioso mas.
+      onSessionExpired: function () {
+        logout();
+      }
+    };
+  });
+
+  document.getElementById('btn-seleccion-info').addEventListener('click', function () {
+    showScreen('seleccionTabla');
+    seleccionController_abrirTabla();
+  });
+  document.getElementById('btn-seleccion-itf').addEventListener('click', function () {
+    showScreen('seleccionItf');
+    seleccionController_abrirItf();
+  });
+  document.getElementById('btn-seleccion-ver-mapa').addEventListener('click', function () {
+    var wellIds = Array.from(seleccionController_obtenerSeleccionSet());
+    abrirMapaDesde({ tipo: 'seleccion', wellIds: wellIds });
+  });
+  document.getElementById('btn-seleccion-tabla-volver').addEventListener('click', function () {
+    showScreen('main');
+  });
+  document.getElementById('btn-seleccion-itf-volver').addEventListener('click', function () {
     showScreen('main');
   });
 

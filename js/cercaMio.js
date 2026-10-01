@@ -58,6 +58,7 @@
 
   var chips = Array.prototype.slice.call(document.querySelectorAll('.cercamio-radio-chip'));
   var btnVerTodosMapa = document.getElementById('btn-cercamio-ver-todos-mapa');
+  var btnUsarSeleccionEl = document.getElementById('btn-cercamio-usar-seleccion');
   var btnRefUbicacion = document.getElementById('btn-cercamio-ref-ubicacion');
   var btnRefMapa = document.getElementById('btn-cercamio-ref-mapa');
   var radioPersonalizadoWrapEl = document.getElementById('cercamio-radio-personalizado');
@@ -431,6 +432,22 @@
     if (estado.contextoActual && ref) {
       estado.contextoActual.onVerTodosEnMapa(ref.lat, ref.lon, estado.radioMetros, estado.referencia);
     }
+  });
+
+  // Item D del cierre: radio desemboca en la MISMA seleccion que
+  // poligono (ver seleccionController_proponerSeleccion en
+  // js/seleccion.js) - se recalcula SIN el tope de 30 de la lista
+  // visible (ese tope es solo para la UX de "pozos cerca mio" en vivo,
+  // la seleccion por lote no tiene por que estar limitada a 30: la
+  // pantalla de ITF ya sabe manejar selecciones grandes en lotes).
+  btnUsarSeleccionEl.addEventListener('click', function () {
+    var ref = cercaMioController_referenciaActual();
+    if (!ref || !estado.datasetCache) {
+      return;
+    }
+    var todos = cercaMioLogic_buscarCercanos(estado.datasetCache, ref.lat, ref.lon, estado.radioMetros, estado.datasetCache.length);
+    var wellIds = todos.map(function (r) { return r.wellId; });
+    seleccionController_proponerSeleccion(wellIds, 'radio', { lat: ref.lat, lon: ref.lon, radioMetros: estado.radioMetros });
   });
 
   // Referencia (item B): "Mi ubicacion" vuelve al flujo GPS de siempre -

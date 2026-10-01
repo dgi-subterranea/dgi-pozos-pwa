@@ -61,6 +61,22 @@ function mapaShared_cargarCSS(href) {
   document.head.appendChild(link);
 }
 
+// Carga diferida de JSZip (vendorizado en vendor/jszip/, MIT, SIN CDN en
+// runtime - ver vendor/jszip/LICENSE) - solo la primera vez que hace
+// falta armar un ZIP de verdad (ver seleccionController_descargarItf en
+// js/seleccion.js). Mismo patron que mapaShared_cargarLibrerias (Leaflet):
+// una sola promesa compartida, nunca vuelve a inyectar el <script> si ya
+// se cargo.
+var jsZipPromise = null;
+
+function mapaShared_cargarJSZip() {
+  if (jsZipPromise) {
+    return jsZipPromise;
+  }
+  jsZipPromise = mapaShared_cargarScript('vendor/jszip/jszip.min.js');
+  return jsZipPromise;
+}
+
 var mapaLibreriasPromise = null;
 
 // Carga diferida real, UNA SOLA vez para toda la pagina: Leaflet/

@@ -33,3 +33,14 @@ describe('profileService_getProfile', () => {
     expect(() => ProfileService.profileService_getProfile('03-0123')).toThrow('FOLDER_ID no configurado');
   });
 });
+
+describe('profileService_checkDisponibilidad', () => {
+  test('delega en itfAvailabilityService_checkDisponibilidad y devuelve el mapa tal cual', () => {
+    global.itfAvailabilityService_checkDisponibilidad.mockReturnValue({ '01-0012': true, '01-0013': false });
+
+    const resultado = ProfileService.profileService_checkDisponibilidad(['01-0012', '01-0013']);
+
+    expect(resultado).toEqual({ '01-0012': true, '01-0013': false });
+    expect(global.itfAvailabilityService_checkDisponibilidad).toHaveBeenCalledWith(['01-0012', '01-0013']);
+  });
+});
