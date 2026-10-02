@@ -769,9 +769,18 @@ button:hover,
   color: var(--color-primary);
   font-weight: 700;
   font-size: 0.82rem;
-  min-height: 0;
-  padding: 0;
+  /* Area tactil de 44px (antes 16px: casi imposible de acertar con el
+     pulgar); el margen negativo compensa para que el texto no se mueva. */
+  min-height: 44px;
+  margin: -14px 0 -14px -12px;
+  padding: 0 14px 0 12px;
   cursor: pointer;
+}
+.tv-topbar-fija {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--color-bg);
 }
 .tv-volver:hover,
 .tv-volver:active,
@@ -2119,6 +2128,9 @@ table.ne-table tr:last-child td {
   .tv-topbar {
     padding: 16px 34px;
   }
+  .tv-topbar-fija {
+    background: var(--color-surface);
+  }
   .tv-header {
     padding: 22px 34px 18px;
   }
@@ -2334,7 +2346,12 @@ table.ne-table tr:last-child td {
   border: none;
 }
 
-/* Bandeja de seleccion persistente (item D/I) */
+/* Bandeja de seleccion persistente (item D/I).
+   Mobile-first: contador arriba y las 4 acciones en grilla 2x2 (nunca un
+   carrusel horizontal: todo visible, botones tactiles de 44px). Desde
+   640px pasa a una sola fila. Respeta la safe area del iPhone. El espacio
+   que ocupa lo reserva body.con-bandeja (ver abajo), asi ninguna pantalla
+   tapa su contenido final ni sus CTAs. */
 .seleccion-bandeja {
   position: fixed;
   left: 0;
@@ -2343,8 +2360,10 @@ table.ne-table tr:last-child td {
   z-index: 40;
   background: var(--color-primary-dark);
   color: #fff;
-  padding: 10px 18px;
-  padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  padding: 10px 16px;
+  padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  padding-left: calc(16px + env(safe-area-inset-left, 0px));
+  padding-right: calc(16px + env(safe-area-inset-right, 0px));
   box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.18);
   display: flex;
   flex-direction: column;
@@ -2352,25 +2371,39 @@ table.ne-table tr:last-child td {
 }
 .seleccion-bandeja-contador {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: 0.88rem;
   font-weight: 700;
 }
 .seleccion-bandeja-acciones {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
-  overflow-x: auto;
 }
 .seleccion-bandeja-acciones .button-secondary {
-  flex: none;
   background: rgba(255, 255, 255, 0.12);
   color: #fff;
   border-color: rgba(255, 255, 255, 0.3);
-  min-height: 36px;
-  padding: 6px 14px;
-  font-size: 0.82rem;
+  min-height: 44px;
+  padding: 8px 10px;
+  font-size: 0.9rem;
+  white-space: nowrap;
 }
 .seleccion-bandeja-acciones .button-secondary:hover {
   background: rgba(255, 255, 255, 0.22);
+}
+/* Limpiar: accion destructiva, menos prominente que las otras tres. */
+.seleccion-bandeja-acciones .seleccion-bandeja-limpiar {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.22);
+  color: rgba(255, 255, 255, 0.85);
+}
+
+/* Reserva de espacio para la bandeja fija: seleccion.js pone la clase
+   con-bandeja en <body> y la altura real de la bandeja en --bandeja-alto
+   (cambia con el ancho, la safe area y el zoom de texto) - el contenido
+   puede scrollear por encima de ella sin que tape su final. */
+body.con-bandeja {
+  padding-bottom: calc(var(--bandeja-alto, 140px) + 20px);
 }
 
 /* Reemplazar/Agregar/Cancelar (item 6) */
@@ -2463,7 +2496,7 @@ table.ne-table tr:last-child td {
   background: var(--color-surface);
 }
 .seleccion-tabla-contenido {
-  padding: 0 18px 90px;
+  padding: 0 18px 24px;
   display: flex;
   flex-direction: column;
 }
@@ -2576,7 +2609,7 @@ table.ne-table tr:last-child td {
   overflow: hidden;
 }
 .seleccion-itf-resultado {
-  padding: 16px 18px 90px;
+  padding: 16px 18px 24px;
 }
 .seleccion-itf-resultado p {
   margin: 0 0 10px;
@@ -2585,11 +2618,20 @@ table.ne-table tr:last-child td {
 
 @media (min-width: 640px) {
   .seleccion-bandeja {
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
     padding: 12px 34px;
     padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
   }
   .seleccion-bandeja-acciones {
-    overflow-x: visible;
+    grid-template-columns: repeat(4, auto);
+  }
+  .seleccion-bandeja-acciones .button-secondary {
+    min-height: 40px;
+    padding: 6px 18px;
+    font-size: 0.86rem;
   }
   .seleccion-tabla-barra,
   .seleccion-itf-lotes,

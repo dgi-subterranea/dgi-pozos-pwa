@@ -32,6 +32,9 @@
     Object.keys(screens).forEach(function (key) {
       screens[key].hidden = key !== name;
     });
+    // Pantalla nueva = arriba de todo: sin esto heredaba el scroll de la
+    // anterior (en una lista larga, Volver quedaba fuera de vista).
+    window.scrollTo(0, 0);
   }
 
   function isIOS() {
@@ -1337,11 +1340,12 @@
   // Mio) - estos 2 ultimos SIEMPRE van directo a Pozos Provincia, nunca
   // pasan por el selector, sin importar los permisos (Cerca Mio es
   // exclusivamente sobre el padron - ver punto 7 de la Etapa v2.2.0).
-  function abrirMapaDesde(enfoque) {
+  function abrirMapaDesde(enfoque, conservarRetorno) {
     // De donde viene el usuario (ver mapaVolverA). Si ya estaba en el mapa
     // (ej. "Ver en mapa" de la bandeja con el mapa abierto) se conserva el
-    // destino de retorno que ya tenia.
-    if (pantallaActual !== 'mapa') {
+    // destino de retorno que ya tenia - igual cuando se REABRE el mapa al
+    // volver de Ver informacion/ITF (conservarRetorno).
+    if (pantallaActual !== 'mapa' && !conservarRetorno) {
       mapaVolverA = PANTALLAS_RETORNO_MAPA[pantallaActual] ? pantallaActual : null;
     }
     actualizarEtiquetaVolverMapa();
@@ -1504,23 +1508,76 @@
     };
   });
 
+  // --- Navegacion de "Ver informacion" / "ITF" de la seleccion ---
+  // Reglas (una sola, para las dos vistas y para toda pantalla desde la
+  // que se abren, porque la bandeja es visible en todas):
+  //  - Ver informacion e ITF recuerdan la pantalla desde la que se entro
+  //    a la seleccion (seleccionOrigen: pantalla + scroll). Volver desde
+  //    Ver informacion vuelve SIEMPRE ahi.
+  //  - ITF abierto desde Ver informacion vuelve a Ver informacion (es un
+  //    paso mas adentro de esa vista); abierto desde cualquier otro lado
+  //    vuelve al mismo origen.
+  //  - Ir de una vista a la otra con la bandeja no cambia el origen
+  //    (evita ciclos Info <-> ITF y deja el origen real intacto).
+  //  - Un origen que ya no se puede restaurar (login, offline...) cae al hub.
+  var SELECCION_VISTAS = { seleccionTabla: true, seleccionItf: true };
+  var seleccionOrigen = { pantalla: 'main', scrollY: 0 };
+  var itfVolverATabla = false;
+
+  function abrirVistaSeleccion(destino) {
+    var desde = pantallaActual;
+    if (!SELECCION_VISTAS[desde]) {
+      seleccionOrigen = { pantalla: desde, scrollY: window.scrollY };
+    }
+    if (destino === 'seleccionItf' && desde !== 'seleccionItf') {
+      itfVolverATabla = desde === 'seleccionTabla';
+    }
+    showScreen(destino);
+    if (destino === 'seleccionItf') {
+      seleccionController_abrirItf();
+    } else {
+      seleccionController_abrirTabla();
+    }
+  }
+
+  function volverAlOrigenDeSeleccion() {
+    var origen = seleccionOrigen.pantalla;
+    if (origen === 'cercaMio') {
+      showScreen('cercaMio');
+      cercaMioController_reanudar();
+    } else if (origen === 'mapa') {
+      abrirMapaDesde(null, true);
+    } else if (origen === 'mapaNE') {
+      abrirMapaNE();
+    } else if (origen === 'main' || origen === 'mapaSelector' || origen === 'wellRecordTable' ||
+      origen === 'perfil' || origen === 'datos' || origen === 'ubicacion' || origen === 'ne') {
+      showScreen(origen);
+    } else {
+      showScreen('main');
+    }
+    window.scrollTo(0, seleccionOrigen.scrollY || 0);
+  }
+
   document.getElementById('btn-seleccion-info').addEventListener('click', function () {
-    showScreen('seleccionTabla');
-    seleccionController_abrirTabla();
+    abrirVistaSeleccion('seleccionTabla');
   });
   document.getElementById('btn-seleccion-itf').addEventListener('click', function () {
-    showScreen('seleccionItf');
-    seleccionController_abrirItf();
+    abrirVistaSeleccion('seleccionItf');
   });
   document.getElementById('btn-seleccion-ver-mapa').addEventListener('click', function () {
     var wellIds = Array.from(seleccionController_obtenerSeleccionSet());
     abrirMapaDesde({ tipo: 'seleccion', wellIds: wellIds });
   });
-  document.getElementById('btn-seleccion-tabla-volver').addEventListener('click', function () {
-    showScreen('main');
-  });
+  document.getElementById('btn-seleccion-tabla-volver').addEventListener('click', volverAlOrigenDeSeleccion);
   document.getElementById('btn-seleccion-itf-volver').addEventListener('click', function () {
-    showScreen('main');
+    if (itfVolverATabla) {
+      // se re-renderiza: la seleccion pudo cambiar desde que se salio
+      itfVolverATabla = false;
+      showScreen('seleccionTabla');
+      seleccionController_abrirTabla();
+    } else {
+      volverAlOrigenDeSeleccion();
+    }
   });
 
   // --- Recuperacion de sesion al cargar ---

@@ -134,10 +134,28 @@
     estado.ultimosFallidos = [];
   }
 
+  // La bandeja es fixed: sin reservarle lugar tapa el final de cada
+  // pantalla (botones de Cerca Mio, ultimo item de listas...). La clase
+  // con-bandeja en <body> agrega padding-bottom = altura real de la
+  // bandeja (--bandeja-alto, ver css) para que el contenido scrollee por
+  // encima de ella. La altura se mide: depende del ancho, de la safe area
+  // del iPhone y del tamano de texto del usuario.
+  function medirBandeja() {
+    if (!bandejaEl.hidden) {
+      document.documentElement.style.setProperty('--bandeja-alto', bandejaEl.offsetHeight + 'px');
+    }
+  }
+  if (typeof ResizeObserver === 'function') {
+    new ResizeObserver(medirBandeja).observe(bandejaEl);
+  }
+  window.addEventListener('resize', medirBandeja);
+
   function actualizarBandeja() {
     var n = estado.seleccion.length;
     bandejaEl.hidden = n === 0;
+    document.body.classList.toggle('con-bandeja', n > 0);
     bandejaContadorEl.textContent = n + ' pozo' + (n === 1 ? '' : 's') + ' seleccionado' + (n === 1 ? '' : 's');
+    medirBandeja();
   }
 
   function aplicarSeleccion(wellIds, origen, geometria) {
