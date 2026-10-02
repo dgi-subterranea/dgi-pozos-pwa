@@ -29,6 +29,9 @@ const {
   mapaLogic_filtrarPorCampoDerivadoMultiple,
   mapaLogic_filtrarPorDepartamentoMultiple,
   mapaLogic_limpiarActivosInvalidos,
+  mapaLogic_aplicarConteosContextuales,
+  mapaLogic_contarPorEstado,
+  mapaLogic_contarEnSetNE,
   mapaLogic_validarRangoProfundidad,
   mapaLogic_filtrarPorRangoProfundidad,
   mapaLogic_tramoIntersectaRango,
@@ -921,6 +924,62 @@ describe('mapaLogic_limpiarActivosInvalidos (Etapa 1B.1/C - multi-select)', () =
 
   test('activos vacio -> sigue vacio', () => {
     expect(mapaLogic_limpiarActivosInvalidos({}, opcionesCondicionadas)).toEqual({});
+  });
+});
+
+describe('conteos contextuales de los chips', () => {
+  const globales = [
+    { valor: 'Rio Mendoza', cantidad: 6739 },
+    { valor: 'Rio Tunuyan', cantidad: 4000 },
+    { valor: 'Rio Diamante', cantidad: 800 }
+  ];
+  const contextuales = [
+    { valor: 'Rio Mendoza', cantidad: 22 },
+    { valor: 'Rio Tunuyan', cantidad: 18 }
+  ];
+
+  test('la cantidad es la del universo contextual (22 de 40, no 6739)', () => {
+    const r = mapaLogic_aplicarConteosContextuales(globales, contextuales, 'valor', {});
+    expect(r).toEqual([
+      { valor: 'Rio Mendoza', cantidad: 22 },
+      { valor: 'Rio Tunuyan', cantidad: 18 }
+    ]);
+  });
+
+  test('un valor sin pozos en el universo se oculta si no esta activo', () => {
+    const r = mapaLogic_aplicarConteosContextuales(globales, contextuales, 'valor', {});
+    expect(r.map(o => o.valor)).not.toContain('Rio Diamante');
+  });
+
+  test('un valor activo con 0 pozos se conserva con cantidad 0 (el filtro no queda invisible)', () => {
+    const r = mapaLogic_aplicarConteosContextuales(globales, contextuales, 'valor', { 'Rio Diamante': true });
+    expect(r.find(o => o.valor === 'Rio Diamante').cantidad).toBe(0);
+  });
+
+  test('conserva orden y campos extra de las globales (departamento: codigo/nombre)', () => {
+    const gDep = [{ codigo: '01', nombre: 'Capital', cantidad: 100 }, { codigo: '02', nombre: 'Godoy Cruz', cantidad: 50 }];
+    const cDep = [{ codigo: '02', nombre: 'Godoy Cruz', cantidad: 3 }];
+    const r = mapaLogic_aplicarConteosContextuales(gDep, cDep, 'codigo', { '01': true });
+    expect(r).toEqual([
+      { codigo: '01', nombre: 'Capital', cantidad: 0 },
+      { codigo: '02', nombre: 'Godoy Cruz', cantidad: 3 }
+    ]);
+  });
+
+  test('no muta las opciones globales', () => {
+    mapaLogic_aplicarConteosContextuales(globales, contextuales, 'valor', {});
+    expect(globales[0].cantidad).toBe(6739);
+  });
+
+  test('mapaLogic_contarPorEstado cuenta C y D e ignora otros valores', () => {
+    expect(mapaLogic_contarPorEstado([{ estado: 'C' }, { estado: 'D' }, { estado: 'D' }, { estado: 'X' }, {}])).toEqual({ C: 1, D: 2 });
+    expect(mapaLogic_contarPorEstado([])).toEqual({ C: 0, D: 0 });
+  });
+
+  test('mapaLogic_contarEnSetNE cuenta la interseccion; sin Set devuelve null', () => {
+    const set = new Set(['a', 'c']);
+    expect(mapaLogic_contarEnSetNE([{ wellId: 'a' }, { wellId: 'b' }, { wellId: 'c' }, {}], set)).toBe(2);
+    expect(mapaLogic_contarEnSetNE([{ wellId: 'a' }], null)).toBeNull();
   });
 });
 

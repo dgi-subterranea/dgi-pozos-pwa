@@ -10,7 +10,11 @@ const {
   seleccionLogic_limpiar,
   seleccionLogic_distanciaPuntoASegmento,
   seleccionLogic_pointInPolygonOrBoundary,
-  seleccionLogic_filtrarPorPoligono
+  seleccionLogic_filtrarPorPoligono,
+  seleccionLogic_resolverContexto,
+  seleccionLogic_claveContexto,
+  seleccionLogic_filtrarPorWellIds,
+  seleccionLogic_describirVista
 } = require('./seleccionLogic');
 
 // ---- Seleccion: operaciones de set ----
@@ -168,6 +172,137 @@ describe('seleccionLogic_filtrarPorPoligono', () => {
 
   test('dataset vacio -> array vacio', () => {
     expect(seleccionLogic_filtrarPorPoligono([], CUADRADO)).toEqual([]);
+  });
+});
+
+// ---- Contexto geografico + alcance + filtros (ajuste UX: seleccion
+// geografica combinada con los filtros del mapa) ----
+
+const GEO_RADIO = { lat: -32.89, lon: -68.84, radioMetros: 2000, tipoReferencia: 'elegirMapa' };
+const GEO_POLI = { vertices: [{ lat: 0, lon: 0 }, { lat: 1, lon: 0 }, { lat: 0, lon: 1 }] };
+
+describe('seleccionLogic_resolverContexto', () => {
+  const seleccion = { wellIds: ['01-0001', '01-0002'], origen: 'poligono', geometria: GEO_POLI };
+  const vista = { wellIds: ['05-0001'], origen: 'radio', geometria: GEO_RADIO };
+
+  test('sin nada -> null', () => {
+    expect(seleccionLogic_resolverContexto(null, null)).toBeNull();
+  });
+  test('solo seleccion confirmada -> tipo "seleccion"', () => {
+    const ctx = seleccionLogic_resolverContexto(null, seleccion);
+    expect(ctx.tipo).toBe('seleccion');
+    expect(ctx.origen).toBe('poligono');
+    expect(ctx.wellIds).toEqual(['01-0001', '01-0002']);
+  });
+  test('solo vista previa -> tipo "vistaPrevia"', () => {
+    expect(seleccionLogic_resolverContexto(vista, null).tipo).toBe('vistaPrevia');
+  });
+  test('las dos: la vista previa tiene prioridad', () => {
+    const ctx = seleccionLogic_resolverContexto(vista, seleccion);
+    expect(ctx.tipo).toBe('vistaPrevia');
+    expect(ctx.wellIds).toEqual(['05-0001']);
+  });
+  test('seleccion vacia (wellIds=[]) no cuenta como contexto', () => {
+    expect(seleccionLogic_resolverContexto(null, { wellIds: [], origen: 'radio', geometria: GEO_RADIO })).toBeNull();
+  });
+  test('vista previa vacia cae a la seleccion', () => {
+    const ctx = seleccionLogic_resolverContexto({ wellIds: [], origen: 'radio', geometria: GEO_RADIO }, seleccion);
+    expect(ctx.tipo).toBe('seleccion');
+  });
+  test('quitar/cancelar la vista previa hace reaparecer la seleccion confirmada (misma geometria y pozos)', () => {
+    const conPrevia = seleccionLogic_resolverContexto(vista, seleccion);
+    expect(conPrevia.tipo).toBe('vistaPrevia');
+    const sinPrevia = seleccionLogic_resolverContexto(null, seleccion);
+    expect(sinPrevia.tipo).toBe('seleccion');
+    expect(sinPrevia.wellIds).toEqual(seleccion.wellIds);
+    expect(sinPrevia.geometria).toEqual(GEO_POLI);
+    // cambia de contexto -> el mapa vuelve a alcance "todo"
+    expect(seleccionLogic_claveContexto(sinPrevia)).not.toBe(seleccionLogic_claveContexto(conPrevia));
+  });
+});
+
+describe('seleccionLogic_claveContexto', () => {
+  test('null -> cadena vacia', () => {
+    expect(seleccionLogic_claveContexto(null)).toBe('');
+  });
+  test('quitar un pozo (mismos tipo/origen/geometria) NO cambia la clave', () => {
+    const a = { tipo: 'seleccion', origen: 'radio', geometria: GEO_RADIO, wellIds: ['01-0001', '01-0002'] };
+    const b = { tipo: 'seleccion', origen: 'radio', geometria: GEO_RADIO, wellIds: ['01-0001'] };
+    expect(seleccionLogic_claveContexto(a)).toBe(seleccionLogic_claveContexto(b));
+  });
+  test('otro radio, otro tipo u otro origen SI cambian la clave', () => {
+    const base = { tipo: 'seleccion', origen: 'radio', geometria: GEO_RADIO, wellIds: [] };
+    const otroRadio = Object.assign({}, base, { geometria: Object.assign({}, GEO_RADIO, { radioMetros: 5000 }) });
+    const otroTipo = Object.assign({}, base, { tipo: 'vistaPrevia' });
+    const otroOrigen = Object.assign({}, base, { origen: 'poligono', geometria: GEO_POLI });
+    const k = seleccionLogic_claveContexto(base);
+    expect(seleccionLogic_claveContexto(otroRadio)).not.toBe(k);
+    expect(seleccionLogic_claveContexto(otroTipo)).not.toBe(k);
+    expect(seleccionLogic_claveContexto(otroOrigen)).not.toBe(k);
+  });
+});
+
+describe('seleccionLogic_filtrarPorWellIds', () => {
+  test('conserva solo los puntos cuyo wellId esta en el set', () => {
+    const puntos = [{ wellId: 'a' }, { wellId: 'b' }, { wellId: 'c' }];
+    expect(seleccionLogic_filtrarPorWellIds(puntos, new Set(['a', 'c']))).toEqual([{ wellId: 'a' }, { wellId: 'c' }]);
+  });
+  test('set vacio -> nada', () => {
+    expect(seleccionLogic_filtrarPorWellIds([{ wellId: 'a' }], new Set())).toEqual([]);
+  });
+});
+
+describe('seleccionLogic_describirVista (3 modos: todo / solo / interseccion)', () => {
+  const ctxSel = { tipo: 'seleccion', origen: 'poligono', geometria: GEO_POLI, wellIds: new Array(40).fill('x') };
+  const ctxPrev = { tipo: 'vistaPrevia', origen: 'radio', geometria: GEO_RADIO, wellIds: new Array(14).fill('x') };
+
+  test('sin contexto: modo "todo", sin titulo, contador sobre todo el dataset', () => {
+    const v = seleccionLogic_describirVista({ contexto: null, alcance: 'todo', filtrosActivos: false, visibles: 13804, totalDataset: 13804 });
+    expect(v.modo).toBe('todo');
+    expect(v.titulo).toBeNull();
+    expect(v.contador).toBe('13804 de 13804 pozos');
+  });
+  test('sin contexto + filtros: el contador sigue siendo sobre todo el dataset', () => {
+    const v = seleccionLogic_describirVista({ contexto: null, alcance: 'todo', filtrosActivos: true, visibles: 3762, totalDataset: 13804 });
+    expect(v.contador).toBe('3762 de 13804 pozos');
+  });
+  test('seleccion + alcance "todo": se ven todos, la seleccion solo esta resaltada', () => {
+    const v = seleccionLogic_describirVista({ contexto: ctxSel, alcance: 'todo', filtrosActivos: false, visibles: 13804, totalDataset: 13804 });
+    expect(v.modo).toBe('todo');
+    expect(v.titulo).toBe('Selección por polígono · 40 pozos');
+    expect(v.estado).toContain('todos los pozos del mapa');
+    expect(v.estado).toContain('resaltada');
+    expect(v.contador).toBe('13804 de 13804 pozos');
+  });
+  test('seleccion + alcance "solo" sin filtros: modo "solo", contador sobre la seleccion', () => {
+    const v = seleccionLogic_describirVista({ contexto: ctxSel, alcance: 'solo', filtrosActivos: false, visibles: 40, totalDataset: 13804 });
+    expect(v.modo).toBe('solo');
+    expect(v.estado).toBe('Viendo: solo la selección');
+    expect(v.contador).toBe('40 de 40 pozos de la selección');
+  });
+  test('seleccion + alcance "solo" + filtros: modo "interseccion" con X de N', () => {
+    const v = seleccionLogic_describirVista({ contexto: ctxSel, alcance: 'solo', filtrosActivos: true, visibles: 12, totalDataset: 13804 });
+    expect(v.modo).toBe('interseccion');
+    expect(v.estado).toBe('Viendo: la selección ∩ filtros · 12 de 40');
+    expect(v.contador).toBe('12 de 40 pozos de la selección (con filtros)');
+  });
+  test('interseccion vacia: 0 de N, no rompe', () => {
+    const v = seleccionLogic_describirVista({ contexto: ctxSel, alcance: 'solo', filtrosActivos: true, visibles: 0, totalDataset: 13804 });
+    expect(v.contador).toBe('0 de 40 pozos de la selección (con filtros)');
+  });
+  test('alcance "todo" con filtros lo aclara en el estado', () => {
+    const v = seleccionLogic_describirVista({ contexto: ctxSel, alcance: 'todo', filtrosActivos: true, visibles: 3762, totalDataset: 13804 });
+    expect(v.estado).toContain('(con filtros)');
+  });
+  test('vista previa: el texto habla de "vista previa", no de "selección"', () => {
+    const v = seleccionLogic_describirVista({ contexto: ctxPrev, alcance: 'solo', filtrosActivos: false, visibles: 14, totalDataset: 13804 });
+    expect(v.titulo).toBe('Vista previa por radio · 14 pozos');
+    expect(v.estado).toBe('Viendo: solo la vista previa');
+  });
+  test('seleccion por radio: titulo "Selección por radio"; 1 solo pozo en singular', () => {
+    const ctx = { tipo: 'seleccion', origen: 'radio', geometria: GEO_RADIO, wellIds: ['x'] };
+    const v = seleccionLogic_describirVista({ contexto: ctx, alcance: 'todo', filtrosActivos: false, visibles: 1, totalDataset: 13804 });
+    expect(v.titulo).toBe('Selección por radio · 1 pozo');
   });
 });
 

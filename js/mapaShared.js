@@ -35,14 +35,71 @@ var MAPA_COLOR_NE = '#073e54';
 // nunca un color nuevo sin relacion con la paleta existente.
 var MAPA_COLOR_NE_NIVEL = '#4fa3c4';
 
-// "Punto de busqueda" (Etapa siguiente, item D - Cerca Mio con punto
-// elegido en el mapa, en vez de GPS). Mismo tono que --color-warn (ya
-// usado en chips de advertencia en otras pantallas) - deliberadamente
-// NO el teal de los pozos (Confirmada/Disponible/NE) ni el terracota de
-// --color-accent (ya es "Tu ubicacion", ver mapa-mi-ubicacion-punto en
-// css/styles.css): con 2 referencias posibles sobre el mismo mapa (GPS vs
-// punto elegido), tienen que poder distinguirse a simple vista.
-var MAPA_COLOR_PUNTO_BUSQUEDA = '#8a5a12';
+// Color de TODA la geografia de seleccion (poligono, vertices, punto de
+// referencia, circulo de radio, anillo de los pozos seleccionados).
+// Magenta fuerte (ajuste UX): el marron anterior (#8a5a12) se perdia sobre
+// Satelite (tierra/vegetacion) y no destacaba sobre el mapa base claro. El
+// magenta casi no existe en la naturaleza ni en la paleta del mapa
+// (teal de los pozos, verdes/beige de OSM, tierra de Esri) y se lee bien
+// en los dos fondos. Aun asi cada linea se dibuja con un halo blanco
+// debajo (ver mapaShared_crearContornoSeleccion) para que el contraste no
+// dependa de lo que haya atras. Mismo hex que --color-seleccion en
+// css/styles.css (Leaflet no lee variables CSS: duplicado a proposito,
+// mantener en sync).
+var MAPA_COLOR_SELECCION = '#e0007a';
+
+// Dibuja un contorno de seleccion como DOS capas: halo blanco ancho
+// debajo + linea magenta arriba. makeLayer(opcionesDeEstilo) crea la capa
+// Leaflet (L.polygon / L.circle / L.polyline) con las opciones que le
+// pasa esta funcion. interactive:false SIEMPRE: la geografia de seleccion
+// nunca debe interceptar toques destinados al mapa (agregar un vertice,
+// mover el punto elegido) ni a los pozos de abajo.
+function mapaShared_crearContornoSeleccion(makeLayer, opciones) {
+  var o = opciones || {};
+  var halo = makeLayer({
+    color: '#ffffff', weight: (o.weight || 3) + 3, opacity: 0.95, fill: false, interactive: false
+  });
+  var lineaOpciones = {
+    color: MAPA_COLOR_SELECCION, weight: o.weight || 3, opacity: 1, interactive: false
+  };
+  if (o.dashArray) {
+    lineaOpciones.dashArray = o.dashArray;
+  }
+  if (o.relleno) {
+    lineaOpciones.fillColor = MAPA_COLOR_SELECCION;
+    lineaOpciones.fillOpacity = o.relleno;
+  } else {
+    lineaOpciones.fill = false;
+  }
+  var linea = makeLayer(lineaOpciones);
+  return { halo: halo, linea: linea };
+}
+
+// Circulo de radio de busqueda (halo + linea + relleno suave) como un
+// L.layerGroup - se redimensiona/mueve con
+// mapaShared_actualizarCirculoSeleccion (lo usa el mini-mapa de Cerca
+// Mio, que lo cambia en vivo, y el mapa Provincia).
+function mapaShared_crearCirculoSeleccion(lat, lon, radioMetros) {
+  var partes = mapaShared_crearContornoSeleccion(function (o) {
+    return L.circle([lat, lon], Object.assign({ radius: radioMetros }, o));
+  }, { relleno: 0.08 });
+  return L.layerGroup([partes.halo, partes.linea]);
+}
+
+function mapaShared_actualizarCirculoSeleccion(grupo, lat, lon, radioMetros) {
+  grupo.eachLayer(function (capa) {
+    capa.setLatLng([lat, lon]);
+    capa.setRadius(radioMetros);
+  });
+}
+
+// Poligono de seleccion (halo + linea + relleno suave), como L.layerGroup.
+function mapaShared_crearPoligonoSeleccion(latlngs) {
+  var partes = mapaShared_crearContornoSeleccion(function (o) {
+    return L.polygon(latlngs, o);
+  }, { relleno: 0.12 });
+  return L.layerGroup([partes.halo, partes.linea]);
+}
 
 function mapaShared_cargarScript(src) {
   return new Promise(function (resolve, reject) {
@@ -264,11 +321,11 @@ function mapaShared_crearMarkerNE(punto, contexto) {
 // "un lugar que el usuario toco en el mapa", y un pin es la forma mas
 // reconocible para eso. Nunca se confunde con los circleMarker de pozos
 // (son circulos chicos y lisos) ni con el circulo-pulso de "Tu ubicacion"
-// (mapaController_iconoMiUbicacion en js/mapa.js, color --color-accent) -
-// ver MAPA_COLOR_PUNTO_BUSQUEDA arriba.
+// (mapaController_iconoMiUbicacion en js/mapa.js, mismo color de seleccion
+// pero forma de punto con pulso) - ver MAPA_COLOR_SELECCION arriba.
 function mapaShared_iconoPuntoBusqueda() {
   var svg = '<svg width="30" height="38" viewBox="0 0 30 38" xmlns="http://www.w3.org/2000/svg">' +
-    '<path d="M15 1C7.8 1 2 6.8 2 14c0 10 13 23 13 23s13-13 13-23C28 6.8 22.2 1 15 1z" fill="' + MAPA_COLOR_PUNTO_BUSQUEDA + '" stroke="#ffffff" stroke-width="2"/>' +
+    '<path d="M15 1C7.8 1 2 6.8 2 14c0 10 13 23 13 23s13-13 13-23C28 6.8 22.2 1 15 1z" fill="' + MAPA_COLOR_SELECCION + '" stroke="#ffffff" stroke-width="2"/>' +
     '<circle cx="15" cy="14" r="5" fill="#ffffff"/>' +
     '</svg>';
   return L.divIcon({ className: 'mapa-punto-busqueda-icono', html: svg, iconSize: [30, 38], iconAnchor: [15, 36] });

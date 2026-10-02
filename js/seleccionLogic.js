@@ -154,9 +154,101 @@ function seleccionLogic_filtrarPorPoligono(puntos, vertices, tolerancia) {
   return resultado;
 }
 
+// ---- Contexto geografico visible en el mapa ----
+// "Contexto" = el conjunto de pozos + la geometria (poligono o
+// punto/radio) que el mapa muestra resaltado y sobre el que pueden actuar
+// los filtros. Puede ser la SELECCION confirmada (bandeja) o una VISTA
+// PREVIA (resultado de Pozos cerca mio todavia sin "Usar estos pozos").
+// Si existen las dos, la vista previa tiene prioridad: es lo que el
+// usuario esta mirando ahora mismo.
+// vistaPrevia / seleccion: {wellIds, origen, geometria} | null.
+function seleccionLogic_resolverContexto(vistaPrevia, seleccion) {
+  if (vistaPrevia && vistaPrevia.wellIds && vistaPrevia.wellIds.length > 0) {
+    return { tipo: 'vistaPrevia', wellIds: vistaPrevia.wellIds, origen: vistaPrevia.origen, geometria: vistaPrevia.geometria };
+  }
+  if (seleccion && seleccion.wellIds && seleccion.wellIds.length > 0) {
+    return { tipo: 'seleccion', wellIds: seleccion.wellIds, origen: seleccion.origen, geometria: seleccion.geometria };
+  }
+  return null;
+}
+
+// Identidad de un contexto (tipo + origen + geometria, NO los wellId): el
+// mapa la usa para volver al alcance "todo el mapa" cuando el contexto
+// cambia de verdad (otra seleccion, otra vista previa) pero NO cuando solo
+// se quita un pozo de la misma seleccion.
+function seleccionLogic_claveContexto(contexto) {
+  if (!contexto) {
+    return '';
+  }
+  return contexto.tipo + '|' + (contexto.origen || '') + '|' + JSON.stringify(contexto.geometria || null);
+}
+
+function seleccionLogic_filtrarPorWellIds(puntos, wellIdsSet) {
+  return puntos.filter(function (p) { return wellIdsSet.has(p.wellId); });
+}
+
+// Etiquetas del mapa segun "que esta viendo el usuario" (pedido D del
+// ajuste UX): 3 modos explicitos -
+//   'todo'          todos los pozos del mapa (con o sin filtros), el
+//                   contexto solo se resalta
+//   'solo'          solo los pozos del contexto, sin filtros
+//   'interseccion'  contexto AND filtros activos
+// alcance: 'todo' | 'solo'. visibles = cuantos pozos quedan dibujados.
+function seleccionLogic_describirVista(params) {
+  var ctx = params.contexto;
+  var plural = function (n, s, p) { return n + ' ' + (n === 1 ? s : p); };
+
+  if (!ctx) {
+    return {
+      modo: 'todo',
+      titulo: null,
+      estado: null,
+      contador: params.visibles + ' de ' + params.totalDataset + ' pozos'
+    };
+  }
+
+  var base = ctx.wellIds.length;
+  var nombre;
+  if (ctx.tipo === 'vistaPrevia') {
+    nombre = 'Vista previa por radio';
+  } else {
+    nombre = ctx.origen === 'poligono' ? 'Selección por polígono' : 'Selección por radio';
+  }
+  var titulo = nombre + ' · ' + plural(base, 'pozo', 'pozos');
+  var cosaContexto = ctx.tipo === 'vistaPrevia' ? 'la vista previa' : 'la selección';
+
+  if (params.alcance !== 'solo') {
+    return {
+      modo: 'todo',
+      titulo: titulo,
+      estado: 'Viendo: todos los pozos del mapa' + (params.filtrosActivos ? ' (con filtros)' : '') + ' · ' + cosaContexto + ' está resaltada',
+      contador: params.visibles + ' de ' + params.totalDataset + ' pozos'
+    };
+  }
+
+  if (params.filtrosActivos) {
+    return {
+      modo: 'interseccion',
+      titulo: titulo,
+      estado: 'Viendo: ' + cosaContexto + ' ∩ filtros · ' + params.visibles + ' de ' + base,
+      contador: params.visibles + ' de ' + base + ' pozos de ' + cosaContexto + ' (con filtros)'
+    };
+  }
+  return {
+    modo: 'solo',
+    titulo: titulo,
+    estado: 'Viendo: solo ' + cosaContexto,
+    contador: params.visibles + ' de ' + base + ' pozos de ' + cosaContexto
+  };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     SELECCION_POLIGONO_TOLERANCIA_DEFAULT,
+    seleccionLogic_resolverContexto,
+    seleccionLogic_claveContexto,
+    seleccionLogic_filtrarPorWellIds,
+    seleccionLogic_describirVista,
     seleccionLogic_normalizar,
     seleccionLogic_reemplazar,
     seleccionLogic_agregar,

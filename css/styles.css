@@ -22,6 +22,10 @@
      "baja"/atencion en el resto de la app, ver .hub-chip.baja). */
   --color-mapa-confirmada: #0b5a7a;
   --color-mapa-disponible: #4fa3c4;
+  /* Geografia de seleccion (poligono, vertices, punto/circulo de radio,
+     anillo de pozos seleccionados) - mismo hex que MAPA_COLOR_SELECCION en
+     js/mapaShared.js (Leaflet no lee variables CSS: mantener en sync). */
+  --color-seleccion: #e0007a;
 }
 
 * {
@@ -1014,6 +1018,12 @@ button:hover,
   width: 18px;
   height: 18px;
 }
+/* el icono "gauge" de Niveles Estaticos (relleno solido, a diferencia de
+   los iconos de linea del resto) se lee mejor un poco mas grande */
+.hub-card-icon-ne svg {
+  width: 23px;
+  height: 23px;
+}
 .hub-card-ct {
   font-size: 0.9rem;
   font-weight: 800;
@@ -1802,7 +1812,7 @@ table.ne-table tr:last-child td {
 .mapa-mi-ubicacion-punto {
   position: absolute;
   inset: 4px;
-  background: var(--color-accent);
+  background: var(--color-seleccion);
   border: 2px solid #fff;
   border-radius: 50%;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
@@ -1810,7 +1820,7 @@ table.ne-table tr:last-child td {
 .mapa-mi-ubicacion-pulso {
   position: absolute;
   inset: 0;
-  background: var(--color-accent);
+  background: var(--color-seleccion);
   opacity: 0.35;
   border-radius: 50%;
   animation: mapa-mi-ubicacion-pulso 1.8s ease-out infinite;
@@ -1920,10 +1930,11 @@ table.ne-table tr:last-child td {
   align-self: center;
 }
 
-/* Marcador "Punto de busqueda" (item D, mapa Provincia): pin triangular en
-   --color-primary (distinto a proposito del circulo-pulso celeste/accent
-   de "Tu ubicacion" - mapaController_iconoMiUbicacion - nunca se confunden
-   a simple vista). Mismo truco background/border:none que el resto de los
+/* Marcador "Punto de busqueda" (mapa Provincia y mini-mapa de Cerca Mio):
+   pin en --color-seleccion (magenta, contrasta en Mapa y en Satelite). Se
+   distingue del punto con pulso de "Tu ubicacion"
+   (mapaController_iconoMiUbicacion, mismo color pero forma de punto) por
+   la FORMA. Mismo truco background/border:none que el resto de los
    divIcon (ver comentario de .mapa-mi-ubicacion-icono). */
 .mapa-punto-busqueda-icono {
   background: none;
@@ -2297,9 +2308,9 @@ table.ne-table tr:last-child td {
   gap: 8px;
 }
 
-/* Marcador de vertice de poligono (item C) - circulo chico solido, color
-   MAPA_COLOR_PUNTO_BUSQUEDA (mismo "punto elegido a mano" que Cerca Mio -
-   coherencia visual entre los 2 flujos de referencia geografica manual). */
+/* Marcador de vertice de poligono (item C) - circulo chico solido en
+   --color-seleccion con borde blanco (mismo magenta que el contorno del
+   poligono, ver MAPA_COLOR_SELECCION en js/mapaShared.js). */
 .mapa-vertice-poligono-icono {
   background: none;
   border: none;
@@ -2307,7 +2318,7 @@ table.ne-table tr:last-child td {
 .mapa-vertice-poligono-punto {
   position: absolute;
   inset: 3px;
-  background: var(--color-warn);
+  background: var(--color-seleccion);
   border: 2px solid #fff;
   border-radius: 50%;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
@@ -2592,4 +2603,84 @@ table.ne-table tr:last-child td {
   .seleccion-itf-resultado {
     padding: 16px 34px 32px;
   }
+}
+
+/* --- Contexto geografico del mapa Provincia (ajuste UX): seleccion
+   confirmada o vista previa de Cerca Mio + alcance (todo el mapa / solo
+   el contexto) + estado "viendo" --- */
+.mapa-contexto-barra {
+  padding: 10px 18px 12px;
+  border-bottom: 1.5px solid var(--color-border-soft);
+  background: var(--color-surface);
+  border-left: 4px solid var(--color-seleccion);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mapa-contexto-titulo {
+  margin: 0;
+  font-size: 0.86rem;
+  font-weight: 800;
+  color: var(--color-text);
+}
+.mapa-contexto-estado {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--color-text-soft);
+}
+/* el estado "interseccion" (seleccion AND filtros) se destaca: es el modo
+   que el usuario tiene que poder reconocer a simple vista */
+.mapa-contexto-barra[data-modo="interseccion"] .mapa-contexto-estado {
+  color: var(--color-seleccion);
+  font-weight: 700;
+}
+.mapa-contexto-acciones {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.mapa-contexto-alcance {
+  display: inline-flex;
+  gap: 6px;
+}
+.mapa-alcance-chip {
+  min-height: 34px;
+  padding: 6px 14px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1.5px solid var(--color-border);
+  box-shadow: none;
+}
+.mapa-alcance-chip:hover {
+  background: var(--color-primary-tint);
+}
+.mapa-alcance-chip.active {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+.mapa-contexto-acciones .button,
+.mapa-contexto-acciones .button-secondary {
+  min-height: 34px;
+  padding: 6px 14px;
+  font-size: 0.8rem;
+}
+
+@media (min-width: 640px) {
+  .mapa-contexto-barra {
+    padding: 12px 34px 14px;
+  }
+}
+
+/* Cluster que contiene pozos del contexto geografico (seleccion o vista
+   previa): anillo magenta + halo blanco alrededor del icono estandar de
+   markercluster (ver iconCreateFunction en js/mapa.js). */
+.marker-cluster.mapa-cluster-con-seleccion {
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 5px var(--color-seleccion);
 }

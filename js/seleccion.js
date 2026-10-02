@@ -24,10 +24,15 @@
 //     unico punto de entrada para radio Y poligono (item D) - origen:
 //     'radio'|'poligono'. Si ya hay seleccion activa, pregunta
 //     Reemplazar/Agregar/Cancelar (item 6) antes de aplicar.
-//   seleccionController_obtenerSeleccionSet() -> Set<wellId>, para que
-//     mapa.js resalte los markers seleccionados.
-//   seleccionController_obtenerGeometria() -> {origen, geometria}|null,
-//     para que mapa.js conserve el poligono mas reciente (item 12).
+//   seleccionController_obtenerSeleccionSet() -> Set<wellId> de la
+//     seleccion CONFIRMADA (app.js lo usa para "Ver en mapa" de la bandeja).
+//   seleccionController_obtenerContextoGeografico() -> {tipo:'vistaPrevia'|
+//     'seleccion', wellIds, origen, geometria}|null - lo que el mapa
+//     dibuja y sobre lo que actuan los filtros (poligono o punto+radio
+//     persistente, item 12 + ajuste UX).
+//   seleccionController_establecerVistaPrevia/hayVistaPrevia/
+//     limpiarVistaPrevia/usarVistaPrevia - busqueda radial de Cerca Mio
+//     todavia sin confirmar como seleccion.
 //   seleccionController_registrarListener(fn) - mapa.js se suscribe para
 //     re-renderizar highlighting cuando la seleccion cambia.
 //   seleccionController_abrirTabla()/seleccionController_abrirItf() -
@@ -37,7 +42,15 @@
   var estado = {
     seleccion: [],                    // array de wellId - FUENTE DE VERDAD
     origenGeografico: null,           // 'radio' | 'poligono' | null
-    geometria: null,                  // {lat,lon,radioMetros} o {vertices}
+    geometria: null,                  // {lat,lon,radioMetros,tipoReferencia} o {vertices}
+    // Vista previa de una busqueda radial de Pozos cerca mio que todavia NO
+    // es una seleccion (ajuste UX: "Ver todos en el mapa"/"Ver en mapa"
+    // desde Cerca Mio tienen que conservar punto + radio + pozos aunque el
+    // usuario no haya tocado "Usar estos pozos"). {wellIds, origen:'radio',
+    // geometria} | null. Vive en memoria igual que la seleccion; la
+    // reemplaza una busqueda nueva, la limpia el usuario, "Usar estos
+    // pozos" (una seleccion confirmada la reemplaza) o salir de Cerca Mio.
+    vistaPrevia: null,
     disponibilidadItf: {},            // cache {wellId: boolean}
     disponibilidadItfListoPara: null, // snapshot (join de wellIds) de la seleccion para la que ya se pidio
     obtenerContexto: null,
@@ -131,6 +144,8 @@
     estado.seleccion = seleccionLogic_reemplazar(wellIds);
     estado.origenGeografico = estado.seleccion.length > 0 ? (origen || null) : null;
     estado.geometria = estado.seleccion.length > 0 ? (geometria || null) : null;
+    // Una seleccion confirmada reemplaza a cualquier vista previa.
+    estado.vistaPrevia = null;
     invalidarCachesDependientes();
     actualizarBandeja();
     notificarCambio();
@@ -143,6 +158,7 @@
     // mostrarla si corresponde.
     estado.origenGeografico = origen || null;
     estado.geometria = geometria || null;
+    estado.vistaPrevia = null;
     invalidarCachesDependientes();
     actualizarBandeja();
     notificarCambio();
@@ -162,15 +178,43 @@
     return new Set(estado.seleccion);
   }
 
-  function seleccionController_tieneSeleccion() {
-    return estado.seleccion.length > 0;
+  // Contexto geografico que el mapa dibuja (resaltado + punto/radio o
+  // poligono) y sobre el que pueden actuar los filtros: la vista previa si
+  // existe, si no la seleccion confirmada (ver
+  // seleccionLogic_resolverContexto).
+  function seleccionController_obtenerContextoGeografico() {
+    var seleccion = estado.seleccion.length > 0
+      ? { wellIds: estado.seleccion, origen: estado.origenGeografico, geometria: estado.geometria }
+      : null;
+    return seleccionLogic_resolverContexto(estado.vistaPrevia, seleccion);
   }
 
-  function seleccionController_obtenerGeometria() {
-    if (!estado.origenGeografico || !estado.geometria) {
-      return null;
+  function seleccionController_establecerVistaPrevia(wellIds, origen, geometria) {
+    estado.vistaPrevia = { wellIds: seleccionLogic_normalizar(wellIds), origen: origen, geometria: geometria };
+    notificarCambio();
+  }
+
+  function seleccionController_hayVistaPrevia() {
+    return !!estado.vistaPrevia;
+  }
+
+  function seleccionController_limpiarVistaPrevia() {
+    if (!estado.vistaPrevia) {
+      return;
     }
-    return { origen: estado.origenGeografico, geometria: estado.geometria };
+    estado.vistaPrevia = null;
+    notificarCambio();
+  }
+
+  // "Usar estos pozos" desde la barra de contexto del mapa: pasa la vista
+  // previa a seleccion confirmada por el mismo camino que cualquier otra
+  // (Reemplazar/Agregar/Cancelar si ya habia una seleccion).
+  function seleccionController_usarVistaPrevia() {
+    if (!estado.vistaPrevia) {
+      return;
+    }
+    var v = estado.vistaPrevia;
+    seleccionController_proponerSeleccion(v.wellIds, v.origen, v.geometria);
   }
 
   // Punto de entrada unico para radio Y poligono (item D/6): si ya habia
@@ -809,8 +853,11 @@
   window.seleccionController_inicializar = seleccionController_inicializar;
   window.seleccionController_registrarListener = seleccionController_registrarListener;
   window.seleccionController_obtenerSeleccionSet = seleccionController_obtenerSeleccionSet;
-  window.seleccionController_tieneSeleccion = seleccionController_tieneSeleccion;
-  window.seleccionController_obtenerGeometria = seleccionController_obtenerGeometria;
+  window.seleccionController_obtenerContextoGeografico = seleccionController_obtenerContextoGeografico;
+  window.seleccionController_establecerVistaPrevia = seleccionController_establecerVistaPrevia;
+  window.seleccionController_hayVistaPrevia = seleccionController_hayVistaPrevia;
+  window.seleccionController_limpiarVistaPrevia = seleccionController_limpiarVistaPrevia;
+  window.seleccionController_usarVistaPrevia = seleccionController_usarVistaPrevia;
   window.seleccionController_proponerSeleccion = seleccionController_proponerSeleccion;
   window.seleccionController_quitarPozo = seleccionController_quitarPozo;
   window.seleccionController_abrirTabla = seleccionController_abrirTabla;

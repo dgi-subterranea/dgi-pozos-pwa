@@ -518,6 +518,63 @@ function mapaLogic_limpiarActivosInvalidos(activos, opciones) {
   return nuevo;
 }
 
+// --- Conteos contextuales de los chips ---
+//
+// Los conteos de un chip se calculan sobre el UNIVERSO vigente (todo el
+// padron, o solo los pozos de la seleccion/vista previa cuando el alcance
+// es "solo"), nunca sobre el padron completo mientras se trabaja sobre un
+// contexto: "Rio Mendoza (22)" tiene que significar 22 de los 40 pozos de
+// la seleccion, no 6.739. Mismo criterio de facetas que ya existia: el
+// conteo es del universo, sin cruzar con los OTROS grupos de filtros.
+
+// Combina las opciones del padron completo (globales: fijan el orden y los
+// nombres) con las del universo vigente (contextuales: fijan la cantidad).
+// Un valor sin ningun pozo en el universo se oculta, salvo que este
+// ACTIVO: ahi se conserva con cantidad 0 para que el filtro nunca quede
+// invisible (y el usuario pueda destildarlo). clave = 'valor' o 'codigo'.
+function mapaLogic_aplicarConteosContextuales(globales, contextuales, clave, activos) {
+  var cantidadPorClave = {};
+  (contextuales || []).forEach(function (o) { cantidadPorClave[o[clave]] = o.cantidad; });
+  var resultado = [];
+  (globales || []).forEach(function (g) {
+    var cantidad = cantidadPorClave[g[clave]] || 0;
+    if (cantidad > 0 || (activos && activos[g[clave]])) {
+      var copia = {};
+      Object.keys(g).forEach(function (k) { copia[k] = g[k]; });
+      copia.cantidad = cantidad;
+      resultado.push(copia);
+    }
+  });
+  return resultado;
+}
+
+// Conteo de Ubicacion: { C: n, D: n } sobre el universo.
+function mapaLogic_contarPorEstado(pozos) {
+  var conteo = { C: 0, D: 0 };
+  (pozos || []).forEach(function (p) {
+    if (p.estado === 'C' || p.estado === 'D') {
+      conteo[p.estado] += 1;
+    }
+  });
+  return conteo;
+}
+
+// Conteo de "Tiene NE": pozos del universo presentes en la red NE. Sin Set
+// cargado (todavia no se pidio el dataset NE) devuelve null: no hay numero
+// honesto que mostrar, el chip queda sin conteo.
+function mapaLogic_contarEnSetNE(pozos, setNE) {
+  if (!setNE) {
+    return null;
+  }
+  var n = 0;
+  (pozos || []).forEach(function (p) {
+    if (p.wellId && setNE.has(p.wellId)) {
+      n += 1;
+    }
+  });
+  return n;
+}
+
 // --- Filtro por profundidad (Desde/Hasta) ---
 //
 // Validacion pura del rango ingresado por el usuario - nunca acepta
@@ -664,6 +721,9 @@ if (typeof module !== 'undefined' && module.exports) {
     mapaLogic_filtrarPorCampoDerivadoMultiple,
     mapaLogic_filtrarPorDepartamentoMultiple,
     mapaLogic_limpiarActivosInvalidos,
+    mapaLogic_aplicarConteosContextuales,
+    mapaLogic_contarPorEstado,
+    mapaLogic_contarEnSetNE,
     mapaLogic_validarRangoProfundidad,
     mapaLogic_filtrarPorRangoProfundidad,
     mapaLogic_tramoIntersectaRango,

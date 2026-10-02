@@ -60,8 +60,6 @@
     estadosActivos: {},      // chips Ubicacion (Confirmada/Disponible)
     deptosExpandido: false,  // true = "+N mas" ya tocado, se ven todos los chips de departamento
     markersPorWellId: {},    // se reconstruye en cada renderPuntos() - permite ubicar el marker de un wellId puntual para enfoque:{tipo:'pozo'}
-    miUbicacionMarker: null, // marcador "Tu ubicacion" (enfoque:{tipo:'ubicacion'}) O "Punto de busqueda" (enfoque:{tipo:'puntoBusqueda'}) - un solo marker a la vez, se saca en cada apertura que no lo pida, para no dejar uno viejo colgado
-    radioCirculo: null,      // L.circle del radio de busqueda (solo enfoque:{tipo:'puntoBusqueda'}, item D) - mismo ciclo de vida que miUbicacionMarker
     neWellIdSet: null,       // Set de wellId de la red NE (mapaLogic_setWellIdNE sobre getMapaNE) - se arma UNA sola vez, la PRIMERA vez que se activa el filtro "Tiene: Niveles estáticos" (carga diferida real)
     neActivo: false,         // estado del filtro "Tiene: Niveles estáticos" (v2.2.0: filtro sobre el padron, NO una capa aparte - ver mapaController_renderPuntos, que lo combina con AND junto a departamento/estado)
     indiceBusqueda: null,    // mapa wellId->{nc16,titular} (mapaLogic_indiceBusquedaPorWellId sobre getIndiceBusquedaProvincia) - se arma UNA sola vez, la PRIMERA vez que el usuario escribe algo en el buscador (Etapa 1A, carga diferida real, nunca al abrir el mapa). NC16 y titular viajan juntos, gateados por "datos" - ver decision de arquitectura en MapaService.js
@@ -85,9 +83,30 @@
     verticesPoligono: [],        // [{lat,lon}] en el orden en que se tocaron
     marcadoresVerticesLayer: null, // L.LayerGroup con un circleMarker por vertice + L.Polyline provisional
     poligonoCerradoLayer: null,   // L.Polygon semitransparente, solo mientras se revisa el resultado ANTES de "Usar seleccion"
-    poligonoSeleccionLayer: null, // L.Polygon persistente de la seleccion ACTUAL (item 12) - se dibuja/saca via mapaController_actualizarPoligonoSeleccionPersistente
     ultimosWellIdsPoligono: [],   // resultado de seleccionLogic_filtrarPorPoligono del ultimo "Cerrar área", listo para "Usar selección"
-    verSoloSeleccionados: false   // toggle (item J), nunca un filtro permanente - se resetea en cada apertura
+
+    // Contexto geografico (ajuste UX): lo que el mapa dibuja de la
+    // seleccion confirmada o de la vista previa de Cerca Mio - poligono o
+    // punto+radio - y sobre lo que pueden actuar los filtros. Todo se
+    // re-deriva de seleccionController_obtenerContextoGeografico() en cada
+    // renderPuntos, asi que sobrevive a cualquier navegacion/reapertura
+    // sin guardar copias aca (la fuente de verdad es js/seleccion.js).
+    contextoLayer: null,          // L.LayerGroup con poligono, o punto de referencia + circulo de radio
+    alcance: 'todo',              // 'todo' = todos los pozos (el contexto solo resaltado) | 'solo' = solo los del contexto (AND con los filtros). Vuelve a 'todo' cuando el contexto cambia de verdad (ver claveContexto)
+    claveContexto: '',            // seleccionLogic_claveContexto del ultimo contexto visto
+    setResaltado: null,           // Set de wellId del contexto vigente, armado una vez por renderPuntos (lo lee crearMarker)
+
+    // Conteos contextuales de los chips (ver mapaController_actualizarConteosChips):
+    // las opciones *Global son las del padron completo (orden/nombres) y
+    // las de arriba (opcionesDepartamento/Cuenca/Condicion) llevan la
+    // cantidad del universo vigente (todo el padron, o solo el contexto).
+    opcionesDepartamentoGlobal: [],
+    opcionesCuencaGlobal: [],
+    opcionesCondicionGlobal: [],
+    claveUniverso: null,          // clave del universo cuyos conteos estan pintados (null = recalcular)
+    totalUniverso: 0,             // "Todos (N)" de Departamento
+    conteoEstado: null,           // {C, D} del universo
+    conteoNE: null                // pozos del universo en la red NE (null mientras el Set NE no se cargo)
   };
 
   var loadingEl = document.getElementById('mapa-loading');
@@ -124,7 +143,13 @@
   var seleccionarMenuEl = document.getElementById('mapa-seleccionar-menu');
   var btnSeleccionarRadioEl = document.getElementById('btn-mapa-seleccionar-radio');
   var btnSeleccionarPoligonoEl = document.getElementById('btn-mapa-seleccionar-poligono');
-  var btnVerSoloSeleccionadosEl = document.getElementById('btn-mapa-ver-solo-seleccionados');
+  var contextoBarraEl = document.getElementById('mapa-contexto-barra');
+  var contextoTituloEl = document.getElementById('mapa-contexto-titulo');
+  var contextoEstadoEl = document.getElementById('mapa-contexto-estado');
+  var btnAlcanceTodoEl = document.getElementById('btn-mapa-alcance-todo');
+  var btnAlcanceSoloEl = document.getElementById('btn-mapa-alcance-solo');
+  var btnContextoUsarEl = document.getElementById('btn-mapa-contexto-usar');
+  var btnContextoQuitarEl = document.getElementById('btn-mapa-contexto-quitar');
   var dibujoPanelEl = document.getElementById('mapa-dibujo-panel');
   var dibujoMensajeEl = document.getElementById('mapa-dibujo-mensaje');
   var dibujoAccionesDibujandoEl = document.getElementById('mapa-dibujo-acciones-dibujando');
@@ -147,9 +172,27 @@
     mapaEstado.clusterGroup = L.markerClusterGroup({
       chunkedLoading: true,
       spiderfyOnMaxZoom: true,
-      disableClusteringAtZoom: MAPA_ZOOM_INDIVIDUAL
+      disableClusteringAtZoom: MAPA_ZOOM_INDIVIDUAL,
+      // Mismo icono que el default de markercluster (misma tabla de
+      // tamanos/clases) + un anillo magenta cuando el cluster CONTIENE
+      // pozos del contexto geografico: con zoom alejado todo se agrupa y
+      // sin esto el resaltado de los pozos seleccionados no se veria
+      // hasta acercarse al zoom donde se desagrupan.
+      iconCreateFunction: function (cluster) {
+        var n = cluster.getChildCount();
+        var tam = n < 10 ? 'small' : (n < 100 ? 'medium' : 'large');
+        var conSeleccion = !!mapaEstado.setResaltado && cluster.getAllChildMarkers().some(function (m) {
+          return m.options.esSeleccionado === true;
+        });
+        return L.divIcon({
+          html: '<div><span>' + n + '</span></div>',
+          className: 'marker-cluster marker-cluster-' + tam + (conSeleccion ? ' mapa-cluster-con-seleccion' : ''),
+          iconSize: L.point(40, 40)
+        });
+      }
     });
     mapaEstado.mapa.addLayer(mapaEstado.clusterGroup);
+    mapaController_registrarListenerSeleccion();
 
     // Item C: UN solo listener de click en el mapa, vive toda la vida de
     // la instancia - solo actua si mapaEstado.dibujando esta activo. Los
@@ -211,20 +254,22 @@
   // dispara el fetch (ver mapaLogic_debeConsultarSummary).
   function mapaController_crearMarker(punto, contexto) {
     var color = punto.estado === 'C' ? MAPA_COLOR_CONFIRMADA : MAPA_COLOR_DISPONIBLE;
-    // Item J: pozo seleccionado se distingue con un borde mas grueso en
-    // MAPA_COLOR_PUNTO_BUSQUEDA (misma familia de color que el resto de
-    // "accion de seleccion geografica" de esta etapa) - el relleno sigue
-    // mostrando Confirmada/Disponible, nunca se pierde esa info. Mismo
-    // L.circleMarker de siempre (no se agrega una capa aparte), asi que
-    // el markercluster nunca se entera de la diferencia.
-    var seleccionado = typeof seleccionController_obtenerSeleccionSet === 'function' &&
-      seleccionController_obtenerSeleccionSet().has(punto.wellId);
+    // Item J: un pozo del contexto geografico (seleccion confirmada o
+    // vista previa de Cerca Mio) se distingue con un borde mas grueso en
+    // MAPA_COLOR_SELECCION (el mismo magenta de poligono/circulo) - el
+    // relleno sigue mostrando Confirmada/Disponible, nunca se pierde esa
+    // info. Mismo L.circleMarker de siempre (no se agrega una capa
+    // aparte), asi que el markercluster nunca se entera de la diferencia.
+    // mapaEstado.setResaltado lo arma renderPuntos UNA vez por pasada (no
+    // un Set nuevo por cada uno de los 13 mil markers).
+    var seleccionado = !!mapaEstado.setResaltado && mapaEstado.setResaltado.has(punto.wellId);
     var marker = L.circleMarker([punto.lat, punto.lon], {
       radius: seleccionado ? 9 : 7,
-      color: seleccionado ? MAPA_COLOR_PUNTO_BUSQUEDA : '#ffffff',
+      color: seleccionado ? MAPA_COLOR_SELECCION : '#ffffff',
       weight: seleccionado ? 3 : 1.5,
       fillColor: color,
-      fillOpacity: 0.9
+      fillOpacity: 0.9,
+      esSeleccionado: seleccionado // lo lee iconCreateFunction del clusterGroup
     });
 
     var popupContent = mapaController_construirPopupInicial(punto, contexto);
@@ -512,7 +557,8 @@
   // Repinta los chips de departamento a partir de mapaEstado.opcionesDepartamento
   // (ya calculado por mapaController_poblarChipsDepartamento) - expandir/
   // contraer "+N mas" pasa por aca sin recalcular nada ni tocar el dataset.
-  function mapaController_renderChipsDepartamento(totalPozos) {
+  function mapaController_renderChipsDepartamento() {
+    var totalPozos = mapaEstado.totalUniverso;
     var division = mapaLogic_dividirChipsDepartamento(mapaEstado.opcionesDepartamento, mapaController_cantidadChipsIniciales());
     var hayMasQueMostrar = division.ocultos.length > 0;
     var visibles = (mapaEstado.deptosExpandido || !hayMasQueMostrar) ? mapaEstado.opcionesDepartamento : division.visibles;
@@ -532,16 +578,20 @@
     }
   }
 
+  // Opciones del PADRON COMPLETO (fijan orden y nombres): se calculan una
+  // vez por apertura. Las cantidades que ve el usuario las recalcula
+  // mapaController_actualizarConteosChips sobre el universo vigente.
   function mapaController_poblarChipsDepartamento(pozos) {
-    mapaEstado.opcionesDepartamento = mapaLogic_construirOpcionesDepartamento(pozos);
+    mapaEstado.opcionesDepartamentoGlobal = mapaLogic_construirOpcionesDepartamento(pozos);
     // Defensivo (no deberia pasar en la practica, el dataset es el mismo
     // entre aperturas): saca de departamentoActivos cualquier codigo que
-    // dejo de tener puntos, en vez de dejar un filtro invisible.
+    // dejo de tener puntos EN EL PADRON, en vez de dejar un filtro
+    // invisible. Se valida contra el padron completo, nunca contra un
+    // universo contextual (ahi un activo con 0 pozos es legitimo).
     mapaEstado.departamentoActivos = mapaLogic_limpiarActivosInvalidos(
       mapaEstado.departamentoActivos,
-      mapaEstado.opcionesDepartamento.map(function (o) { return { valor: o.codigo, cantidad: o.cantidad }; })
+      mapaEstado.opcionesDepartamentoGlobal.map(function (o) { return { valor: o.codigo, cantidad: o.cantidad }; })
     );
-    mapaController_renderChipsDepartamento(pozos.length);
   }
 
   // --- Cuenca (Etapa 1C) ---
@@ -574,20 +624,26 @@
   // asi que no hace falta revalidar nada aca (a diferencia de
   // Departamento, cuyos codigos si podrian variar en teoria).
   function mapaController_poblarChipsCuenca(pozos) {
-    mapaEstado.opcionesCuenca = mapaLogic_construirOpcionesCampoNE(pozos, 'cuenca');
-    mapaController_renderChipsCuenca();
+    mapaEstado.opcionesCuencaGlobal = mapaLogic_construirOpcionesCampoNE(pozos, 'cuenca');
   }
 
   // --- Ubicacion (Confirmada/Disponible) ---
   // Multi-seleccion OR, mismo modelo que el resto (unificacion UX) -
   // "Todos" (estatico en el HTML, data-estado='todos') activo cuando el
-  // grupo esta vacio. Nunca se le agrega conteo a estos 3 chips (ya eran
-  // asi antes de esta etapa, no se agrega ruido nuevo).
+  // grupo esta vacio. Confirmada/Disponible llevan el conteo contextual
+  // (ver mapaController_actualizarConteosChips); "Todos" no.
   function mapaController_actualizarChipsEstado() {
     var sinSeleccion = Object.keys(mapaEstado.estadosActivos).length === 0;
     estadoChipsEls.forEach(function (chip) {
       var valor = chip.getAttribute('data-estado');
       var activo = valor === 'todos' ? sinSeleccion : !!mapaEstado.estadosActivos[valor];
+      if (valor !== 'todos') {
+        if (!chip.hasAttribute('data-etiqueta')) {
+          chip.setAttribute('data-etiqueta', chip.textContent);
+        }
+        var n = mapaEstado.conteoEstado ? mapaEstado.conteoEstado[valor] : null;
+        chip.textContent = chip.getAttribute('data-etiqueta') + (n === null || n === undefined ? '' : ' (' + n + ')');
+      }
       chip.classList.toggle('active', activo);
       chip.setAttribute('aria-pressed', activo ? 'true' : 'false');
     });
@@ -714,8 +770,64 @@
   }
 
   function mapaController_poblarChipsCondicion(pozos) {
-    mapaEstado.opcionesCondicion = mapaLogic_construirOpcionesCampoNE(pozos, 'surgencia');
+    mapaEstado.opcionesCondicionGlobal = mapaLogic_construirOpcionesCampoNE(pozos, 'surgencia');
+  }
+
+  // Conteos CONTEXTUALES de todos los chips (pedido: "Todo el mapa" =
+  // padron completo; "Solo selección"/"Solo vista previa" = unicamente los
+  // pozos de ese contexto - "Río Mendoza (22)" son 22 de los 40, no 6.739).
+  // Criterio de facetas ya existente: el conteo es del universo, sin
+  // cruzar con los demas grupos (OR dentro del grupo, AND entre grupos
+  // siguen siendo del filtrado, no del conteo). Profundidad no tiene
+  // conteo. Se recalcula solo si cambio el universo (clave), no en cada
+  // toque de un filtro.
+  function mapaController_actualizarConteosChips(ctx) {
+    var soloContexto = !!ctx && mapaEstado.alcance === 'solo';
+    var ids = soloContexto ? ctx.wellIds : null;
+    var clave = soloContexto
+      ? 'solo|' + mapaEstado.claveContexto + '|' + ids.length + '|' + ids[0] + '|' + ids[ids.length - 1]
+      : 'todo';
+    clave += mapaEstado.neWellIdSet ? '|ne' : '';
+    // Los valores activos entran en la clave: un chip activo con 0 pozos se
+    // conserva visible, y debe desaparecer al destildarlo.
+    clave += '|' + [mapaEstado.departamentoActivos, mapaEstado.cuencaActivos, mapaEstado.condicionActivos]
+      .map(function (a) { return Object.keys(a).sort().join(','); }).join('/');
+    if (clave === mapaEstado.claveUniverso) {
+      return;
+    }
+    mapaEstado.claveUniverso = clave;
+
+    var universo = soloContexto
+      ? seleccionLogic_filtrarPorWellIds(mapaEstado.puntosCrudos, new Set(ids))
+      : mapaEstado.puntosCrudos;
+    mapaEstado.totalUniverso = universo.length;
+
+    mapaEstado.opcionesDepartamento = mapaLogic_aplicarConteosContextuales(
+      mapaEstado.opcionesDepartamentoGlobal, mapaLogic_construirOpcionesDepartamento(universo),
+      'codigo', mapaEstado.departamentoActivos
+    );
+    mapaEstado.opcionesCuenca = mapaLogic_aplicarConteosContextuales(
+      mapaEstado.opcionesCuencaGlobal, mapaLogic_construirOpcionesCampoNE(universo, 'cuenca'),
+      'valor', mapaEstado.cuencaActivos
+    );
+    mapaEstado.opcionesCondicion = mapaLogic_aplicarConteosContextuales(
+      mapaEstado.opcionesCondicionGlobal, mapaLogic_construirOpcionesCampoNE(universo, 'surgencia'),
+      'valor', mapaEstado.condicionActivos
+    );
+    mapaEstado.conteoEstado = mapaLogic_contarPorEstado(universo);
+    mapaEstado.conteoNE = mapaLogic_contarEnSetNE(universo, mapaEstado.neWellIdSet);
+
+    mapaController_renderChipsDepartamento();
+    mapaController_renderChipsCuenca();
     mapaController_renderChipsCondicion();
+    mapaController_actualizarChipsEstado();
+    mapaController_actualizarChipNE();
+  }
+
+  function mapaController_actualizarChipNE() {
+    chipNEEl.textContent = mapaEstado.conteoNE === null || mapaEstado.conteoNE === undefined
+      ? 'Niveles estáticos'
+      : 'Niveles estáticos (' + mapaEstado.conteoNE + ')';
   }
 
   // "Limpiar filtros": vuelve TODOS los grupos a "Todos"/vacio - Cuenca,
@@ -741,13 +853,7 @@
     inputTramoHastaEl.value = '';
     errorTramoEl.hidden = true;
 
-    mapaController_renderChipsCuenca();
-    mapaController_renderChipsCondicion();
-    mapaController_actualizarChipsEstado();
-    if (mapaEstado.puntosCrudos) {
-      mapaController_renderChipsDepartamento(mapaEstado.puntosCrudos.length);
-    }
-
+    // Los chips se repintan (activos, conteos) dentro de renderPuntos.
     if (mapaEstado.contextoActual && mapaEstado.puntosCrudos) {
       mapaController_renderPuntos(mapaEstado.contextoActual);
     }
@@ -803,13 +909,18 @@
       mapaEstado.tramoDesde, mapaEstado.tramoHasta, 'tramosFiltrantes'
     );
 
-    // "Ver solo seleccionados" (item J): toggle, no un filtro permanente -
-    // se aplica DESPUES de los 7 filtros normales (AND con todos), nunca
-    // se guarda como parte de ellos ("Limpiar filtros" no lo toca).
-    if (mapaEstado.verSoloSeleccionados && typeof seleccionController_obtenerSeleccionSet === 'function') {
-      var setSeleccionados = seleccionController_obtenerSeleccionSet();
-      filtrados = filtrados.filter(function (p) { return setSeleccionados.has(p.wellId); });
+    // Contexto geografico (seleccion confirmada o vista previa de Cerca
+    // Mio): con alcance "solo" el contexto define el CONJUNTO BASE y los 7
+    // filtros de arriba actuan sobre el - o sea la interseccion (AND)
+    // pedida. Se aplica sobre el resultado de los filtros (AND es
+    // conmutativo), nunca se guarda como parte de ellos: "Limpiar filtros"
+    // no toca el alcance. Con alcance "todo" el contexto solo se resalta.
+    var ctx = mapaController_sincronizarContexto();
+    mapaEstado.setResaltado = ctx ? new Set(ctx.wellIds) : null;
+    if (ctx && mapaEstado.alcance === 'solo') {
+      filtrados = seleccionLogic_filtrarPorWellIds(filtrados, mapaEstado.setResaltado);
     }
+    mapaController_actualizarConteosChips(ctx);
 
     mapaEstado.clusterGroup.clearLayers();
     mapaEstado.markersPorWellId = {};
@@ -820,21 +931,142 @@
     });
     mapaEstado.clusterGroup.addLayers(markers);
 
+    var vista = seleccionLogic_describirVista({
+      contexto: ctx,
+      alcance: mapaEstado.alcance,
+      filtrosActivos: mapaController_hayFiltrosActivos(),
+      visibles: filtrados.length,
+      totalDataset: mapaEstado.puntosCrudos.length
+    });
     contadorEl.hidden = false;
-    contadorEl.textContent = filtrados.length + ' de ' + mapaEstado.puntosCrudos.length + ' pozos';
+    contadorEl.textContent = vista.contador;
+    mapaController_actualizarBarraContexto(ctx, vista);
 
     if (filtrados.length > 0 && !saltarAutoFit) {
       mapaEstado.mapa.fitBounds(mapaEstado.clusterGroup.getBounds().pad(0.05));
     }
 
-    mapaController_actualizarPoligonoSeleccionPersistente();
-    mapaController_actualizarBotonVerSoloSeleccionados();
+    mapaController_dibujarContexto(ctx);
+  }
+
+  // True si hay CUALQUIER filtro del panel activo (los 7 de arriba) - el
+  // alcance "solo" lo usa para distinguir "solo la seleccion" de
+  // "seleccion AND filtros".
+  function mapaController_hayFiltrosActivos() {
+    var hayClaves = function (o) { return Object.keys(o).length > 0; };
+    return hayClaves(mapaEstado.departamentoActivos) || hayClaves(mapaEstado.cuencaActivos) ||
+      hayClaves(mapaEstado.estadosActivos) || hayClaves(mapaEstado.condicionActivos) ||
+      mapaEstado.neActivo ||
+      mapaEstado.profundidadDesde !== null || mapaEstado.profundidadHasta !== null ||
+      mapaEstado.tramoDesde !== null || mapaEstado.tramoHasta !== null;
+  }
+
+  // Lee el contexto vigente de js/seleccion.js y, si cambio de verdad
+  // (otra seleccion, otra vista previa - NO si solo se quito un pozo de la
+  // misma), vuelve al alcance "todo": un alcance "solo" heredado de un
+  // contexto anterior dejaria el mapa casi vacio sin que el usuario haya
+  // pedido eso para el contexto NUEVO.
+  function mapaController_sincronizarContexto() {
+    var ctx = typeof seleccionController_obtenerContextoGeografico === 'function'
+      ? seleccionController_obtenerContextoGeografico()
+      : null;
+    var clave = seleccionLogic_claveContexto(ctx);
+    if (clave !== mapaEstado.claveContexto) {
+      mapaEstado.claveContexto = clave;
+      mapaEstado.alcance = 'todo';
+    }
+    return ctx;
+  }
+
+  // Barra de contexto (pedido D: "debe quedar claro cuando esta viendo
+  // todos los pozos, solo la seleccion, o la interseccion"): siempre dice
+  // que contexto hay, cuantos pozos y que esta viendo ahora; con vista
+  // previa suma "Usar estos pozos"/"Quitar".
+  function mapaController_actualizarBarraContexto(ctx, vista) {
+    contextoBarraEl.hidden = !ctx;
+    if (!ctx) {
+      return;
+    }
+    contextoTituloEl.textContent = vista.titulo;
+    contextoEstadoEl.textContent = vista.estado;
+    contextoBarraEl.setAttribute('data-modo', vista.modo);
+    var solo = mapaEstado.alcance === 'solo';
+    btnAlcanceTodoEl.classList.toggle('active', !solo);
+    btnAlcanceTodoEl.setAttribute('aria-pressed', solo ? 'false' : 'true');
+    btnAlcanceSoloEl.classList.toggle('active', solo);
+    btnAlcanceSoloEl.setAttribute('aria-pressed', solo ? 'true' : 'false');
+    btnAlcanceSoloEl.textContent = ctx.tipo === 'vistaPrevia' ? 'Solo vista previa' : 'Solo selección';
+    var esPrevia = ctx.tipo === 'vistaPrevia';
+    btnContextoUsarEl.hidden = !esPrevia;
+    btnContextoQuitarEl.hidden = !esPrevia;
+  }
+
+  // Poligono, o punto de referencia + circulo de radio, del contexto
+  // vigente: se redibuja en CADA renderPuntos (apertura, filtro, cambio de
+  // contexto), asi que persiste a toda navegacion SPA igual para radio
+  // que para poligono - esa era la diferencia que perdia el radio (antes
+  // solo el poligono se redibujaba, el punto/circulo vivian como un
+  // adorno de la apertura con "Ver todos en el mapa"). Contorno magenta con
+  // halo blanco (contrasta en Mapa y en Satelite) - interactive:false para
+  // no tapar toques destinados a pozos/vertices (ver
+  // mapaShared_crearContornoSeleccion).
+  function mapaController_dibujarContexto(ctx) {
+    if (mapaEstado.contextoLayer) {
+      mapaEstado.mapa.removeLayer(mapaEstado.contextoLayer);
+      mapaEstado.contextoLayer = null;
+    }
+    if (!ctx || !ctx.geometria) {
+      return;
+    }
+    var capa = L.layerGroup();
+    var g = ctx.geometria;
+    if (ctx.origen === 'poligono' && g.vertices) {
+      mapaShared_crearPoligonoSeleccion(g.vertices.map(function (v) { return [v.lat, v.lon]; })).addTo(capa);
+    } else if (ctx.origen === 'radio' && typeof g.lat === 'number') {
+      mapaShared_crearCirculoSeleccion(g.lat, g.lon, g.radioMetros).addTo(capa);
+      var esGps = g.tipoReferencia === 'miUbicacion';
+      L.marker([g.lat, g.lon], { icon: esGps ? mapaController_iconoMiUbicacion() : mapaShared_iconoPuntoBusqueda(), keyboard: false })
+        .bindPopup(esGps ? 'Tu ubicación' : 'Punto de búsqueda')
+        .addTo(capa);
+    }
+    capa.addTo(mapaEstado.mapa);
+    // Poligono/circulo POR DEBAJO de los pozos (el relleno suave no tapa
+    // markers ni clusters): bringToBack solo existe en capas vectoriales.
+    // En orden INVERSO (linea magenta primero, halo blanco despues): cada
+    // bringToBack manda la capa al fondo, asi el halo termina debajo de la
+    // linea.
+    var vectoriales = [];
+    capa.eachLayer(function (sub) {
+      if (sub.eachLayer) {
+        sub.eachLayer(function (v) { vectoriales.push(v); });
+      }
+    });
+    vectoriales.reverse().forEach(function (v) { v.bringToBack(); });
+    mapaEstado.contextoLayer = capa;
+  }
+
+  // Bounds del contexto vigente (para encuadrar): circulo de radio o
+  // poligono. null si no hay contexto.
+  function mapaController_boundsContexto(ctx) {
+    if (!ctx || !ctx.geometria) {
+      return null;
+    }
+    var g = ctx.geometria;
+    if (ctx.origen === 'poligono' && g.vertices && g.vertices.length >= 3) {
+      var b = seleccionLogic_bboxDeVertices(g.vertices);
+      return [[b.latMin, b.lonMin], [b.latMax, b.lonMax]];
+    }
+    if (ctx.origen === 'radio' && typeof g.lat === 'number') {
+      var r = cercaMioLogic_boundingBox(g.lat, g.lon, g.radioMetros);
+      return [[r.latMin, r.lonMin], [r.latMax, r.lonMax]];
+    }
+    return null;
   }
 
   // Icono div (sin imagenes vendorizadas, igual que los circleMarker de
   // pozos) para "Tu ubicacion" - un punto solido con un pulso animado
-  // alrededor, visualmente bien distinto de los pozos (color accent en
-  // vez de los 2 teals de Confirmada/Disponible).
+  // alrededor, visualmente bien distinto de los pozos (color de seleccion,
+  // --color-seleccion, en vez de los 2 teals de Confirmada/Disponible).
   function mapaController_iconoMiUbicacion() {
     return L.divIcon({
       className: 'mapa-mi-ubicacion-icono',
@@ -844,54 +1076,27 @@
     });
   }
 
-  // Aplica un enfoque (opcional) DESPUES de renderizar los puntos: o
-  // centra+abre el popup de un pozo puntual, o centra en la ubicacion
-  // del usuario y le agrega su marcador. El marcador "Tu ubicacion" de
-  // una apertura anterior se saca siempre primero - si esta apertura no
-  // pide uno nuevo, no debe quedar ninguno colgado.
-  function mapaController_aplicarEnfoque(contexto) {
-    if (mapaEstado.miUbicacionMarker) {
-      mapaEstado.mapa.removeLayer(mapaEstado.miUbicacionMarker);
-      mapaEstado.miUbicacionMarker = null;
-    }
-    if (mapaEstado.radioCirculo) {
-      mapaEstado.mapa.removeLayer(mapaEstado.radioCirculo);
-      mapaEstado.radioCirculo = null;
-    }
-
-    var enfoque = contexto.enfoque;
+  // Aplica un enfoque (opcional) DESPUES de renderizar los puntos:
+  //   {tipo:'pozo', wellId}      centra + abre el popup de ese pozo
+  //   {tipo:'contexto'}          encuadra el poligono o el radio del
+  //                              contexto geografico vigente (el punto, el
+  //                              circulo, el poligono y el resaltado ya los
+  //                              dibujo renderPuntos - ver
+  //                              mapaController_dibujarContexto)
+  //   {tipo:'seleccion', wellIds} encuadra esos pozos
+  // Ya no hay enfoques 'ubicacion'/'puntoBusqueda': el punto y el circulo
+  // dejaron de ser un adorno efimero de UNA apertura (por eso se perdian
+  // al navegar) y pasaron a ser parte del contexto persistente.
+  function mapaController_aplicarEnfoque(enfoque) {
     if (!enfoque) {
       return;
     }
 
-    if (enfoque.tipo === 'ubicacion') {
-      mapaEstado.miUbicacionMarker = L.marker([enfoque.lat, enfoque.lon], { icon: mapaController_iconoMiUbicacion() })
-        .bindPopup('Tu ubicación');
-      mapaEstado.miUbicacionMarker.addTo(mapaEstado.mapa);
-
-      var bbox = cercaMioLogic_boundingBox(enfoque.lat, enfoque.lon, enfoque.radioMetros || CERCA_MIO_RADIO_DEFAULT_METROS);
-      mapaEstado.mapa.fitBounds([[bbox.latMin, bbox.lonMin], [bbox.latMax, bbox.lonMax]], { padding: [20, 20] });
-    } else if (enfoque.tipo === 'puntoBusqueda') {
-      // "Ver todos en el mapa" cuando la referencia de Cerca Mio fue un
-      // punto elegido a mano (item D) - mismo flujo que 'ubicacion' pero
-      // con el icono/popup distinto (mapaShared_iconoPuntoBusqueda, color
-      // MAPA_COLOR_PUNTO_BUSQUEDA) y un circulo visual del radio pedido
-      // (liviano: un L.circle, no vuelve a pedir nada a Apps Script).
-      mapaEstado.miUbicacionMarker = L.marker([enfoque.lat, enfoque.lon], { icon: mapaShared_iconoPuntoBusqueda() })
-        .bindPopup('Punto de búsqueda');
-      mapaEstado.miUbicacionMarker.addTo(mapaEstado.mapa);
-
-      var radioMetrosCirculo = enfoque.radioMetros || CERCA_MIO_RADIO_DEFAULT_METROS;
-      mapaEstado.radioCirculo = L.circle([enfoque.lat, enfoque.lon], {
-        radius: radioMetrosCirculo,
-        color: MAPA_COLOR_PUNTO_BUSQUEDA,
-        weight: 1.5,
-        fillColor: MAPA_COLOR_PUNTO_BUSQUEDA,
-        fillOpacity: 0.08
-      }).addTo(mapaEstado.mapa);
-
-      var bboxPunto = cercaMioLogic_boundingBox(enfoque.lat, enfoque.lon, radioMetrosCirculo);
-      mapaEstado.mapa.fitBounds([[bboxPunto.latMin, bboxPunto.lonMin], [bboxPunto.latMax, bboxPunto.lonMax]], { padding: [20, 20] });
+    if (enfoque.tipo === 'contexto') {
+      var limites = mapaController_boundsContexto(mapaController_sincronizarContexto());
+      if (limites) {
+        mapaEstado.mapa.fitBounds(limites, { padding: [20, 20] });
+      }
     } else if (enfoque.tipo === 'pozo') {
       // NO se usa clusterGroup.zoomToShowLayer(): su heuristica interna
       // (¿el marker ya esta "visible" segun sus bounds actuales? ¿hace
@@ -911,6 +1116,17 @@
         // "moveend" nunca dispara - mapaController_centrarYAbrirPopup ya
         // contempla ese caso (mismo helper que usa el buscador).
         mapaController_centrarYAbrirPopup(marker);
+      } else {
+        // El pozo no pasa los filtros/alcance activos. Antes se BORRABAN
+        // todos los filtros para poder mostrarlo; ahora (pedido: que no se
+        // pierdan los filtros activos al navegar) se muestra igual como
+        // marker temporal - mismo mecanismo que "Mostrarlo igual" del
+        // buscador - y los filtros quedan como estaban.
+        var punto = mapaEstado.puntosCrudos.filter(function (p) { return p.wellId === enfoque.wellId; })[0];
+        if (punto) {
+          mapaController_mostrarResultadoTemporalmente(punto, mapaEstado.contextoActual);
+          contadorEl.textContent += ' · +1 pozo fuera de los filtros';
+        }
       }
     } else if (enfoque.tipo === 'seleccion') {
       // "Ver en mapa" desde la bandeja de seleccion (item D): ajusta la
@@ -918,8 +1134,9 @@
       // visibles (respetando los filtros activos) - el resaltado en si
       // ya lo hace mapaController_crearMarker, aca solo falta encuadrar.
       var bounds = [];
+      var wellIdsEnfoque = new Set(enfoque.wellIds);
       Object.keys(mapaEstado.markersPorWellId).forEach(function (wellId) {
-        if (enfoque.wellIds.indexOf(wellId) !== -1) {
+        if (wellIdsEnfoque.has(wellId)) {
           bounds.push(mapaEstado.markersPorWellId[wellId].getLatLng());
         }
       });
@@ -1001,7 +1218,9 @@
     });
     if (mapaEstado.verticesPoligono.length >= 2) {
       var latlngs = mapaEstado.verticesPoligono.map(function (v) { return [v.lat, v.lon]; });
-      L.polyline(latlngs, { color: MAPA_COLOR_PUNTO_BUSQUEDA, weight: 2, dashArray: '6 6' }).addTo(layer);
+      var linea = mapaShared_crearContornoSeleccion(function (o) { return L.polyline(latlngs, o); }, { weight: 3, dashArray: '8 6' });
+      linea.halo.addTo(layer);
+      linea.linea.addTo(layer);
     }
     layer.addTo(mapaEstado.mapa);
     mapaEstado.marcadoresVerticesLayer = layer;
@@ -1038,12 +1257,7 @@
       return;
     }
     var latlngs = mapaEstado.verticesPoligono.map(function (v) { return [v.lat, v.lon]; });
-    mapaEstado.poligonoCerradoLayer = L.polygon(latlngs, {
-      color: MAPA_COLOR_PUNTO_BUSQUEDA,
-      weight: 2,
-      fillColor: MAPA_COLOR_PUNTO_BUSQUEDA,
-      fillOpacity: 0.18
-    }).addTo(mapaEstado.mapa);
+    mapaEstado.poligonoCerradoLayer = mapaShared_crearPoligonoSeleccion(latlngs).addTo(mapaEstado.mapa);
 
     var wellIdsDentro = mapaEstado.puntosCrudos
       ? seleccionLogic_filtrarPorPoligono(mapaEstado.puntosCrudos, mapaEstado.verticesPoligono)
@@ -1074,62 +1288,42 @@
   btnDibujoCancelarEl.addEventListener('click', mapaController_salirDeDibujo);
   btnDibujoCancelar2El.addEventListener('click', mapaController_salirDeDibujo);
 
-  // Item 12 del cierre: mientras la seleccion ACTUAL venga de un
-  // poligono, se conserva ese poligono dibujado sobre el mapa (sin
-  // interaccion, solo visual) cada vez que se renderizan los puntos -
-  // nunca el historial completo de poligonos usados, solo el mas
-  // reciente (seleccionController_obtenerGeometria ya solo guarda ese).
-  function mapaController_actualizarPoligonoSeleccionPersistente() {
-    if (mapaEstado.poligonoSeleccionLayer) {
-      mapaEstado.mapa.removeLayer(mapaEstado.poligonoSeleccionLayer);
-      mapaEstado.poligonoSeleccionLayer = null;
-    }
-    if (typeof seleccionController_obtenerGeometria !== 'function') {
+  // Alcance (pedido D): "Todo el mapa" deja ver todos los pozos con el
+  // contexto solo resaltado; "Solo selección/vista previa" restringe el
+  // mapa al conjunto del contexto y los filtros actuan SOBRE el (AND).
+  // Cambiar a "solo" re-encuadra a lo que queda visible; volver a "todo"
+  // no mueve la vista (no se zoomea a toda la provincia sin pedirlo).
+  function mapaController_cambiarAlcance(alcance) {
+    if (mapaEstado.alcance === alcance) {
       return;
     }
-    var info = seleccionController_obtenerGeometria();
-    if (!info || info.origen !== 'poligono' || !info.geometria || !info.geometria.vertices) {
-      return;
-    }
-    var latlngs = info.geometria.vertices.map(function (v) { return [v.lat, v.lon]; });
-    mapaEstado.poligonoSeleccionLayer = L.polygon(latlngs, {
-      color: MAPA_COLOR_PUNTO_BUSQUEDA,
-      weight: 1.5,
-      fillColor: MAPA_COLOR_PUNTO_BUSQUEDA,
-      fillOpacity: 0.1,
-      interactive: false
-    }).addTo(mapaEstado.mapa);
-  }
-
-  // El chip "Ver solo seleccionados" (item J) solo tiene sentido con
-  // seleccion activa - oculto el resto del tiempo, nunca un filtro que
-  // el usuario pueda dejar prendido "colgado" sin saber por que no ve
-  // pozos.
-  function mapaController_actualizarBotonVerSoloSeleccionados() {
-    var hay = typeof seleccionController_tieneSeleccion === 'function' && seleccionController_tieneSeleccion();
-    btnVerSoloSeleccionadosEl.hidden = !hay;
-    if (!hay && mapaEstado.verSoloSeleccionados) {
-      mapaEstado.verSoloSeleccionados = false;
-      btnVerSoloSeleccionadosEl.setAttribute('aria-pressed', 'false');
-      btnVerSoloSeleccionadosEl.classList.remove('active');
-    }
-  }
-
-  btnVerSoloSeleccionadosEl.addEventListener('click', function () {
-    mapaEstado.verSoloSeleccionados = !mapaEstado.verSoloSeleccionados;
-    btnVerSoloSeleccionadosEl.classList.toggle('active', mapaEstado.verSoloSeleccionados);
-    btnVerSoloSeleccionadosEl.setAttribute('aria-pressed', mapaEstado.verSoloSeleccionados ? 'true' : 'false');
+    mapaEstado.alcance = alcance;
     if (mapaEstado.contextoActual && mapaEstado.puntosCrudos) {
-      mapaController_renderPuntos(mapaEstado.contextoActual);
+      mapaController_renderPuntos(mapaEstado.contextoActual, alcance === 'todo');
     }
-  });
+  }
+  btnAlcanceTodoEl.addEventListener('click', function () { mapaController_cambiarAlcance('todo'); });
+  btnAlcanceSoloEl.addEventListener('click', function () { mapaController_cambiarAlcance('solo'); });
+  btnContextoUsarEl.addEventListener('click', function () { seleccionController_usarVistaPrevia(); });
+  btnContextoQuitarEl.addEventListener('click', function () { seleccionController_limpiarVistaPrevia(); });
 
-  // mapa.js nunca pregunta por la seleccion por su cuenta en cada
-  // render salvo que YA haya pozos renderizados - esta suscripcion
-  // vuelve a pintar (resaltado + poligono persistente) cuando la
-  // seleccion cambia desde OTRA pantalla (ej. "Limpiar" o "Quitar" en la
-  // tabla) sin que el usuario haya vuelto a tocar ningun filtro aca.
-  if (typeof seleccionController_registrarListener === 'function') {
+  // mapa.js nunca pregunta por el contexto por su cuenta en cada render
+  // salvo que YA haya pozos renderizados - esta suscripcion vuelve a
+  // pintar (resaltado + poligono/punto/radio + barra de contexto) cuando
+  // la seleccion o la vista previa cambian desde OTRA pantalla (ej.
+  // "Limpiar" o "Quitar" en la tabla, un radio nuevo en Cerca Mio) sin
+  // que el usuario haya vuelto a tocar ningun filtro aca.
+  // Se registra al crear el mapa (primera apertura), NO al cargar este
+  // archivo: js/seleccion.js se carga DESPUES de js/mapa.js (ver orden de
+  // <script> en index.html), asi que al cargar mapa.js
+  // seleccionController_registrarListener todavia no existe - registrarlo
+  // a nivel de modulo dejaba la suscripcion en silencio sin efecto.
+  var listenerSeleccionRegistrado = false;
+  function mapaController_registrarListenerSeleccion() {
+    if (listenerSeleccionRegistrado || typeof seleccionController_registrarListener !== 'function') {
+      return;
+    }
+    listenerSeleccionRegistrado = true;
     seleccionController_registrarListener(function () {
       if (mapaEstado.contextoActual && mapaEstado.puntosCrudos) {
         mapaController_renderPuntos(mapaEstado.contextoActual, true);
@@ -1256,44 +1450,33 @@
           return;
         }
 
-        // Si vinimos a mostrar un pozo puntual (enfoque:{tipo:'pozo'}), los
-        // filtros de departamento, estado Y "Tiene: Niveles estáticos"
-        // tienen que estar sin restringir ANTES de renderizar - si no, un
-        // filtro previo (ej. "solo Confirmada", un departamento distinto o
-        // el filtro NE activo con ese wellId fuera del Set) podria dejar
-        // ese wellId afuera y mapaController_aplicarEnfoque no lo
-        // encontraria.
-        if (contexto.enfoque && contexto.enfoque.tipo === 'pozo') {
-          mapaEstado.departamentoActivos = {};
-          mapaEstado.cuencaActivos = {};
-          mapaEstado.estadosActivos = {};
-          mapaEstado.condicionActivos = {};
-          mapaController_actualizarChipsEstado();
-          mapaEstado.neActivo = false;
-          chipNEEl.classList.remove('active');
-          chipNEEl.setAttribute('aria-pressed', 'false');
-          mapaEstado.profundidadDesde = null;
-          mapaEstado.profundidadHasta = null;
-          inputProfundidadDesdeEl.value = '';
-          inputProfundidadHastaEl.value = '';
-          errorProfundidadEl.hidden = true;
-          mapaEstado.tramoDesde = null;
-          mapaEstado.tramoHasta = null;
-          inputTramoDesdeEl.value = '';
-          inputTramoHastaEl.value = '';
-          errorTramoEl.hidden = true;
-        }
+        // Ya NO se borran los filtros al venir a mostrar un pozo puntual
+        // (enfoque:{tipo:'pozo'}): se perdian filtros/alcance activos solo
+        // por tocar "Ver en mapa". Si ese pozo no pasa los filtros,
+        // mapaController_aplicarEnfoque lo muestra igual como marker
+        // temporal (ver ahi).
 
         mapaController_poblarChipsDepartamento(mapaEstado.puntosCrudos);
         mapaController_poblarChipsCuenca(mapaEstado.puntosCrudos);
         mapaController_poblarChipsCondicion(mapaEstado.puntosCrudos);
-        mapaController_renderPuntos(contexto, !!contexto.enfoque);
+        // Fuerza el recalculo de conteos (renderPuntos los pinta) - el
+        // dataset pudo cambiar entre aperturas.
+        mapaEstado.claveUniverso = null;
+
+        // Sin enfoque explicito pero con un contexto geografico vivo
+        // (seleccion confirmada o vista previa), el mapa abre encuadrando
+        // ese contexto en vez de toda la provincia: volver al mapa deja
+        // ver el poligono/radio con el que se estaba trabajando.
+        var enfoque = contexto.enfoque ||
+          (typeof seleccionController_obtenerContextoGeografico === 'function' && seleccionController_obtenerContextoGeografico()
+            ? { tipo: 'contexto' } : null);
+        mapaController_renderPuntos(contexto, !!enfoque);
         // markersPorWellId ya esta poblado en este punto (renderPuntos lo
         // arma de forma sincronica, ANTES de pasarle los markers a
         // clusterGroup.addLayers - no hace falta esperar a que termine el
         // chunked loading de addLayers para encontrar el marker de un
         // wellId puntual).
-        mapaController_aplicarEnfoque(contexto);
+        mapaController_aplicarEnfoque(enfoque);
       });
     }).catch(function () {
       mapaController_mostrarError(aperturaId, 'No se pudo cargar el mapa. Revisá tu conexión.');
@@ -1317,7 +1500,6 @@
       return;
     }
     mapaEstado.departamentoActivos = mapaLogic_toggleFiltroMultiple(mapaEstado.departamentoActivos, chip.getAttribute('data-depto'));
-    mapaController_renderChipsDepartamento(mapaEstado.puntosCrudos.length);
     mapaController_renderPuntos(mapaEstado.contextoActual);
   });
 
@@ -1330,7 +1512,6 @@
       return;
     }
     mapaEstado.cuencaActivos = mapaLogic_toggleFiltroMultiple(mapaEstado.cuencaActivos, chip.getAttribute('data-valor'));
-    mapaController_renderChipsCuenca();
     mapaController_renderPuntos(mapaEstado.contextoActual);
   });
 
@@ -1341,14 +1522,13 @@
       return;
     }
     mapaEstado.condicionActivos = mapaLogic_toggleFiltroMultiple(mapaEstado.condicionActivos, chip.getAttribute('data-valor'));
-    mapaController_renderChipsCondicion();
     mapaController_renderPuntos(mapaEstado.contextoActual);
   });
 
   btnDeptosExpandirEl.addEventListener('click', function () {
     mapaEstado.deptosExpandido = !mapaEstado.deptosExpandido;
     if (mapaEstado.puntosCrudos) {
-      mapaController_renderChipsDepartamento(mapaEstado.puntosCrudos.length);
+      mapaController_renderChipsDepartamento();
     }
   });
 

@@ -20,11 +20,17 @@
 // esta etapa.
 //
 // API publica (ver window.cercaMioController_* al final):
-// cercaMioController_abrir(contexto) y cercaMioController_cerrar().
+// cercaMioController_abrir(contexto), cercaMioController_cerrar() y
+// cercaMioController_reanudar() (volver desde el mapa SIN reiniciar la
+// busqueda).
 // contexto = {sessionToken, permisos, onAbrirPozo(wellId),
-// onVerEnMapa(wellId), onVerTodosEnMapa(lat, lon, radioMetros,
-// tipoReferencia)} - mismo criterio que js/mapa.js: app.js es el unico
-// dueño de sessionToken/permisos, los pasa frescos en cada apertura.
+// onVerEnMapa(wellId), onVerTodosEnMapa()} - mismo criterio que
+// js/mapa.js: app.js es el unico dueño de sessionToken/permisos, los
+// pasa frescos en cada apertura. Antes de pedir "Ver en mapa"/"Ver todos
+// en el mapa" este modulo publica la busqueda radial como VISTA PREVIA
+// (seleccionController_establecerVistaPrevia: punto + radio + pozos), que
+// es lo que el mapa dibuja - por eso esas 2 callbacks ya no llevan
+// lat/lon/radio.
 (function () {
   var estado = {
     aperturaId: 0,
@@ -117,6 +123,8 @@
     estado.aperturaId += 1;
     var aperturaId = estado.aperturaId;
     estado.contextoActual = contexto;
+    // Una busqueda nueva arranca sin la vista previa de la anterior.
+    seleccionController_limpiarVistaPrevia();
     estado.miUbicacion = null;
     estado.puntoElegido = null;
     estado.datasetCache = null;
@@ -221,6 +229,8 @@
     var resultados = cercaMioLogic_buscarCercanos(estado.datasetCache, ref.lat, ref.lon, estado.radioMetros);
 
     if (resultados.length === 0) {
+      // Sin pozos en el radio no hay nada que mostrar como vista previa.
+      seleccionController_limpiarVistaPrevia();
       mostrarEstado('sinResultados');
       estadosEls.sinResultadosMensaje.textContent = 'No encontramos pozos a menos de ' + cercaMioLogic_formatearDistancia(estado.radioMetros) + '.';
 
@@ -258,6 +268,35 @@
         ' pozo' + (resultados.length === 1 ? '' : 's') + ' encontrado' + (resultados.length === 1 ? '' : 's');
     }
     cercaMioController_pintarLista(resultados, contexto);
+    // Si el usuario ya habia mirado esta busqueda en el mapa, cambiar el
+    // radio/punto actualiza tambien lo que el mapa muestra (nunca queda
+    // una vista previa vieja de un radio que ya no es el activo).
+    if (seleccionController_hayVistaPrevia()) {
+      cercaMioController_publicarVistaPrevia();
+    }
+  }
+
+  // Busqueda radial ACTUAL completa (sin el tope de 30 de la lista
+  // visible) como contexto geografico: todos los wellId dentro del
+  // radio + la geometria (punto de referencia, radio y de donde salio -
+  // GPS o punto elegido en el mapa, para dibujar el icono correcto).
+  function cercaMioController_contextoRadial() {
+    var ref = cercaMioController_referenciaActual();
+    if (!ref || !estado.datasetCache) {
+      return null;
+    }
+    var todos = cercaMioLogic_buscarCercanos(estado.datasetCache, ref.lat, ref.lon, estado.radioMetros, estado.datasetCache.length);
+    return {
+      wellIds: todos.map(function (r) { return r.wellId; }),
+      geometria: { lat: ref.lat, lon: ref.lon, radioMetros: estado.radioMetros, tipoReferencia: estado.referencia }
+    };
+  }
+
+  function cercaMioController_publicarVistaPrevia() {
+    var c = cercaMioController_contextoRadial();
+    if (c && c.wellIds.length > 0) {
+      seleccionController_establecerVistaPrevia(c.wellIds, 'radio', c.geometria);
+    }
   }
 
   function cercaMioController_pintarLista(resultados, contexto) {
@@ -316,6 +355,10 @@
     btnMapa.textContent = 'Ver en mapa';
     btnMapa.addEventListener('click', function (ev) {
       ev.stopPropagation();
+      // El pozo se muestra enfocado PERO conservando el contexto de esta
+      // busqueda (punto + radio + pozos del radio) - ver
+      // cercaMioController_publicarVistaPrevia.
+      cercaMioController_publicarVistaPrevia();
       contexto.onVerEnMapa(resultado.wellId);
     });
 
@@ -370,8 +413,22 @@
     return item;
   }
 
+  // Salir de Cerca Mio por su propio "Volver" termina esa busqueda: la
+  // vista previa (que solo existe mientras dura este flujo) se va con
+  // ella. Una SELECCION ya confirmada ("Usar estos pozos") no se toca.
   function cercaMioController_cerrar() {
     estado.aperturaId += 1;
+    seleccionController_limpiarVistaPrevia();
+  }
+
+  // Volver a esta pantalla desde el mapa (btn-mapa-volver en js/app.js):
+  // el estado de la busqueda sigue intacto en memoria (referencia, radio,
+  // lista) - solo hay que re-medir el mini-mapa si es lo que estaba a la
+  // vista (Leaflet mide mal un contenedor que estuvo oculto).
+  function cercaMioController_reanudar() {
+    if (estado.pickerMapa && !estadosEls.eligiendoPunto.hidden) {
+      mapaShared_alMostrarMapa(estado.pickerMapa, function () {});
+    }
   }
 
   // Recalcula y vuelve a renderizar sobre lo que ya esta en memoria (sin
@@ -428,10 +485,11 @@
   });
 
   btnVerTodosMapa.addEventListener('click', function () {
-    var ref = cercaMioController_referenciaActual();
-    if (estado.contextoActual && ref) {
-      estado.contextoActual.onVerTodosEnMapa(ref.lat, ref.lon, estado.radioMetros, estado.referencia);
+    if (!estado.contextoActual) {
+      return;
     }
+    cercaMioController_publicarVistaPrevia();
+    estado.contextoActual.onVerTodosEnMapa();
   });
 
   // Item D del cierre: radio desemboca en la MISMA seleccion que
@@ -441,13 +499,11 @@
   // la seleccion por lote no tiene por que estar limitada a 30: la
   // pantalla de ITF ya sabe manejar selecciones grandes en lotes).
   btnUsarSeleccionEl.addEventListener('click', function () {
-    var ref = cercaMioController_referenciaActual();
-    if (!ref || !estado.datasetCache) {
+    var c = cercaMioController_contextoRadial();
+    if (!c) {
       return;
     }
-    var todos = cercaMioLogic_buscarCercanos(estado.datasetCache, ref.lat, ref.lon, estado.radioMetros, estado.datasetCache.length);
-    var wellIds = todos.map(function (r) { return r.wellId; });
-    seleccionController_proponerSeleccion(wellIds, 'radio', { lat: ref.lat, lon: ref.lon, radioMetros: estado.radioMetros });
+    seleccionController_proponerSeleccion(c.wellIds, 'radio', c.geometria);
   });
 
   // Referencia (item B): "Mi ubicacion" vuelve al flujo GPS de siempre -
@@ -528,25 +584,19 @@
 
   // Circulo de radio sobre el mini-mapa (item 3 del cierre): se crea o se
   // mueve/redimensiona junto con el marcador "Punto de busqueda" - mismo
-  // color MAPA_COLOR_PUNTO_BUSQUEDA que el circulo del mapa Provincia
-  // (enfoque:{tipo:'puntoBusqueda'} en js/mapa.js), mismo lenguaje visual
-  // en los 2 lugares. setRadius() en vez de recrear el circulo: cambiar de
-  // radio NUNCA mueve el centro elegido (requisito explicito del usuario).
+  // helper (mapaShared_crearCirculoSeleccion: magenta + halo blanco) que
+  // el circulo persistente del mapa Provincia, mismo lenguaje visual en
+  // los 2 lugares. Se actualiza en vez de recrearlo: cambiar de radio
+  // NUNCA mueve el centro elegido (requisito explicito del usuario).
   function cercaMioController_actualizarCirculoPicker() {
     if (!estado.puntoElegido || !estado.pickerMapa) {
       return;
     }
     if (!estado.pickerCirculo) {
-      estado.pickerCirculo = L.circle([estado.puntoElegido.lat, estado.puntoElegido.lon], {
-        radius: estado.radioMetros,
-        color: MAPA_COLOR_PUNTO_BUSQUEDA,
-        weight: 1.5,
-        fillColor: MAPA_COLOR_PUNTO_BUSQUEDA,
-        fillOpacity: 0.08
-      }).addTo(estado.pickerMapa);
+      estado.pickerCirculo = mapaShared_crearCirculoSeleccion(estado.puntoElegido.lat, estado.puntoElegido.lon, estado.radioMetros)
+        .addTo(estado.pickerMapa);
     } else {
-      estado.pickerCirculo.setLatLng([estado.puntoElegido.lat, estado.puntoElegido.lon]);
-      estado.pickerCirculo.setRadius(estado.radioMetros);
+      mapaShared_actualizarCirculoSeleccion(estado.pickerCirculo, estado.puntoElegido.lat, estado.puntoElegido.lon, estado.radioMetros);
     }
   }
 
@@ -583,4 +633,5 @@
 
   window.cercaMioController_abrir = cercaMioController_abrir;
   window.cercaMioController_cerrar = cercaMioController_cerrar;
+  window.cercaMioController_reanudar = cercaMioController_reanudar;
 })();

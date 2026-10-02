@@ -23,7 +23,12 @@
     offline: document.getElementById('screen-offline')
   };
 
+  // Pantalla visible ahora mismo - abrirMapaDesde la lee para saber de
+  // donde viene el usuario y poder devolverlo ahi (ver mapaVolverA).
+  var pantallaActual = null;
+
   function showScreen(name) {
+    pantallaActual = name;
     Object.keys(screens).forEach(function (key) {
       screens[key].hidden = key !== name;
     });
@@ -1118,8 +1123,22 @@
   function actualizarBotonesVolverMapa() {
     var esSelector = accesoMapas() === 'selector';
     var etiqueta = esSelector ? 'Mapas' : 'Volver';
-    document.querySelector('#btn-mapa-volver .tv-volver-label').textContent = etiqueta;
+    actualizarEtiquetaVolverMapa();
     document.querySelector('#btn-mapa-ne-volver .tv-volver-label').textContent = etiqueta;
+  }
+
+  // Pozos Provincia puede abrirse desde Cerca Mio o desde la tabla/ITF de
+  // la seleccion ("Ver en mapa", "Ver todos en el mapa"): en esos casos
+  // "Volver" tiene que devolver AHI (con el estado de esa pantalla
+  // intacto) en vez de mandar al selector/hub - era parte de por que se
+  // "perdia" el contexto radial al volver. mapaVolverA = nombre de esa
+  // pantalla, o null para el comportamiento de siempre (selector/hub).
+  var mapaVolverA = null;
+  var PANTALLAS_RETORNO_MAPA = { cercaMio: true, seleccionTabla: true, seleccionItf: true };
+
+  function actualizarEtiquetaVolverMapa() {
+    var etiqueta = (!mapaVolverA && accesoMapas() === 'selector') ? 'Mapas' : 'Volver';
+    document.querySelector('#btn-mapa-volver .tv-volver-label').textContent = etiqueta;
   }
 
   function toggleAccesosUbicacion() {
@@ -1319,6 +1338,13 @@
   // pasan por el selector, sin importar los permisos (Cerca Mio es
   // exclusivamente sobre el padron - ver punto 7 de la Etapa v2.2.0).
   function abrirMapaDesde(enfoque) {
+    // De donde viene el usuario (ver mapaVolverA). Si ya estaba en el mapa
+    // (ej. "Ver en mapa" de la bandeja con el mapa abierto) se conserva el
+    // destino de retorno que ya tenia.
+    if (pantallaActual !== 'mapa') {
+      mapaVolverA = PANTALLAS_RETORNO_MAPA[pantallaActual] ? pantallaActual : null;
+    }
+    actualizarEtiquetaVolverMapa();
     showScreen('mapa');
     mapaController_abrir({
       sessionToken: sessionToken,
@@ -1387,7 +1413,23 @@
   // un selector de una sola opcion.
   document.getElementById('btn-mapa-volver').addEventListener('click', function () {
     mapaController_cerrar();
-    showScreen(accesoMapas() === 'selector' ? 'mapaSelector' : 'main');
+    var destino = mapaVolverA;
+    mapaVolverA = null;
+    actualizarEtiquetaVolverMapa();
+    if (destino === 'cercaMio') {
+      // sin cercaMioController_abrir: la busqueda (referencia, radio,
+      // lista) sigue como se dejo
+      showScreen('cercaMio');
+      cercaMioController_reanudar();
+    } else if (destino === 'seleccionTabla') {
+      showScreen('seleccionTabla');
+      seleccionController_abrirTabla();
+    } else if (destino === 'seleccionItf') {
+      showScreen('seleccionItf');
+      seleccionController_abrirItf();
+    } else {
+      showScreen(accesoMapas() === 'selector' ? 'mapaSelector' : 'main');
+    }
   });
 
   document.getElementById('btn-mapa-ne-volver').addEventListener('click', function () {
@@ -1417,8 +1459,11 @@
       onVerEnMapa: function (wellId) {
         abrirMapaDesde({ tipo: 'pozo', wellId: wellId });
       },
-      onVerTodosEnMapa: function (lat, lon, radioMetros, tipoReferencia) {
-        abrirMapaDesde({ tipo: tipoReferencia === 'elegirMapa' ? 'puntoBusqueda' : 'ubicacion', lat: lat, lon: lon, radioMetros: radioMetros });
+      // La busqueda radial ya quedo publicada como vista previa
+      // (cercaMioController_publicarVistaPrevia) - el mapa dibuja punto,
+      // circulo y pozos desde ahi, aca solo se pide encuadrarla.
+      onVerTodosEnMapa: function () {
+        abrirMapaDesde({ tipo: 'contexto' });
       }
     });
   }
