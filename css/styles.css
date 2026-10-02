@@ -1052,6 +1052,19 @@ button:hover,
 #screen-mapa-selector .hub-grid {
   padding: 0 18px 18px;
 }
+/* Las dos tarjetas del selector son "tiles hermanas": mismo alto (la grilla
+   las estira) y MISMA estructura vertical aunque una tenga mas texto. El
+   <button> centra su contenido en vertical por defecto, asi que la tarjeta
+   con menos texto bajaba su icono y su titulo (desparejas) - se ancla todo
+   arriba y se reserva el alto de 2 lineas de titulo para que icono, titulo
+   y descripcion arranquen a la misma altura en las dos. */
+#screen-mapa-selector .hub-card {
+  justify-content: flex-start;
+}
+#screen-mapa-selector .hub-card-ct {
+  line-height: 1.25;
+  min-height: 2.5em;
+}
 
 /* --- Contenido comun a las 4 pantallas de modulo --- */
 .modulo-content {
