@@ -47,6 +47,14 @@ function doPost(e) {
         // timestamp, evaluacionId...) que mande el cliente se ignora - la
         // identidad sale de la sesion, nunca del body.
         response = handleRegistrarEvaluacionReemplazo(body.sessionToken, body.wellId, body.estado, body.motivo, body.observacion, body.puntoNEReferencia);
+      } else if (body.action === 'subirFotoReemplazo') {
+        response = handleSubirFotoReemplazo(body.sessionToken, body.wellId, body.evaluacionId, body.nombreArchivo, body.mimeType, body.imagenBase64, body.thumbBase64);
+      } else if (body.action === 'getFotosReemplazo') {
+        response = handleGetFotosReemplazo(body.sessionToken, body.evaluacionId);
+      } else if (body.action === 'getFotosReemplazoPozo') {
+        response = handleGetFotosReemplazoPozo(body.sessionToken, body.wellId);
+      } else if (body.action === 'getFotoReemplazo') {
+        response = handleGetFotoReemplazo(body.sessionToken, body.fotoId, body.variante);
       } else {
         response = { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'accion desconocida: ' + body.action };
       }
@@ -708,6 +716,105 @@ function handleRegistrarEvaluacionReemplazo(sessionToken, wellId, estado, motivo
   return { status: 'ok', data: { evaluacion: resultado.evaluacion } };
 }
 
+// --- Fotos de evaluaciones de reemplazo (Reemplazos v2) ---
+// Todos gateados EXCLUSIVAMENTE por "reemplazo" (lectura y escritura). El
+// almacenamiento real esta en otro proyecto/cuenta de Google (ver
+// FotosStorageClient.js): este backend valida, firma y hace de proxy; el
+// navegador nunca habla con el storage ni recibe URLs/Drive IDs. Auditoria
+// sin ruido: NO se escribe una fila de Historial por cada foto OK (la hoja
+// FotosReemplazo ya es el registro con usuario y fecha), solo los errores
+// y los permisos denegados; sin Telegram.
+
+function validarSesionPermisoFotos(sessionToken, accion, wellId) {
+  var validation = wellId === undefined
+    ? validateSession(sessionToken, accion)
+    : validateSessionAndWellId(sessionToken, wellId, accion);
+  if (!validation.ok) {
+    return validation;
+  }
+  var permiso = validarPermiso(validation.session, accion, wellId === undefined ? null : wellId, 'reemplazo');
+  if (!permiso.ok) {
+    return permiso;
+  }
+  return { ok: true, session: validation.session };
+}
+
+function handleSubirFotoReemplazo(sessionToken, wellId, evaluacionId, nombreArchivo, mimeType, imagenBase64, thumbBase64) {
+  var v = validarSesionPermisoFotos(sessionToken, 'subirFotoReemplazo', wellId);
+  if (!v.ok) {
+    return v.response;
+  }
+  var session = v.session;
+
+  var resultado;
+  try {
+    resultado = fotosService_subir(session.email, wellId, evaluacionId, {
+      nombreArchivo: nombreArchivo,
+      mimeType: mimeType,
+      imagenBase64: imagenBase64,
+      thumbBase64: thumbBase64
+    });
+  } catch (err) {
+    logHistoryEvent(session.email, 'subirFotoReemplazo', wellId, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+  if (!resultado.ok) {
+    logHistoryEvent(session.email, 'subirFotoReemplazo', wellId, resultado.code);
+    return { status: 'error', code: resultado.code, message: resultado.message };
+  }
+  return { status: 'ok', data: { foto: resultado.foto } };
+}
+
+function handleGetFotosReemplazo(sessionToken, evaluacionId) {
+  var v = validarSesionPermisoFotos(sessionToken, 'getFotosReemplazo');
+  if (!v.ok) {
+    return v.response;
+  }
+  if (typeof evaluacionId !== 'string' || !FOTOS_UUID_REGEX.test(evaluacionId)) {
+    return { status: 'error', code: 'INVALID_EVALUACION_ID', message: 'evaluacionId invalido' };
+  }
+  try {
+    return { status: 'ok', data: fotosService_listarPorEvaluacion(evaluacionId) };
+  } catch (err) {
+    logHistoryEvent(v.session.email, 'getFotosReemplazo', null, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+}
+
+function handleGetFotosReemplazoPozo(sessionToken, wellId) {
+  var v = validarSesionPermisoFotos(sessionToken, 'getFotosReemplazoPozo', wellId);
+  if (!v.ok) {
+    return v.response;
+  }
+  try {
+    return { status: 'ok', data: fotosService_listarPorPozo(wellId) };
+  } catch (err) {
+    logHistoryEvent(v.session.email, 'getFotosReemplazoPozo', wellId, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+}
+
+function handleGetFotoReemplazo(sessionToken, fotoId, variante) {
+  var v = validarSesionPermisoFotos(sessionToken, 'getFotoReemplazo');
+  if (!v.ok) {
+    return v.response;
+  }
+  var resultado;
+  try {
+    resultado = fotosService_obtenerImagen(fotoId, variante);
+  } catch (err) {
+    logHistoryEvent(v.session.email, 'getFotoReemplazo', null, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+  if (!resultado.ok) {
+    if (resultado.code === 'STORAGE_UNAVAILABLE') {
+      logHistoryEvent(v.session.email, 'getFotoReemplazo', null, resultado.code);
+    }
+    return { status: 'error', code: resultado.code, message: resultado.message };
+  }
+  return { status: 'ok', data: resultado.imagen };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     doPost,
@@ -726,6 +833,10 @@ if (typeof module !== 'undefined' && module.exports) {
     handleGetEstadoReemplazo,
     handleGetHistorialReemplazo,
     handleRegistrarEvaluacionReemplazo,
+    handleSubirFotoReemplazo,
+    handleGetFotosReemplazo,
+    handleGetFotosReemplazoPozo,
+    handleGetFotoReemplazo,
     validarPermiso,
     validateSession,
     validateSessionAndWellId

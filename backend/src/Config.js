@@ -79,6 +79,29 @@ function getMapaFolderId() {
   return folderId;
 }
 
+// Fotos de Reemplazos v2: el almacenamiento vive en OTRO proyecto de Apps
+// Script, desplegado por una SEGUNDA cuenta de Google (ver storage/ y
+// docs/fotos-reemplazo-storage.md), para que las fotos consuman la cuota
+// de Drive de esa cuenta y no la de la cuenta principal. Este backend solo
+// guarda la URL del Web App de storage y el secreto compartido con el que
+// firma cada llamada (HMAC) - ambos en Script Properties, nunca en el
+// frontend ni en el codigo.
+function getFotosStorageUrl() {
+  var url = PropertiesService.getScriptProperties().getProperty('FOTOS_STORAGE_URL');
+  if (!url) {
+    throw new Error('FOTOS_STORAGE_URL no configurado en Script Properties');
+  }
+  return url;
+}
+
+function getFotosStorageSecret() {
+  var secret = PropertiesService.getScriptProperties().getProperty('FOTOS_STORAGE_SECRET');
+  if (!secret || secret.length < 32) {
+    throw new Error('FOTOS_STORAGE_SECRET no configurado (o demasiado corto, minimo 32 caracteres) en Script Properties');
+  }
+  return secret;
+}
+
 function getSpreadsheetId() {
   var spreadsheetId = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
   if (!spreadsheetId) {

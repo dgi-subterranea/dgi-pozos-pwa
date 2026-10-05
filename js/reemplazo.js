@@ -59,6 +59,9 @@
 
   function reemplazoController_inicializar(obtenerContexto) {
     estado.obtenerContexto = obtenerContexto;
+    // Fotos (v2): cuando cambian las fotos de una evaluacion (subida OK) se
+    // repinta el historial.
+    reemplazoFotosController_inicializar(obtenerContexto, function () { renderHistorial(); });
   }
 
   function contexto() {
@@ -118,7 +121,9 @@
 
     Promise.all([
       apiGetEstadoReemplazo(ctx.sessionToken, wellId),
-      apiGetHistorialReemplazo(ctx.sessionToken, wellId)
+      apiGetHistorialReemplazo(ctx.sessionToken, wellId),
+      // metadata de fotos (tolerante: si falla, el historial se ve sin fotos)
+      reemplazoFotosController_cargarPozo(wellId)
     ]).then(function (resultados) {
       if (cargaId !== estado.cargaId) {
         return;
@@ -235,6 +240,11 @@
       cabecera.appendChild(badge);
       item.appendChild(cabecera);
       item.appendChild(construirDatosEvaluacion(ev));
+      // Fotos de ESTA evaluacion (metadata ya cargada, miniaturas lazy)
+      var galeria = reemplazoFotosController_construirGaleria(ev.evaluacionId);
+      if (galeria) {
+        item.appendChild(galeria);
+      }
       historialEl.appendChild(item);
     });
   }
@@ -292,6 +302,7 @@
     poblarMotivos('');
     obsEl.value = '';
     puntoEl.value = estado.puntoNEOrigen || '';
+    reemplazoFotosController_resetFormulario();
     limpiarErroresForm();
     formEl.hidden = false;
     btnNuevaEl.hidden = true;
@@ -301,6 +312,7 @@
   function cerrarFormulario() {
     formEl.hidden = true;
     btnNuevaEl.hidden = false;
+    reemplazoFotosController_resetFormulario();
   }
 
   function limpiarErroresForm() {
@@ -322,6 +334,10 @@
     e.preventDefault();
     var r = leerFormulario();
     limpiarErroresForm();
+    if (reemplazoFotosController_hayProcesando()) {
+      mostrarTexto(document.getElementById('reemplazo-err-fotos'), 'Esperá a que terminen de procesarse las fotos.');
+      return;
+    }
     if (!r.valido) {
       mostrarTexto(errEstadoEl, r.errores.estado);
       mostrarTexto(errMotivoEl, r.errores.motivo);
@@ -340,6 +356,10 @@
     }
     if (v.puntoNEReferencia) {
       resumen += '\nPunto NE: ' + v.puntoNEReferencia;
+    }
+    var nFotos = reemplazoFotosController_cantidadListas();
+    if (nFotos > 0) {
+      resumen += '\nFotos: ' + nFotos;
     }
     confirmarResumenEl.textContent = resumen;
     mostrarTexto(confirmarErrorEl, '');
@@ -396,6 +416,11 @@
         var derivado = reemplazoLogic_estadoDesdeHistorial(estado.historial);
         estado.estadoActual = derivado.estado;
         estado.ultimaEvaluacion = derivado.ultimaEvaluacion;
+        // Las fotos se suben DESPUES de guardar la evaluacion (una por
+        // request, en cola): si alguna falla, la evaluacion y las demas
+        // quedan, y la fallida se puede reintentar. Va antes de
+        // cerrarFormulario, que limpia las fotos del formulario.
+        reemplazoFotosController_subirDeEvaluacion(nueva);
         cerrarFormulario();
         renderDetalle();
         exitoEl.hidden = false;

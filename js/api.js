@@ -135,3 +135,30 @@ function apiRegistrarEvaluacionReemplazo(sessionToken, wellId, estado, motivo, o
     puntoNEReferencia: puntoNEReferencia
   });
 }
+
+// --- Fotos de evaluaciones de reemplazo (v2) ---
+// Todas gateadas por reemplazo=SI en el backend. El navegador habla SOLO
+// con el backend principal (que firma y llama al storage de la segunda
+// cuenta): nunca ve URLs de Drive ni Drive IDs. Una foto por request
+// (cola secuencial en js/reemplazoFotos.js); la imagen viaja en base64
+// ya comprimida por el navegador (JPEG, sin EXIF/GPS).
+function apiSubirFotoReemplazo(sessionToken, wellId, evaluacionId, nombreArchivo, mimeType, imagenBase64, thumbBase64) {
+  return callBackend('subirFotoReemplazo', {
+    sessionToken: sessionToken, wellId: wellId, evaluacionId: evaluacionId, nombreArchivo: nombreArchivo,
+    mimeType: mimeType, imagenBase64: imagenBase64, thumbBase64: thumbBase64
+  });
+}
+
+// Metadata de TODAS las fotos de un pozo (una llamada por apertura del pozo)
+function apiGetFotosReemplazoPozo(sessionToken, wellId) {
+  return callBackend('getFotosReemplazoPozo', { sessionToken: sessionToken, wellId: wellId });
+}
+
+function apiGetFotosReemplazo(sessionToken, evaluacionId) {
+  return callBackend('getFotosReemplazo', { sessionToken: sessionToken, evaluacionId: evaluacionId });
+}
+
+// variante: 'thumb' (miniatura, lazy en el historial) | 'full' (solo al abrir el visor)
+function apiGetFotoReemplazo(sessionToken, fotoId, variante) {
+  return callBackend('getFotoReemplazo', { sessionToken: sessionToken, fotoId: fotoId, variante: variante });
+}

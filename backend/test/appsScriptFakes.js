@@ -49,6 +49,7 @@ function installAppsScriptFakes() {
     base64DecodeWebSafe: base64UrlDecode,
     base64Encode: (bytes) => Buffer.from(bytes).toString('base64'),
     getUuid: () => crypto.randomUUID(),
+    base64Decode: (str) => Array.from(Buffer.from(String(str), 'base64')).map((b) => (b > 127 ? b - 256 : b)),
     newBlob: (bytes) => {
       const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
       return { getDataAsString: () => buf.toString('utf8') };
@@ -102,6 +103,20 @@ function installAppsScriptFakes() {
   global.reemplazoService_getEstado = jest.fn();
   global.reemplazoService_getHistorial = jest.fn();
   global.reemplazoService_registrar = jest.fn();
+  global.reemplazoRepository_buscarPorEvaluacionId = jest.fn();
+  global.fotosRepository_listarPorEvaluacionId = jest.fn();
+  global.fotosRepository_listarPorWellId = jest.fn();
+  global.fotosRepository_buscarPorFotoId = jest.fn();
+  global.fotosRepository_contarPorEvaluacionId = jest.fn();
+  global.fotosRepository_agregarSiHayCupo = jest.fn();
+  global.fotosStorageClient_subir = jest.fn();
+  global.fotosStorageClient_obtener = jest.fn();
+  global.fotosStorageClient_descartar = jest.fn();
+  global.fotosService_subir = jest.fn();
+  global.fotosService_listarPorEvaluacion = jest.fn();
+  global.fotosService_listarPorPozo = jest.fn();
+  global.fotosService_obtenerImagen = jest.fn();
+  global.FOTOS_UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 }
 
 module.exports = { installAppsScriptFakes };

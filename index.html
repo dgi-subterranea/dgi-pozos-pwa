@@ -875,6 +875,10 @@
         <div id="reemplazo-ultima" class="reemplazo-ultima"></div>
         <button type="button" id="btn-reemplazo-nueva" class="button reemplazo-nueva">Nueva evaluación</button>
         <p id="reemplazo-exito" class="reemplazo-exito" role="status" hidden>Evaluación guardada.</p>
+        <div id="reemplazo-subida" class="reemplazo-subida" role="status" hidden>
+          <p id="reemplazo-subida-titulo" class="reemplazo-subida-titulo"></p>
+          <div id="reemplazo-subida-lista" class="reemplazo-subida-lista"></div>
+        </div>
       </div>
 
       <form id="reemplazo-form" class="reemplazo-form" hidden>
@@ -904,6 +908,23 @@
           <p id="reemplazo-err-punto" class="error-message" hidden></p>
         </div>
 
+        <fieldset class="reemplazo-campo">
+          <legend>Fotos <span class="reemplazo-opcional">(opcional, hasta 5)</span></legend>
+          <div class="reemplazo-fotos-botones">
+            <button type="button" id="btn-reemplazo-foto-camara" class="button-secondary">Tomar foto</button>
+            <button type="button" id="btn-reemplazo-foto-galeria" class="button-secondary">Elegir de galería</button>
+          </div>
+          <!-- Tomar foto: en el celular abre la camara trasera; en
+               escritorio equivale a elegir un archivo. Galeria: acepta
+               varias a la vez. Compatibilidad con HEIC (iPhone) pendiente de
+               validacion en un dispositivo real: si el navegador no puede
+               decodificar la imagen se muestra un error por foto. -->
+          <input type="file" id="input-reemplazo-foto-camara" accept="image/*" capture="environment" hidden>
+          <input type="file" id="input-reemplazo-foto-galeria" accept="image/*" multiple hidden>
+          <div id="reemplazo-fotos-previews" class="reemplazo-fotos-previews"></div>
+          <p id="reemplazo-err-fotos" class="error-message" hidden></p>
+        </fieldset>
+
         <div class="reemplazo-form-acciones">
           <button type="submit" id="btn-reemplazo-continuar" class="button">Continuar</button>
           <button type="button" id="btn-reemplazo-cancelar" class="button-secondary">Cancelar</button>
@@ -914,6 +935,24 @@
         <h2 class="reemplazo-historial-titulo">Historial <span id="reemplazo-historial-cantidad" class="reemplazo-opcional"></span></h2>
         <div id="reemplazo-historial" class="reemplazo-historial"></div>
       </div>
+    </div>
+  </div>
+
+  <!-- Visor de fotos de una evaluacion: la imagen completa se pide al
+       abrir (y al pasar a la siguiente/anterior), nunca todas juntas. -->
+  <div id="reemplazo-visor-overlay" class="reemplazo-visor" role="dialog" aria-modal="true" aria-label="Foto de la evaluación" hidden>
+    <div class="reemplazo-visor-barra">
+      <span id="reemplazo-visor-contador" class="reemplazo-visor-contador"></span>
+      <button type="button" id="btn-reemplazo-visor-cerrar" class="reemplazo-visor-cerrar" aria-label="Cerrar">&times;</button>
+    </div>
+    <div class="reemplazo-visor-escenario">
+      <button type="button" id="btn-reemplazo-visor-anterior" class="reemplazo-visor-nav" aria-label="Foto anterior">&#8249;</button>
+      <div class="reemplazo-visor-imagen-caja">
+        <span id="reemplazo-visor-cargando" class="spinner" aria-hidden="true"></span>
+        <p id="reemplazo-visor-error" class="reemplazo-visor-error" hidden></p>
+        <img id="reemplazo-visor-img" class="reemplazo-visor-img" alt="Foto de la evaluación" hidden>
+      </div>
+      <button type="button" id="btn-reemplazo-visor-siguiente" class="reemplazo-visor-nav" aria-label="Foto siguiente">&#8250;</button>
     </div>
   </div>
 
@@ -988,6 +1027,8 @@
   <script src="js/cercaMio.js"></script>
   <script src="js/seleccion.js"></script>
   <script src="js/reemplazoLogic.js"></script>
+  <script src="js/reemplazoFotosLogic.js"></script>
+  <script src="js/reemplazoFotos.js"></script>
   <script src="js/reemplazo.js"></script>
   <script src="js/app.js"></script>
   <!-- Va DESPUES de app.js en el documento a proposito, para que

@@ -106,6 +106,20 @@ function reemplazoRepository_listarPorWellId(wellId) {
   return resultado;
 }
 
+// Una evaluacion por su id (o null). Lo usa el modulo de fotos para
+// validar que la evaluacion existe, a que pozo pertenece y quien la creo.
+function reemplazoRepository_buscarPorEvaluacionId(evaluacionId) {
+  var hoja = reemplazoRepository_abrirHoja();
+  var data = hoja.sheet.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    var ev = reemplazoRepository_evaluacionDesdeFila(data[i], hoja.indices);
+    if (ev.evaluacionId === evaluacionId) {
+      return ev;
+    }
+  }
+  return null;
+}
+
 // Append de UNA fila. LockService (lock de script) serializa escrituras
 // concurrentes: se escribe con formato texto previo, lo que requiere
 // conocer la fila destino, y dos usuarios guardando a la vez podrian

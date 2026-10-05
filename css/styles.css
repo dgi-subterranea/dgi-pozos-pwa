@@ -2996,3 +2996,274 @@ body.con-bandeja {
     min-width: 0;
   }
 }
+
+/* --- Reemplazos v2: fotos de una evaluacion --- */
+.reemplazo-fotos-botones {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.reemplazo-fotos-botones .button-secondary {
+  min-height: 48px;
+  padding: 8px 10px;
+  font-size: 0.92rem;
+}
+.reemplazo-fotos-botones .button-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.reemplazo-fotos-previews {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 10px;
+}
+.reemplazo-foto-preview {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.reemplazo-foto-preview-marco {
+  aspect-ratio: 1 / 1;
+  border-radius: 12px;
+  border: 1.5px solid var(--color-border);
+  background: var(--color-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.reemplazo-foto-preview-marco img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.reemplazo-foto-error .reemplazo-foto-preview-marco {
+  border-color: var(--color-error);
+}
+.reemplazo-foto-preview-error-icono {
+  font-size: 1.6rem;
+  font-weight: 800;
+  color: var(--color-error);
+}
+.reemplazo-foto-preview-info {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--color-text-soft);
+  overflow-wrap: anywhere;
+}
+.reemplazo-foto-quitar {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  min-height: 28px;
+  width: 28px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1.1rem;
+  line-height: 1;
+  background: rgba(22, 33, 42, 0.78);
+  box-shadow: none;
+}
+.reemplazo-foto-quitar:hover {
+  background: var(--color-error);
+}
+
+/* Panel de subida (despues de guardar la evaluacion) */
+.reemplazo-subida {
+  width: 100%;
+  margin-top: 8px;
+  padding: 12px;
+  border: 1.5px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg);
+}
+.reemplazo-subida-titulo {
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+.reemplazo-subida-lista {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.reemplazo-subida-fila {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.reemplazo-subida-mini {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  object-fit: cover;
+  border-radius: 8px;
+  background: var(--color-border-soft);
+}
+.reemplazo-subida-texto {
+  flex: 1;
+  min-width: 0;
+}
+.reemplazo-subida-nombre,
+.reemplazo-subida-estado {
+  margin: 0;
+  font-size: 0.85rem;
+}
+.reemplazo-subida-nombre {
+  font-weight: 700;
+}
+.reemplazo-subida-estado {
+  color: var(--color-text-soft);
+  overflow-wrap: anywhere;
+}
+.reemplazo-subida-subida .reemplazo-subida-estado {
+  color: #17633d;
+}
+.reemplazo-subida-fallida {
+  flex-wrap: wrap;
+}
+/* Reintentar va debajo del mensaje (ocupa su propia linea): el mensaje de
+   error tiene el ancho completo y no se parte en una columna angosta. */
+.reemplazo-subida-reintentar {
+  flex: 1 1 100%;
+  min-height: 44px;
+  padding: 6px 14px;
+  font-size: 0.9rem;
+}
+
+/* Fotos dentro de cada evaluacion del historial */
+.reemplazo-fotos {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.reemplazo-fotos-titulo {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: var(--color-text-soft);
+}
+.reemplazo-fotos-grilla {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.reemplazo-foto-thumb {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1.5px solid var(--color-border);
+  background: var(--color-border-soft);
+  box-shadow: none;
+}
+.reemplazo-foto-thumb:hover {
+  background: var(--color-border-soft);
+}
+.reemplazo-foto-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.reemplazo-foto-thumb.cargada img {
+  opacity: 1;
+}
+.reemplazo-foto-thumb.error::after {
+  content: '!';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  color: var(--color-error);
+}
+
+/* Visor */
+.reemplazo-visor {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(10, 16, 21, 0.94);
+  display: flex;
+  flex-direction: column;
+  color: #fff;
+}
+.reemplazo-visor-barra {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  padding-top: calc(10px + env(safe-area-inset-top, 0px));
+}
+.reemplazo-visor-contador {
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+.reemplazo-visor-cerrar {
+  min-height: 44px;
+  width: 44px;
+  padding: 0;
+  font-size: 1.8rem;
+  line-height: 1;
+  background: transparent;
+  box-shadow: none;
+}
+.reemplazo-visor-cerrar:hover,
+.reemplazo-visor-nav:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.reemplazo-visor-escenario {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px calc(12px + env(safe-area-inset-bottom, 0px));
+}
+.reemplazo-visor-nav {
+  flex: none;
+  min-height: 56px;
+  width: 40px;
+  padding: 0;
+  font-size: 2.2rem;
+  line-height: 1;
+  background: transparent;
+  box-shadow: none;
+}
+.reemplazo-visor-imagen-caja {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.reemplazo-visor-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+}
+.reemplazo-visor-error {
+  margin: 0;
+  padding: 0 16px;
+  text-align: center;
+  color: #ffd2cd;
+}
+
+@media (min-width: 640px) {
+  .reemplazo-foto-thumb {
+    width: 84px;
+    height: 84px;
+  }
+}
