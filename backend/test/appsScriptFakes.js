@@ -48,6 +48,7 @@ function installAppsScriptFakes() {
     base64EncodeWebSafe: base64UrlEncode,
     base64DecodeWebSafe: base64UrlDecode,
     base64Encode: (bytes) => Buffer.from(bytes).toString('base64'),
+    getUuid: () => crypto.randomUUID(),
     newBlob: (bytes) => {
       const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
       return { getDataAsString: () => buf.toString('utf8') };
@@ -96,6 +97,11 @@ function installAppsScriptFakes() {
   global.itfAvailabilityService_checkDisponibilidad = jest.fn();
   global.profileService_checkDisponibilidad = jest.fn();
   global.notificationService_notifyDescargaItf = jest.fn();
+  global.reemplazoRepository_listarPorWellId = jest.fn();
+  global.reemplazoRepository_agregar = jest.fn();
+  global.reemplazoService_getEstado = jest.fn();
+  global.reemplazoService_getHistorial = jest.fn();
+  global.reemplazoService_registrar = jest.fn();
 }
 
 module.exports = { installAppsScriptFakes };

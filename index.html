@@ -99,6 +99,13 @@
       Pozos cerca mío
     </button>
 
+    <!-- Modulo Evaluacion / Reemplazo: visible solo con reemplazo=SI (ver
+         toggleAccesosUbicacion en app.js). -->
+    <button type="button" id="btn-abrir-reemplazo" class="button-secondary btn-mapa-acceso" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="9"/></svg>
+      Evaluación / Reemplazo
+    </button>
+
     <!-- Hub modular: cabecera compacta + tarjetas de acceso solo a los
          modulos que existen (Perfil/Datos/Ubicacion/Niveles Estaticos).
          Los 3 fetches (ITF, Ficha, NE) corren en paralelo y son
@@ -822,6 +829,109 @@
     </div>
   </div>
 
+  <!-- Evaluacion / Reemplazo (v1): estado actual + historial append-only
+       de aptitud de un pozo candidato a reemplazar un pozo de monitoreo
+       problematico. Visible/habilitado solo con reemplazo=SI (el backend
+       vuelve a validarlo en cada llamada). Se llena desde
+       js/reemplazo.js; Volver regresa a la pantalla desde la que se
+       abrio (ver abrirReemplazo en app.js). -->
+  <div id="screen-reemplazo" class="screen" hidden>
+    <div class="tv-topbar tv-topbar-fija">
+      <button type="button" id="btn-reemplazo-volver" class="tv-volver">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+        Volver
+      </button>
+    </div>
+    <div class="tv-header">
+      <div>
+        <p class="mapa-titulo">Evaluación / Reemplazo</p>
+        <p class="tv-header-label">Aptitud de pozos candidatos</p>
+      </div>
+    </div>
+
+    <form id="reemplazo-form-pozo" class="reemplazo-buscar" autocomplete="off">
+      <label for="input-reemplazo-well-id" class="search-label">Número de pozo</label>
+      <div class="reemplazo-buscar-fila">
+        <input id="input-reemplazo-well-id" type="text" placeholder="DD-PPPP" inputmode="numeric" autocomplete="off">
+        <button type="submit" id="btn-reemplazo-abrir">Abrir</button>
+      </div>
+      <p id="reemplazo-pozo-error" class="error-message" hidden></p>
+    </form>
+
+    <div id="reemplazo-cargando" class="mapa-loading reemplazo-cargando" hidden>
+      <span class="spinner" aria-hidden="true"></span>
+      <span>Cargando evaluaciones...</span>
+    </div>
+    <div id="reemplazo-error" class="reemplazo-bloque" hidden>
+      <p id="reemplazo-error-texto" class="error-message"></p>
+      <button type="button" id="btn-reemplazo-reintentar" class="button-secondary">Reintentar</button>
+    </div>
+
+    <div id="reemplazo-detalle" class="reemplazo-detalle" hidden>
+      <div class="reemplazo-actual">
+        <p id="reemplazo-wellid" class="reemplazo-wellid mono"></p>
+        <p class="reemplazo-etiqueta">Estado actual</p>
+        <span id="reemplazo-estado-badge" class="reemplazo-badge reemplazo-badge-grande"></span>
+        <div id="reemplazo-ultima" class="reemplazo-ultima"></div>
+        <button type="button" id="btn-reemplazo-nueva" class="button reemplazo-nueva">Nueva evaluación</button>
+        <p id="reemplazo-exito" class="reemplazo-exito" role="status" hidden>Evaluación guardada.</p>
+      </div>
+
+      <form id="reemplazo-form" class="reemplazo-form" hidden>
+        <h2 class="reemplazo-form-titulo">Nueva evaluación</h2>
+
+        <fieldset class="reemplazo-campo">
+          <legend>Estado</legend>
+          <div id="reemplazo-estados" class="reemplazo-estados" role="group" aria-label="Estado"></div>
+          <p id="reemplazo-err-estado" class="error-message" hidden></p>
+        </fieldset>
+
+        <div class="reemplazo-campo">
+          <label for="reemplazo-motivo">Motivo</label>
+          <select id="reemplazo-motivo" disabled></select>
+          <p id="reemplazo-err-motivo" class="error-message" hidden></p>
+        </div>
+
+        <div class="reemplazo-campo">
+          <label for="reemplazo-observacion">Observación <span id="reemplazo-obs-req" class="reemplazo-opcional">(opcional)</span></label>
+          <textarea id="reemplazo-observacion" rows="4" maxlength="1000" placeholder="Detalle de lo observado en campo"></textarea>
+          <p id="reemplazo-err-observacion" class="error-message" hidden></p>
+        </div>
+
+        <div class="reemplazo-campo">
+          <label for="reemplazo-punto-ne">Punto NE de referencia <span class="reemplazo-opcional">(opcional)</span></label>
+          <input id="reemplazo-punto-ne" type="text" maxlength="40" placeholder="Ej: 04-0263 o INA 2055" autocomplete="off">
+          <p id="reemplazo-err-punto" class="error-message" hidden></p>
+        </div>
+
+        <div class="reemplazo-form-acciones">
+          <button type="submit" id="btn-reemplazo-continuar" class="button">Continuar</button>
+          <button type="button" id="btn-reemplazo-cancelar" class="button-secondary">Cancelar</button>
+        </div>
+      </form>
+
+      <div class="reemplazo-historial-bloque">
+        <h2 class="reemplazo-historial-titulo">Historial <span id="reemplazo-historial-cantidad" class="reemplazo-opcional"></span></h2>
+        <div id="reemplazo-historial" class="reemplazo-historial"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirmacion antes de guardar (la evaluacion es append-only: no se
+       puede editar ni borrar despues). -->
+  <div id="reemplazo-confirmar-overlay" class="seleccion-confirmar-overlay" hidden>
+    <div class="seleccion-confirmar-caja">
+      <p class="reemplazo-confirmar-titulo">Vas a guardar esta evaluación</p>
+      <p id="reemplazo-confirmar-resumen" class="reemplazo-confirmar-resumen"></p>
+      <p class="reemplazo-confirmar-aviso">Queda registrada en el historial del pozo y no se puede editar ni borrar.</p>
+      <p id="reemplazo-confirmar-error" class="error-message" hidden></p>
+      <div class="seleccion-confirmar-acciones">
+        <button type="button" id="btn-reemplazo-guardar" class="button">Guardar evaluación</button>
+        <button type="button" id="btn-reemplazo-confirmar-cancelar" class="button-secondary">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Bandeja de seleccion (item D/I): persistente, fuera de cualquier
        .screen a proposito - sobrevive la navegacion SPA completa. Solo
        visible con seleccion.length > 0 (ver seleccionController en
@@ -877,6 +987,8 @@
   <script src="js/mapaNE.js"></script>
   <script src="js/cercaMio.js"></script>
   <script src="js/seleccion.js"></script>
+  <script src="js/reemplazoLogic.js"></script>
+  <script src="js/reemplazo.js"></script>
   <script src="js/app.js"></script>
   <!-- Va DESPUES de app.js en el documento a proposito, para que
        onGsiLoaded/onGsiLoadError ya existan antes de que puedan

@@ -526,6 +526,17 @@
     btnMapa.addEventListener('click', function () { contexto.onVerEnMapa(fila.wellId); });
     acciones.appendChild(btnMapa);
 
+    // Evaluacion / Reemplazo (solo con reemplazo=SI): abre el modulo sobre
+    // este wellId. No carga ningun estado aca (nada de badges masivos).
+    if (contexto.permisos && contexto.permisos.reemplazo && typeof contexto.onEvaluarReemplazo === 'function') {
+      var btnEvaluar = document.createElement('button');
+      btnEvaluar.type = 'button';
+      btnEvaluar.className = 'button-secondary';
+      btnEvaluar.textContent = 'Evaluar';
+      btnEvaluar.addEventListener('click', function () { contexto.onEvaluarReemplazo(fila.wellId); });
+      acciones.appendChild(btnEvaluar);
+    }
+
     card.appendChild(acciones);
     return card;
   }

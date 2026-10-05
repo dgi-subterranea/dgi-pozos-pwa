@@ -38,6 +38,15 @@ function doPost(e) {
         response = handleGetItfAvailability(body.sessionToken, body.wellIds);
       } else if (body.action === 'registerDescargaItf') {
         response = handleRegisterDescargaItf(body.sessionToken, body.resumen);
+      } else if (body.action === 'getEstadoReemplazo') {
+        response = handleGetEstadoReemplazo(body.sessionToken, body.wellId);
+      } else if (body.action === 'getHistorialReemplazo') {
+        response = handleGetHistorialReemplazo(body.sessionToken, body.wellId);
+      } else if (body.action === 'registrarEvaluacionReemplazo') {
+        // Solo estos 4 campos de contenido: cualquier otro (email, nombre,
+        // timestamp, evaluacionId...) que mande el cliente se ignora - la
+        // identidad sale de la sesion, nunca del body.
+        response = handleRegistrarEvaluacionReemplazo(body.sessionToken, body.wellId, body.estado, body.motivo, body.observacion, body.puntoNEReferencia);
       } else {
         response = { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'accion desconocida: ' + body.action };
       }
@@ -605,6 +614,99 @@ function handleRegisterDescargaItf(sessionToken, resumen) {
   return { status: 'ok' };
 }
 
+// --- Modulo Reemplazos v1 (evaluacion de aptitud de pozos candidatos) ---
+// Los 3 endpoints se gatean EXCLUSIVAMENTE por el permiso "reemplazo"
+// (lectura y escritura, mismo permiso): sin el no se ve estado, no se ve
+// historial y no se registra nada. Orden de chequeos, igual que el resto:
+// sesion -> formato de wellId -> permiso -> contenido. Toda la logica de
+// negocio y validacion vive en ReemplazoService.js, aca solo se traduce.
+
+function handleGetEstadoReemplazo(sessionToken, wellId) {
+  var validation = validateSessionAndWellId(sessionToken, wellId, 'getEstadoReemplazo');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var permiso = validarPermiso(session, 'getEstadoReemplazo', wellId, 'reemplazo');
+  if (!permiso.ok) {
+    return permiso.response;
+  }
+
+  var estado;
+  try {
+    estado = reemplazoService_getEstado(wellId);
+  } catch (err) {
+    logHistoryEvent(session.email, 'getEstadoReemplazo', wellId, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+  // Las lecturas no se auditan en caso OK (son de alta frecuencia y no
+  // cambian nada): solo la escritura deja una fila en Historial.
+  return { status: 'ok', data: estado };
+}
+
+function handleGetHistorialReemplazo(sessionToken, wellId) {
+  var validation = validateSessionAndWellId(sessionToken, wellId, 'getHistorialReemplazo');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var permiso = validarPermiso(session, 'getHistorialReemplazo', wellId, 'reemplazo');
+  if (!permiso.ok) {
+    return permiso.response;
+  }
+
+  var historial;
+  try {
+    historial = reemplazoService_getHistorial(wellId);
+  } catch (err) {
+    logHistoryEvent(session.email, 'getHistorialReemplazo', wellId, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+  return { status: 'ok', data: historial };
+}
+
+// email/nombre SIEMPRE de la sesion + hoja Usuarios (getUserAccess), nunca
+// del cliente. UNA fila de Historial por evaluacion creada (OK), mas los
+// resultados de error habituales; sin Telegram en v1 y sin tocar
+// registerWellSearch.
+function handleRegistrarEvaluacionReemplazo(sessionToken, wellId, estado, motivo, observacion, puntoNEReferencia) {
+  var validation = validateSessionAndWellId(sessionToken, wellId, 'registrarEvaluacionReemplazo');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var permiso = validarPermiso(session, 'registrarEvaluacionReemplazo', wellId, 'reemplazo');
+  if (!permiso.ok) {
+    return permiso.response;
+  }
+
+  var access = getUserAccess(session.email);
+
+  var resultado;
+  try {
+    resultado = reemplazoService_registrar(session.email, access.nombre, wellId, {
+      estado: estado,
+      motivo: motivo,
+      observacion: observacion,
+      puntoNEReferencia: puntoNEReferencia
+    });
+  } catch (err) {
+    logHistoryEvent(session.email, 'registrarEvaluacionReemplazo', wellId, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+
+  if (!resultado.ok) {
+    logHistoryEvent(session.email, 'registrarEvaluacionReemplazo', wellId, resultado.code);
+    return { status: 'error', code: resultado.code, message: resultado.message };
+  }
+
+  logHistoryEvent(session.email, 'registrarEvaluacionReemplazo', wellId, 'OK');
+  return { status: 'ok', data: { evaluacion: resultado.evaluacion } };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     doPost,
@@ -620,6 +722,9 @@ if (typeof module !== 'undefined' && module.exports) {
     handleGetIndiceBusquedaProvincia,
     handleGetItfAvailability,
     handleRegisterDescargaItf,
+    handleGetEstadoReemplazo,
+    handleGetHistorialReemplazo,
+    handleRegistrarEvaluacionReemplazo,
     validarPermiso,
     validateSession,
     validateSessionAndWellId

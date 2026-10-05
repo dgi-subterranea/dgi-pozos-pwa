@@ -11,6 +11,7 @@ var ERROR_MESSAGES = {
   UNAUTHORIZED: 'Tu sesión venció. Iniciá sesión de nuevo.',
   USER_DISABLED: 'Tu cuenta no tiene acceso habilitado. Contactá al administrador.',
   PROFILE_NOT_FOUND: 'No se encontró información para el pozo {wellId}.',
+  PERMISSION_DENIED: 'No tenés permiso para esta función.',
   SERVICE_UNAVAILABLE: 'No se pudo completar la consulta. Intentá nuevamente.',
   OFFLINE: 'No tenés conexión a internet.'
 };

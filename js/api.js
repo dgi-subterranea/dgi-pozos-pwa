@@ -109,3 +109,29 @@ function apiGetItfAvailability(sessionToken, wellIds) {
 function apiRegisterDescargaItf(sessionToken, resumen) {
   return callBackend('registerDescargaItf', { sessionToken: sessionToken, resumen: resumen }, { keepalive: true });
 }
+
+
+// --- Modulo Evaluacion / Reemplazo (v1) ---
+// Los 3 endpoints se gatean en el backend EXCLUSIVAMENTE por el permiso
+// reemplazo=SI (lectura y escritura). La identidad (email/nombre) NUNCA se
+// manda: el backend la toma de la sesion. registrarEvaluacionReemplazo NO
+// lleva keepalive a proposito: el usuario espera la confirmacion para
+// refrescar estado/historial (ver js/reemplazo.js).
+function apiGetEstadoReemplazo(sessionToken, wellId) {
+  return callBackend('getEstadoReemplazo', { sessionToken: sessionToken, wellId: wellId });
+}
+
+function apiGetHistorialReemplazo(sessionToken, wellId) {
+  return callBackend('getHistorialReemplazo', { sessionToken: sessionToken, wellId: wellId });
+}
+
+function apiRegistrarEvaluacionReemplazo(sessionToken, wellId, estado, motivo, observacion, puntoNEReferencia) {
+  return callBackend('registrarEvaluacionReemplazo', {
+    sessionToken: sessionToken,
+    wellId: wellId,
+    estado: estado,
+    motivo: motivo,
+    observacion: observacion,
+    puntoNEReferencia: puntoNEReferencia
+  });
+}

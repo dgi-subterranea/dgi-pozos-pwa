@@ -19,6 +19,7 @@
     cercaMio: document.getElementById('screen-cerca-mio'),
     seleccionTabla: document.getElementById('screen-seleccion-tabla'),
     seleccionItf: document.getElementById('screen-seleccion-itf'),
+    reemplazo: document.getElementById('screen-reemplazo'),
     disabled: document.getElementById('screen-disabled'),
     offline: document.getElementById('screen-offline')
   };
@@ -154,20 +155,21 @@
   var neContent = document.getElementById('ne-content');
   var pozoActual = null;
 
-  // Permisos efectivos del usuario (perfil/datos/ubicacion/ne), tal como
+  // Permisos efectivos del usuario (perfil/datos/ubicacion/ne/reemplazo), tal como
   // los devolvio el ultimo login/checkSession - NUNCA viven en el
   // sessionToken (que sigue siendo pura identidad). Fail-closed por
   // defecto: hasta que login/checkSession responda, no se asume ningun
   // permiso. Se usan solo para decidir que fetch conviene ni siquiera
   // disparar - el backend vuelve a validar cada uno igual, esto es una
   // optimizacion de red, no el limite de seguridad real.
-  var permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false };
+  var permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false };
 
   var ICON_PERFIL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5.5-5.5L11 15l-3-3-4.5 4.5"/></svg>';
   var ICON_DATOS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>';
   var ICON_UBICACION = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 21s7-7.2 7-12a7 7 0 10-14 0c0 4.8 7 12 7 12z"/><circle cx="12" cy="9" r="2.4"/></svg>';
   var ICON_UBICACION_WARN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s7-7.2 7-12a7 7 0 10-14 0c0 4.8 7 12 7 12z"/><path d="M12 7v5M12 15h.01"/></svg>';
   var ICON_NE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 17l5-6 4 3 4-7 5 5"/><path d="M3 21h18" stroke-linecap="round"/></svg>';
+  var ICON_REEMPLAZO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   var ICON_MAPS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 20l-5-2V5l5 2 6-2 5 2v13l-5-2-6 2z"/></svg>';
   var ICON_SEARCH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>';
   var ICON_CLOSE = '<svg viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
@@ -254,11 +256,20 @@
     if (pozo.ne.found) {
       modulos.push({ id: 'ne', titulo: 'Niveles estáticos', desc: 'Histórico y evolución', icono: ICON_NE });
     }
+    // Evaluacion / Reemplazo: solo con reemplazo=SI. Es un modulo propio
+    // con su propio permiso (no depende de que el pozo tenga ITF/Ficha/
+    // NE), pero no se ofrece sobre un pozo que no existe en ningun modulo
+    // (renderHubNotFound ya corto mas arriba).
+    if (permisosActuales.reemplazo) {
+      modulos.push({ id: 'reemplazo', titulo: 'Evaluar reemplazo', desc: 'Estado y evaluaciones', icono: ICON_REEMPLAZO });
+    }
 
+    // Cantidad impar (>1) de tarjetas: la ultima ocupa todo el ancho en vez
+    // de dejar un hueco al lado (ver .hub-grid.n3).
     var gridClass = 'hub-grid';
     if (modulos.length === 1) {
       gridClass += ' n1';
-    } else if (modulos.length === 3) {
+    } else if (modulos.length > 1 && modulos.length % 2 === 1) {
       gridClass += ' n3';
     }
 
@@ -296,6 +307,13 @@
     } else if (id === 'ne') {
       renderNE(pozoActual.ne.data);
       showScreen('ne');
+    } else if (id === 'reemplazo') {
+      // Contexto NE del detalle: si el pozo esta en la red NE, su
+      // monitoringId (el wellId para un punto normal; el identificador
+      // propio de un punto especial - nunca se inventa un DD-PPPP) se
+      // ofrece como punto NE de referencia, editable en el formulario.
+      var puntoNE = pozoActual.ne && pozoActual.ne.found && pozoActual.ne.data ? (pozoActual.ne.data.monitoringId || '') : '';
+      abrirReemplazo({ wellId: pozoActual.wellId, puntoNEReferencia: puntoNE });
     }
   }
 
@@ -1146,6 +1164,7 @@
 
   function toggleAccesosUbicacion() {
     document.getElementById('btn-abrir-cerca-mio').hidden = !permisosActuales.ubicacion;
+    document.getElementById('btn-abrir-reemplazo').hidden = !permisosActuales.reemplazo;
     document.getElementById('btn-abrir-mapa').hidden = accesoMapas() === 'ninguno';
     actualizarBotonesVolverMapa();
   }
@@ -1163,7 +1182,7 @@
     localStorage.removeItem('sessionToken');
     sessionToken = null;
     currentEmail = null;
-    permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false };
+    permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false };
     toggleAccesosUbicacion();
     if (gsiLoaded) {
       // Sin esto, auto_select podria volver a loguear silenciosamente a
@@ -1496,6 +1515,11 @@
       onVerEnMapa: function (wellId) {
         abrirMapaDesde({ tipo: 'pozo', wellId: wellId });
       },
+      // "Evaluar" en una card de Mi seleccion (solo con reemplazo=SI): abre
+      // el modulo de reemplazos sobre ese wellId, sin contexto NE.
+      onEvaluarReemplazo: function (wellId) {
+        abrirReemplazo({ wellId: wellId });
+      },
       // Item 8 del cierre ("token de sesion expirado se maneja igual que
       // el resto de la app"): mismo criterio que buscarPozo (ver chequeo
       // de UNAUTHORIZED mas abajo) - getItfAvailability/getProfile/
@@ -1540,23 +1564,77 @@
     }
   }
 
-  function volverAlOrigenDeSeleccion() {
-    var origen = seleccionOrigen.pantalla;
-    if (origen === 'cercaMio') {
+  // Restaura una pantalla de origen ({pantalla, scrollY}) - la usan Ver
+  // informacion/ITF y Evaluacion/Reemplazo con la MISMA regla: las
+  // pantallas que solo se ocultan (hub, modulos del pozo, selector, ...)
+  // vuelven con su DOM intacto; Cerca Mio retoma su busqueda; los mapas se
+  // reabren (el contexto/filtros viven en sus controladores); las vistas de
+  // la seleccion se vuelven a armar (la seleccion pudo cambiar). Un origen
+  // que ya no se puede restaurar (login, offline...) cae al hub.
+  function restaurarPantalla(origen) {
+    var pantalla = origen.pantalla;
+    if (pantalla === 'cercaMio') {
       showScreen('cercaMio');
       cercaMioController_reanudar();
-    } else if (origen === 'mapa') {
+    } else if (pantalla === 'mapa') {
       abrirMapaDesde(null, true);
-    } else if (origen === 'mapaNE') {
+    } else if (pantalla === 'mapaNE') {
       abrirMapaNE();
-    } else if (origen === 'main' || origen === 'mapaSelector' || origen === 'wellRecordTable' ||
-      origen === 'perfil' || origen === 'datos' || origen === 'ubicacion' || origen === 'ne') {
-      showScreen(origen);
+    } else if (pantalla === 'seleccionTabla') {
+      showScreen('seleccionTabla');
+      seleccionController_abrirTabla();
+    } else if (pantalla === 'seleccionItf') {
+      showScreen('seleccionItf');
+      seleccionController_abrirItf();
+    } else if (pantalla === 'main' || pantalla === 'mapaSelector' || pantalla === 'wellRecordTable' ||
+      pantalla === 'perfil' || pantalla === 'datos' || pantalla === 'ubicacion' || pantalla === 'ne' ||
+      pantalla === 'reemplazo') {
+      showScreen(pantalla);
     } else {
       showScreen('main');
     }
-    window.scrollTo(0, seleccionOrigen.scrollY || 0);
+    window.scrollTo(0, origen.scrollY || 0);
   }
+
+  function volverAlOrigenDeSeleccion() {
+    restaurarPantalla(seleccionOrigen);
+  }
+
+  // --- Evaluacion / Reemplazo ---
+  // Mismo patron que Ver informacion/ITF: recuerda la pantalla de origen
+  // (hub, detalle del pozo, card de Mi seleccion, Ver informacion...) y
+  // Volver regresa AHI, con su scroll. Abrir otro pozo dentro del modulo
+  // no cambia el origen.
+  var reemplazoOrigen = { pantalla: 'main', scrollY: 0 };
+
+  function abrirReemplazo(ap) {
+    if (pantallaActual !== 'reemplazo') {
+      reemplazoOrigen = { pantalla: pantallaActual, scrollY: window.scrollY };
+    }
+    showScreen('reemplazo');
+    reemplazoController_abrir(ap);
+  }
+
+  reemplazoController_inicializar(function () {
+    return {
+      sessionToken: sessionToken,
+      onSessionExpired: function () {
+        logout();
+      }
+    };
+  });
+
+  document.getElementById('btn-abrir-reemplazo').addEventListener('click', function () {
+    // Si el buscador del hub ya tiene un numero de pozo valido, se ofrece
+    // como punto de partida.
+    var sugerido = normalizeWellId(input.value);
+    abrirReemplazo({ wellIdSugerido: isValidWellId(sugerido) ? sugerido : '' });
+  });
+
+  document.getElementById('btn-reemplazo-volver').addEventListener('click', function () {
+    reemplazoController_cerrar();
+    restaurarPantalla(reemplazoOrigen);
+  });
 
   document.getElementById('btn-seleccion-info').addEventListener('click', function () {
     abrirVistaSeleccion('seleccionTabla');

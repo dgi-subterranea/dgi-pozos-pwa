@@ -373,3 +373,45 @@ describe('handleCheckSession', () => {
     expect(result.data.permisos).toEqual({ perfil: true, datos: false, ubicacion: true, ne: false });
   });
 });
+
+describe('permiso reemplazo (Modulo Reemplazos v1)', () => {
+  test('reemplazo=SI: hasPermission true; reemplazo=NO: false', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({
+      found: true, active: true, permisos: { perfil: true, datos: true, ubicacion: true, ne: true, reemplazo: true }
+    });
+    expect(AuthService.hasPermission('a@example.com', 'reemplazo')).toBe(true);
+
+    global.sheetUserRepository_getUserStatus.mockReturnValue({
+      found: true, active: true, permisos: { perfil: true, datos: true, ubicacion: true, ne: true, reemplazo: false }
+    });
+    expect(AuthService.hasPermission('b@example.com', 'reemplazo')).toBe(false);
+  });
+
+  test('columna reemplazo ausente (el repositorio no la trae): fail-closed, false', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({
+      found: true, active: true, permisos: { perfil: true, datos: true, ubicacion: true, ne: true }
+    });
+    expect(AuthService.hasPermission('c@example.com', 'reemplazo')).toBe(false);
+  });
+
+  test('usuario inactivo con reemplazo=SI: false', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({
+      found: true, active: false, permisos: { perfil: true, datos: true, ubicacion: true, ne: true, reemplazo: true }
+    });
+    expect(AuthService.hasPermission('d@example.com', 'reemplazo')).toBe(false);
+  });
+
+  test('getUserAccess propaga el permiso reemplazo', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({
+      found: true, active: true, permisos: { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: true }
+    });
+    expect(AuthService.getUserAccess('e@example.com').permisos.reemplazo).toBe(true);
+  });
+
+  test('sin permisos en el repositorio, los permisos vacios incluyen reemplazo=false', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({ found: true, active: true });
+    expect(AuthService.getUserAccess('f@example.com').permisos).toEqual({
+      perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false
+    });
+  });
+});
