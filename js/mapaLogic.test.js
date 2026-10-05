@@ -12,6 +12,8 @@ const {
   mapaLogic_setWellIdNE,
   mapaLogic_filtrarPorNE,
   mapaLogic_determinarAccesoMapas,
+  mapaLogic_calcularAccesos,
+  mapaLogic_puedeVerProvincia,
   mapaLogic_normalizarTexto,
   mapaLogic_indiceBusquedaPorWellId,
   mapaLogic_buscarPozosProvincia,
@@ -336,32 +338,89 @@ describe('mapaLogic_filtrarPorNE', () => {
   });
 });
 
-describe('mapaLogic_determinarAccesoMapas', () => {
-  test('ubicacion=SI y ne=SI -> "selector"', () => {
-    expect(mapaLogic_determinarAccesoMapas({ ubicacion: true, ne: true })).toBe('selector');
+describe('mapaLogic_determinarAccesoMapas (matriz perfil/ne)', () => {
+  test('ne=SI -> "selector" (las dos opciones), con o sin perfil', () => {
+    expect(mapaLogic_determinarAccesoMapas({ perfil: true, ne: true })).toBe('selector');
+    expect(mapaLogic_determinarAccesoMapas({ perfil: false, ne: true })).toBe('selector');
+    expect(mapaLogic_determinarAccesoMapas({ ne: true })).toBe('selector');
   });
 
-  test('solo ubicacion=SI -> "provincia" (sin selector, sin referencias a NE)', () => {
-    expect(mapaLogic_determinarAccesoMapas({ ubicacion: true, ne: false })).toBe('provincia');
-    expect(mapaLogic_determinarAccesoMapas({ ubicacion: true })).toBe('provincia');
+  test('perfil=SI, ne=NO -> "provincia" (entra directo, sin selector ni NE)', () => {
+    expect(mapaLogic_determinarAccesoMapas({ perfil: true, ne: false })).toBe('provincia');
+    expect(mapaLogic_determinarAccesoMapas({ perfil: true })).toBe('provincia');
   });
 
-  // Caso central del pedido: el mapa NE NUNCA depende de "ubicacion" -
-  // un usuario sin ubicacion pero con ne=SI entra directo a Niveles
-  // Estaticos, nunca se lo bloquea porque le falta el otro permiso.
-  test('solo ne=SI -> "ne" (independiente de ubicacion)', () => {
-    expect(mapaLogic_determinarAccesoMapas({ ubicacion: false, ne: true })).toBe('ne');
-    expect(mapaLogic_determinarAccesoMapas({ ne: true })).toBe('ne');
-  });
-
-  test('ninguno de los 2 -> "ninguno"', () => {
-    expect(mapaLogic_determinarAccesoMapas({ ubicacion: false, ne: false })).toBe('ninguno');
+  test('perfil=NO y ne=NO -> "ninguno"', () => {
+    expect(mapaLogic_determinarAccesoMapas({ perfil: false, ne: false })).toBe('ninguno');
     expect(mapaLogic_determinarAccesoMapas({})).toBe('ninguno');
+  });
+
+  test('ubicacion, datos y reemplazo NO deciden el acceso a Mapas', () => {
+    expect(mapaLogic_determinarAccesoMapas({ ubicacion: true, datos: true, reemplazo: true })).toBe('ninguno');
+    expect(mapaLogic_determinarAccesoMapas({ perfil: true, ubicacion: false, datos: false })).toBe('provincia');
   });
 
   test('permisos ausente/null -> "ninguno", no rompe', () => {
     expect(mapaLogic_determinarAccesoMapas(undefined)).toBe('ninguno');
     expect(mapaLogic_determinarAccesoMapas(null)).toBe('ninguno');
+  });
+});
+
+// Matriz de permisos completa (hub, selector de mapas, acceso directo a
+// pantallas): es el contrato de producto, un cambio aca es un cambio de
+// reglas de acceso.
+describe('mapaLogic_calcularAccesos (matriz de permisos)', () => {
+  const T = true;
+  const F = false;
+  const casos = [
+    // nombre, permisos, activo, esperado
+    ['solo perfil', { perfil: T }, T,
+      { cercaMio: T, mapas: 'provincia', provincia: T, ne: F, itf: T, reemplazo: F }],
+    ['solo ne', { ne: T }, T,
+      { cercaMio: T, mapas: 'selector', provincia: T, ne: T, itf: F, reemplazo: F }],
+    ['perfil + ne', { perfil: T, ne: T }, T,
+      { cercaMio: T, mapas: 'selector', provincia: T, ne: T, itf: T, reemplazo: F }],
+    ['solo reemplazo', { reemplazo: T }, T,
+      { cercaMio: T, mapas: 'ninguno', provincia: F, ne: F, itf: F, reemplazo: T }],
+    ['perfil + reemplazo (caso real: datos=NO, ubicacion=NO, ne=NO)', { perfil: T, reemplazo: T, datos: F, ubicacion: F, ne: F }, T,
+      { cercaMio: T, mapas: 'provincia', provincia: T, ne: F, itf: T, reemplazo: T }],
+    ['ningun permiso funcional pero activo', { perfil: F, datos: F, ubicacion: F, ne: F, reemplazo: F }, T,
+      { cercaMio: T, mapas: 'ninguno', provincia: F, ne: F, itf: F, reemplazo: F }],
+    ['solo datos + ubicacion (no deciden nada)', { datos: T, ubicacion: T }, T,
+      { cercaMio: T, mapas: 'ninguno', provincia: F, ne: F, itf: F, reemplazo: F }],
+    ['usuario inactivo (aunque tenga todo)', { perfil: T, datos: T, ubicacion: T, ne: T, reemplazo: T }, F,
+      { cercaMio: F, mapas: 'ninguno', provincia: F, ne: F, itf: F, reemplazo: F }]
+  ];
+
+  test.each(casos)('%s', (nombre, permisos, activo, esperado) => {
+    expect(mapaLogic_calcularAccesos(permisos, activo)).toEqual(esperado);
+  });
+
+  test('Cerca Mio: todo usuario activo, aunque ubicacion=NO y sin permisos', () => {
+    expect(mapaLogic_calcularAccesos({ ubicacion: false }, true).cercaMio).toBe(true);
+    expect(mapaLogic_calcularAccesos(undefined, true).cercaMio).toBe(true);
+    expect(mapaLogic_calcularAccesos({ ubicacion: true }, false).cercaMio).toBe(false);
+  });
+
+  test('selector de mapas: nunca muestra una sola opcion (selector solo si hay 2: ne=SI)', () => {
+    casos.forEach(([nombre, permisos, activo, esperado]) => {
+      if (esperado.mapas === 'selector') {
+        expect(esperado.provincia && esperado.ne).toBe(true);
+      }
+    });
+  });
+
+  test('valores no booleanos (strings, 1) no conceden nada: fail-closed', () => {
+    expect(mapaLogic_calcularAccesos({ perfil: 'SI', ne: 1, reemplazo: 'true' }, true)).toMatchObject({
+      mapas: 'ninguno', provincia: false, ne: false, itf: false, reemplazo: false, cercaMio: true
+    });
+  });
+
+  test('mapaLogic_puedeVerProvincia: perfil o ne', () => {
+    expect(mapaLogic_puedeVerProvincia({ perfil: true })).toBe(true);
+    expect(mapaLogic_puedeVerProvincia({ ne: true })).toBe(true);
+    expect(mapaLogic_puedeVerProvincia({ ubicacion: true, datos: true, reemplazo: true })).toBe(false);
+    expect(mapaLogic_puedeVerProvincia(undefined)).toBe(false);
   });
 });
 

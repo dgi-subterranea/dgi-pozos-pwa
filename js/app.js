@@ -1120,15 +1120,13 @@
     });
   }
 
-  // Arquitectura de 2 mapas (v2.2.0): ubicacion y ne son permisos
-  // independientes, cada uno da acceso a un mapa distinto (ver
-  // mapaLogic_determinarAccesoMapas en js/mapaLogic.js) - "Mapa de
-  // pozos" y "Cerca mío" YA NO comparten el mismo gate. Cerca Mío sigue
-  // siendo exclusivamente sobre Pozos Provincia (pedido explicito, fuera
-  // de alcance agregar una version NE), asi que sigue gateado solo por
-  // ubicacion=SI. El boton "Mapa de pozos" en cambio se habilita con
-  // ubicacion=SI Y/O ne=SI (accesoMapas() !== 'ninguno') - el click en
-  // si decide a donde entra (ver abrirMapaPrincipal).
+  // Matriz de acceso (ver mapaLogic_calcularAccesos en js/mapaLogic.js):
+  // "Pozos cerca mío" es para todo usuario activo (sin depender de ningun
+  // permiso); el boton "Mapa de pozos" se muestra con perfil=SI o ne=SI
+  // (accesoMapas() !== 'ninguno') y el click decide a donde entra (ver
+  // abrirMapaPrincipal): selector con las 2 opciones si ne=SI, directo a
+  // Pozos Provincia si solo perfil=SI. ubicacion/datos no deciden nada de
+  // esto. Aca solo hay usuarios activos (un inactivo nunca pasa el login).
   function accesoMapas() {
     return mapaLogic_determinarAccesoMapas(permisosActuales);
   }
@@ -1163,9 +1161,10 @@
   }
 
   function toggleAccesosUbicacion() {
-    document.getElementById('btn-abrir-cerca-mio').hidden = !permisosActuales.ubicacion;
-    document.getElementById('btn-abrir-reemplazo').hidden = !permisosActuales.reemplazo;
-    document.getElementById('btn-abrir-mapa').hidden = accesoMapas() === 'ninguno';
+    var accesos = mapaLogic_calcularAccesos(permisosActuales, true);
+    document.getElementById('btn-abrir-cerca-mio').hidden = !accesos.cercaMio;
+    document.getElementById('btn-abrir-reemplazo').hidden = !accesos.reemplazo;
+    document.getElementById('btn-abrir-mapa').hidden = accesos.mapas === 'ninguno';
     actualizarBotonesVolverMapa();
   }
 

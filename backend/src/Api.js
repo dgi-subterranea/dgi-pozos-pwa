@@ -344,10 +344,17 @@ function handleRegisterWellSearch(sessionToken, wellId, modulos) {
 }
 
 // Mapa de Pozos: dataset general (todos los puntos con coordenada
-// confirmada/disponible), requiere el permiso "ubicacion" - mismo
-// permiso que getWellLocation, coherente con que ambos exponen
-// coordenadas; nunca "datos" (el dataset general no lleva titular ni
-// ningun otro campo registral, ver MapaService.js). No es una accion
+// confirmada/disponible). Ya NO se gatea por un permiso de modulo: lo
+// consumen "Pozos cerca mio" (disponible para TODO usuario activo), el
+// mapa Pozos Provincia (perfil=SI o ne=SI) y la seleccion por radio/
+// poligono, asi que cualquier gate de modulo (antes "ubicacion") dejaria
+// afuera a alguien que si debe usar esas funciones. Alcanza con sesion
+// valida + usuario activo. El dataset es estructuralmente general (ver
+// MapaService.js: wellId/lat/lon/estado/cuenca y los campos tecnicos de
+// filtro, NUNCA titular ni ningun campo registral), y todo lo individual y
+// protegido sigue gateado aparte: getWellLocation ("ubicacion"),
+// getWellSummary/getIndiceBusquedaProvincia/getWellRecord ("datos"),
+// getMapaNE ("ne"). No es una accion
 // por-wellId (no recibe ni valida uno), asi que no pasa por
 // validateSessionAndWellId ni se audita por wellId en Historial - mismo
 // criterio que getMetadata.
@@ -355,12 +362,6 @@ function handleGetMapaPozos(sessionToken) {
   var validation = validateSession(sessionToken, 'getMapaPozos');
   if (!validation.ok) {
     return validation.response;
-  }
-  var session = validation.session;
-
-  var permiso = validarPermiso(session, 'getMapaPozos', null, 'ubicacion');
-  if (!permiso.ok) {
-    return permiso.response;
   }
 
   var result;

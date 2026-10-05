@@ -43,6 +43,7 @@
     datasetCache: null,  // referencia al array ya cargado (mapaDataset.js) - nunca se reenvia a ningun lado
     pickerMapa: null,    // instancia L.Map del mini-mapa de "Elegir en mapa", se crea UNA sola vez
     pickerMarker: null,  // marcador "Punto de busqueda" sobre pickerMapa
+    puedeVerMapa: false, // perfil=SI o ne=SI: habilita los botones que abren el mapa Provincia
     pickerCirculo: null  // L.circle del radio sobre pickerMapa (item 3 del cierre) - sigue al marcador y se redimensiona en vivo con el radio, sin tocar el centro
   };
 
@@ -147,14 +148,13 @@
     actualizarChipsReferencia();
     actualizarHeaderLabel();
 
-    if (!contexto.permisos || !contexto.permisos.ubicacion) {
-      // Defensa en profundidad: el boton de acceso (btn-abrir-cerca-mio)
-      // ya deberia estar oculto sin este permiso, pero si de todas
-      // formas se llega aca, nunca se pide geolocation ni se hace fetch.
-      mostrarEstado('error');
-      estadosEls.errorMensaje.textContent = 'No tenés permiso para usar esta función.';
-      return;
-    }
+    // Cerca Mio esta disponible para TODO usuario activo (no depende de
+    // ningun permiso de modulo, ver mapaLogic_calcularAccesos). Lo que SI
+    // depende de perfil/ne es poder abrir el mapa Pozos Provincia: sin ese
+    // acceso se ocultan "Ver todos en el mapa" y "Ver en mapa" por pozo
+    // (la busqueda, la lista y "Usar estos pozos" siguen funcionando).
+    estado.puedeVerMapa = mapaLogic_puedeVerProvincia(contexto.permisos);
+    btnVerTodosMapa.hidden = !estado.puedeVerMapa;
 
     cercaMioController_solicitarUbicacion(contexto, aperturaId);
   }
@@ -371,7 +371,9 @@
       contexto.onAbrirPozo(resultado.wellId);
     });
 
-    actions.appendChild(btnMapa);
+    if (estado.puedeVerMapa) {
+      actions.appendChild(btnMapa);
+    }
     actions.appendChild(btnAbrir);
     detalle.appendChild(actions);
     item.appendChild(detalle);

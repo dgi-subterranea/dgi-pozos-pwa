@@ -162,31 +162,47 @@ function mapaLogic_filtrarPorNE(pozos, wellIdSet, activo) {
 }
 
 // --- Navegacion entre los 2 mapas, segun permisos (arquitectura v2.2.0) ---
-// Centraliza la decision de que le corresponde ver al usuario al tocar
-// "Mapa de pozos" - la UNICA fuente de verdad para app.js (que boton/
-// pantalla mostrar) y para mapa.js/mapaNE.js (que boton "Volver" usar,
-// ver actualizarBotonesVolverMapa en app.js). ubicacion y ne son
-// permisos completamente independientes (nunca se infiere uno del otro -
-// mismo criterio de v2.1.0 aplicado ahora tambien a la navegacion, no
-// solo al dataset):
-//   ambos       -> 'selector'  (elegir Pozos Provincia o Niveles Estaticos)
-//   solo ubicacion -> 'provincia' (entra directo, sin selector ni NE)
-//   solo ne     -> 'ne'        (entra directo a Niveles Estaticos - el
-//                                mapa NE nunca depende de "ubicacion")
-//   ninguno     -> 'ninguno'   (sin acceso a ningun mapa)
+// MATRIZ DE ACCESO a modulos/pantallas - la UNICA fuente de verdad para
+// app.js (que botones del hub y tarjetas del selector mostrar), para
+// mapa.js/cercaMio.js (defensa en profundidad al abrir) y para el selector
+// de mapas. Reglas (decididas por producto):
+//   - Pozos cerca mio: todo usuario ACTIVO, sin depender de ningun permiso.
+//   - Mapa Pozos Provincia: perfil=SI (o ne=SI: quien ve Niveles Estaticos
+//     tambien ve las dos opciones en el selector).
+//   - Mapa Niveles Estaticos: solo ne=SI.
+//   - Selector de mapas ('selector'): cuando hay DOS opciones (ne=SI);
+//     'provincia' = entra directo a Provincia sin selector (perfil=SI,
+//     ne=NO); 'ninguno' = sin acceso a Mapas (perfil=NO y ne=NO).
+//   - Perfil/ITF: perfil=SI. Evaluacion/Reemplazo: reemplazo=SI.
+//   - datos y ubicacion NO deciden ninguno de estos accesos: siguen
+//     controlando solo su informacion protegida (ficha / ubicacion
+//     individual del pozo), en el backend y en el detalle del pozo.
+// Usuario inactivo (o sin sesion): todo cerrado, fail-closed.
+function mapaLogic_calcularAccesos(permisos, activo) {
+  if (!activo) {
+    return { cercaMio: false, mapas: 'ninguno', provincia: false, ne: false, itf: false, reemplazo: false };
+  }
+  var p = permisos || {};
+  var perfil = p.perfil === true;
+  var ne = p.ne === true;
+  return {
+    cercaMio: true,
+    mapas: ne ? 'selector' : (perfil ? 'provincia' : 'ninguno'),
+    provincia: perfil || ne,
+    ne: ne,
+    itf: perfil,
+    reemplazo: p.reemplazo === true
+  };
+}
+
+// Que le corresponde ver al usuario al tocar "Mapa de pozos" ('selector' |
+// 'provincia' | 'ninguno') - ver mapaLogic_calcularAccesos.
 function mapaLogic_determinarAccesoMapas(permisos) {
-  var ubicacion = !!(permisos && permisos.ubicacion);
-  var ne = !!(permisos && permisos.ne);
-  if (ubicacion && ne) {
-    return 'selector';
-  }
-  if (ubicacion) {
-    return 'provincia';
-  }
-  if (ne) {
-    return 'ne';
-  }
-  return 'ninguno';
+  return mapaLogic_calcularAccesos(permisos, true).mapas;
+}
+
+function mapaLogic_puedeVerProvincia(permisos) {
+  return mapaLogic_calcularAccesos(permisos, true).provincia;
 }
 
 // --- Busqueda dentro de los mapas (Etapa 1A) ---
@@ -703,6 +719,8 @@ if (typeof module !== 'undefined' && module.exports) {
     mapaLogic_setWellIdNE,
     mapaLogic_filtrarPorNE,
     mapaLogic_determinarAccesoMapas,
+    mapaLogic_calcularAccesos,
+    mapaLogic_puedeVerProvincia,
     mapaLogic_normalizarTexto,
     mapaLogic_indiceBusquedaPorWellId,
     mapaLogic_buscarPozosProvincia,

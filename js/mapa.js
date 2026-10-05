@@ -1390,11 +1390,10 @@
       ? 'Buscar pozo, NC16 o titular...'
       : 'Buscar número de pozo...';
 
-    if (!contexto.permisos || !contexto.permisos.ubicacion) {
+    if (!mapaLogic_puedeVerProvincia(contexto.permisos)) {
       // Defensa en profundidad: el boton de acceso (btn-abrir-mapa) ya
-      // deberia estar oculto sin este permiso (ver toggleAccesoMapa en
-      // app.js), pero si de todas formas se llega aca, nunca se dispara
-      // el fetch.
+      // deberia estar oculto sin perfil/ne (ver mapaLogic_calcularAccesos),
+      // pero si de todas formas se llega aca, nunca se dispara el fetch.
       mapaController_mostrarError(aperturaId, 'No tenés permiso para ver el mapa de pozos.');
       return;
     }

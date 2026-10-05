@@ -738,17 +738,36 @@ describe('handleGetMapaPozos', () => {
     expect(result.code).toBe('USER_DISABLED');
   });
 
-  // El caso central del diseño: getMapaPozos requiere "ubicacion", nunca
-  // "datos" - el dataset general no lleva ningun campo que dependa de
-  // "datos".
-  test('ubicacion=NO (aunque tenga "datos"): PERMISSION_DENIED, no consulta el servicio', () => {
-    mockValidSession();
-    global.hasPermission.mockImplementation((email, modulo) => modulo === 'datos');
+  // Cerca Mio es para TODO usuario activo y Pozos Provincia para
+  // perfil/ne: el dataset general ya no se gatea por un permiso de modulo
+  // (antes "ubicacion"), alcanza con sesion valida + usuario activo.
+  test.each([
+    ['ningun permiso funcional (solo activo)', {}],
+    ['solo perfil', { perfil: true }],
+    ['solo ne', { ne: true }],
+    ['solo reemplazo', { reemplazo: true }],
+    ['solo datos', { datos: true }],
+    ['ubicacion=NO con todo lo demas en SI', { perfil: true, datos: true, ne: true, reemplazo: true }]
+  ])('usuario activo con %s: OK, sin consultar permisos de modulo', (nombre, permisos) => {
+    global.verifySessionToken.mockReturnValue({ valid: true, email: 'user@example.com' });
+    global.isUserActive.mockReturnValue(true);
+    global.hasPermission.mockImplementation((email, modulo) => !!permisos[modulo]);
+    global.mapaService_getPozos.mockReturnValue({ found: true, pozos: [{ wellId: '04-0263', lat: -32.8, lon: -68.7, estado: 'C' }], metadata: null });
 
     const result = Api.handleGetMapaPozos('token-valido');
 
-    expect(result.status).toBe('error');
-    expect(result.code).toBe('PERMISSION_DENIED');
+    expect(result.status).toBe('ok');
+    expect(global.hasPermission).not.toHaveBeenCalled();
+  });
+
+  test('usuario INACTIVO: USER_DISABLED aunque tenga todos los permisos (fail-closed), no consulta el servicio', () => {
+    global.verifySessionToken.mockReturnValue({ valid: true, email: 'user@example.com' });
+    global.isUserActive.mockReturnValue(false);
+    global.hasPermission.mockReturnValue(true);
+
+    const result = Api.handleGetMapaPozos('token-valido');
+
+    expect(result.code).toBe('USER_DISABLED');
     expect(global.mapaService_getPozos).not.toHaveBeenCalled();
   });
 

@@ -155,6 +155,9 @@
     bandejaEl.hidden = n === 0;
     document.body.classList.toggle('con-bandeja', n > 0);
     bandejaContadorEl.textContent = n + ' pozo' + (n === 1 ? '' : 's') + ' seleccionado' + (n === 1 ? '' : 's');
+    // "Ver en mapa" abre Pozos Provincia: solo con perfil=SI o ne=SI.
+    var ctx = obtenerContextoSeguro();
+    btnVerMapaEl.hidden = !!ctx && !mapaLogic_puedeVerProvincia(ctx.permisos);
     medirBandeja();
   }
 
@@ -519,12 +522,14 @@
     }
     acciones.appendChild(btnItfFila);
 
-    var btnMapa = document.createElement('button');
-    btnMapa.type = 'button';
-    btnMapa.className = 'button-secondary';
-    btnMapa.textContent = 'Mapa';
-    btnMapa.addEventListener('click', function () { contexto.onVerEnMapa(fila.wellId); });
-    acciones.appendChild(btnMapa);
+    if (mapaLogic_puedeVerProvincia(contexto.permisos)) {
+      var btnMapa = document.createElement('button');
+      btnMapa.type = 'button';
+      btnMapa.className = 'button-secondary';
+      btnMapa.textContent = 'Mapa';
+      btnMapa.addEventListener('click', function () { contexto.onVerEnMapa(fila.wellId); });
+      acciones.appendChild(btnMapa);
+    }
 
     // Evaluacion / Reemplazo (solo con reemplazo=SI): abre el modulo sobre
     // este wellId. No carga ningun estado aca (nada de badges masivos).
