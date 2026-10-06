@@ -1095,6 +1095,151 @@
     </div>
   </div>
 
+  <!-- Galeria general de fotos de un pozo / punto NE (FotosPozos v1; separada
+       de las fotos de Reemplazos). Controlador: js/fotosPozos.js. Sin fotos=SI
+       no se pide ni se muestra galeria ni contador; sin fotos_carga=SI no hay
+       "Agregar foto". Volver regresa a la pantalla desde la que se abrio
+       (ver abrirFotos en app.js). -->
+  <div id="screen-fotos" class="screen" hidden>
+    <div class="tv-topbar tv-topbar-fija">
+      <button type="button" id="btn-fotos-volver" class="tv-volver">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+        Volver
+      </button>
+    </div>
+    <div class="tv-header">
+      <div>
+        <p id="fotos-entidad" class="mapa-titulo mono"></p>
+        <p class="tv-header-label">Fotos del pozo</p>
+      </div>
+    </div>
+
+    <div id="fotos-cargando" class="mapa-loading reemplazo-cargando" hidden>
+      <span class="spinner" aria-hidden="true"></span>
+      <span>Cargando fotos...</span>
+    </div>
+    <div id="fotos-error" class="reemplazo-bloque" hidden>
+      <p id="fotos-error-texto" class="error-message"></p>
+      <button type="button" id="btn-fotos-reintentar" class="button-secondary">Reintentar</button>
+    </div>
+
+    <div id="fotos-contenido" class="fotos-contenido" hidden>
+      <div class="fotos-cabecera">
+        <p id="fotos-contador" class="fotos-contador" hidden></p>
+        <button type="button" id="btn-fotos-agregar" class="button fotos-agregar" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.5"/></svg>
+          Agregar foto
+        </button>
+      </div>
+      <p id="fotos-sin-ver" class="fotos-nota" hidden>Podés cargar fotos de este pozo. Tu perfil no incluye ver la galería.</p>
+      <p id="fotos-exito" class="reemplazo-exito" role="status" hidden></p>
+
+      <div id="fotos-subida" class="reemplazo-subida" role="status" hidden>
+        <p id="fotos-subida-titulo" class="reemplazo-subida-titulo"></p>
+        <div id="fotos-subida-lista" class="reemplazo-subida-lista"></div>
+      </div>
+
+      <form id="fotos-form" class="reemplazo-form fotos-form" autocomplete="off" hidden>
+        <h2 class="reemplazo-form-titulo">Agregar fotos</h2>
+
+        <fieldset class="reemplazo-campo">
+          <legend>Fotos <span class="reemplazo-opcional">(hasta 10 por vez)</span></legend>
+          <div class="reemplazo-fotos-botones">
+            <button type="button" id="btn-fotos-camara" class="button-secondary">Tomar foto</button>
+            <button type="button" id="btn-fotos-galeria" class="button-secondary">Elegir de galería</button>
+          </div>
+          <input type="file" id="input-fotos-camara" accept="image/*" capture="environment" hidden>
+          <input type="file" id="input-fotos-galeria" accept="image/*" multiple hidden>
+          <div id="fotos-previews" class="reemplazo-fotos-previews"></div>
+          <p id="fotos-err-archivos" class="error-message" hidden></p>
+        </fieldset>
+
+        <div class="reemplazo-campo">
+          <label for="input-fotos-fecha">Fecha de la foto</label>
+          <input id="input-fotos-fecha" type="date">
+          <label class="fotos-check" for="chk-fotos-fecha-desconocida">
+            <input id="chk-fotos-fecha-desconocida" type="checkbox"> No sé la fecha
+          </label>
+          <p id="fotos-err-fecha" class="error-message" hidden></p>
+        </div>
+
+        <div class="reemplazo-campo">
+          <label for="select-fotos-tipo">Tipo de foto</label>
+          <select id="select-fotos-tipo">
+            <option value="OTRA">Otra</option>
+            <option value="CERCA">De cerca</option>
+            <option value="PANORAMICA">Panorámica</option>
+          </select>
+        </div>
+
+        <div id="fotos-grupo-fuente" class="reemplazo-campo" hidden>
+          <label for="select-fotos-fuente">Origen</label>
+          <select id="select-fotos-fuente"></select>
+        </div>
+
+        <div class="reemplazo-campo">
+          <label for="fotos-observacion">Observación <span class="reemplazo-opcional">(opcional)</span></label>
+          <textarea id="fotos-observacion" rows="2" maxlength="140" placeholder="Ej: brocal y cañería"></textarea>
+          <p id="fotos-observacion-contador" class="fotos-contador-obs">0/140</p>
+          <p id="fotos-err-observacion" class="error-message" hidden></p>
+        </div>
+
+        <div class="reemplazo-campo">
+          <label class="fotos-check" for="chk-fotos-gps">
+            <input id="chk-fotos-gps" type="checkbox"> Guardar ubicación de esta foto
+          </label>
+          <p class="fotos-nota">La ubicación es solo evidencia de campo: no modifica la coordenada oficial del pozo. Si no se puede obtener, las fotos se suben igual.</p>
+          <p id="fotos-gps-estado" class="fotos-nota" role="status" hidden></p>
+        </div>
+
+        <div class="reemplazo-form-acciones">
+          <button type="submit" id="btn-fotos-subir" class="button" disabled>Subir foto</button>
+          <button type="button" id="btn-fotos-cancelar" class="button-secondary">Cancelar</button>
+        </div>
+      </form>
+
+      <section id="fotos-galeria" class="fotos-galeria" aria-label="Galería de fotos" hidden>
+        <div id="fotos-filtros" class="fotos-filtros" hidden>
+          <label class="fotos-filtro">Fuente
+            <select id="select-fotos-filtro-fuente"></select>
+          </label>
+          <label class="fotos-filtro">Año
+            <select id="select-fotos-filtro-anio"></select>
+          </label>
+          <label class="fotos-filtro">Tipo
+            <select id="select-fotos-filtro-tipo"></select>
+          </label>
+          <button type="button" id="btn-fotos-limpiar-filtros" class="button-link" hidden>Limpiar filtros</button>
+        </div>
+        <p id="fotos-vacio" class="fotos-nota" hidden></p>
+        <div id="fotos-grilla" class="fotos-grilla"></div>
+      </section>
+    </div>
+  </div>
+
+  <!-- Visor de la galeria de fotos de pozos: la imagen completa se pide al
+       abrir y al pasar a la anterior/siguiente (por el proxy del backend). -->
+  <div id="fotos-visor-overlay" class="reemplazo-visor" role="dialog" aria-modal="true" aria-label="Foto del pozo" hidden>
+    <div class="reemplazo-visor-barra">
+      <span id="fotos-visor-contador" class="reemplazo-visor-contador"></span>
+      <button type="button" id="btn-fotos-visor-cerrar" class="reemplazo-visor-cerrar" aria-label="Cerrar">&times;</button>
+    </div>
+    <div class="reemplazo-visor-escenario">
+      <button type="button" id="btn-fotos-visor-anterior" class="reemplazo-visor-nav" aria-label="Foto anterior">&#8249;</button>
+      <div class="reemplazo-visor-imagen-caja">
+        <span id="fotos-visor-cargando" class="spinner" aria-hidden="true"></span>
+        <p id="fotos-visor-error" class="reemplazo-visor-error" hidden></p>
+        <img id="fotos-visor-img" class="reemplazo-visor-img" alt="Foto del pozo" hidden>
+      </div>
+      <button type="button" id="btn-fotos-visor-siguiente" class="reemplazo-visor-nav" aria-label="Foto siguiente">&#8250;</button>
+    </div>
+    <div class="fotos-visor-meta">
+      <p id="fotos-visor-fecha" class="fotos-visor-fecha"></p>
+      <p id="fotos-visor-detalle" class="fotos-visor-detalle"></p>
+      <p id="fotos-visor-obs" class="fotos-visor-obs" hidden></p>
+    </div>
+  </div>
+
   <!-- Confirmacion antes de guardar (la evaluacion es append-only: no se
        puede editar ni borrar despues). -->
   <div id="reemplazo-confirmar-overlay" class="seleccion-confirmar-overlay" hidden>
@@ -1171,7 +1316,11 @@
   <script src="js/seleccion.js"></script>
   <script src="js/reemplazoLogic.js"></script>
   <script src="js/reemplazoFotosLogic.js"></script>
+  <script src="js/fotosImagen.js"></script>
   <script src="js/reemplazoFotos.js"></script>
+  <script src="js/fotosPozosLogic.js"></script>
+  <script src="js/fotosPozosResumen.js"></script>
+  <script src="js/fotosPozos.js"></script>
   <script src="js/reemplazo.js"></script>
   <script src="js/app.js"></script>
   <!-- Va DESPUES de app.js en el documento a proposito, para que

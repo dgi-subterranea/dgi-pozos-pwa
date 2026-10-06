@@ -326,6 +326,26 @@ function mapaShared_crearMarkerNE(punto, contexto) {
     el.appendChild(btnReemplazo);
   }
 
+  // "Fotos": galeria general / carga de fotos del punto (FotosPozos). Solo si el
+  // contexto la ofrece (fotos=SI o fotos_carga=SI). El contador sale del resumen
+  // compartido (contexto.cantidadFotos, null si no hay permiso de ver) y se
+  // refresca al abrir el popup, asi refleja fotos recien cargadas.
+  if (typeof contexto.onVerFotos === 'function') {
+    var btnFotos = document.createElement('button');
+    btnFotos.type = 'button';
+    btnFotos.className = 'button mapa-popup-btn mapa-popup-btn-secundario';
+    var etiquetaFotos = function () {
+      var n = typeof contexto.cantidadFotos === 'function' ? contexto.cantidadFotos(punto) : null;
+      btnFotos.textContent = n > 0 ? 'Fotos (' + n + ')' : 'Fotos';
+    };
+    etiquetaFotos();
+    btnFotos.addEventListener('click', function () {
+      contexto.onVerFotos(punto);
+    });
+    marker.on('popupopen', etiquetaFotos);
+    el.appendChild(btnFotos);
+  }
+
   marker.bindPopup(el);
   return marker;
 }

@@ -21,6 +21,7 @@
     seleccionTabla: document.getElementById('screen-seleccion-tabla'),
     seleccionItf: document.getElementById('screen-seleccion-itf'),
     reemplazo: document.getElementById('screen-reemplazo'),
+    fotos: document.getElementById('screen-fotos'),
     disabled: document.getElementById('screen-disabled'),
     offline: document.getElementById('screen-offline')
   };
@@ -163,7 +164,7 @@
   // permiso. Se usan solo para decidir que fetch conviene ni siquiera
   // disparar - el backend vuelve a validar cada uno igual, esto es una
   // optimizacion de red, no el limite de seguridad real.
-  var permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false };
+  var permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false };
 
   var ICON_PERFIL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5.5-5.5L11 15l-3-3-4.5 4.5"/></svg>';
   var ICON_DATOS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>';
@@ -171,7 +172,8 @@
   var ICON_UBICACION_WARN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s7-7.2 7-12a7 7 0 10-14 0c0 4.8 7 12 7 12z"/><path d="M12 7v5M12 15h.01"/></svg>';
   var ICON_NE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 17l5-6 4 3 4-7 5 5"/><path d="M3 21h18" stroke-linecap="round"/></svg>';
   var ICON_REEMPLAZO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-  var ICON_MAPS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 20l-5-2V5l5 2 6-2 5 2v13l-5-2-6 2z"/></svg>';
+  var ICON_FOTOS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h3l2-3h6l2 3h3v11H4z" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.5"/></svg>';
+  var ICON_MAPS ='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 20l-5-2V5l5 2 6-2 5 2v13l-5-2-6 2z"/></svg>';
   var ICON_SEARCH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>';
   var ICON_CLOSE = '<svg viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
 
@@ -264,6 +266,11 @@
     if (permisosActuales.reemplazo) {
       modulos.push({ id: 'reemplazo', titulo: 'Evaluar reemplazo', desc: 'Estado y evaluaciones', icono: ICON_REEMPLAZO });
     }
+    // Fotos del pozo (galeria general, FotosPozos): con fotos=SI (ver) y/o
+    // fotos_carga=SI (cargar). Independiente de reemplazo y de los demas modulos.
+    if (puedeFotos()) {
+      modulos.push({ id: 'fotos', titulo: 'Fotos', desc: descFotosHub(pozo.wellId), icono: ICON_FOTOS });
+    }
 
     // Cantidad impar (>1) de tarjetas: la ultima ocupa todo el ancho en vez
     // de dejar un hueco al lado (ver .hub-grid.n3).
@@ -291,6 +298,34 @@
         abrirModulo(btn.getAttribute('data-modulo'));
       });
     });
+
+    // El contador de la tarjeta Fotos sale del resumen batch (una sola llamada,
+    // con cache). Sin fotos=SI no se llama a nada (cargar() devuelve null).
+    if (permisosActuales.fotos) {
+      var wellIdFotos = pozo.wellId;
+      fotosPozosResumenController_cargar().then(function () {
+        var desc = hubArea.querySelector('.hub-card[data-modulo="fotos"] .hub-card-cd');
+        if (desc && pozoActual && pozoActual.wellId === wellIdFotos) {
+          desc.textContent = descFotosHub(wellIdFotos);
+        }
+      });
+    }
+  }
+
+  function puedeFotos() {
+    return permisosActuales.fotos === true || permisosActuales.fotos_carga === true;
+  }
+
+  // Texto de la tarjeta Fotos del hub. Sin fotos=SI nunca se dice si hay fotos.
+  function descFotosHub(wellId) {
+    if (!permisosActuales.fotos) {
+      return 'Cargar fotos del pozo';
+    }
+    var n = fotosPozosResumenController_cantidadDe(wellId);
+    if (n === null) {
+      return 'Galería y carga de fotos';
+    }
+    return n > 0 ? fotosPozosLogic_textoContador(n) : 'Sin fotos todavía';
   }
 
   function abrirModulo(id) {
@@ -315,6 +350,8 @@
       // ofrece como punto NE de referencia, editable en el formulario.
       var puntoNE = pozoActual.ne && pozoActual.ne.found && pozoActual.ne.data ? (pozoActual.ne.data.monitoringId || '') : '';
       abrirReemplazo({ wellId: pozoActual.wellId, puntoNEReferencia: puntoNE });
+    } else if (id === 'fotos') {
+      abrirFotos(fotosPozosLogic_entidadDePozo(pozoActual));
     }
   }
 
@@ -1102,7 +1139,32 @@
       html += '<button type="button" id="btn-ne-buscar-reemplazo" class="button-secondary ne-buscar-reemplazo">Buscar reemplazo cerca de este punto</button>';
     }
 
+    // Fotos del punto (galeria general; con numero de pozo es la misma que la de
+    // Provincia). Visible con fotos=SI y/o fotos_carga=SI.
+    var entidadFotosNE = puedeFotos() ? fotosPozosLogic_entidadDePuntoNE(punto) : null;
+    if (entidadFotosNE) {
+      html += '<hr class="divider">';
+      html += '<button type="button" id="btn-ne-fotos" class="button-secondary ne-fotos">' + ICON_FOTOS + '<span id="btn-ne-fotos-texto"></span></button>';
+    }
+
     neContent.innerHTML = html;
+    if (entidadFotosNE) {
+      var btnFotosNE = document.getElementById('btn-ne-fotos');
+      var textoFotosNE = document.getElementById('btn-ne-fotos-texto');
+      var etiquetarFotosNE = function () {
+        var n = permisosActuales.fotos ? fotosPozosResumenController_cantidadDe(fotosPozosLogic_claveEntidad(entidadFotosNE)) : null;
+        textoFotosNE.textContent = n > 0 ? 'Fotos (' + n + ')' : 'Fotos';
+      };
+      etiquetarFotosNE();
+      if (permisosActuales.fotos) {
+        fotosPozosResumenController_cargar().then(function () {
+          if (document.body.contains(textoFotosNE)) { etiquetarFotosNE(); }
+        });
+      }
+      btnFotosNE.addEventListener('click', function () {
+        abrirFotos(entidadFotosNE);
+      });
+    }
     var btnBuscarReemplazoNE = document.getElementById('btn-ne-buscar-reemplazo');
     if (btnBuscarReemplazoNE) {
       btnBuscarReemplazoNE.addEventListener('click', function () {
@@ -1196,9 +1258,12 @@
     localStorage.removeItem('sessionToken');
     sessionToken = null;
     currentEmail = null;
-    permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false };
+    permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false };
     // el resumen de aptitud no sobrevive a la sesion
     reemplazoEstadosController_reset();
+    // ni el resumen de fotos, la galeria abierta o la cola de subida
+    fotosPozosResumenController_reset();
+    fotosPozosController_reset();
     toggleAccesosUbicacion();
     if (gsiLoaded) {
       // Sin esto, auto_select podria volver a loguear silenciosamente a
@@ -1428,8 +1493,18 @@
       // reemplazo=SI no se pasa la accion y el popup no muestra el boton.
       onBuscarReemplazo: buscarReemplazoLogic_puedeBuscar(permisosActuales)
         ? function (monitoringId) { abrirBuscarReemplazo(monitoringId); }
+        : undefined,
+      // Popup de un punto NE: "Fotos" (galeria / carga) solo con fotos=SI y/o
+      // fotos_carga=SI; el contador solo con fotos=SI (resumen compartido).
+      onVerFotos: puedeFotos()
+        ? function (punto) { abrirFotos(fotosPozosLogic_entidadDePuntoNE(punto)); }
+        : undefined,
+      cantidadFotos: permisosActuales.fotos
+        ? function (punto) { return fotosPozosResumenController_cantidadDe(fotosPozosLogic_claveEntidad(fotosPozosLogic_entidadDePuntoNE(punto))); }
         : undefined
     });
+    // Resumen precargado para que los popups ya muestren el contador (sin fotos=SI no llama a nada)
+    fotosPozosResumenController_cargar();
   }
 
   // Boton principal "Mapa de pozos" del hub: el UNICO punto que consulta
@@ -1521,6 +1596,10 @@
       onEvaluarReemplazo: function (wellId) {
         abrirReemplazo({ wellId: wellId });
       },
+      // "Fotos" del pozo (solo con fotos=SI; sin permiso no se pasa la accion)
+      onVerFotos: permisosActuales.fotos === true
+        ? function (wellId) { abrirFotos({ wellId: wellId, monitoringId: '', etiqueta: wellId, esNE: false }); }
+        : undefined,
       // La busqueda radial ya quedo publicada como vista previa
       // (cercaMioController_publicarVistaPrevia) - el mapa dibuja punto,
       // circulo y pozos desde ahi, aca solo se pide encuadrarla.
@@ -1674,6 +1753,11 @@
       onEvaluarReemplazo: function (wellId, puntoNE) {
         abrirReemplazo({ wellId: wellId, puntoNEReferencia: puntoNE });
       },
+      // "Fotos" de un candidato: solo si el contexto trae la accion (fotos=SI).
+      // El contador sale del resumen compartido (sin fotos=SI no hay llamada).
+      onVerFotos: permisosActuales.fotos === true
+        ? function (wellId) { abrirFotos({ wellId: wellId, monitoringId: '', etiqueta: wellId, esNE: false }); }
+        : undefined,
       onSessionExpired: function () {
         logout();
       }
@@ -1684,6 +1768,61 @@
     buscarReemplazoController_cerrar();
     restaurarPantalla(buscarReemplazoOrigen);
   });
+
+  // --- Fotos de pozos (galeria general + carga desde campo) ---
+  // Recuerda la pantalla de origen (ficha NE, hub, mapa NE, Buscar reemplazo,
+  // Cerca Mio): Volver regresa AHI. Sin fotos=SI ni fotos_carga=SI no se abre.
+  var fotosOrigen = { pantalla: 'main', scrollY: 0 };
+
+  function abrirFotos(entidad) {
+    if (!entidad || !puedeFotos()) {
+      return;       // defensa en profundidad: el backend vuelve a validar cada accion
+    }
+    if (pantallaActual !== 'fotos') {
+      fotosOrigen = { pantalla: pantallaActual, scrollY: window.scrollY };
+    }
+    showScreen('fotos');
+    fotosPozosController_abrir(entidad);
+  }
+
+  fotosPozosController_inicializar(function () {
+    return {
+      sessionToken: sessionToken,
+      permisos: permisosActuales,
+      onSessionExpired: function () {
+        logout();
+      }
+    };
+  });
+
+  // Resumen de fotos compartido (hub, ficha NE, popup NE, Buscar reemplazo, Cerca
+  // Mio): sin fotos=SI (permisosActuales) no hace ninguna llamada.
+  fotosPozosResumenController_inicializar(function () {
+    return { sessionToken: sessionToken, permisos: permisosActuales };
+  });
+
+  document.getElementById('btn-fotos-volver').addEventListener('click', function () {
+    fotosPozosController_cerrar();
+    restaurarPantalla(fotosOrigen);
+    // el contador del origen pudo cambiar (fotos cargadas): se repinta
+    repintarContadoresFotos();
+  });
+
+  // Repinta los contadores de fotos de la pantalla a la que se vuelve
+  function repintarContadoresFotos() {
+    if (!permisosActuales.fotos) {
+      return;
+    }
+    if (pozoActual && screens.main && !screens.main.hidden) {
+      var desc = hubArea.querySelector('.hub-card[data-modulo="fotos"] .hub-card-cd');
+      if (desc) { desc.textContent = descFotosHub(pozoActual.wellId); }
+    }
+    if (pozoActual && !screens.ne.hidden && pozoActual.ne && pozoActual.ne.found) {
+      renderNE(pozoActual.ne.data);
+    }
+    // Buscar reemplazo y Cerca Mio ya se retoman en restaurarPantalla (reanudar)
+    // y releen el resumen compartido al repintarse.
+  }
 
   // --- Evaluacion / Reemplazo ---
   // Mismo patron que Ver informacion/ITF: recuerda la pantalla de origen

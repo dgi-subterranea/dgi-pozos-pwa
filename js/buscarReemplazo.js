@@ -126,10 +126,14 @@
     // Los 3 datasets son cache de sesion compartida; el de aptitud no hace
     // ninguna llamada sin reemplazo=SI y nunca rechaza.
     var pResumen = reemplazoEstadosController_cargar();
+    // Contador de fotos: una llamada batch con cache; sin fotos=SI no llama a nada
+    // y nunca rechaza (si falla, simplemente no hay contadores).
+    var pFotos = fotosPozosResumenController_cargar();
     Promise.all([
       mapaNEDataset_obtener(contexto.sessionToken),
       mapaDataset_obtener(contexto.sessionToken),
-      pResumen
+      pResumen,
+      pFotos
     ]).then(function (resultados) {
       if (aperturaId !== estado.aperturaId) { return; }
       var rNE = resultados[0];
@@ -300,6 +304,11 @@
     if (estadoReemplazo) {
       cabecera.appendChild(crearEl('span', 'reemplazo-badge reemplazo-badge-' + reemplazoLogic_claseEstado(estadoReemplazo), reemplazoResumenLogic_etiqueta(estadoReemplazo)));
     }
+    // Contador de fotos (FotosPozos): solo con fotos=SI y si el pozo tiene fotos
+    var chipFotos = typeof ctx.onVerFotos === 'function' ? fotosPozosController_crearChip(c.wellId, ctx.onVerFotos) : null;
+    if (chipFotos) {
+      cabecera.appendChild(chipFotos);
+    }
     cabecera.appendChild(crearEl('span', 'bre-item-dist', buscarReemplazoLogic_formatearDistancia(c.distanciaMetros)));
     item.appendChild(cabecera);
 
@@ -456,7 +465,7 @@
     if (!estado.ref || contenidoEl.hidden) { return; }
     pintar(true);
     var aperturaId = estado.aperturaId;
-    reemplazoEstadosController_cargar().then(function () {
+    Promise.all([reemplazoEstadosController_cargar(), fotosPozosResumenController_cargar()]).then(function () {
       if (aperturaId === estado.aperturaId && !contenidoEl.hidden) { pintar(true); }
     });
   }

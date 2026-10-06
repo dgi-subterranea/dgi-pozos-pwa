@@ -209,7 +209,8 @@
     // red, ver requisito de offline de la Etapa 5C-3).
     // Aptitud para reemplazo: UNA llamada batch (o cache), solo con
     // reemplazo=SI; sin permiso no hace ninguna llamada. Nunca rechaza.
-    var pResumen = reemplazoEstadosController_cargar();
+    // Contador de fotos: idem, una llamada batch con cache y solo con fotos=SI.
+    var pResumen = Promise.all([reemplazoEstadosController_cargar(), fotosPozosResumenController_cargar()]);
     mapaDataset_obtener(contexto.sessionToken).then(function (result) {
       return pResumen.then(function () { return result; });
     }).then(function (result) {
@@ -410,6 +411,11 @@
       badgeEl.textContent = reemplazoResumenLogic_etiqueta(estadoReemplazo);
       main.appendChild(badgeEl);
     }
+    // Contador de fotos (FotosPozos): solo con fotos=SI y si el pozo tiene fotos
+    var chipFotos = typeof contexto.onVerFotos === 'function' ? fotosPozosController_crearChip(resultado.wellId, contexto.onVerFotos) : null;
+    if (chipFotos) {
+      main.appendChild(chipFotos);
+    }
     main.appendChild(distEl);
     main.appendChild(chevEl);
     item.appendChild(main);
@@ -525,7 +531,7 @@
     if (estado.contextoActual && !estadosEls.resultados.hidden) {
       cercaMioController_pintarResultados(estado.contextoActual);
       var aperturaId = estado.aperturaId;
-      reemplazoEstadosController_cargar().then(function () {
+      Promise.all([reemplazoEstadosController_cargar(), fotosPozosResumenController_cargar()]).then(function () {
         if (aperturaId === estado.aperturaId && !estadosEls.resultados.hidden) {
           cercaMioController_pintarResultados(estado.contextoActual);
         }

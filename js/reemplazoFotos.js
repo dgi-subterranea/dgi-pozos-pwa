@@ -69,99 +69,10 @@
   // 1) Seleccion + compresion en el navegador
   // =====================================================================
 
-  // Decodifica respetando la orientacion EXIF (fotos de celular tomadas en
-  // vertical). createImageBitmap con 'from-image'; si el navegador no lo
-  // soporta, <img> (los navegadores modernos tambien la respetan).
-  function decodificarConImg(archivo) {
-    return new Promise(function (resolve, reject) {
-      var url = URL.createObjectURL(archivo);
-      var img = new Image();
-      img.onload = function () {
-        resolve({ fuente: img, ancho: img.naturalWidth, alto: img.naturalHeight, liberar: function () { URL.revokeObjectURL(url); } });
-      };
-      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('DECODIFICAR')); };
-      img.src = url;
-    });
-  }
-
-  function decodificar(archivo) {
-    if (typeof createImageBitmap !== 'function') {
-      return decodificarConImg(archivo);
-    }
-    return createImageBitmap(archivo, { imageOrientation: 'from-image' })
-      .catch(function () { return createImageBitmap(archivo); })
-      .then(function (bmp) {
-        return { fuente: bmp, ancho: bmp.width, alto: bmp.height, liberar: function () { if (bmp.close) { bmp.close(); } } };
-      })
-      .catch(function () { return decodificarConImg(archivo); });
-  }
-
-  function dibujarABlob(decodificada, dimMax, calidad) {
-    var d = reemplazoFotosLogic_dimensiones(decodificada.ancho, decodificada.alto, dimMax);
-    var canvas = document.createElement('canvas');
-    canvas.width = d.ancho;
-    canvas.height = d.alto;
-    var ctx = canvas.getContext('2d');
-    // Fondo blanco: un PNG con transparencia no debe salir negro en JPEG.
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, d.ancho, d.alto);
-    ctx.drawImage(decodificada.fuente, 0, 0, d.ancho, d.alto);
-    return new Promise(function (resolve, reject) {
-      canvas.toBlob(function (blob) {
-        canvas.width = 0; canvas.height = 0;
-        if (blob) { resolve(blob); } else { reject(new Error('DECODIFICAR')); }
-      }, 'image/jpeg', calidad);
-    });
-  }
-
-  function blobABase64(blob) {
-    return new Promise(function (resolve, reject) {
-      var lector = new FileReader();
-      lector.onload = function () { resolve(reemplazoFotosLogic_base64DeDataUrl(lector.result)); };
-      lector.onerror = function () { reject(new Error('DECODIFICAR')); };
-      lector.readAsDataURL(blob);
-    });
-  }
-
-  // Foto completa a 1600 px bajando la calidad solo si hace falta (escalera
-  // 0.72 -> 0.62 -> 0.52), mas la miniatura de 256 px. {base64, bytes,
-  // thumbBase64, thumbBytes, ancho, alto, calidad}.
-  function comprimir(archivo) {
-    return decodificar(archivo).then(function (dec) {
-      var resultado = {};
-      function intentar(calidad) {
-        return dibujarABlob(dec, REEMPLAZO_FOTOS_MAX_DIM, calidad).then(function (blob) {
-          var siguiente = reemplazoFotosLogic_siguienteCalidad(calidad, blob.size);
-          if (siguiente !== null) {
-            return intentar(siguiente);
-          }
-          if (blob.size > REEMPLAZO_FOTOS_OBJETIVO_BYTES) {
-            throw new Error('COMPRIMIR_GRANDE');
-          }
-          resultado.bytes = blob.size;
-          resultado.calidad = calidad;
-          var d = reemplazoFotosLogic_dimensiones(dec.ancho, dec.alto, REEMPLAZO_FOTOS_MAX_DIM);
-          resultado.ancho = d.ancho;
-          resultado.alto = d.alto;
-          return blobABase64(blob);
-        });
-      }
-      return intentar(REEMPLAZO_FOTOS_CALIDADES[0]).then(function (b64) {
-        resultado.base64 = b64;
-        return dibujarABlob(dec, REEMPLAZO_FOTOS_THUMB_DIM, 0.6);
-      }).then(function (thumb) {
-        resultado.thumbBytes = thumb.size;
-        return blobABase64(thumb);
-      }).then(function (thumbB64) {
-        resultado.thumbBase64 = thumbB64;
-        dec.liberar();
-        return resultado;
-      }, function (err) {
-        dec.liberar();
-        throw err;
-      });
-    });
-  }
+  // La compresion (decodificar respetando la orientacion, 1600 px, escalera de
+  // calidad, miniatura) vive en js/fotosImagen.js, compartida con la galeria
+  // general de pozos (fotosImagen_comprimir): una sola implementacion.
+  var comprimir = fotosImagen_comprimir;
 
   function mostrarErrorFotos(texto) {
     errorFotosEl.textContent = texto || '';

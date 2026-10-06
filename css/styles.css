@@ -3767,3 +3767,193 @@ body.con-bandeja {
     width: 112px;
   }
 }
+
+/* --- FotosPozos v1: galeria general de fotos de un pozo / punto NE --- */
+.fotos-contenido {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 0 16px 24px;
+}
+.fotos-cabecera {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.fotos-contador {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 800;
+  color: var(--color-text);
+}
+.fotos-agregar {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.fotos-agregar svg {
+  width: 20px;
+  height: 20px;
+}
+.fotos-nota {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--color-text-soft);
+}
+.fotos-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.fotos-check input {
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+.fotos-contador-obs {
+  margin: 2px 0 0;
+  text-align: right;
+  font-size: 0.74rem;
+  color: var(--color-text-faint);
+}
+.fotos-galeria {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.fotos-filtros {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+.fotos-filtro {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1 1 120px;
+  min-width: 0;
+  font-size: 0.74rem;
+  font-weight: 800;
+  color: var(--color-text-soft);
+}
+.fotos-filtro select {
+  min-height: 40px;
+  font-size: 0.88rem;
+}
+.fotos-grilla {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.fotos-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.fotos-thumb {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  min-height: 0;
+  padding: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1.5px solid var(--color-border);
+  background: var(--color-border-soft);
+  box-shadow: none;
+}
+.fotos-thumb:hover {
+  background: var(--color-border-soft);
+}
+.fotos-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.fotos-thumb.cargada img {
+  opacity: 1;
+}
+.fotos-thumb.error::after {
+  content: '!';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  color: var(--color-error);
+}
+.fotos-item-fecha {
+  margin: 4px 0 0;
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+.fotos-item-detalle {
+  margin: 0;
+  font-size: 0.76rem;
+  color: var(--color-text-soft);
+}
+.fotos-item-obs {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+.fotos-visor-meta {
+  padding: 0 16px calc(14px + env(safe-area-inset-bottom, 0px));
+  text-align: center;
+}
+.fotos-visor-meta p {
+  margin: 0;
+}
+.fotos-visor-fecha {
+  font-size: 0.95rem;
+  font-weight: 800;
+}
+.fotos-visor-detalle {
+  font-size: 0.82rem;
+  color: #c9d4da;
+}
+.fotos-visor-obs {
+  margin-top: 4px !important;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+/* chip del contador de fotos en cards/resultados (hub, Buscar reemplazo, Cerca Mio) */
+.fotos-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1.5px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-primary);
+  font-size: 0.78rem;
+  font-weight: 800;
+  box-shadow: none;
+}
+.fotos-chip svg {
+  width: 15px;
+  height: 15px;
+}
+.fotos-chip:hover {
+  background: var(--color-primary-tint);
+}
+
+@media (min-width: 640px) {
+  .fotos-grilla {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
