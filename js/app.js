@@ -17,6 +17,7 @@
     mapa: document.getElementById('screen-mapa'),
     mapaNE: document.getElementById('screen-mapa-ne'),
     cercaMio: document.getElementById('screen-cerca-mio'),
+    buscarReemplazo: document.getElementById('screen-buscar-reemplazo'),
     seleccionTabla: document.getElementById('screen-seleccion-tabla'),
     seleccionItf: document.getElementById('screen-seleccion-itf'),
     reemplazo: document.getElementById('screen-reemplazo'),
@@ -1093,7 +1094,21 @@
       html += '</div></div>';
     }
 
+    // Buscar reemplazo: solo con coordenada propia (es la referencia de la
+    // busqueda, nunca la de Provincia).
+    // y solo con reemplazo=SI (es una accion del modulo de reemplazos).
+    if (buscarReemplazoLogic_puedeBuscar(permisosActuales) && punto.coordenadas && punto.coordenadas.lat !== undefined && punto.coordenadas.lat !== null) {
+      html += '<hr class="divider">';
+      html += '<button type="button" id="btn-ne-buscar-reemplazo" class="button-secondary ne-buscar-reemplazo">Buscar reemplazo cerca de este punto</button>';
+    }
+
     neContent.innerHTML = html;
+    var btnBuscarReemplazoNE = document.getElementById('btn-ne-buscar-reemplazo');
+    if (btnBuscarReemplazoNE) {
+      btnBuscarReemplazoNE.addEventListener('click', function () {
+        abrirBuscarReemplazo(punto.monitoringId);
+      });
+    }
   }
 
   // --- Login ---
@@ -1153,7 +1168,7 @@
   // "perdia" el contexto radial al volver. mapaVolverA = nombre de esa
   // pantalla, o null para el comportamiento de siempre (selector/hub).
   var mapaVolverA = null;
-  var PANTALLAS_RETORNO_MAPA = { cercaMio: true, seleccionTabla: true, seleccionItf: true };
+  var PANTALLAS_RETORNO_MAPA = { cercaMio: true, buscarReemplazo: true, seleccionTabla: true, seleccionItf: true };
 
   function actualizarEtiquetaVolverMapa() {
     var etiqueta = (!mapaVolverA && accesoMapas() === 'selector') ? 'Mapas' : 'Volver';
@@ -1387,8 +1402,14 @@
       },
       // "Evaluar" del popup del pozo (solo reemplazo=SI): abre el modulo
       // Reemplazo con ese wellId, sin cargar historial ni fotos desde el popup.
+      // "Evaluar" del popup del pozo: si el mapa esta mostrando el contexto de una
+      // busqueda de reemplazo (punto NE + circulo) y el pozo es parte de el, la
+      // referencia viaja a la evaluacion; en el mapa normal no se inventa ninguna.
       onEvaluarReemplazo: function (wellId) {
-        abrirReemplazo({ wellId: wellId });
+        abrirReemplazo({
+          wellId: wellId,
+          puntoNEReferencia: buscarReemplazoLogic_puntoNEDeContexto(seleccionController_obtenerContextoGeografico(), wellId) || ''
+        });
       },
       enfoque: enfoque
     });
@@ -1402,7 +1423,12 @@
       onAbrirPozo: function (wellId) {
         showScreen('main');
         buscarPozo(wellId);
-      }
+      },
+      // Popup de un punto NE: busca pozos de Provincia cerca de ese punto. Sin
+      // reemplazo=SI no se pasa la accion y el popup no muestra el boton.
+      onBuscarReemplazo: buscarReemplazoLogic_puedeBuscar(permisosActuales)
+        ? function (monitoringId) { abrirBuscarReemplazo(monitoringId); }
+        : undefined
     });
   }
 
@@ -1450,6 +1476,10 @@
       // lista) sigue como se dejo
       showScreen('cercaMio');
       cercaMioController_reanudar();
+    } else if (destino === 'buscarReemplazo') {
+      // idem: misma busqueda de reemplazo, con filtros/orden intactos
+      showScreen('buscarReemplazo');
+      buscarReemplazoController_reanudar();
     } else if (destino === 'seleccionTabla') {
       showScreen('seleccionTabla');
       seleccionController_abrirTabla();
@@ -1585,6 +1615,9 @@
     if (pantalla === 'cercaMio') {
       showScreen('cercaMio');
       cercaMioController_reanudar();
+    } else if (pantalla === 'buscarReemplazo') {
+      showScreen('buscarReemplazo');
+      buscarReemplazoController_reanudar();
     } else if (pantalla === 'mapa') {
       abrirMapaDesde(null, true);
     } else if (pantalla === 'mapaNE') {
@@ -1608,6 +1641,49 @@
   function volverAlOrigenDeSeleccion() {
     restaurarPantalla(seleccionOrigen);
   }
+
+  // --- Buscar reemplazo (pozos de Provincia cerca de un punto NE) ---
+  // Se abre con el monitoringId del punto NE desde el popup de los mapas o
+  // desde su ficha. Recuerda la pantalla de origen (como Evaluacion/
+  // Reemplazo): Volver regresa AHI. Ver en mapa / Evaluar / Abrir pozo salen
+  // y vuelven con la busqueda intacta (reanudar).
+  var buscarReemplazoOrigen = { pantalla: 'main', scrollY: 0 };
+
+  function abrirBuscarReemplazo(monitoringId) {
+    if (!buscarReemplazoLogic_puedeBuscar(permisosActuales)) {
+      return;       // defensa en profundidad: sin reemplazo=SI (o sin ne) no se abre
+    }
+    if (pantallaActual !== 'buscarReemplazo') {
+      buscarReemplazoOrigen = { pantalla: pantallaActual, scrollY: window.scrollY };
+    }
+    showScreen('buscarReemplazo');
+    buscarReemplazoController_abrir({
+      sessionToken: sessionToken,
+      permisos: permisosActuales,
+      onAbrirPozo: function (wellId) {
+        showScreen('main');
+        buscarPozo(wellId);
+      },
+      onVerEnMapa: function (wellId) {
+        abrirMapaDesde({ tipo: 'pozo', wellId: wellId });
+      },
+      onVerTodosEnMapa: function () {
+        abrirMapaDesde({ tipo: 'contexto' });
+      },
+      // El punto NE de referencia viaja a la evaluacion (puntoNEReferencia).
+      onEvaluarReemplazo: function (wellId, puntoNE) {
+        abrirReemplazo({ wellId: wellId, puntoNEReferencia: puntoNE });
+      },
+      onSessionExpired: function () {
+        logout();
+      }
+    }, monitoringId);
+  }
+
+  document.getElementById('btn-bre-volver').addEventListener('click', function () {
+    buscarReemplazoController_cerrar();
+    restaurarPantalla(buscarReemplazoOrigen);
+  });
 
   // --- Evaluacion / Reemplazo ---
   // Mismo patron que Ver informacion/ITF: recuerda la pantalla de origen

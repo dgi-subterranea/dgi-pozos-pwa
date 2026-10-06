@@ -758,6 +758,124 @@
     </div>
   </div>
 
+  <!-- Buscar reemplazo (v1): pozos de Provincia cercanos a un punto de la red
+       NE. Se abre desde el popup del punto en los mapas o desde su ficha
+       (nunca con un buscador propio). La referencia es SIEMPRE la
+       coordenada propia del punto NE; todo se calcula en el navegador sobre
+       los datasets ya cargados (getMapaNE + getMapaPozos) y el estado de
+       reemplazo (solo con reemplazo=SI). Sin score: un orden a la vez y los
+       datos crudos de cada candidato a la vista. -->
+  <div id="screen-buscar-reemplazo" class="screen" hidden>
+    <div class="tv-topbar">
+      <button type="button" id="btn-bre-volver" class="tv-volver">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+        Volver
+      </button>
+    </div>
+    <div class="tv-header">
+      <div>
+        <p class="mapa-titulo">Buscar reemplazo</p>
+        <p class="tv-header-label">Pozos de Provincia cerca de un punto NE</p>
+      </div>
+    </div>
+
+    <div id="bre-cargando" class="cercamio-estado">
+      <span class="spinner" aria-hidden="true"></span>
+      <span>Cargando pozos...</span>
+    </div>
+    <div id="bre-error" class="cercamio-estado" hidden>
+      <p id="bre-error-mensaje">No se pudo cargar la búsqueda.</p>
+      <button type="button" id="btn-bre-reintentar" class="button-secondary">Reintentar</button>
+    </div>
+
+    <div id="bre-contenido" hidden>
+      <section class="bre-referencia" aria-label="Punto NE de referencia">
+        <p class="bre-referencia-etiqueta">Punto NE de referencia</p>
+        <p id="bre-ref-id" class="bre-ref-id mono"></p>
+        <p id="bre-ref-nombre" class="bre-ref-nombre" hidden></p>
+        <dl id="bre-ref-datos" class="bre-ref-datos"></dl>
+        <p id="bre-ref-aviso" class="bre-aviso" role="status" hidden></p>
+      </section>
+
+      <div class="bre-radios cercamio-radios" role="group" aria-label="Radio de búsqueda">
+        <button type="button" class="cercamio-radio-chip bre-radio-chip" data-radio="500" aria-pressed="false">500 m</button>
+        <button type="button" class="cercamio-radio-chip bre-radio-chip active" data-radio="1000" aria-pressed="true">1 km</button>
+        <button type="button" class="cercamio-radio-chip bre-radio-chip" data-radio="2000" aria-pressed="false">2 km</button>
+        <button type="button" class="cercamio-radio-chip bre-radio-chip" data-radio="5000" aria-pressed="false">5 km</button>
+        <button type="button" class="cercamio-radio-chip bre-radio-chip" data-radio="personalizado" aria-pressed="false">Personalizado</button>
+      </div>
+      <div id="bre-radio-personalizado" class="cercamio-radio-personalizado" hidden>
+        <label for="input-bre-radio-km">Radio</label>
+        <input type="number" id="input-bre-radio-km" inputmode="decimal" min="0.1" max="100" step="0.1" placeholder="km">
+        <span>km</span>
+        <p id="bre-radio-error" class="mapa-profundidad-error" hidden></p>
+      </div>
+
+      <div class="bre-barra">
+        <label class="bre-interruptor" for="chk-bre-red-ne">
+          <input type="checkbox" id="chk-bre-red-ne">
+          <span>Incluir pozos que ya pertenecen a la red NE</span>
+        </label>
+        <label class="bre-interruptor" id="bre-interruptor-no-aptos" for="chk-bre-no-aptos" hidden>
+          <input type="checkbox" id="chk-bre-no-aptos">
+          <span>Mostrar no aptos</span>
+          <span id="bre-no-aptos-ocultos" class="bre-ocultos"></span>
+        </label>
+      </div>
+
+      <details id="bre-filtros" class="bre-filtros">
+        <summary><span>Filtros</span> <span id="bre-filtros-cantidad" class="bre-filtros-cantidad" hidden></span></summary>
+        <div class="bre-filtros-cuerpo">
+          <div id="bre-grupo-aptitud" class="bre-grupo" hidden>
+            <p class="mapa-filtro-label">Aptitud para reemplazo</p>
+            <div id="bre-aptitud-chips" class="mapa-chips-wrap"></div>
+          </div>
+          <div class="bre-grupo">
+            <p class="mapa-filtro-label">Tipo de pozo</p>
+            <div id="bre-surgencia-chips" class="mapa-chips-wrap"></div>
+          </div>
+          <div class="bre-grupo">
+            <p class="mapa-filtro-label">Cuenca del pozo</p>
+            <div id="bre-cuenca-chips" class="mapa-chips-wrap"></div>
+          </div>
+          <div class="bre-grupo">
+            <p class="mapa-filtro-label">Profundidad total (m)</p>
+            <div class="bre-prof">
+              <label for="input-bre-prof-desde">Desde</label>
+              <input type="number" id="input-bre-prof-desde" inputmode="decimal" min="0" step="1" placeholder="mín.">
+              <label for="input-bre-prof-hasta">Hasta</label>
+              <input type="number" id="input-bre-prof-hasta" inputmode="decimal" min="0" step="1" placeholder="máx.">
+            </div>
+            <p id="bre-prof-error" class="mapa-profundidad-error" hidden></p>
+            <p class="bre-nota">Con un rango, los pozos "Sin dato" de profundidad quedan fuera.</p>
+          </div>
+          <div class="bre-grupo bre-grupo-checks">
+            <label class="bre-interruptor" for="chk-bre-con-prof"><input type="checkbox" id="chk-bre-con-prof"><span>Solo con profundidad conocida</span></label>
+            <label class="bre-interruptor" for="chk-bre-con-tramos"><input type="checkbox" id="chk-bre-con-tramos"><span>Solo con tramos filtrantes</span></label>
+          </div>
+          <button type="button" id="btn-bre-limpiar-filtros" class="button-secondary bre-limpiar">Limpiar filtros</button>
+        </div>
+      </details>
+
+      <div class="bre-orden" role="group" aria-label="Ordenar por">
+        <span class="bre-orden-etiqueta">Ordenar por</span>
+        <button type="button" class="bre-orden-chip active" data-orden="distancia" aria-pressed="true">Distancia</button>
+        <button type="button" class="bre-orden-chip" data-orden="profundidad" aria-pressed="false">Profundidad similar</button>
+        <button type="button" class="bre-orden-chip" id="btn-bre-orden-estado" data-orden="estado" aria-pressed="false" hidden>Estado</button>
+      </div>
+      <p id="bre-texto-orden" class="bre-texto-orden"></p>
+
+      <p id="bre-contador" class="bre-contador" role="status"></p>
+      <div id="bre-sin-resultados" class="cercamio-estado" hidden>
+        <p id="bre-sin-resultados-mensaje"></p>
+        <button type="button" id="btn-bre-ampliar" class="button-secondary" hidden></button>
+      </div>
+      <div id="bre-lista" class="bre-lista"></div>
+      <button type="button" id="btn-bre-mas" class="button-secondary bre-mas" hidden>Mostrar más</button>
+      <button type="button" id="btn-bre-ver-todos-mapa" class="button bre-ver-mapa">Ver todos en el mapa</button>
+    </div>
+  </div>
+
   <div id="screen-disabled" class="screen" hidden>
     <p>Tu cuenta no tiene acceso habilitado. Contactá al administrador.</p>
     <button id="btn-logout-disabled" class="button-secondary">Cerrar sesión</button>
@@ -1043,11 +1161,13 @@
   <script src="js/mapaNEDataset.js"></script>
   <script src="js/busquedaProvinciaDataset.js"></script>
   <script src="js/cercaMioLogic.js"></script>
+  <script src="js/buscarReemplazoLogic.js"></script>
   <script src="js/seleccionLogic.js"></script>
   <script src="js/mapaShared.js"></script>
   <script src="js/mapa.js"></script>
   <script src="js/mapaNE.js"></script>
   <script src="js/cercaMio.js"></script>
+  <script src="js/buscarReemplazo.js"></script>
   <script src="js/seleccion.js"></script>
   <script src="js/reemplazoLogic.js"></script>
   <script src="js/reemplazoFotosLogic.js"></script>

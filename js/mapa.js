@@ -1182,8 +1182,12 @@
     } else if (ctx.origen === 'radio' && typeof g.lat === 'number') {
       mapaShared_crearCirculoSeleccion(g.lat, g.lon, g.radioMetros).addTo(capa);
       var esGps = g.tipoReferencia === 'miUbicacion';
-      L.marker([g.lat, g.lon], { icon: esGps ? mapaController_iconoMiUbicacion() : mapaShared_iconoPuntoBusqueda(), keyboard: false })
-        .bindPopup(esGps ? 'Tu ubicación' : 'Punto de búsqueda')
+      // Buscar reemplazo: el centro es un punto de la red NE (con su icono).
+      var esPuntoNE = g.tipoReferencia === 'puntoNE';
+      var icono = esGps ? mapaController_iconoMiUbicacion() : (esPuntoNE ? mapaShared_iconoNE() : mapaShared_iconoPuntoBusqueda());
+      var rotulo = esGps ? 'Tu ubicación' : (esPuntoNE ? 'Punto NE de referencia: ' + g.etiqueta : 'Punto de búsqueda');
+      L.marker([g.lat, g.lon], { icon: icono, keyboard: false })
+        .bindPopup(rotulo)
         .addTo(capa);
     }
     capa.addTo(mapaEstado.mapa);

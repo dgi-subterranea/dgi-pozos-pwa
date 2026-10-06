@@ -308,10 +308,23 @@ function mapaShared_crearMarkerNE(punto, contexto) {
     });
     el.appendChild(btn);
   }
-  // Punto especial sin wellId: sin boton a proposito - todavia no existe
-  // una ruta/controlador reutilizable para abrir el modulo NE directo
+  // Punto especial sin wellId: sin "Abrir pozo" a proposito - todavia no
+  // existe una ruta/controlador reutilizable para abrir el modulo NE directo
   // desde un monitoringId sin pasar por buscarPozo(wellId) (el buscador
   // de la app solo acepta el formato DD-PPPP).
+
+  // "Buscar reemplazo" trabaja con el monitoringId, asi que tambien sirve
+  // para un punto especial (sin wellId).
+  if (typeof contexto.onBuscarReemplazo === 'function') {
+    var btnReemplazo = document.createElement('button');
+    btnReemplazo.type = 'button';
+    btnReemplazo.className = 'button mapa-popup-btn mapa-popup-btn-secundario';
+    btnReemplazo.textContent = 'Buscar reemplazo';
+    btnReemplazo.addEventListener('click', function () {
+      contexto.onBuscarReemplazo(punto.monitoringId);
+    });
+    el.appendChild(btnReemplazo);
+  }
 
   marker.bindPopup(el);
   return marker;
