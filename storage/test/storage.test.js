@@ -6,6 +6,7 @@ const crypto = require('crypto');
 
 const SECRET = 'a'.repeat(40);
 const ROOT_ID = 'ROOT_FOLDER_ID_0001';
+const POZOS_ROOT_ID = 'POZOS_ROOT_FOLDER_0001';
 
 // --- Fakes de Apps Script ---
 let idSeq = 0;
@@ -56,11 +57,14 @@ function crearDriveEnMemoria() {
   const raiz = crearCarpeta('FotosReemplazo', null);
   raiz._id = ROOT_ID;
   carpetas[ROOT_ID] = raiz;
+  const raizPozos = crearCarpeta('FotosPozos', null);
+  raizPozos._id = POZOS_ROOT_ID;
+  carpetas[POZOS_ROOT_ID] = raizPozos;
   const otraCarpeta = crearCarpeta('PrivadoDeLaCuenta', null);
   const archivoAjeno = otraCarpeta.createFile({ nombre: 'secreto.jpg', bytes: Buffer.from([0xff, 0xd8, 0xff, 1]), mime: 'image/jpeg' });
 
   return {
-    raiz, archivos, archivoAjeno,
+    raiz, raizPozos, archivos, archivoAjeno,
     DriveApp: {
       Access: { PRIVATE: 'PRIVATE' }, Permission: { NONE: 'NONE' },
       getFolderById: (id) => carpetas[id],
@@ -90,6 +94,7 @@ function instalarGlobals() {
   };
   global.getStorageSecret = () => SECRET;
   global.getStorageRootFolderId = () => ROOT_ID;
+  global.getStoragePozosRootFolderId = () => POZOS_ROOT_ID;
   global.getFotosStorageSecret = () => SECRET;
   global.getFotosStorageUrl = () => 'https://script.google.com/macros/s/STORAGE/exec';
   return cacheStore;
@@ -335,5 +340,207 @@ describe('StorageApi (extremo a extremo con el cliente del backend)', () => {
     expect(Client.fotosStorageClient_verificarRespuesta(g.cuerpo, SECRET, g.sol.nonce, ahora()).data.imagenBase64).toBe(THUMB_B64);
     const t = llamar('trashFoto', { driveFileId: id });
     expect(Client.fotosStorageClient_verificarRespuesta(t.cuerpo, SECRET, t.sol.nonce, ahora()).data.status).toBe('ok');
+  });
+});
+
+
+// ===========================================================================
+// Galeria general de pozos (FotosPozos): otra raiz, otras acciones
+// ===========================================================================
+describe('StorageDrive: galeria general de pozos (FotosPozos)', () => {
+  const FOTO_POZO = '55555555-5555-4555-8555-555555555555';
+
+  function payloadPozo(extra) {
+    return Object.assign({
+      fotoId: FOTO_POZO, fuente: 'CAMPO_APP', carpetaFecha: '2026',
+      mimeType: 'image/jpeg', imagenBase64: JPEG_B64, thumbBase64: THUMB_B64
+    }, extra || {});
+  }
+  const carpetaHija = (padre, nombre) => padre._hijosCarpetas.find((c) => c._nombre === nombre);
+
+  test('putFotoPozo: FotosPozos/<fuente>/<anio>/<fotoId>.jpg + _thumb.jpg, privados, miniatura en la descripcion', () => {
+    const r = Dr.storageDrive_putFotoPozo(payloadPozo());
+    expect(r.status).toBe('ok');
+    const anio = carpetaHija(carpetaHija(drive.raizPozos, 'CAMPO_APP'), '2026');
+    expect(anio).toBeTruthy();
+    expect(anio._hijosArchivos.map((a) => a._nombre).sort()).toEqual([FOTO_POZO + '.jpg', FOTO_POZO + '_thumb.jpg']);
+    const principal = drive.archivos[r.driveFileId];
+    expect(principal._desc).toMatch(/^thumb:/);
+    expect(principal._sharing).toEqual(['PRIVATE', 'NONE']);
+    expect(r.tamanoBytes).toBe(principal._bytes.length);
+    // devuelve tambien el id de la miniatura (columna driveThumbId de la hoja)
+    expect(drive.archivos[r.driveThumbId]._nombre).toBe(FOTO_POZO + '_thumb.jpg');
+    expect(principal._desc).toBe('thumb:' + r.driveThumbId);
+    // la raiz de Reemplazos no se toca
+    expect(drive.raiz._hijosCarpetas).toHaveLength(0);
+  });
+
+  test('fecha desconocida: carpeta sin_fecha; fuentes distintas, carpetas distintas; la misma carpeta se reutiliza', () => {
+    Dr.storageDrive_putFotoPozo(payloadPozo({ carpetaFecha: 'sin_fecha' }));
+    Dr.storageDrive_putFotoPozo(payloadPozo({ fotoId: '66666666-6666-4666-8666-666666666666', fuente: 'MONITOREO_NE', carpetaFecha: '2024' }));
+    Dr.storageDrive_putFotoPozo(payloadPozo({ fotoId: '77777777-7777-4777-8777-777777777777', fuente: 'MONITOREO_NE', carpetaFecha: '2024' }));
+    expect(drive.raizPozos._hijosCarpetas.map((c) => c._nombre).sort()).toEqual(['CAMPO_APP', 'MONITOREO_NE']);
+    expect(carpetaHija(carpetaHija(drive.raizPozos, 'CAMPO_APP'), 'sin_fecha')._hijosArchivos).toHaveLength(2);
+    expect(carpetaHija(drive.raizPozos, 'MONITOREO_NE')._hijosCarpetas).toHaveLength(1);
+    expect(carpetaHija(carpetaHija(drive.raizPozos, 'MONITOREO_NE'), '2024')._hijosArchivos).toHaveLength(4);
+  });
+
+  test('el nombre del archivo lo fija el storage (fotoId): no hay forma de pasar un nombre del cliente', () => {
+    const r = Dr.storageDrive_putFotoPozo(payloadPozo({ nombreArchivo: '../../Perez_Juan.jpg', nombre: 'titular.jpg' }));
+    expect(drive.archivos[r.driveFileId]._nombre).toBe(FOTO_POZO + '.jpg');
+  });
+
+  test('idempotente: reintentar el mismo fotoId devuelve el existente sin duplicar', () => {
+    const a = Dr.storageDrive_putFotoPozo(payloadPozo());
+    const b = Dr.storageDrive_putFotoPozo(payloadPozo());
+    expect(b.driveFileId).toBe(a.driveFileId);
+    expect(b.driveThumbId).toBe(a.driveThumbId);
+    expect(carpetaHija(carpetaHija(drive.raizPozos, 'CAMPO_APP'), '2026')._hijosArchivos).toHaveLength(2);
+  });
+
+  test.each([
+    ['fuente en minusculas', { fuente: 'campo_app' }, 'INVALID_FUENTE'],
+    ['fuente con ruta', { fuente: '../CAMPO' }, 'INVALID_FUENTE'],
+    ['fuente corta', { fuente: 'AB' }, 'INVALID_FUENTE'],
+    ['carpetaFecha anterior a 2000', { carpetaFecha: '1999' }, 'INVALID_CARPETA_FECHA'],
+    ['carpetaFecha con ruta', { carpetaFecha: '2026/../x' }, 'INVALID_CARPETA_FECHA'],
+    ['carpetaFecha libre', { carpetaFecha: 'verano' }, 'INVALID_CARPETA_FECHA'],
+    ['fotoId no UUID', { fotoId: 'abc' }, 'INVALID_FOTO_ID'],
+    ['mime no jpeg', { mimeType: 'image/png' }, 'INVALID_MIME'],
+    ['no es JPEG real', { imagenBase64: Buffer.from('no es una imagen').toString('base64') }, 'INVALID_IMAGEN'],
+    ['demasiado grande', { imagenBase64: Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(3 * 1024 * 1024)]).toString('base64') }, 'INVALID_IMAGEN'],
+    ['miniatura invalida', { thumbBase64: 'AAAA' }, 'INVALID_THUMB']
+  ])('putFotoPozo rechaza: %s', (nombre, extra, codigo) => {
+    expect(Dr.storageDrive_putFotoPozo(payloadPozo(extra))).toEqual({ status: 'error', code: codigo });
+    expect(drive.raizPozos._hijosCarpetas).toHaveLength(0);
+  });
+
+  test('getFotoPozo full y thumb devuelven el contenido correcto', () => {
+    const r = Dr.storageDrive_putFotoPozo(payloadPozo());
+    expect(Dr.storageDrive_getFotoPozo({ driveFileId: r.driveFileId, variante: 'full' })).toMatchObject({ status: 'ok', mimeType: 'image/jpeg', imagenBase64: JPEG_B64 });
+    expect(Dr.storageDrive_getFotoPozo({ driveFileId: r.driveFileId, variante: 'thumb' }).imagenBase64).toBe(THUMB_B64);
+    expect(Dr.storageDrive_getFotoPozo({ driveFileId: r.driveFileId, variante: 'otra' }).code).toBe('INVALID_VARIANTE');
+  });
+
+  test('getFotoPozo thumb con driveThumbId explicito: lo sirve solo si cuelga de la raiz de pozos', () => {
+    const r = Dr.storageDrive_putFotoPozo(payloadPozo());
+    drive.archivos[r.driveFileId]._desc = '';    // sin descripcion (p. ej. archivo cargado a mano)
+    expect(Dr.storageDrive_getFotoPozo({ driveFileId: r.driveFileId, driveThumbId: r.driveThumbId, variante: 'thumb' }).imagenBase64).toBe(THUMB_B64);
+    // un driveThumbId de OTRA raiz o ajeno se ignora: cae a la completa de su propia raiz
+    const re = Dr.storageDrive_putFoto(payloadPut(), 2026);
+    expect(Dr.storageDrive_getFotoPozo({ driveFileId: r.driveFileId, driveThumbId: re.driveFileId, variante: 'thumb' }).imagenBase64).toBe(JPEG_B64);
+    expect(Dr.storageDrive_getFotoPozo({ driveFileId: r.driveFileId, driveThumbId: drive.archivoAjeno._id, variante: 'thumb' }).imagenBase64).toBe(JPEG_B64);
+  });
+
+  test('trashFotoPozo manda a papelera foto + miniatura (nunca borra)', () => {
+    const r = Dr.storageDrive_putFotoPozo(payloadPozo());
+    expect(Dr.storageDrive_trashFotoPozo({ driveFileId: r.driveFileId })).toEqual({ status: 'ok' });
+    carpetaHija(carpetaHija(drive.raizPozos, 'CAMPO_APP'), '2026')._hijosArchivos.forEach((a) => expect(a._papelera).toBe(true));
+  });
+
+  describe('aislamiento respecto de FotosReemplazo', () => {
+    test('un archivo de Reemplazos NO se lee ni se descarta con las acciones de Pozos', () => {
+      const re = Dr.storageDrive_putFoto(payloadPut(), 2026);
+      expect(Dr.storageDrive_getFotoPozo({ driveFileId: re.driveFileId, variante: 'full' })).toEqual({ status: 'error', code: 'NOT_FOUND' });
+      expect(Dr.storageDrive_trashFotoPozo({ driveFileId: re.driveFileId })).toEqual({ status: 'error', code: 'NOT_FOUND' });
+      expect(drive.archivos[re.driveFileId]._papelera).toBe(false);
+    });
+
+    test('un archivo de Pozos NO se lee ni se descarta con las acciones de Reemplazos', () => {
+      const po = Dr.storageDrive_putFotoPozo(payloadPozo());
+      expect(Dr.storageDrive_getFoto({ driveFileId: po.driveFileId, variante: 'full' })).toEqual({ status: 'error', code: 'NOT_FOUND' });
+      expect(Dr.storageDrive_trashFoto({ driveFileId: po.driveFileId })).toEqual({ status: 'error', code: 'NOT_FOUND' });
+      expect(drive.archivos[po.driveFileId]._papelera).toBe(false);
+    });
+
+    test('un archivo ajeno de la cuenta tampoco se alcanza por las acciones de Pozos', () => {
+      expect(Dr.storageDrive_getFotoPozo({ driveFileId: drive.archivoAjeno._id, variante: 'full' }).code).toBe('NOT_FOUND');
+      expect(Dr.storageDrive_trashFotoPozo({ driveFileId: drive.archivoAjeno._id }).code).toBe('NOT_FOUND');
+      expect(drive.archivoAjeno._papelera).toBe(false);
+    });
+
+    test('subir una foto de Pozos no cambia el comportamiento de Reemplazos (estructura por anio intacta)', () => {
+      Dr.storageDrive_putFotoPozo(payloadPozo());
+      const re = Dr.storageDrive_putFoto(payloadPut(), 2026);
+      expect(drive.raiz._hijosCarpetas.map((c) => c._nombre)).toEqual(['2026']);
+      expect(Dr.storageDrive_getFoto({ driveFileId: re.driveFileId, variante: 'full' }).status).toBe('ok');
+    });
+
+    test('la miniatura referenciada en la descripcion tambien se resuelve solo dentro de SU raiz', () => {
+      const po = Dr.storageDrive_putFotoPozo(payloadPozo());
+      const archivo = drive.archivos[po.driveFileId];
+      // descripcion apuntando a un archivo de OTRA raiz (Reemplazos): no se sirve
+      const re = Dr.storageDrive_putFoto(payloadPut(), 2026);
+      archivo._desc = 'thumb:' + re.driveFileId;
+      const r = Dr.storageDrive_getFotoPozo({ driveFileId: po.driveFileId, variante: 'thumb' });
+      expect(r.imagenBase64).toBe(JPEG_B64);   // cae a la completa de SU propia raiz, nunca al archivo de la otra
+    });
+  });
+
+  test('estaBajoRaiz respeta el limite de niveles (3 para pozos, 2 por defecto)', () => {
+    const fuente = drive.raizPozos.createFolder('CAMPO_APP');
+    const anio = fuente.createFolder('2026');
+    const profunda = anio.createFolder('extra').createFolder('mas');
+    const enAnio = anio.createFile({ nombre: 'a.jpg', bytes: Buffer.from([0xff, 0xd8, 0xff]), mime: 'image/jpeg' });
+    const enProfunda = profunda.createFile({ nombre: 'b.jpg', bytes: Buffer.from([0xff, 0xd8, 0xff]), mime: 'image/jpeg' });
+    expect(Dr.storageDrive_estaBajoRaiz(enAnio, POZOS_ROOT_ID, 3)).toBe(true);
+    expect(Dr.storageDrive_estaBajoRaiz(enAnio, POZOS_ROOT_ID)).toBe(false);      // por defecto 2 niveles (Reemplazos)
+    expect(Dr.storageDrive_estaBajoRaiz(enProfunda, POZOS_ROOT_ID, 3)).toBe(false);
+    expect(Dr.storageDrive_estaBajoRaiz(drive.archivoAjeno, POZOS_ROOT_ID, 3)).toBe(false);
+  });
+});
+
+describe('StorageApi: acciones de Pozos (extremo a extremo)', () => {
+  const FOTO = '88888888-8888-4888-8888-888888888888';
+  const pl = (extra) => Object.assign({ fotoId: FOTO, fuente: 'CAMPO_APP', carpetaFecha: '2026', mimeType: 'image/jpeg', imagenBase64: JPEG_B64, thumbBase64: THUMB_B64 }, extra || {});
+
+  function llamar(accion, payload, secretoFirma) {
+    const sol = Client.fotosStorageClient_armarSolicitud(accion, payload, secretoFirma || SECRET, ahora(), crypto.randomUUID());
+    const salida = Api.doPost({ postData: { contents: JSON.stringify(sol) } });
+    return { sol, cuerpo: JSON.parse(salida.text) };
+  }
+  const datos = (r) => Client.fotosStorageClient_verificarRespuesta(r.cuerpo, SECRET, r.sol.nonce, ahora()).data;
+
+  test('flujo completo firmado: putFotoPozo -> getFotoPozo (thumb/full) -> trashFotoPozo', () => {
+    const put = datos(llamar('putFotoPozo', pl()));
+    expect(put.status).toBe('ok');
+    expect(datos(llamar('getFotoPozo', { driveFileId: put.driveFileId, variante: 'thumb' })).imagenBase64).toBe(THUMB_B64);
+    expect(datos(llamar('getFotoPozo', { driveFileId: put.driveFileId, variante: 'full' })).imagenBase64).toBe(JPEG_B64);
+    expect(datos(llamar('trashFotoPozo', { driveFileId: put.driveFileId })).status).toBe('ok');
+  });
+
+  test('sin firma valida: UNAUTHORIZED sin detalle y no escribe nada', () => {
+    const { cuerpo } = llamar('putFotoPozo', pl(), 'q'.repeat(40));
+    expect(cuerpo).toEqual({ status: 'error', code: 'UNAUTHORIZED' });
+    expect(drive.raizPozos._hijosCarpetas).toHaveLength(0);
+  });
+
+  test('replay de una subida de Pozos: la segunda se rechaza', () => {
+    const sol = Client.fotosStorageClient_armarSolicitud('putFotoPozo', pl(), SECRET, ahora(), crypto.randomUUID());
+    const enviar = () => JSON.parse(Api.doPost({ postData: { contents: JSON.stringify(sol) } }).text);
+    expect(enviar().status).toBeUndefined();
+    expect(enviar()).toEqual({ status: 'error', code: 'UNAUTHORIZED' });
+  });
+
+  test('cambiar la accion firmada de putFoto a putFotoPozo reusando la firma: rechazado', () => {
+    const sol = Client.fotosStorageClient_armarSolicitud('putFoto', pl(), SECRET, ahora(), crypto.randomUUID());
+    sol.action = 'putFotoPozo';
+    expect(JSON.parse(Api.doPost({ postData: { contents: JSON.stringify(sol) } }).text)).toEqual({ status: 'error', code: 'UNAUTHORIZED' });
+  });
+
+  test('errores de validacion salen como respuesta firmada (sin excepciones)', () => {
+    expect(datos(llamar('putFotoPozo', pl({ fuente: 'x' }))).code).toBe('INVALID_FUENTE');
+  });
+
+  test('si falta FOTOS_POZOS_ROOT_FOLDER_ID (setup sin correr): INTERNAL generico, sin detalle', () => {
+    global.getStoragePozosRootFolderId = () => { throw new Error('FOTOS_POZOS_ROOT_FOLDER_ID no configurado'); };
+    const { cuerpo } = llamar('putFotoPozo', pl());
+    expect(cuerpo).toEqual({ status: 'error', code: 'INTERNAL' });
+  });
+
+  test('las acciones de Reemplazos siguen funcionando igual (no se rompieron)', () => {
+    const put = datos(llamar('putFoto', { fotoId: FOTO_ID, evaluacionId: EVAL_ID, wellId: '04-0263', nombreArchivo: '04-0263_' + EVAL_ID + '_' + FOTO_ID + '.jpg', mimeType: 'image/jpeg', imagenBase64: JPEG_B64, thumbBase64: THUMB_B64 }));
+    expect(put.status).toBe('ok');
+    expect(datos(llamar('getFoto', { driveFileId: put.driveFileId, variante: 'thumb' })).imagenBase64).toBe(THUMB_B64);
   });
 });

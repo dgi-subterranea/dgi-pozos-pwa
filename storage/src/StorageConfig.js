@@ -11,7 +11,12 @@
 //                          que en el backend principal
 //   FOTOS_ROOT_FOLDER_ID   id de la carpeta raiz "FotosReemplazo" (lo crea
 //                          setupFotosStorage)
+//   FOTOS_POZOS_ROOT_FOLDER_ID  id de la carpeta raiz "FotosPozos" (galeria general
+//                          de pozos/puntos NE; lo crea setupFotosPozosStorage). Es OTRA
+//                          raiz, aparte de la de Reemplazos: cada familia de acciones solo
+//                          alcanza archivos bajo SU raiz (ver StorageDrive.js).
 var STORAGE_ROOT_FOLDER_NAME = 'FotosReemplazo';
+var STORAGE_POZOS_ROOT_FOLDER_NAME = 'FotosPozos';
 var STORAGE_SECRET_MIN_LENGTH = 32;
 
 function getStorageSecret() {
@@ -26,6 +31,14 @@ function getStorageRootFolderId() {
   var id = PropertiesService.getScriptProperties().getProperty('FOTOS_ROOT_FOLDER_ID');
   if (!id) {
     throw new Error('FOTOS_ROOT_FOLDER_ID no configurado: correr setupFotosStorage() una vez');
+  }
+  return id;
+}
+
+function getStoragePozosRootFolderId() {
+  var id = PropertiesService.getScriptProperties().getProperty('FOTOS_POZOS_ROOT_FOLDER_ID');
+  if (!id) {
+    throw new Error('FOTOS_POZOS_ROOT_FOLDER_ID no configurado: correr setupFotosPozosStorage() una vez');
   }
   return id;
 }
@@ -47,6 +60,23 @@ function setupFotosStorage() {
   Logger.log('Carpeta raiz lista: ' + carpeta.getName() + ' (' + carpeta.getId() + ')');
 }
 
+// Correr UNA VEZ manualmente (con la SEGUNDA cuenta) para la galeria general de
+// pozos: crea (o reutiliza) la carpeta "FotosPozos" en Mi unidad y guarda su id
+// en FOTOS_POZOS_ROOT_FOLDER_ID. IDEMPOTENTE y no toca la raiz de Reemplazos.
+function setupFotosPozosStorage() {
+  var props = PropertiesService.getScriptProperties();
+  Logger.log('Cuenta efectiva: ' + Session.getEffectiveUser().getEmail());
+  var existente = props.getProperty('FOTOS_POZOS_ROOT_FOLDER_ID');
+  if (existente) {
+    Logger.log('FOTOS_POZOS_ROOT_FOLDER_ID ya configurado, no se modifico.');
+    return;
+  }
+  var carpetas = DriveApp.getRootFolder().getFoldersByName(STORAGE_POZOS_ROOT_FOLDER_NAME);
+  var carpeta = carpetas.hasNext() ? carpetas.next() : DriveApp.getRootFolder().createFolder(STORAGE_POZOS_ROOT_FOLDER_NAME);
+  props.setProperty('FOTOS_POZOS_ROOT_FOLDER_ID', carpeta.getId());
+  Logger.log('Carpeta raiz de pozos lista: ' + carpeta.getName());
+}
+
 // Verificacion de cuota (correr con la segunda cuenta, antes y despues de
 // subir fotos de prueba): el uso de Drive de ESTA cuenta tiene que subir y
 // el de la cuenta principal no.
@@ -59,5 +89,5 @@ function diagnosticarCuotaStorage() {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { STORAGE_ROOT_FOLDER_NAME, getStorageSecret, getStorageRootFolderId };
+  module.exports = { STORAGE_ROOT_FOLDER_NAME, STORAGE_POZOS_ROOT_FOLDER_NAME, getStorageSecret, getStorageRootFolderId, getStoragePozosRootFolderId };
 }

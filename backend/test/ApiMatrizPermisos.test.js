@@ -20,6 +20,10 @@ beforeEach(() => {
   global.profileService_getProfile.mockReturnValue({ found: true, blob: { getBytes: () => [1], getContentType: () => 'image/jpeg' } });
   global.profileService_checkDisponibilidad.mockReturnValue({ '04-0263': true });
   global.reemplazoService_getEstado.mockReturnValue({ wellId: '04-0263', estado: 'SIN_EVALUAR', ultimaEvaluacion: null });
+  global.fotosPozosService_listar.mockReturnValue({ ok: true, entidad: '04-0263', total: 0, fotos: [] });
+  global.fotosPozosService_obtenerImagen.mockReturnValue({ ok: true, imagen: { fotoId: 'f', variante: 'thumb', mimeType: 'image/jpeg', imagenBase64: 'AAAA' } });
+  global.fotosPozosService_resumen.mockReturnValue({ '04-0263': 2 });
+  global.fotosPozosService_subir.mockReturnValue({ ok: true, foto: { fotoId: 'f' }, duplicada: false });
 });
 
 function como(permisos, activo) {
@@ -38,7 +42,11 @@ const endpoints = {
   getIndiceBusquedaProvincia: () => Api.handleGetIndiceBusquedaProvincia('t'),
   getProfile: () => Api.handleGetProfile('t', W),
   getItfAvailability: () => Api.handleGetItfAvailability('t', [W]),
-  getEstadoReemplazo: () => Api.handleGetEstadoReemplazo('t', W)
+  getEstadoReemplazo: () => Api.handleGetEstadoReemplazo('t', W),
+  getFotosPozo: () => Api.handleGetFotosPozo('t', W, '', 'recientes'),
+  getFotoPozo: () => Api.handleGetFotoPozo('t', '11111111-1111-4111-8111-111111111111', 'thumb'),
+  getResumenFotosPozos: () => Api.handleGetResumenFotosPozos('t'),
+  subirFotoPozo: () => Api.handleSubirFotoPozo('t', { wellId: W, imagenBase64: 'AAAA' })
 };
 // permiso que exige cada endpoint (null = solo usuario activo)
 const exige = {
@@ -50,7 +58,11 @@ const exige = {
   getIndiceBusquedaProvincia: 'datos',
   getProfile: 'perfil',
   getItfAvailability: 'perfil',
-  getEstadoReemplazo: 'reemplazo'
+  getEstadoReemplazo: 'reemplazo',
+  getFotosPozo: 'fotos',
+  getFotoPozo: 'fotos',
+  getResumenFotosPozos: 'fotos',
+  subirFotoPozo: 'fotos_carga'
 };
 
 const perfiles = [
@@ -60,7 +72,11 @@ const perfiles = [
   ['solo reemplazo', { reemplazo: true }],
   ['perfil + reemplazo (datos/ubicacion/ne = NO)', { perfil: true, reemplazo: true }],
   ['ningun permiso funcional (activo)', {}],
-  ['todos los permisos', { perfil: true, datos: true, ubicacion: true, ne: true, reemplazo: true }]
+  ['solo fotos (ver, no cargar)', { fotos: true }],
+  ['solo fotos_carga (cargar, no ver)', { fotos_carga: true }],
+  ['fotos + fotos_carga', { fotos: true, fotos_carga: true }],
+  ['ne + reemplazo sin fotos', { ne: true, reemplazo: true }],
+  ['todos los permisos', { perfil: true, datos: true, ubicacion: true, ne: true, reemplazo: true, fotos: true, fotos_carga: true }]
 ];
 
 describe.each(perfiles)('usuario activo: %s', (nombre, permisos) => {
@@ -88,7 +104,7 @@ describe.each(perfiles)('usuario activo: %s', (nombre, permisos) => {
 describe('usuario inactivo: nada, aunque tenga todos los permisos', () => {
   Object.keys(endpoints).forEach((ep) => {
     test(ep + ' -> USER_DISABLED', () => {
-      como({ perfil: true, datos: true, ubicacion: true, ne: true, reemplazo: true }, false);
+      como({ perfil: true, datos: true, ubicacion: true, ne: true, reemplazo: true, fotos: true, fotos_carga: true }, false);
       const r = endpoints[ep]();
       expect(r.status).toBe('error');
       expect(r.code).toBe('USER_DISABLED');

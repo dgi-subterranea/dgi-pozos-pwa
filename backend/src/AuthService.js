@@ -25,7 +25,7 @@ var USER_STATUS_CACHE_SECONDS = 300;
 // USER_STATUS_CACHE_SECONDS en notarse (ese caso si sigue cacheado) -
 // ya documentado como aceptado.
 //
-// Los permisos por modulo (perfil/datos/ubicacion/ne/reemplazo) viajan en el MISMO
+// Los permisos por modulo (perfil/datos/ubicacion/ne/reemplazo/fotos/fotos_carga) viajan en el MISMO
 // objeto cacheado que el estado activo/inactivo, con la misma regla
 // asimetrica: solo se cachean junto a un usuario activo. Esto significa
 // que otorgar O quitar un permiso a un usuario ya activo (y por lo tanto
@@ -48,7 +48,7 @@ function getUserAccess(email) {
   // Fail-closed tambien si el repositorio no trajo permisos por algun
   // motivo (forma inesperada, columna faltante que ademas rompio el
   // objeto entero, etc.) - nunca se asume acceso por ausencia de dato.
-  var permisosVacios = { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false };
+  var permisosVacios = { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false };
   // nombre viaja en el MISMO objeto cacheado (misma lectura de Sheets
   // que ya trae estado/permisos) - se usa para notificaciones de
   // Telegram (ver NotificationService.js), no requiere una consulta

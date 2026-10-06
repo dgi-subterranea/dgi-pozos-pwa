@@ -66,6 +66,33 @@ function doPost(e) {
         response = handleGetFotosReemplazoPozo(body.sessionToken, body.wellId);
       } else if (body.action === 'getFotoReemplazo') {
         response = handleGetFotoReemplazo(body.sessionToken, body.fotoId, body.variante);
+      } else if (body.action === 'getFotosPozo') {
+        response = handleGetFotosPozo(body.sessionToken, body.wellId, body.monitoringId, body.orden);
+      } else if (body.action === 'getFotoPozo') {
+        response = handleGetFotoPozo(body.sessionToken, body.fotoId, body.variante);
+      } else if (body.action === 'getResumenFotosPozos') {
+        response = handleGetResumenFotosPozos(body.sessionToken);
+      } else if (body.action === 'subirFotoPozo') {
+        // Lista BLANCA de campos: la identidad (email, timestamp) sale de la sesion, y
+        // nada mas que lo declarado aca llega al servicio. driveFileId, estado,
+        // estadoVinculo, gpsOrigen, lote... que mande el cliente se ignoran.
+        response = handleSubirFotoPozo(body.sessionToken, {
+          wellId: body.wellId,
+          monitoringId: body.monitoringId,
+          fuente: body.fuente,
+          tipoFoto: body.tipoFoto,
+          fechaFotoValor: body.fechaFotoValor,
+          fechaFotoPrecision: body.fechaFotoPrecision,
+          fechaFotoFuente: body.fechaFotoFuente,
+          observacion: body.observacion,
+          gps: body.gps,
+          mimeType: body.mimeType,
+          imagenBase64: body.imagenBase64,
+          thumbBase64: body.thumbBase64,
+          sha1Original: body.sha1Original,
+          procesamiento: body.procesamiento,
+          tamanoOriginalBytes: body.tamanoOriginalBytes
+        });
       } else {
         Logger.log('doPost: accion desconocida: ' + api_limpiarMensajeLog(body.action));
         response = { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'accion desconocida: ' + body.action };
@@ -856,9 +883,130 @@ function handleGetFotoReemplazo(sessionToken, fotoId, variante) {
   return { status: 'ok', data: resultado.imagen };
 }
 
+// --- Galeria general de fotos de pozos / puntos NE (FotosPozos v1) ---
+// Gates INDEPENDIENTES de "reemplazo": ver (galeria, imagen, resumen) = "fotos";
+// cargar = "fotos_carga". fotos_carga NO implica "fotos": un usuario que solo
+// puede cargar no ve la galeria, ni contadores, ni el resumen (el backend lee
+// lo que necesita para SU subida, pero no se lo devuelve). Auditoria sin ruido:
+// las lecturas OK no escriben en Historial; la subida OK si (es una escritura,
+// igual que registrarEvaluacionReemplazo) con la entidad y sin foto ni ids de
+// Drive; errores y permisos denegados siempre. Sin Telegram.
+
+function validarSesionPermisoFotosPozos(sessionToken, accion, modulo, entidad) {
+  var validation = validateSession(sessionToken, accion, entidad);
+  if (!validation.ok) {
+    return validation;
+  }
+  var permiso = validarPermiso(validation.session, accion, entidad || null, modulo);
+  if (!permiso.ok) {
+    return permiso;
+  }
+  return { ok: true, session: validation.session };
+}
+
+// Clave de entidad para Historial (acotada): wellId o monitoringId si son strings sanos.
+function claveEntidadParaLog(wellId, monitoringId) {
+  var c = (typeof wellId === 'string' && wellId.trim() !== '') ? wellId : monitoringId;
+  return (typeof c === 'string' && c.length <= 40) ? c.trim() : null;
+}
+
+function handleGetFotosPozo(sessionToken, wellId, monitoringId, orden) {
+  var v = validarSesionPermisoFotosPozos(sessionToken, 'getFotosPozo', 'fotos', claveEntidadParaLog(wellId, monitoringId));
+  if (!v.ok) {
+    return v.response;
+  }
+  var resultado;
+  try {
+    resultado = fotosPozosService_listar(wellId, monitoringId, orden);
+  } catch (err) {
+    logHistoryEvent(v.session.email, 'getFotosPozo', claveEntidadParaLog(wellId, monitoringId), 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+  if (!resultado.ok) {
+    return { status: 'error', code: resultado.code, message: resultado.message };
+  }
+  return { status: 'ok', data: { entidad: resultado.entidad, total: resultado.total, fotos: resultado.fotos } };
+}
+
+function handleGetFotoPozo(sessionToken, fotoId, variante) {
+  var v = validarSesionPermisoFotosPozos(sessionToken, 'getFotoPozo', 'fotos');
+  if (!v.ok) {
+    return v.response;
+  }
+  var resultado;
+  try {
+    resultado = fotosPozosService_obtenerImagen(fotoId, variante);
+  } catch (err) {
+    logHistoryEvent(v.session.email, 'getFotoPozo', null, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+  if (!resultado.ok) {
+    if (resultado.code === 'STORAGE_UNAVAILABLE') {
+      logHistoryEvent(v.session.email, 'getFotoPozo', null, resultado.code);
+    }
+    return { status: 'error', code: resultado.code, message: resultado.message };
+  }
+  return { status: 'ok', data: resultado.imagen };
+}
+
+// Contador {wellId|monitoringId: n}, solo claves con al menos una foto visible.
+function handleGetResumenFotosPozos(sessionToken) {
+  var v = validarSesionPermisoFotosPozos(sessionToken, 'getResumenFotosPozos', 'fotos');
+  if (!v.ok) {
+    return v.response;
+  }
+  try {
+    return { status: 'ok', data: fotosPozosService_resumen() };
+  } catch (err) {
+    logHistoryEvent(v.session.email, 'getResumenFotosPozos', null, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+}
+
+// Unicos campos que una subida puede traer del cliente. Todo lo demas (email,
+// estado, estadoVinculo, vinculoMetodo, gpsOrigen, driveFileId, lote, fotoId...)
+// lo fija el backend o no existe para el cliente.
+var API_FOTOS_POZOS_CAMPOS_SUBIDA = ['wellId', 'monitoringId', 'fuente', 'tipoFoto', 'fechaFotoValor', 'fechaFotoPrecision',
+  'fechaFotoFuente', 'observacion', 'gps', 'mimeType', 'imagenBase64', 'thumbBase64', 'sha1Original', 'procesamiento', 'tamanoOriginalBytes'];
+
+function handleSubirFotoPozo(sessionToken, datos) {
+  var d = {};
+  API_FOTOS_POZOS_CAMPOS_SUBIDA.forEach(function (campo) {
+    if (datos && datos[campo] !== undefined) {
+      d[campo] = datos[campo];
+    }
+  });
+  var clave = claveEntidadParaLog(d.wellId, d.monitoringId);
+  var v = validarSesionPermisoFotosPozos(sessionToken, 'subirFotoPozo', 'fotos_carga', clave);
+  if (!v.ok) {
+    return v.response;
+  }
+  var session = v.session;
+
+  var resultado;
+  try {
+    resultado = fotosPozosService_subir(session.email, d);
+  } catch (err) {
+    logHistoryEvent(session.email, 'subirFotoPozo', clave, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+  if (!resultado.ok) {
+    logHistoryEvent(session.email, 'subirFotoPozo', clave, resultado.code);
+    return { status: 'error', code: resultado.code, message: resultado.message };
+  }
+  if (!resultado.duplicada) {
+    logHistoryEvent(session.email, 'subirFotoPozo', clave, 'OK');
+  }
+  return { status: 'ok', data: { foto: resultado.foto, duplicada: resultado.duplicada } };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     doPost,
+    handleGetFotosPozo,
+    handleGetFotoPozo,
+    handleGetResumenFotosPozos,
+    handleSubirFotoPozo,
     handleGetProfile,
     handleGetWellRecord,
     handleGetMetadata,

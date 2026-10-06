@@ -411,7 +411,45 @@ describe('permiso reemplazo (Modulo Reemplazos v1)', () => {
   test('sin permisos en el repositorio, los permisos vacios incluyen reemplazo=false', () => {
     global.sheetUserRepository_getUserStatus.mockReturnValue({ found: true, active: true });
     expect(AuthService.getUserAccess('f@example.com').permisos).toEqual({
-      perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false
+      perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false
     });
+  });
+});
+
+describe('permisos fotos / fotos_carga (FotosPozos)', () => {
+  const base = { perfil: true, datos: true, ubicacion: true, ne: true, reemplazo: true };
+
+  test('cada permiso es independiente: fotos no implica fotos_carga ni al reves', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({ found: true, active: true, permisos: Object.assign({}, base, { fotos: true, fotos_carga: false }) });
+    expect(AuthService.hasPermission('a1@example.com', 'fotos')).toBe(true);
+    expect(AuthService.hasPermission('a1@example.com', 'fotos_carga')).toBe(false);
+    global.sheetUserRepository_getUserStatus.mockReturnValue({ found: true, active: true, permisos: Object.assign({}, base, { fotos: false, fotos_carga: true }) });
+    expect(AuthService.hasPermission('a2@example.com', 'fotos')).toBe(false);
+    expect(AuthService.hasPermission('a2@example.com', 'fotos_carga')).toBe(true);
+  });
+
+  test('tener reemplazo=SI y todo lo demas no otorga fotos ni fotos_carga', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({ found: true, active: true, permisos: Object.assign({}, base, { fotos: false, fotos_carga: false }) });
+    expect(AuthService.hasPermission('b@example.com', 'fotos')).toBe(false);
+    expect(AuthService.hasPermission('b@example.com', 'fotos_carga')).toBe(false);
+  });
+
+  test('columnas ausentes en el repositorio (hoja sin fotos/fotos_carga): fail-closed', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({ found: true, active: true, permisos: base });
+    expect(AuthService.hasPermission('c@example.com', 'fotos')).toBe(false);
+    expect(AuthService.hasPermission('c@example.com', 'fotos_carga')).toBe(false);
+  });
+
+  test('usuario inactivo con fotos=SI y fotos_carga=SI: nada', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({ found: true, active: false, permisos: Object.assign({}, base, { fotos: true, fotos_carga: true }) });
+    expect(AuthService.hasPermission('d@example.com', 'fotos')).toBe(false);
+    expect(AuthService.hasPermission('d@example.com', 'fotos_carga')).toBe(false);
+  });
+
+  test('login/checkSession entregan ambos permisos al frontend', () => {
+    global.sheetUserRepository_getUserStatus.mockReturnValue({ found: true, active: true, permisos: Object.assign({}, base, { fotos: true, fotos_carga: false }) });
+    const acceso = AuthService.getUserAccess('e@example.com');
+    expect(acceso.permisos.fotos).toBe(true);
+    expect(acceso.permisos.fotos_carga).toBe(false);
   });
 });

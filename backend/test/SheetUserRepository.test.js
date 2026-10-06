@@ -9,16 +9,34 @@ const {
 } = require('../src/SheetUserRepository');
 
 describe('sheetUserRepository_indiceColumnas', () => {
-  test('encuentra las 9 columnas en el orden original', () => {
-    const header = ['email', 'nombre', 'estado', 'fecha_alta', 'perfil', 'datos', 'ubicacion', 'ne', 'reemplazo'];
+  test('encuentra las 11 columnas en el orden original', () => {
+    const header = ['email', 'nombre', 'estado', 'fecha_alta', 'perfil', 'datos', 'ubicacion', 'ne', 'reemplazo', 'fotos', 'fotos_carga'];
     const idx = sheetUserRepository_indiceColumnas(header);
-    expect(idx).toEqual({ email: 0, nombre: 1, estado: 2, fecha_alta: 3, perfil: 4, datos: 5, ubicacion: 6, ne: 7, reemplazo: 8 });
+    expect(idx).toEqual({ email: 0, nombre: 1, estado: 2, fecha_alta: 3, perfil: 4, datos: 5, ubicacion: 6, ne: 7, reemplazo: 8, fotos: 9, fotos_carga: 10 });
   });
 
   test('encuentra las columnas aunque esten reordenadas', () => {
-    const header = ['reemplazo', 'ne', 'ubicacion', 'datos', 'perfil', 'fecha_alta', 'estado', 'nombre', 'email'];
+    const header = ['fotos_carga', 'fotos', 'reemplazo', 'ne', 'ubicacion', 'datos', 'perfil', 'fecha_alta', 'estado', 'nombre', 'email'];
     const idx = sheetUserRepository_indiceColumnas(header);
-    expect(idx).toEqual({ reemplazo: 0, ne: 1, ubicacion: 2, datos: 3, perfil: 4, fecha_alta: 5, estado: 6, nombre: 7, email: 8 });
+    expect(idx).toEqual({ fotos_carga: 0, fotos: 1, reemplazo: 2, ne: 3, ubicacion: 4, datos: 5, perfil: 6, fecha_alta: 7, estado: 8, nombre: 9, email: 10 });
+  });
+
+  test('una hoja SIN las columnas fotos / fotos_carga (todavia no agregadas) las da como -1: fail-closed', () => {
+    const header = ['email', 'nombre', 'estado', 'fecha_alta', 'perfil', 'datos', 'ubicacion', 'ne', 'reemplazo'];
+    const idx = sheetUserRepository_indiceColumnas(header);
+    expect(idx.fotos).toBe(-1);
+    expect(idx.fotos_carga).toBe(-1);
+    expect(sheetUserRepository_leerPermiso(['x', 'x', 'x', 'x', 'SI', 'SI', 'SI', 'SI', 'SI'], idx, 'fotos')).toBe(false);
+    expect(sheetUserRepository_leerPermiso(['x', 'x', 'x', 'x', 'SI', 'SI', 'SI', 'SI', 'SI'], idx, 'fotos_carga')).toBe(false);
+  });
+
+  test('fotos y fotos_carga son permisos independientes (SI / NO por separado)', () => {
+    const idx = sheetUserRepository_indiceColumnas(['email', 'fotos', 'fotos_carga']);
+    expect(sheetUserRepository_leerPermiso(['a', 'SI', 'NO'], idx, 'fotos')).toBe(true);
+    expect(sheetUserRepository_leerPermiso(['a', 'SI', 'NO'], idx, 'fotos_carga')).toBe(false);
+    expect(sheetUserRepository_leerPermiso(['a', '', 'si'], idx, 'fotos')).toBe(false);
+    expect(sheetUserRepository_leerPermiso(['a', '', 'si'], idx, 'fotos_carga')).toBe(true);
+    expect(sheetUserRepository_leerPermiso(['a', 'yes', 'true'], idx, 'fotos')).toBe(false);
   });
 
   test('es insensible a mayusculas y espacios en el encabezado', () => {

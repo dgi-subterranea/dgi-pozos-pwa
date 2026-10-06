@@ -171,3 +171,51 @@ function apiGetFotoReemplazo(sessionToken, fotoId, variante) {
 function apiGetResumenReemplazoMapa(sessionToken) {
   return callBackend('getResumenReemplazoMapa', { sessionToken: sessionToken });
 }
+
+// --- Galeria general de fotos de pozos / puntos NE (FotosPozos v1) ---
+// Separada de las fotos de Reemplazos. Ver y contar = permiso "fotos"; cargar =
+// "fotos_carga" (independientes entre si y de "reemplazo"). El frontend ni siquiera
+// dispara las lecturas sin "fotos" (ver js/fotosPozosResumen.js / js/fotosPozos.js);
+// el backend vuelve a validar igual. El navegador habla SOLO con el backend
+// principal: nunca recibe URLs de Drive, Drive IDs, emails ni sha1.
+// La entidad es wellId (pozo Provincia o punto NE con numero de pozo) o, para un
+// punto NE especial sin wellId, monitoringId.
+function apiGetFotosPozo(sessionToken, wellId, monitoringId, orden) {
+  return callBackend('getFotosPozo', { sessionToken: sessionToken, wellId: wellId, monitoringId: monitoringId, orden: orden });
+}
+
+// variante: 'thumb' (miniaturas, lazy) | 'full' (solo al abrir el visor)
+function apiGetFotoPozo(sessionToken, fotoId, variante) {
+  return callBackend('getFotoPozo', { sessionToken: sessionToken, fotoId: fotoId, variante: variante });
+}
+
+// UNA llamada: {wellId | monitoringId: cantidad}, solo entidades con al menos una foto
+function apiGetResumenFotosPozos(sessionToken) {
+  return callBackend('getResumenFotosPozos', { sessionToken: sessionToken });
+}
+
+// Una foto por request (cola secuencial). datos: {wellId, monitoringId, fuente, tipoFoto,
+// fechaFotoValor, fechaFotoPrecision, fechaFotoFuente, observacion, gps:{lat,lon}|null,
+// mimeType, imagenBase64, thumbBase64, sha1Original, procesamiento, tamanoOriginalBytes}.
+// La identidad de quien sube nunca se manda: sale de la sesion.
+function apiSubirFotoPozo(sessionToken, datos) {
+  var d = datos || {};
+  return callBackend('subirFotoPozo', {
+    sessionToken: sessionToken,
+    wellId: d.wellId,
+    monitoringId: d.monitoringId,
+    fuente: d.fuente,
+    tipoFoto: d.tipoFoto,
+    fechaFotoValor: d.fechaFotoValor,
+    fechaFotoPrecision: d.fechaFotoPrecision,
+    fechaFotoFuente: d.fechaFotoFuente,
+    observacion: d.observacion,
+    gps: d.gps,
+    mimeType: d.mimeType,
+    imagenBase64: d.imagenBase64,
+    thumbBase64: d.thumbBase64,
+    sha1Original: d.sha1Original,
+    procesamiento: d.procesamiento,
+    tamanoOriginalBytes: d.tamanoOriginalBytes
+  });
+}

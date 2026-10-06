@@ -1,10 +1,11 @@
 // Unica funcion que sabe que existe una hoja "Usuarios" en Sheets.
 // Columnas esperadas (header en la fila 1, CUALQUIER orden):
-//   email | nombre | estado | fecha_alta | perfil | datos | ubicacion | ne | reemplazo
+//   email | nombre | estado | fecha_alta | perfil | datos | ubicacion | ne | reemplazo | fotos | fotos_carga
 // Las columnas se buscan por el TEXTO del encabezado (normalizado a
 // minuscula/trim), nunca por posicion fija - reordenar columnas en la
-// hoja no rompe nada. Si falta alguna de las 5 columnas de permiso, ese
-// permiso da false para todos (fail-closed), sin lanzar error.
+// hoja no rompe nada. Si falta alguna de las columnas de permiso (por ejemplo
+// fotos / fotos_carga antes de agregarlas a la hoja), ese permiso da false para
+// todos (fail-closed), sin lanzar error.
 //
 // "estado" debe valer exactamente "activo" (normalizado) para
 // considerarse habilitado. Cualquier otro valor, o el email ausente de
@@ -14,8 +15,8 @@
 // dat true. Cualquier otra cosa da false: "NO", vacio, "1", "true",
 // texto desconocido, o la columna directamente inexistente en el header.
 // No hay ningun valor que se interprete como "permitido por defecto".
-var USUARIOS_COLUMNAS = ['email', 'nombre', 'estado', 'fecha_alta', 'perfil', 'datos', 'ubicacion', 'ne', 'reemplazo'];
-var USUARIOS_COLUMNAS_PERMISO = ['perfil', 'datos', 'ubicacion', 'ne', 'reemplazo'];
+var USUARIOS_COLUMNAS = ['email', 'nombre', 'estado', 'fecha_alta', 'perfil', 'datos', 'ubicacion', 'ne', 'reemplazo', 'fotos', 'fotos_carga'];
+var USUARIOS_COLUMNAS_PERMISO = ['perfil', 'datos', 'ubicacion', 'ne', 'reemplazo', 'fotos', 'fotos_carga'];
 
 function sheetUserRepository_indiceColumnas(headerRow) {
   var normalizados = headerRow.map(function (h) { return String(h).trim().toLowerCase(); });
@@ -35,7 +36,7 @@ function sheetUserRepository_leerPermiso(row, indices, nombreColumna) {
 }
 
 function sheetUserRepository_permisosVacios() {
-  return { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false };
+  return { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false };
 }
 
 function sheetUserRepository_getUserStatus(email) {

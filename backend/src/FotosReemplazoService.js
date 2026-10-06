@@ -265,6 +265,8 @@ if (typeof module !== 'undefined' && module.exports) {
     FOTOS_MAX_BYTES,
     FOTOS_THUMB_MAX_BYTES,
     fotosService_bytesDeBase64,
+    fotosService_esJpeg,
+    fotosService_limpiar,
     fotosService_validarSubida,
     fotosService_nombreArchivo,
     fotosService_sanitizar,

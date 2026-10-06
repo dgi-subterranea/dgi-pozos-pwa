@@ -134,8 +134,35 @@ function fotosStorageClient_descartar(driveFileId) {
   fotosStorageClient_llamar('trashFoto', { driveFileId: driveFileId });
 }
 
+// --- Galeria general de pozos (FotosPozos): mismas firmas HMAC, otras acciones ---
+
+// datos: {fotoId, fuente, carpetaFecha, mimeType, imagenBase64, thumbBase64}.
+// Devuelve {driveFileId, driveThumbId, tamanoBytes}.
+function fotosStorageClient_subirPozo(datos) {
+  var r = fotosStorageClient_llamar('putFotoPozo', datos);
+  return { driveFileId: r.driveFileId, driveThumbId: r.driveThumbId || '', tamanoBytes: r.tamanoBytes };
+}
+
+// variante: 'thumb' | 'full'. driveThumbId opcional (columna de la hoja).
+function fotosStorageClient_obtenerPozo(driveFileId, driveThumbId, variante) {
+  var payload = { driveFileId: driveFileId, variante: variante };
+  if (driveThumbId) {
+    payload.driveThumbId = driveThumbId;
+  }
+  var r = fotosStorageClient_llamar('getFotoPozo', payload);
+  return { mimeType: r.mimeType, imagenBase64: r.imagenBase64 };
+}
+
+// SOLO compensacion interna (foto subida pero no registrada): papelera.
+function fotosStorageClient_descartarPozo(driveFileId) {
+  fotosStorageClient_llamar('trashFotoPozo', { driveFileId: driveFileId });
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
+    fotosStorageClient_subirPozo,
+    fotosStorageClient_obtenerPozo,
+    fotosStorageClient_descartarPozo,
     fotosStorageClient_hex,
     fotosStorageClient_firmar,
     fotosStorageClient_igualesConstante,
