@@ -28,6 +28,14 @@ function fotosService_error(code, message) {
   return { ok: false, code: code, message: message };
 }
 
+// Logging seguro: el mensaje de un error de red del storage puede traer su
+// URL (o ids largos). Antes de loguearlo se tapan las URLs y cualquier tramo
+// largo con pinta de base64/id, y se recorta. Nunca se loguea base64,
+// secreto, URL del storage, driveFileId ni email.
+function fotosService_limpiar(mensaje) {
+  return String(mensaje).replace(/https?:\/\/\S+/g, '[url]').replace(/[A-Za-z0-9+\/=_-]{16,}/g, '[...]').substring(0, 160);
+}
+
 // Bytes que representa un base64 (sin decodificarlo entero).
 function fotosService_bytesDeBase64(b64) {
   var len = b64.length;
@@ -161,7 +169,7 @@ function fotosService_subir(email, wellId, evaluacionId, datos) {
       thumbBase64: d.thumbBase64
     });
   } catch (err) {
-    Logger.log('Storage de fotos no disponible: ' + err.toString());
+    Logger.log('Storage de fotos no disponible: ' + fotosService_limpiar(err));
     return fotosService_error('STORAGE_UNAVAILABLE', 'no se pudo guardar la foto');
   }
 
@@ -205,7 +213,7 @@ function fotosService_descartarSilencioso(driveFileId) {
   try {
     fotosStorageClient_descartar(driveFileId);
   } catch (err) {
-    Logger.log('No se pudo descartar una foto huerfana: ' + err.toString());
+    Logger.log('No se pudo descartar una foto huerfana: ' + fotosService_limpiar(err));
   }
 }
 
@@ -242,7 +250,7 @@ function fotosService_obtenerImagen(fotoId, variante) {
   try {
     r = fotosStorageClient_obtener(foto.driveFileId, variante);
   } catch (err) {
-    Logger.log('Storage de fotos no disponible: ' + err.toString());
+    Logger.log('Storage de fotos no disponible: ' + fotosService_limpiar(err));
     return fotosService_error('STORAGE_UNAVAILABLE', 'no se pudo leer la foto');
   }
   if (variante === 'thumb' && r.imagenBase64.length <= FOTOS_THUMB_CACHE_MAX_CHARS) {

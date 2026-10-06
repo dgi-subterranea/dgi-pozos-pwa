@@ -300,6 +300,10 @@
       texto.appendChild(el('p', 'reemplazo-subida-nombre', 'Foto ' + (i + 1)));
       var etiquetas = { pendiente: 'En espera', subiendo: 'Subiendo...', subida: 'Subida', fallida: it.error || 'Falló' };
       texto.appendChild(el('p', 'reemplazo-subida-estado' + (it.estado === 'fallida' ? ' error-message' : ''), etiquetas[it.estado]));
+      if (it.estado === 'fallida' && it.codigo) {
+        // codigo real del backend (no oculto detras de un mensaje generico)
+        texto.appendChild(el('p', 'reemplazo-subida-codigo', reemplazoFotosLogic_textoCodigo(it.codigo)));
+      }
       fila.appendChild(texto);
 
       if (it.estado === 'fallida') {
@@ -358,15 +362,19 @@
         if (r.code === 'UNAUTHORIZED' || r.code === 'USER_DISABLED') {
           item.estado = 'fallida';
           item.error = reemplazoFotosLogic_mensajeError('SERVICE_UNAVAILABLE');
+          item.codigo = r.code;
           if (ctx.onSessionExpired) { ctx.onSessionExpired(); }
           return;
         }
         item.estado = 'fallida';
         item.error = reemplazoFotosLogic_mensajeError(r.code);
+        item.codigo = r.code || 'SIN_CODIGO';
       })
       .catch(function () {
         item.estado = 'fallida';
         item.error = reemplazoFotosLogic_mensajeError('RED');
+        // fetch rechazado o respuesta que no es JSON (p. ej. pagina de error de Google)
+        item.codigo = 'RED';
       })
       .then(function () {
         s.subiendo = false;
@@ -381,6 +389,7 @@
     }
     item.estado = 'pendiente';
     item.error = null;
+    item.codigo = null;
     renderSubida();
     procesarCola();
   }

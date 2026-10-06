@@ -128,6 +128,13 @@ function reemplazoFotosLogic_mensajeError(code) {
   return REEMPLAZO_FOTOS_MENSAJES[code] || 'No se pudo subir la foto. Reintentá.';
 }
 
+// Una subida fallida muestra SIEMPRE el codigo real que devolvio el backend
+// (o RED si ni respondio): el mensaje amigable es generico y ocultaba la
+// causa. Es una linea corta para soporte, sin datos de la imagen.
+function reemplazoFotosLogic_textoCodigo(codigo) {
+  return codigo ? 'Código: ' + codigo : '';
+}
+
 // Items de la cola. estado: 'procesando' | 'lista' | 'error' | 'pendiente'
 // (guardada la evaluacion, esperando turno) | 'subiendo' | 'subida' |
 // 'fallida'. Devuelve el primer item que toca subir (cola secuencial) o
@@ -195,6 +202,7 @@ if (typeof module !== 'undefined' && module.exports) {
     reemplazoFotosLogic_formatearBytes,
     reemplazoFotosLogic_base64DeDataUrl,
     reemplazoFotosLogic_mensajeError,
+    reemplazoFotosLogic_textoCodigo,
     reemplazoFotosLogic_siguienteASubir,
     reemplazoFotosLogic_hayEnCurso,
     reemplazoFotosLogic_resumenSubida,

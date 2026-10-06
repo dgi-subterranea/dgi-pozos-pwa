@@ -3267,3 +3267,11 @@ body.con-bandeja {
     height: 84px;
   }
 }
+
+.reemplazo-subida-codigo {
+  margin: 2px 0 0;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  color: var(--color-text-soft);
+  overflow-wrap: anywhere;
+}

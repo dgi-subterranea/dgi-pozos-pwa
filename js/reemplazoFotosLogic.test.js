@@ -150,3 +150,14 @@ describe('historial: agrupar fotos por evaluacion (0 / 1 / varias, sin mezclar)'
     expect(m.E3).toBeUndefined();
   });
 });
+
+describe('reemplazoFotosLogic_textoCodigo: el codigo real de un fallo no se pierde', () => {
+  test('muestra el codigo del backend', () => {
+    expect(L.reemplazoFotosLogic_textoCodigo('SERVICE_UNAVAILABLE')).toBe('Código: SERVICE_UNAVAILABLE');
+    expect(L.reemplazoFotosLogic_textoCodigo('RED')).toBe('Código: RED');
+  });
+  test('sin codigo: vacio', () => {
+    expect(L.reemplazoFotosLogic_textoCodigo(null)).toBe('');
+    expect(L.reemplazoFotosLogic_textoCodigo(undefined)).toBe('');
+  });
+});

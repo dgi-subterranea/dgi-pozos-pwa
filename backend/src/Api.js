@@ -3,6 +3,15 @@
 // respuesta (por ejemplo, la codificacion en base64 de la imagen es una
 // decision de esta capa, no de ProfileService).
 
+// Logging seguro de errores inesperados de doPost: sirve para detectar, por
+// ejemplo, una VERSION DESPLEGADA vieja del Web App (la app manda una accion
+// que ese codigo no conoce). Solo el nombre de la accion, recortado, y el
+// mensaje de error sin URLs ni tramos largos con pinta de base64/id: nunca
+// el cuerpo del request, secretos ni datos del usuario.
+function api_limpiarMensajeLog(mensaje) {
+  return String(mensaje).replace(/https?:\/\/\S+/g, '[url]').replace(/[A-Za-z0-9+\/=_-]{16,}/g, '[...]').substring(0, 160);
+}
+
 function doPost(e) {
   var response;
   try {
@@ -56,10 +65,12 @@ function doPost(e) {
       } else if (body.action === 'getFotoReemplazo') {
         response = handleGetFotoReemplazo(body.sessionToken, body.fotoId, body.variante);
       } else {
+        Logger.log('doPost: accion desconocida: ' + api_limpiarMensajeLog(body.action));
         response = { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'accion desconocida: ' + body.action };
       }
     }
   } catch (err) {
+    Logger.log('doPost: excepcion: ' + api_limpiarMensajeLog(err));
     response = { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
   }
 
