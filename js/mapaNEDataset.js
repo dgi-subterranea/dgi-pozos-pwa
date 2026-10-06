@@ -5,11 +5,11 @@
 // "Niveles estáticos" vive unicamente en el Mapa, no en Cerca Mio - ver
 // v2.1.0). No persiste entre recargas de pagina (memoria de sesion nada
 // mas, mismo criterio que mapaDataset.js).
-var mapaNEDatasetEstado = { puntos: null, promise: null };
+var mapaNEDatasetEstado = { puntos: null, wellIdsSinCoordenada: [], promise: null };
 
 function mapaNEDataset_obtener(sessionToken) {
   if (mapaNEDatasetEstado.puntos) {
-    return Promise.resolve({ status: 'ok', data: { puntos: mapaNEDatasetEstado.puntos } });
+    return Promise.resolve({ status: 'ok', data: { puntos: mapaNEDatasetEstado.puntos, wellIdsSinCoordenada: mapaNEDatasetEstado.wellIdsSinCoordenada } });
   }
 
   if (mapaNEDatasetEstado.promise) {
@@ -20,6 +20,10 @@ function mapaNEDataset_obtener(sessionToken) {
     mapaNEDatasetEstado.promise = null;
     if (result.status === 'ok') {
       mapaNEDatasetEstado.puntos = result.data.puntos;
+      // Miembros de la red NE sin coordenada propia (solo wellId). Un backend
+      // viejo no lo manda: se asume lista vacia.
+      result.data.wellIdsSinCoordenada = result.data.wellIdsSinCoordenada || [];
+      mapaNEDatasetEstado.wellIdsSinCoordenada = result.data.wellIdsSinCoordenada;
     }
     // Un error NUNCA se cachea - la proxima vez que se active el chip
     // vuelve a intentar el fetch en vez de quedar pegada a la falla.

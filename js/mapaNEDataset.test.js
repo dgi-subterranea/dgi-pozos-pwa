@@ -20,6 +20,24 @@ describe('mapaNEDataset_obtener', () => {
     expect(result.data.puntos).toEqual([{ monitoringId: '04-0263', wellId: '04-0263', lat: -32.8, lon: -68.7, nombreOriginal: null }]);
   });
 
+  test('wellIdsSinCoordenada: se cachea junto con los puntos; un backend viejo (sin el campo) da lista vacia', async () => {
+    global.apiGetMapaNE = jest.fn().mockResolvedValue({
+      status: 'ok', data: { puntos: [{ monitoringId: 'x' }], wellIdsSinCoordenada: ['06-1902'] }
+    });
+    let { mapaNEDataset_obtener } = require('./mapaNEDataset');
+    const primera = await mapaNEDataset_obtener('token-x');
+    const segunda = await mapaNEDataset_obtener('token-x');
+    expect(primera.data.wellIdsSinCoordenada).toEqual(['06-1902']);
+    expect(segunda.data.wellIdsSinCoordenada).toEqual(['06-1902']);
+    expect(global.apiGetMapaNE).toHaveBeenCalledTimes(1);
+
+    jest.resetModules();
+    global.apiGetMapaNE = jest.fn().mockResolvedValue({ status: 'ok', data: { puntos: [] } });
+    ({ mapaNEDataset_obtener } = require('./mapaNEDataset'));
+    expect((await mapaNEDataset_obtener('t')).data.wellIdsSinCoordenada).toEqual([]);
+    expect((await mapaNEDataset_obtener('t')).data.wellIdsSinCoordenada).toEqual([]);
+  });
+
   test('segunda llamada tras exito: reusa el cache, NO vuelve a llamar a apiGetMapaNE', async () => {
     global.apiGetMapaNE = jest.fn().mockResolvedValue({
       status: 'ok', data: { puntos: [{ monitoringId: 'INA 2055', wellId: null, lat: -32.9, lon: -68.9, nombreOriginal: 'X' }] }

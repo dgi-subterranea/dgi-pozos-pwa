@@ -42,6 +42,31 @@ function puntoEspecial(overrides) {
 }
 
 describe('mapaNEService_getPuntos', () => {
+  test('wellIdsSinCoordenada: miembros de la red sin coordenada propia, solo su wellId y ordenados', () => {
+    global.nivelesEstaticosRepository_getTodosLosPuntos.mockReturnValue({
+      found: true,
+      puntos: {
+        '04-0263': puntoConWellId(),
+        '06-1902': puntoConWellId({ monitoringId: '06-1902', wellId: '06-1902', coordenadas: null }),
+        '04-0577': puntoConWellId({ monitoringId: '04-0577', wellId: '04-0577', coordenadas: { lat: null, lon: null } }),
+        '9': puntoEspecial({ monitoringId: '9', coordenadas: null })   // especial sin coordenada y sin wellId: no es un wellId
+      }
+    });
+
+    const result = MapaNEService.mapaNEService_getPuntos();
+
+    expect(result.puntos.map((p) => p.monitoringId)).toEqual(['04-0263']);
+    expect(result.wellIdsSinCoordenada).toEqual(['04-0577', '06-1902']);
+    // nada mas de esos puntos se filtra: ningun campo de la ficha en el resultado
+    expect(JSON.stringify(result)).not.toMatch(/PEREZ|propietario|nombreOriginal":"/);
+  });
+
+  test('sin miembros sin coordenada: lista vacia', () => {
+    global.nivelesEstaticosRepository_getTodosLosPuntos.mockReturnValue({ found: true, puntos: { '04-0263': puntoConWellId() } });
+
+    expect(MapaNEService.mapaNEService_getPuntos().wellIdsSinCoordenada).toEqual([]);
+  });
+
   test('no encontrado (no existe nivelesEstaticos.json) -> found:false', () => {
     global.nivelesEstaticosRepository_getTodosLosPuntos.mockReturnValue({ found: false });
 
@@ -126,7 +151,7 @@ describe('mapaNEService_getPuntos', () => {
 
     const result = MapaNEService.mapaNEService_getPuntos();
 
-    expect(result).toEqual({ found: true, puntos: [] });
+    expect(result).toEqual({ found: true, puntos: [], wellIdsSinCoordenada: [] });
   });
 
   test('mezcla de puntos con y sin wellId en el mismo dataset', () => {

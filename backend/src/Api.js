@@ -466,7 +466,9 @@ function handleGetMapaNE(sessionToken) {
     return { status: 'error', code: 'MAPA_NE_NOT_FOUND', message: 'no se encontro nivelesEstaticos.json' };
   }
 
-  return { status: 'ok', data: { puntos: result.puntos } };
+  // wellIdsSinCoordenada: pozos de la red NE sin coordenada propia (no se dibujan,
+  // pero siguen siendo miembros de la red); lista corta de wellId, nada mas.
+  return { status: 'ok', data: { puntos: result.puntos, wellIdsSinCoordenada: result.wellIdsSinCoordenada || [] } };
 }
 
 // Indice de busqueda por titular de Pozos Provincia (Etapa 1A): dataset

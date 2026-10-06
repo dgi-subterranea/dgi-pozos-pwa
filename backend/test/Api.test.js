@@ -1006,7 +1006,20 @@ describe('handleGetMapaNE', () => {
 
     const result = Api.handleGetMapaNE('token-valido');
 
-    expect(result).toEqual({ status: 'ok', data: { puntos } });
+    expect(result).toEqual({ status: 'ok', data: { puntos, wellIdsSinCoordenada: [] } });
+  });
+
+  test('wellIdsSinCoordenada: se reenvia tal cual lo devuelve el service (miembros de la red NE no dibujables)', () => {
+    mockValidSession();
+    global.mapaNEService_getPuntos.mockReturnValue({
+      found: true,
+      puntos: [],
+      wellIdsSinCoordenada: ['04-0577', '06-1902']
+    });
+
+    const result = Api.handleGetMapaNE('token-valido');
+
+    expect(result.data.wellIdsSinCoordenada).toEqual(['04-0577', '06-1902']);
   });
 
   // Caso central de seguridad: cada punto solo trae los 5 campos

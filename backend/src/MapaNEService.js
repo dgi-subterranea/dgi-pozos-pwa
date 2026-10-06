@@ -86,6 +86,7 @@ function mapaNEService_getPuntos() {
   }
 
   var puntos = [];
+  var wellIdsSinCoordenada = [];
   for (var monitoringId in result.puntos) {
     if (!Object.prototype.hasOwnProperty.call(result.puntos, monitoringId)) {
       continue;
@@ -93,10 +94,17 @@ function mapaNEService_getPuntos() {
     var punto = result.puntos[monitoringId];
     if (mapaNEService_tieneCoordenadasValidas(punto)) {
       puntos.push(mapaNEService_sanitizarPunto(punto, monitoringId));
+    } else if (punto.wellId) {
+      // Miembro de la red NE que no se puede dibujar (sin coordenada
+      // propia): solo se informa su wellId, para que el frontend sepa que
+      // ese pozo YA pertenece a la red (ej. excluirlo de los candidatos de
+      // "Buscar reemplazo"). Nada mas de su ficha viaja por aca.
+      wellIdsSinCoordenada.push(punto.wellId);
     }
   }
+  wellIdsSinCoordenada.sort();
 
-  return { found: true, puntos: puntos };
+  return { found: true, puntos: puntos, wellIdsSinCoordenada: wellIdsSinCoordenada };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
