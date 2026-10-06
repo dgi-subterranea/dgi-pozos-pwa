@@ -13,3 +13,15 @@ scripts/out/
 # no los usa la app ni el indexador, quedan solo localmente por si se
 # vuelve a abrir el CSV en QGIS.
 *.qmd
+
+# Fotos de pozos: los originales (sus nombres pueden traer titulares/lugares) y todo lo que
+# genera scripts/fotos/ (inventario, manifiestos privados, imagenes normalizadas del piloto,
+# CSV de revision) nunca al repo. Las salidas viven en scripts/out/fotos/ (ya ignorado arriba).
+# "/Fotos/" va anclado a la raiz: en Windows git ignora mayusculas y sin el ancla tambien taparia
+# el codigo de scripts/fotos/.
+/Fotos/
+manifiesto_privado*
+mapeo_privado*
+excluidas_privado*
+inventario.json
+corpus.json
