@@ -104,6 +104,9 @@ function installAppsScriptFakes() {
   global.reemplazoService_getHistorial = jest.fn();
   global.reemplazoService_registrar = jest.fn();
   global.reemplazoRepository_buscarPorEvaluacionId = jest.fn();
+  global.reemplazoRepository_listarParaResumen = jest.fn();
+  global.reemplazoService_getResumenMapa = jest.fn();
+  global.reemplazoService_invalidarResumen = jest.fn();
   global.fotosRepository_listarPorEvaluacionId = jest.fn();
   global.fotosRepository_listarPorWellId = jest.fn();
   global.fotosRepository_buscarPorFotoId = jest.fn();

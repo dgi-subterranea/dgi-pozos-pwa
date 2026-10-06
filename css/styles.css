@@ -26,6 +26,12 @@
      anillo de pozos seleccionados) - mismo hex que MAPA_COLOR_SELECCION en
      js/mapaShared.js (Leaflet no lee variables CSS: mantener en sync). */
   --color-seleccion: #e0007a;
+  /* Aptitud para reemplazo (Reemplazos v3): anillo del marcador en el mapa y
+     punto de los chips de filtro. Mismos hex que MAPA_COLOR_REEMPLAZO en
+     js/mapaShared.js (Leaflet no lee variables CSS: mantener en sync). */
+  --color-reemplazo-apto: #1f9d55;
+  --color-reemplazo-dudoso: #e0a100;
+  --color-reemplazo-no-apto: #d32f2f;
 }
 
 * {
@@ -3274,4 +3280,112 @@ body.con-bandeja {
   font-size: 0.72rem;
   color: var(--color-text-soft);
   overflow-wrap: anywhere;
+}
+
+/* --- Reemplazos v3: aptitud en mapa, Cerca Mio y Mi seleccion --- */
+.reemplazo-filtro-chip {
+  min-height: 34px;
+  padding: 6px 14px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text-soft);
+  border: 1.5px solid var(--color-border);
+  box-shadow: none;
+  gap: 6px;
+}
+.reemplazo-filtro-chip:hover {
+  background: var(--color-primary-tint);
+}
+.reemplazo-filtro-chip.active {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+/* punto de color del estado (en el chip activo se vuelve a ver con borde blanco) */
+.reemplazo-filtro-chip-apto::before,
+.reemplazo-filtro-chip-dudoso::before,
+.reemplazo-filtro-chip-no-apto::before {
+  content: '';
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+  border: 1.5px solid #fff;
+  box-shadow: 0 0 0 1px var(--color-border);
+}
+.reemplazo-filtro-chip-apto::before { background: var(--color-reemplazo-apto); }
+.reemplazo-filtro-chip-dudoso::before { background: var(--color-reemplazo-dudoso); }
+.reemplazo-filtro-chip-no-apto::before { background: var(--color-reemplazo-no-apto); }
+
+.cercamio-filtro-reemplazo,
+.seleccion-tabla-filtro-reemplazo {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+.seleccion-tabla-filtro-reemplazo {
+  padding: 12px 18px 0;
+}
+
+/* Cluster que contiene pozos evaluados: punto discreto en la esquina (sin
+   colores: un cluster mezcla estados, no se pinta de arcoiris). El anillo
+   magenta de la seleccion sigue teniendo prioridad (box-shadow aparte). */
+.marker-cluster.mapa-cluster-con-evaluados {
+  position: relative;
+}
+.marker-cluster.mapa-cluster-con-evaluados::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--color-primary-dark);
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(7, 62, 84, 0.35);
+}
+
+/* Linea "Reemplazo: Apto" del popup + boton Evaluar */
+.mapa-popup-reemplazo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+.mapa-popup-reemplazo .reemplazo-badge {
+  padding: 1px 9px;
+  font-size: 0.74rem;
+}
+.mapa-popup-btn-secundario {
+  margin-top: 6px;
+  background: transparent;
+  color: var(--color-primary);
+  border: 1.5px solid var(--color-primary);
+  box-shadow: none;
+}
+.mapa-popup-btn-secundario:hover {
+  background: var(--color-primary-tint);
+  color: var(--color-primary);
+}
+
+/* Badge de aptitud en las cards de Cerca Mio y Mi seleccion */
+.cercamio-item-reemplazo,
+.seleccion-card-reemplazo {
+  flex: none;
+}
+
+/* En la card de Mi seleccion el badge de aptitud queda pegado al id (el X a la derecha) */
+.seleccion-card-reemplazo {
+  margin-right: auto;
+}
+.cercamio-item-reemplazo {
+  margin-left: 8px;
+  margin-right: auto;
 }

@@ -56,6 +56,8 @@ function doPost(e) {
         // timestamp, evaluacionId...) que mande el cliente se ignora - la
         // identidad sale de la sesion, nunca del body.
         response = handleRegistrarEvaluacionReemplazo(body.sessionToken, body.wellId, body.estado, body.motivo, body.observacion, body.puntoNEReferencia);
+      } else if (body.action === 'getResumenReemplazoMapa') {
+        response = handleGetResumenReemplazoMapa(body.sessionToken);
       } else if (body.action === 'subirFotoReemplazo') {
         response = handleSubirFotoReemplazo(body.sessionToken, body.wellId, body.evaluacionId, body.nombreArchivo, body.mimeType, body.imagenBase64, body.thumbBase64);
       } else if (body.action === 'getFotosReemplazo') {
@@ -727,6 +729,32 @@ function handleRegistrarEvaluacionReemplazo(sessionToken, wellId, estado, motivo
   return { status: 'ok', data: { evaluacion: resultado.evaluacion } };
 }
 
+// Resumen BATCH para mapa, Cerca Mio y Mi seleccion (Reemplazos v3): un
+// objeto {wellId: "APTO"|"DUDOSO"|"NO_APTO"} solo con los pozos que tienen
+// al menos una evaluacion valida (el resto es SIN_EVALUAR). Gateado
+// EXCLUSIVAMENTE por "reemplazo": sin el permiso no se lee la hoja ni se
+// devuelve nada. Lectura frecuente y sin efectos: no se audita el caso OK
+// (ni Historial ni Telegram); permisos denegados y fallas si, como siempre.
+function handleGetResumenReemplazoMapa(sessionToken) {
+  var validation = validateSession(sessionToken, 'getResumenReemplazoMapa');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var permiso = validarPermiso(session, 'getResumenReemplazoMapa', null, 'reemplazo');
+  if (!permiso.ok) {
+    return permiso.response;
+  }
+
+  try {
+    return { status: 'ok', data: reemplazoService_getResumenMapa() };
+  } catch (err) {
+    logHistoryEvent(session.email, 'getResumenReemplazoMapa', null, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+}
+
 // --- Fotos de evaluaciones de reemplazo (Reemplazos v2) ---
 // Todos gateados EXCLUSIVAMENTE por "reemplazo" (lectura y escritura). El
 // almacenamiento real esta en otro proyecto/cuenta de Google (ver
@@ -848,6 +876,7 @@ if (typeof module !== 'undefined' && module.exports) {
     handleGetFotosReemplazo,
     handleGetFotosReemplazoPozo,
     handleGetFotoReemplazo,
+    handleGetResumenReemplazoMapa,
     validarPermiso,
     validateSession,
     validateSessionAndWellId

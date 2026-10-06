@@ -106,6 +106,39 @@ function reemplazoRepository_listarPorWellId(wellId) {
   return resultado;
 }
 
+// Une 3 columnas ya leidas (wellId, estado, timestamp: arrays de filas de 1
+// celda, como los devuelve getValues()) en evaluaciones minimas
+// {wellId, estado, timestamp ISO|null}. Logica pura, testeable.
+function reemplazoRepository_resumenDesdeColumnas(wellIds, estados, timestamps) {
+  var resultado = [];
+  for (var i = 0; i < wellIds.length; i++) {
+    var ts = timestamps[i][0];
+    var fecha = ts instanceof Date ? ts : new Date(ts);
+    resultado.push({
+      wellId: String(wellIds[i][0] === null || wellIds[i][0] === undefined ? '' : wellIds[i][0]).trim(),
+      estado: String(estados[i][0] === null || estados[i][0] === undefined ? '' : estados[i][0]).trim(),
+      timestamp: isNaN(fecha.getTime()) ? null : fecha.toISOString()
+    });
+  }
+  return resultado;
+}
+
+// Lectura LIVIANA para el resumen del mapa: solo 3 columnas (wellId,
+// estado, timestamp) de TODAS las filas, en vez de la hoja completa con
+// observaciones y demas texto. Una sola lectura por columna.
+function reemplazoRepository_listarParaResumen() {
+  var hoja = reemplazoRepository_abrirHoja();
+  var ultimaFila = hoja.sheet.getLastRow();
+  if (ultimaFila < 2) {
+    return [];
+  }
+  var cantidad = ultimaFila - 1;
+  function columna(nombre) {
+    return hoja.sheet.getRange(2, hoja.indices[nombre] + 1, cantidad, 1).getValues();
+  }
+  return reemplazoRepository_resumenDesdeColumnas(columna('wellId'), columna('estado'), columna('timestamp'));
+}
+
 // Una evaluacion por su id (o null). Lo usa el modulo de fotos para
 // validar que la evaluacion existe, a que pozo pertenece y quien la creo.
 function reemplazoRepository_buscarPorEvaluacionId(evaluacionId) {
@@ -167,6 +200,7 @@ if (typeof module !== 'undefined' && module.exports) {
     reemplazoRepository_indiceColumnas,
     reemplazoRepository_columnasFaltantes,
     reemplazoRepository_filaDesdeEvaluacion,
-    reemplazoRepository_evaluacionDesdeFila
+    reemplazoRepository_evaluacionDesdeFila,
+    reemplazoRepository_resumenDesdeColumnas
   };
 }

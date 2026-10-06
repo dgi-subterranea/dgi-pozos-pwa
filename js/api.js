@@ -162,3 +162,12 @@ function apiGetFotosReemplazo(sessionToken, evaluacionId) {
 function apiGetFotoReemplazo(sessionToken, fotoId, variante) {
   return callBackend('getFotoReemplazo', { sessionToken: sessionToken, fotoId: fotoId, variante: variante });
 }
+
+// --- Reemplazos v3: resumen batch para mapa, Cerca Mio y Mi seleccion ---
+// UNA llamada devuelve {wellId: "APTO"|"DUDOSO"|"NO_APTO"} solo de los
+// pozos evaluados (el resto es SIN_EVALUAR). Gateada por reemplazo=SI en el
+// backend; el frontend ni siquiera la dispara sin el permiso (ver
+// js/reemplazoEstados.js). Sin email, motivo, fotos, ids ni fechas.
+function apiGetResumenReemplazoMapa(sessionToken) {
+  return callBackend('getResumenReemplazoMapa', { sessionToken: sessionToken });
+}

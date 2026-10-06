@@ -165,6 +165,94 @@ function reemplazoService_getHistorial(wellId) {
   return { wellId: wellId, evaluaciones: reemplazoService_ordenarDescendente(reemplazoRepository_listarPorWellId(wellId)) };
 }
 
+// --- Resumen del mapa: wellId -> estado actual (solo pozos evaluados) ---
+// Lo consumen el mapa Provincia, Cerca Mio y Mi seleccion. SOLO wellId y
+// estado: nada de email, nombre, motivo, observacion, fotos, ids ni
+// timestamps. Los pozos ausentes son SIN_EVALUAR (no se devuelven 13.804
+// entradas de "SIN_EVALUAR"). Mismo criterio de "estado actual" que
+// getEstadoReemplazo: ultima evaluacion VALIDA por timestamp, y ante empate
+// la fila escrita despues; filas corruptas se ignoran.
+var REEMPLAZO_WELLID_REGEX = /^\d{2}-\d{4}$/;
+var REEMPLAZO_RESUMEN_CACHE_KEY = 'reemplazo_resumen_v1';
+var REEMPLAZO_RESUMEN_CACHE_SEG = 180;       // pocos minutos; se invalida al registrar
+var REEMPLAZO_RESUMEN_CACHE_MAX_CHARS = 95000; // CacheService: 100 KB por valor
+
+function reemplazoService_calcularResumen(evaluaciones) {
+  var ultimo = {}; // wellId -> {estado, t, i}
+  (evaluaciones || []).forEach(function (ev, i) {
+    if (!ev || !REEMPLAZO_WELLID_REGEX.test(ev.wellId) || !reemplazoService_esValida(ev)) {
+      return;
+    }
+    var t = new Date(ev.timestamp).getTime();
+    var previo = ultimo[ev.wellId];
+    if (!previo || t > previo.t || (t === previo.t && i > previo.i)) {
+      ultimo[ev.wellId] = { estado: ev.estado, t: t, i: i };
+    }
+  });
+  var resumen = {};
+  Object.keys(ultimo).forEach(function (wellId) {
+    resumen[wellId] = ultimo[wellId].estado;
+  });
+  return resumen;
+}
+
+// Forma compacta para el cache (arrays de wellId por estado: ~10 bytes por
+// pozo en vez de ~20) y su inversa.
+function reemplazoService_comprimirResumen(resumen) {
+  var porEstado = {};
+  REEMPLAZO_ESTADOS.forEach(function (e) { porEstado[e] = []; });
+  Object.keys(resumen).forEach(function (wellId) {
+    porEstado[resumen[wellId]].push(wellId);
+  });
+  return JSON.stringify(porEstado);
+}
+
+function reemplazoService_expandirResumen(texto) {
+  var porEstado = JSON.parse(texto);
+  var resumen = {};
+  REEMPLAZO_ESTADOS.forEach(function (estado) {
+    (porEstado[estado] || []).forEach(function (wellId) {
+      if (REEMPLAZO_WELLID_REGEX.test(wellId)) {
+        resumen[wellId] = estado;
+      }
+    });
+  });
+  return resumen;
+}
+
+// Cache de script de pocos minutos (compartido entre usuarios: el resumen
+// no es por usuario; el PERMISO se valida en Api.js antes de llegar aca).
+// Un fallo del cache nunca rompe la consulta: se lee la hoja.
+function reemplazoService_getResumenMapa() {
+  var cache = CacheService.getScriptCache();
+  try {
+    var guardado = cache.get(REEMPLAZO_RESUMEN_CACHE_KEY);
+    if (guardado !== null) {
+      return reemplazoService_expandirResumen(guardado);
+    }
+  } catch (err) {
+    // cache corrupto o no disponible: se recalcula
+  }
+  var resumen = reemplazoService_calcularResumen(reemplazoRepository_listarParaResumen());
+  try {
+    var texto = reemplazoService_comprimirResumen(resumen);
+    if (texto.length <= REEMPLAZO_RESUMEN_CACHE_MAX_CHARS) {
+      cache.put(REEMPLAZO_RESUMEN_CACHE_KEY, texto, REEMPLAZO_RESUMEN_CACHE_SEG);
+    }
+  } catch (err) {
+    // sin cache esta vez
+  }
+  return resumen;
+}
+
+function reemplazoService_invalidarResumen() {
+  try {
+    CacheService.getScriptCache().remove(REEMPLAZO_RESUMEN_CACHE_KEY);
+  } catch (err) {
+    // el cache vence solo en pocos minutos
+  }
+}
+
 // email/nombre llegan SIEMPRE de la sesion (Api.js) - este servicio nunca
 // los toma de datos del cliente. timestamp e evaluacionId los genera el
 // backend. Devuelve {ok:true, evaluacion} o {ok:false, code, message}.
@@ -187,6 +275,9 @@ function reemplazoService_registrar(email, nombre, wellId, datos) {
     puntoNEReferencia: v.puntoNEReferencia
   };
   reemplazoRepository_agregar(evaluacion);
+  // La evaluacion nueva cambia el estado actual del pozo: el resumen
+  // cacheado queda viejo, se descarta ya (no espera al vencimiento).
+  reemplazoService_invalidarResumen();
   return {
     ok: true,
     evaluacion: reemplazoService_sanitizar({
@@ -212,6 +303,12 @@ if (typeof module !== 'undefined' && module.exports) {
     reemplazoService_calcularEstado,
     reemplazoService_getEstado,
     reemplazoService_getHistorial,
-    reemplazoService_registrar
+    reemplazoService_registrar,
+    reemplazoService_calcularResumen,
+    reemplazoService_comprimirResumen,
+    reemplazoService_expandirResumen,
+    reemplazoService_getResumenMapa,
+    reemplazoService_invalidarResumen,
+    REEMPLAZO_RESUMEN_CACHE_KEY
   };
 }

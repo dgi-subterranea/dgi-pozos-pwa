@@ -381,6 +381,16 @@
         </div>
       </div>
 
+      <!-- Aptitud para reemplazo (Reemplazos v3): SOLO con reemplazo=SI (el
+           grupo entero empieza hidden y mapa.js lo muestra si hay resumen
+           disponible). Misma semantica que el resto: "Todos" = sin filtro
+           del grupo, se pueden sumar varios (OR dentro del grupo) y se
+           combina con AND con los demas grupos. -->
+      <div class="mapa-filtro-grupo" id="mapa-grupo-reemplazo" hidden>
+        <p class="mapa-filtro-label">Aptitud para reemplazo</p>
+        <div id="mapa-reemplazo-chips" class="mapa-chips-wrap"></div>
+      </div>
+
       <!-- Tiene / Niveles estáticos (v2.2.0: FILTRO sobre el padron, no
            una capa separada - ver mapaLogic_filtrarPorNE en
            js/mapaLogic.js): reduce Pozos Provincia a la interseccion con
@@ -731,6 +741,12 @@
       </div>
 
       <div id="cercamio-resultados" hidden>
+        <!-- Aptitud para reemplazo (solo reemplazo=SI): filtra LOCALMENTE los
+             pozos ya encontrados por el radio, sin recalcular GPS ni radio. -->
+        <div id="cercamio-grupo-reemplazo" class="cercamio-filtro-reemplazo" hidden>
+          <p class="mapa-filtro-label">Aptitud para reemplazo</p>
+          <div id="cercamio-reemplazo-chips" class="mapa-chips-wrap"></div>
+        </div>
         <p id="cercamio-contador" class="mapa-contador"></p>
         <div id="cercamio-lista" class="cercamio-lista"></div>
         <button type="button" id="btn-cercamio-ver-todos-mapa" class="button-secondary cercamio-ver-todos-mapa">Ver todos en el mapa</button>
@@ -786,6 +802,11 @@
         <option value="cuenca">Ordenar: Cuenca</option>
         <option value="profundidad">Ordenar: Profundidad</option>
       </select>
+    </div>
+    <!-- Aptitud (solo reemplazo=SI): se combina con buscar y ordenar -->
+    <div id="seleccion-tabla-grupo-reemplazo" class="seleccion-tabla-filtro-reemplazo" hidden>
+      <p class="mapa-filtro-label">Aptitud para reemplazo</p>
+      <div id="seleccion-tabla-reemplazo-chips" class="mapa-chips-wrap"></div>
     </div>
     <div id="seleccion-tabla-vacio" class="cercamio-estado" hidden>
       <p>No tenés pozos seleccionados.</p>
@@ -1016,6 +1037,8 @@
   <script src="js/api.js"></script>
   <script src="js/hubIdentificacion.js"></script>
   <script src="js/mapaLogic.js"></script>
+  <script src="js/reemplazoResumenLogic.js"></script>
+  <script src="js/reemplazoEstados.js"></script>
   <script src="js/mapaDataset.js"></script>
   <script src="js/mapaNEDataset.js"></script>
   <script src="js/busquedaProvinciaDataset.js"></script>

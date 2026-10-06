@@ -242,6 +242,19 @@ function seleccionLogic_describirVista(params) {
   };
 }
 
+// Mi seleccion conserva busqueda y filtro de aptitud al volver de abrir un
+// pozo / evaluar, pero NO los arrastra a una seleccion distinta: se conservan
+// mientras la seleccion actual sea la misma o un SUBCONJUNTO de la anterior
+// (p. ej. se quito un pozo con la X); si entro algun pozo nuevo (otra
+// seleccion, "Agregar a seleccion") se parte de cero.
+function seleccionLogic_debeConservarVista(wellIdsAnteriores, wellIdsActuales) {
+  if (!wellIdsAnteriores) {
+    return false;
+  }
+  var previos = new Set(wellIdsAnteriores);
+  return wellIdsActuales.every(function (id) { return previos.has(id); });
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     SELECCION_POLIGONO_TOLERANCIA_DEFAULT,
@@ -257,6 +270,7 @@ if (typeof module !== 'undefined' && module.exports) {
     seleccionLogic_distanciaPuntoASegmento,
     seleccionLogic_pointInPolygonOrBoundary,
     seleccionLogic_bboxDeVertices,
-    seleccionLogic_filtrarPorPoligono
+    seleccionLogic_filtrarPorPoligono,
+    seleccionLogic_debeConservarVista
   };
 }

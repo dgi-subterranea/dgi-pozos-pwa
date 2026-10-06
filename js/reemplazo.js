@@ -139,6 +139,10 @@
       estado.estadoActual = rEstado.data.estado;
       estado.ultimaEvaluacion = rEstado.data.ultimaEvaluacion;
       estado.historial = rHistorial.data.evaluaciones || [];
+      // el estado autoritativo del backend manda sobre el resumen en memoria
+      if (reemplazoEstadosController_estadoDe(wellId) !== estado.estadoActual) {
+        reemplazoEstadosController_actualizar(wellId, estado.estadoActual);
+      }
       renderDetalle();
     }).catch(function () {
       if (cargaId !== estado.cargaId) {
@@ -416,6 +420,11 @@
         var derivado = reemplazoLogic_estadoDesdeHistorial(estado.historial);
         estado.estadoActual = derivado.estado;
         estado.ultimaEvaluacion = derivado.ultimaEvaluacion;
+        // Actualizacion INMEDIATA del estado compartido (mapa, Cerca Mio, Mi
+        // seleccion): al volver, el badge ya muestra el estado nuevo, sin
+        // esperar el cache ni refetchear todo. (El backend invalida su
+        // cache al registrar.)
+        reemplazoEstadosController_actualizar(wellIdGuardando, derivado.estado);
         // Las fotos se suben DESPUES de guardar la evaluacion (una por
         // request, en cola): si alguna falla, la evaluacion y las demas
         // quedan, y la fallida se puede reintentar. Va antes de

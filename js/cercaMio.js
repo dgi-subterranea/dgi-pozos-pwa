@@ -44,6 +44,8 @@
     pickerMapa: null,    // instancia L.Map del mini-mapa de "Elegir en mapa", se crea UNA sola vez
     pickerMarker: null,  // marcador "Punto de busqueda" sobre pickerMapa
     puedeVerMapa: false, // perfil=SI o ne=SI: habilita los botones que abren el mapa Provincia
+    encontrados: [],     // TODOS los pozos del radio actual, ordenados por distancia (sin el tope de 30): sobre este conjunto filtra localmente la aptitud, sin recalcular GPS ni radio
+    reemplazoActivos: {}, // filtro "Aptitud para reemplazo" (solo reemplazo=SI), multi-seleccion OR
     pickerCirculo: null  // L.circle del radio sobre pickerMapa (item 3 del cierre) - sigue al marcador y se redimensiona en vivo con el radio, sin tocar el centro
   };
 
@@ -72,6 +74,8 @@
   var inputRadioKmEl = document.getElementById('input-cercamio-radio-km');
   var radioPersonalizadoErrorEl = document.getElementById('cercamio-radio-personalizado-error');
   var btnBuscarDesdePuntoEl = document.getElementById('btn-cercamio-buscar-desde-punto');
+  var grupoReemplazoEl = document.getElementById('cercamio-grupo-reemplazo');
+  var reemplazoChipsEl = document.getElementById('cercamio-reemplazo-chips');
 
   function mostrarEstado(nombre) {
     ['permiso', 'denegado', 'noDisponible', 'error', 'eligiendoPunto', 'sinResultados'].forEach(function (k) {
@@ -124,6 +128,8 @@
     estado.aperturaId += 1;
     var aperturaId = estado.aperturaId;
     estado.contextoActual = contexto;
+    estado.reemplazoActivos = {};
+    estado.encontrados = [];
     // Una busqueda nueva arranca sin la vista previa de la anterior.
     seleccionController_limpiarVistaPrevia();
     estado.miUbicacion = null;
@@ -201,7 +207,12 @@
     // el Mapa de Pozos - si el usuario ya abrio el mapa antes en esta
     // sesion, esto no vuelve a pedir nada a Apps Script (y funciona sin
     // red, ver requisito de offline de la Etapa 5C-3).
+    // Aptitud para reemplazo: UNA llamada batch (o cache), solo con
+    // reemplazo=SI; sin permiso no hace ninguna llamada. Nunca rechaza.
+    var pResumen = reemplazoEstadosController_cargar();
     mapaDataset_obtener(contexto.sessionToken).then(function (result) {
+      return pResumen.then(function () { return result; });
+    }).then(function (result) {
       if (aperturaId !== estado.aperturaId) {
         return;
       }
@@ -226,7 +237,10 @@
     if (!ref) {
       return;
     }
-    var resultados = cercaMioLogic_buscarCercanos(estado.datasetCache, ref.lat, ref.lon, estado.radioMetros);
+    // El conjunto COMPLETO del radio (sin el tope de 30): la lista visible se
+    // arma desde aca (con o sin filtro de aptitud) sin volver a buscar.
+    var resultados = cercaMioLogic_buscarCercanos(estado.datasetCache, ref.lat, ref.lon, estado.radioMetros, estado.datasetCache.length);
+    estado.encontrados = resultados;
 
     if (resultados.length === 0) {
       // Sin pozos en el radio no hay nada que mostrar como vista previa.
@@ -254,20 +268,7 @@
     }
 
     mostrarEstado('resultados');
-    // Si la lista vino justo al tope de CERCA_MIO_MAX_RESULTADOS, hay que
-    // distinguir "justo entraron 30" de "hay mas de 30 y se estan
-    // recortando" - cercaMioLogic_contarDentroDeRadio hace el mismo
-    // bounding box + Haversine sin ordenar ni armar objetos, mas liviano
-    // que repetir buscarCercanos con un maxResultados mayor. Mensaje
-    // explicito pedido por el usuario cuando SI hay mas de 30.
-    if (resultados.length >= CERCA_MIO_MAX_RESULTADOS &&
-        cercaMioLogic_contarDentroDeRadio(estado.datasetCache, ref.lat, ref.lon, estado.radioMetros) > CERCA_MIO_MAX_RESULTADOS) {
-      estadosEls.contador.textContent = 'Se muestran los ' + CERCA_MIO_MAX_RESULTADOS + ' pozos más cercanos dentro de ' + cercaMioLogic_formatearDistancia(estado.radioMetros) + '.';
-    } else {
-      estadosEls.contador.textContent = resultados.length +
-        ' pozo' + (resultados.length === 1 ? '' : 's') + ' encontrado' + (resultados.length === 1 ? '' : 's');
-    }
-    cercaMioController_pintarLista(resultados, contexto);
+    cercaMioController_pintarResultados(contexto);
     // Si el usuario ya habia mirado esta busqueda en el mapa, cambiar el
     // radio/punto actualiza tambien lo que el mapa muestra (nunca queda
     // una vista previa vieja de un radio que ya no es el activo).
@@ -276,20 +277,87 @@
     }
   }
 
+  // Pinta contador + filtro de aptitud + lista a partir de estado.encontrados
+  // (el conjunto ya buscado por radio). Tocar un chip de aptitud solo vuelve
+  // a pasar por aca: NO se recalcula GPS ni radio, y la vista previa/
+  // "Usar estos pozos"/"Ver todos en el mapa" siguen siendo el RADIO completo.
+  function cercaMioController_pintarResultados(contexto) {
+    var resumen = reemplazoEstadosController_resumen();
+    if (!resumen) {
+      // sin reemplazo=SI (o sin resumen): Cerca Mio funciona exactamente como siempre
+      estado.reemplazoActivos = {};
+      grupoReemplazoEl.hidden = true;
+    } else {
+      grupoReemplazoEl.hidden = false;
+      reemplazoEstadosUI_pintarFiltro(reemplazoChipsEl, estado.reemplazoActivos, reemplazoResumenLogic_contar(estado.encontrados, resumen), function (nuevos) {
+        estado.reemplazoActivos = nuevos;
+        cercaMioController_pintarResultados(contexto);
+      });
+    }
+
+    var total = estado.encontrados.length;
+    var filtrados = reemplazoResumenLogic_filtrar(estado.encontrados, resumen, estado.reemplazoActivos);
+    var hayFiltro = reemplazoResumenLogic_hayActivos(estado.reemplazoActivos);
+    var excede = filtrados.length > CERCA_MIO_MAX_RESULTADOS;
+
+    if (!hayFiltro) {
+      estadosEls.contador.textContent = excede
+        ? 'Se muestran los ' + CERCA_MIO_MAX_RESULTADOS + ' pozos más cercanos dentro de ' + cercaMioLogic_formatearDistancia(estado.radioMetros) + '.'
+        : total + ' pozo' + (total === 1 ? '' : 's') + ' encontrado' + (total === 1 ? '' : 's');
+    } else if (filtrados.length === 0) {
+      estadosEls.contador.textContent = 'Ningún pozo del radio coincide con el filtro de aptitud (' + total + ' encontrado' + (total === 1 ? '' : 's') + ').';
+    } else {
+      estadosEls.contador.textContent = filtrados.length + ' de ' + total + ' pozo' + (total === 1 ? '' : 's') + ' del radio' +
+        (excede ? ' (se muestran los ' + CERCA_MIO_MAX_RESULTADOS + ' más cercanos)' : '');
+    }
+    cercaMioController_pintarLista(filtrados.slice(0, CERCA_MIO_MAX_RESULTADOS), contexto);
+    cercaMioController_actualizarAcciones();
+  }
+
   // Busqueda radial ACTUAL completa (sin el tope de 30 de la lista
   // visible) como contexto geografico: todos los wellId dentro del
   // radio + la geometria (punto de referencia, radio y de donde salio -
   // GPS o punto elegido en el mapa, para dibujar el icono correcto).
+  // Las acciones ("Ver todos en el mapa", "Usar estos pozos", vista previa)
+  // operan sobre LO QUE EL USUARIO VE: sin filtros de aptitud son todos los
+  // pozos del radio; con filtros, solo el subconjunto filtrado (ver
+  // reemplazoResumenLogic_pozosParaAcciones). La GEOMETRIA es siempre la del
+  // radio original: el circulo sigue siendo el contexto.
   function cercaMioController_contextoRadial() {
     var ref = cercaMioController_referenciaActual();
     if (!ref || !estado.datasetCache) {
       return null;
     }
-    var todos = cercaMioLogic_buscarCercanos(estado.datasetCache, ref.lat, ref.lon, estado.radioMetros, estado.datasetCache.length);
+    var encontrados = estado.encontrados.length > 0
+      ? estado.encontrados
+      : cercaMioLogic_buscarCercanos(estado.datasetCache, ref.lat, ref.lon, estado.radioMetros, estado.datasetCache.length);
+    var acciones = reemplazoResumenLogic_pozosParaAcciones(encontrados, reemplazoEstadosController_resumen(), estado.reemplazoActivos);
     return {
-      wellIds: todos.map(function (r) { return r.wellId; }),
+      wellIds: acciones.wellIds,
+      filtrado: acciones.filtrado,
+      total: acciones.total,
       geometria: { lat: ref.lat, lon: ref.lon, radioMetros: estado.radioMetros, tipoReferencia: estado.referencia }
     };
+  }
+
+  // Estado de los 2 botones de accion segun el subconjunto vigente: con
+  // filtro activo muestran cuantos pozos usan; sin pozos (filtro que deja 0)
+  // quedan deshabilitados. Si ya habia una vista previa en el mapa, se
+  // actualiza (o se retira si ya no hay pozos) para no dejar una vista vieja.
+  function cercaMioController_actualizarAcciones() {
+    var c = cercaMioController_contextoRadial();
+    var n = c ? c.wellIds.length : 0;
+    btnVerTodosMapa.textContent = c && c.filtrado ? 'Ver ' + n + ' en el mapa' : 'Ver todos en el mapa';
+    btnUsarSeleccionEl.textContent = c && c.filtrado ? 'Usar estos ' + n + ' pozos' : 'Usar estos pozos';
+    btnVerTodosMapa.disabled = n === 0;
+    btnUsarSeleccionEl.disabled = n === 0;
+    if (seleccionController_hayVistaPrevia()) {
+      if (n > 0) {
+        cercaMioController_publicarVistaPrevia();
+      } else {
+        seleccionController_limpiarVistaPrevia();
+      }
+    }
   }
 
   function cercaMioController_publicarVistaPrevia() {
@@ -334,6 +402,14 @@
     chevEl.textContent = '›';
 
     main.appendChild(idEl);
+    // Aptitud para reemplazo (solo reemplazo=SI)
+    var estadoReemplazo = reemplazoEstadosController_estadoDe(resultado.wellId);
+    if (estadoReemplazo) {
+      var badgeEl = document.createElement('span');
+      badgeEl.className = 'reemplazo-badge cercamio-item-reemplazo reemplazo-badge-' + reemplazoLogic_claseEstado(estadoReemplazo);
+      badgeEl.textContent = reemplazoResumenLogic_etiqueta(estadoReemplazo);
+      main.appendChild(badgeEl);
+    }
     main.appendChild(distEl);
     main.appendChild(chevEl);
     item.appendChild(main);
@@ -375,6 +451,18 @@
       actions.appendChild(btnMapa);
     }
     actions.appendChild(btnAbrir);
+    // "Evaluar" (solo reemplazo=SI): abre el modulo sobre este pozo.
+    if (estadoReemplazo && typeof contexto.onEvaluarReemplazo === 'function') {
+      var btnEvaluar = document.createElement('button');
+      btnEvaluar.type = 'button';
+      btnEvaluar.className = 'button-secondary';
+      btnEvaluar.textContent = 'Evaluar';
+      btnEvaluar.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        contexto.onEvaluarReemplazo(resultado.wellId);
+      });
+      actions.appendChild(btnEvaluar);
+    }
     detalle.appendChild(actions);
     item.appendChild(detalle);
 
@@ -430,6 +518,18 @@
   function cercaMioController_reanudar() {
     if (estado.pickerMapa && !estadosEls.eligiendoPunto.hidden) {
       mapaShared_alMostrarMapa(estado.pickerMapa, function () {});
+    }
+    // Volver de evaluar un pozo (o del mapa): los badges y los conteos de
+    // aptitud se repintan YA con el estado local actualizado (sin refetch
+    // masivo), sobre la misma busqueda - sin tocar GPS ni radio.
+    if (estado.contextoActual && !estadosEls.resultados.hidden) {
+      cercaMioController_pintarResultados(estado.contextoActual);
+      var aperturaId = estado.aperturaId;
+      reemplazoEstadosController_cargar().then(function () {
+        if (aperturaId === estado.aperturaId && !estadosEls.resultados.hidden) {
+          cercaMioController_pintarResultados(estado.contextoActual);
+        }
+      });
     }
   }
 
@@ -487,7 +587,7 @@
   });
 
   btnVerTodosMapa.addEventListener('click', function () {
-    if (!estado.contextoActual) {
+    if (!estado.contextoActual || btnVerTodosMapa.disabled) {
       return;
     }
     cercaMioController_publicarVistaPrevia();
@@ -502,7 +602,8 @@
   // pantalla de ITF ya sabe manejar selecciones grandes en lotes).
   btnUsarSeleccionEl.addEventListener('click', function () {
     var c = cercaMioController_contextoRadial();
-    if (!c) {
+    // nunca una seleccion vacia por accidente (filtro que no deja pozos)
+    if (!c || c.wellIds.length === 0) {
       return;
     }
     seleccionController_proponerSeleccion(c.wellIds, 'radio', c.geometria);

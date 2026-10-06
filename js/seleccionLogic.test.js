@@ -376,3 +376,24 @@ describe('rendimiento: filtrarPorPoligono contra el dataset real (13.804 pozos)'
     expect(elapsedMs).toBeLessThan(1000);
   });
 });
+
+describe('seleccionLogic_debeConservarVista (Mi seleccion conserva buscar/filtro al volver)', () => {
+  const { seleccionLogic_debeConservarVista } = require('./seleccionLogic');
+  test('misma seleccion: se conserva', () => {
+    expect(seleccionLogic_debeConservarVista(['01-0001', '01-0002'], ['01-0001', '01-0002'])).toBe(true);
+  });
+  test('se quito un pozo (subconjunto): se conserva', () => {
+    expect(seleccionLogic_debeConservarVista(['01-0001', '01-0002', '01-0003'], ['01-0001', '01-0003'])).toBe(true);
+  });
+  test('entro un pozo nuevo (otra seleccion / agregar): se reinicia', () => {
+    expect(seleccionLogic_debeConservarVista(['01-0001'], ['01-0001', '01-0002'])).toBe(false);
+    expect(seleccionLogic_debeConservarVista(['01-0001'], ['09-0009'])).toBe(false);
+  });
+  test('primera apertura (sin seleccion anterior): se reinicia', () => {
+    expect(seleccionLogic_debeConservarVista(null, ['01-0001'])).toBe(false);
+  });
+  test('seleccion vacia ahora y luego una nueva: la nueva reinicia', () => {
+    expect(seleccionLogic_debeConservarVista([], [])).toBe(true);
+    expect(seleccionLogic_debeConservarVista([], ['01-0001'])).toBe(false);
+  });
+});

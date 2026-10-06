@@ -59,7 +59,9 @@
     aperturaTablaId: 0,
     aperturaItfId: 0,
     descargaEnCurso: false,
-    ultimosFallidos: []               // wellId que fallaron en la ultima descarga (para "Reintentar fallidos")
+    ultimosFallidos: [],              // wellId que fallaron en la ultima descarga (para "Reintentar fallidos")
+    reemplazoActivos: {},             // filtro "Aptitud" de la tabla (solo reemplazo=SI); se conserva al volver de evaluar un pozo
+    pozosDeLaUltimaTabla: null        // seleccion con la que se abrio la tabla la ultima vez (para decidir si se conserva buscar/filtro)
   };
 
   var bandejaEl = document.getElementById('seleccion-bandeja');
@@ -78,6 +80,8 @@
   var tablaSubtituloEl = document.getElementById('seleccion-tabla-subtitulo');
   var tablaBuscarEl = document.getElementById('seleccion-tabla-buscar');
   var tablaOrdenEl = document.getElementById('seleccion-tabla-orden');
+  var tablaGrupoReemplazoEl = document.getElementById('seleccion-tabla-grupo-reemplazo');
+  var tablaReemplazoChipsEl = document.getElementById('seleccion-tabla-reemplazo-chips');
   var tablaVacioEl = document.getElementById('seleccion-tabla-vacio');
   var tablaContenidoEl = document.getElementById('seleccion-tabla-contenido');
 
@@ -316,11 +320,19 @@
     var aperturaId = estado.aperturaTablaId;
 
     tablaSubtituloEl.textContent = estado.seleccion.length + ' pozo' + (estado.seleccion.length === 1 ? '' : 's');
-    tablaBuscarEl.value = '';
+    // Busqueda y filtro de aptitud se conservan al volver de abrir un pozo /
+    // evaluar (misma seleccion, o un subconjunto por haber quitado pozos);
+    // una seleccion con pozos nuevos arranca limpia.
+    if (!seleccionLogic_debeConservarVista(estado.pozosDeLaUltimaTabla, estado.seleccion)) {
+      tablaBuscarEl.value = '';
+      estado.reemplazoActivos = {};
+    }
+    estado.pozosDeLaUltimaTabla = estado.seleccion.slice();
 
     if (estado.seleccion.length === 0) {
       tablaVacioEl.hidden = false;
       tablaContenidoEl.hidden = true;
+      tablaGrupoReemplazoEl.hidden = true;
       return;
     }
     tablaVacioEl.hidden = true;
@@ -333,6 +345,10 @@
     var promesas = [mapaDataset_obtener(contexto.sessionToken)];
     promesas.push(permisos.datos ? busquedaProvinciaDataset_obtener(contexto.sessionToken) : Promise.resolve({ status: 'ok', data: { pozos: [] } }));
     promesas.push(permisos.ne ? mapaNEDataset_obtener(contexto.sessionToken) : Promise.resolve({ status: 'ok', data: { puntos: [] } }));
+    // Aptitud para reemplazo: UNA llamada batch (o el cache de pocos
+    // minutos / el estado local ya actualizado al evaluar); sin
+    // reemplazo=SI no hace ninguna llamada. Nunca rechaza.
+    promesas.push(reemplazoEstadosController_cargar());
 
     Promise.all(promesas).then(function (resultados) {
       if (aperturaId !== estado.aperturaTablaId) {
@@ -422,9 +438,14 @@
         estadoUbicacion: permisos.ubicacion ? campoTexto(p.estado === 'C' ? 'Confirmada' : (p.estado === 'D' ? 'Disponible' : p.estado)) : '—',
         tieneItf: permisos.perfil ? (estado.disponibilidadItf[wellId] ? 'Sí' : 'No') : '—',
         tieneNe: permisos.ne ? (neSet.has(wellId) ? 'Sí' : 'No') : '—',
-        profundidadNum: typeof p.profundidad === 'number' ? p.profundidad : -1
+        profundidadNum: typeof p.profundidad === 'number' ? p.profundidad : -1,
+        // Aptitud para reemplazo (null sin reemplazo=SI: ningun badge)
+        estadoReemplazo: reemplazoEstadosController_estadoDe(wellId)
       };
     });
+
+    // Aptitud: AND con la busqueda y el orden (OR dentro de sus chips).
+    filas = reemplazoResumenLogic_filtrar(filas, reemplazoEstadosController_resumen(), estado.reemplazoActivos);
 
     if (filtro) {
       filas = filas.filter(function (f) {
@@ -455,6 +476,14 @@
     idEl.className = 'seleccion-card-id mono';
     idEl.textContent = fila.wellId;
     header.appendChild(idEl);
+
+    // Aptitud para reemplazo: Apto / Dudoso / No apto / Sin evaluar
+    if (fila.estadoReemplazo) {
+      var badgeEl = document.createElement('span');
+      badgeEl.className = 'reemplazo-badge seleccion-card-reemplazo reemplazo-badge-' + reemplazoLogic_claseEstado(fila.estadoReemplazo);
+      badgeEl.textContent = reemplazoResumenLogic_etiqueta(fila.estadoReemplazo);
+      header.appendChild(badgeEl);
+    }
 
     var btnQuitar = document.createElement('button');
     btnQuitar.type = 'button';
@@ -589,23 +618,45 @@
     itfVisorOverlayEl.hidden = true;
   });
 
+  // Grupo "Aptitud para reemplazo" de la tabla: conteos sobre TODA la
+  // seleccion (el universo contextual: 40 seleccionados -> la suma da 40),
+  // sin depender de lo que este escrito en el buscador.
+  function pintarFiltroReemplazoTabla() {
+    var resumen = reemplazoEstadosController_resumen();
+    if (!resumen) {
+      estado.reemplazoActivos = {};
+      tablaGrupoReemplazoEl.hidden = true;
+      return;
+    }
+    tablaGrupoReemplazoEl.hidden = false;
+    var universo = estado.seleccion.map(function (wellId) { return { wellId: wellId }; });
+    reemplazoEstadosUI_pintarFiltro(tablaReemplazoChipsEl, estado.reemplazoActivos, reemplazoResumenLogic_contar(universo, resumen), function (nuevos) {
+      estado.reemplazoActivos = nuevos;
+      if (estado.ultimoRenderTabla) {
+        renderizarTabla(estado.ultimoRenderTabla.indicePozos, estado.ultimoRenderTabla.indiceBusqueda, estado.ultimoRenderTabla.neSet, estado.ultimoRenderTabla.permisos);
+      }
+    });
+  }
+
   function renderizarTabla(indicePozos, indiceBusqueda, neSet, permisos) {
     var contexto = obtenerContextoSeguro();
+    // guarda el ultimo render para que buscar/ordenar/filtrar puedan re-renderizar sin re-pedir red
+    // (antes del early return: un filtro sin resultados no debe romper el siguiente cambio)
+    estado.ultimoRenderTabla = { indicePozos: indicePozos, indiceBusqueda: indiceBusqueda, neSet: neSet, permisos: permisos };
+    pintarFiltroReemplazoTabla();
     tablaContenidoEl.hidden = false;
     tablaContenidoEl.innerHTML = '';
     var filas = construirFilasOrdenadasYFiltradas(indicePozos, indiceBusqueda, neSet, permisos);
     if (filas.length === 0) {
       var vacio = document.createElement('p');
       vacio.className = 'cercamio-estado';
-      vacio.textContent = 'Ningún pozo coincide con la búsqueda.';
+      vacio.textContent = 'Ningún pozo coincide con la búsqueda y los filtros.';
       tablaContenidoEl.appendChild(vacio);
       return;
     }
     filas.forEach(function (fila) {
       tablaContenidoEl.appendChild(construirCardFila(fila, contexto));
     });
-    // guarda el ultimo render para que buscar/ordenar puedan re-renderizar sin re-pedir red
-    estado.ultimoRenderTabla = { indicePozos: indicePozos, indiceBusqueda: indiceBusqueda, neSet: neSet, permisos: permisos };
   }
 
   tablaBuscarEl.addEventListener('input', function () {

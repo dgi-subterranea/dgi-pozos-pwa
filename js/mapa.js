@@ -106,7 +106,15 @@
     claveUniverso: null,          // clave del universo cuyos conteos estan pintados (null = recalcular)
     totalUniverso: 0,             // "Todos (N)" de Departamento
     conteoEstado: null,           // {C, D} del universo
-    conteoNE: null                // pozos del universo en la red NE (null mientras el Set NE no se cargo)
+    conteoNE: null,               // pozos del universo en la red NE (null mientras el Set NE no se cargo)
+
+    // Aptitud para reemplazo (Reemplazos v3). SOLO con reemplazo=SI: el
+    // resumen {wellId: estado} vive en js/reemplazoEstados.js (null sin
+    // permiso -> ningun badge, filtro ni llamada).
+    reemplazoActivos: {},         // multi-seleccion OR, mismo modelo que el resto
+    resumenReemplazo: null,       // referencia al resumen vigente en este renderPuntos (lo leen crearMarker y el popup)
+    conteoReemplazo: null,        // {APTO, DUDOSO, NO_APTO, SIN_EVALUAR} del universo contextual
+    badgesReemplazoLayer: null    // L.layerGroup de puntos de aptitud sobre pozos SELECCIONADOS (ver mapaController_dibujarBadgesReemplazo)
   };
 
   var loadingEl = document.getElementById('mapa-loading');
@@ -124,6 +132,8 @@
   var capaBaseChipsEls = Array.prototype.slice.call(document.querySelectorAll('.mapa-capa-chip'));
   var grupoTieneEl = document.getElementById('mapa-grupo-tiene');
   var chipNEEl = document.getElementById('mapa-chip-ne');
+  var grupoReemplazoEl = document.getElementById('mapa-grupo-reemplazo');
+  var reemplazoChipsEl = document.getElementById('mapa-reemplazo-chips');
   var btnReintentar = document.getElementById('btn-mapa-reintentar');
   var btnBuscarToggleEl = document.getElementById('btn-mapa-buscar-toggle');
   var panelBuscarEl = document.getElementById('mapa-buscar-panel');
@@ -181,17 +191,35 @@
       iconCreateFunction: function (cluster) {
         var n = cluster.getChildCount();
         var tam = n < 10 ? 'small' : (n < 100 ? 'medium' : 'large');
-        var conSeleccion = !!mapaEstado.setResaltado && cluster.getAllChildMarkers().some(function (m) {
+        var hijos = cluster.getAllChildMarkers();
+        var conSeleccion = !!mapaEstado.setResaltado && hijos.some(function (m) {
           return m.options.esSeleccionado === true;
+        });
+        // Aptitud para reemplazo: un cluster con pozos evaluados lleva un
+        // punto discreto (sin colores: mezcla estados, no es un arcoiris).
+        var conEvaluados = !!mapaEstado.resumenReemplazo && hijos.some(function (m) {
+          return !!m.options.estadoReemplazo;
         });
         return L.divIcon({
           html: '<div><span>' + n + '</span></div>',
-          className: 'marker-cluster marker-cluster-' + tam + (conSeleccion ? ' mapa-cluster-con-seleccion' : ''),
+          className: 'marker-cluster marker-cluster-' + tam + (conSeleccion ? ' mapa-cluster-con-seleccion' : '') + (conEvaluados ? ' mapa-cluster-con-evaluados' : ''),
           iconSize: L.point(40, 40)
         });
       }
     });
     mapaEstado.mapa.addLayer(mapaEstado.clusterGroup);
+
+    // Puntos de aptitud sobre los pozos SELECCIONADOS (donde el anillo del
+    // marcador es magenta y manda): pane propio por encima de los
+    // marcadores y sin eventos (el click pasa al pozo). Solo se muestran con
+    // el zoom en que el cluster ya desagrupa todo (ver
+    // mapaController_sincronizarBadgesReemplazo).
+    mapaEstado.mapa.createPane('mapaBadgesReemplazo');
+    mapaEstado.mapa.getPane('mapaBadgesReemplazo').style.zIndex = 450;
+    mapaEstado.mapa.getPane('mapaBadgesReemplazo').style.pointerEvents = 'none';
+    mapaEstado.badgesReemplazoLayer = L.layerGroup();
+    mapaEstado.mapa.on('zoomend', mapaController_sincronizarBadgesReemplazo);
+
     mapaController_registrarListenerSeleccion();
 
     // Item C: UN solo listener de click en el mapa, vive toda la vida de
@@ -231,6 +259,16 @@
     estadoEl.textContent = mapaLogic_estadoLabel(punto.estado);
     el.appendChild(estadoEl);
 
+    // "Reemplazo: Apto" (solo reemplazo=SI): sin cargar historial ni fotos;
+    // se refresca al abrir el popup por si el estado cambio.
+    var reemplazoEl = null;
+    if (mapaEstado.resumenReemplazo) {
+      reemplazoEl = document.createElement('p');
+      reemplazoEl.className = 'mapa-popup-reemplazo';
+      mapaController_pintarLineaReemplazo(reemplazoEl, punto.wellId);
+      el.appendChild(reemplazoEl);
+    }
+
     var summaryEl = document.createElement('div');
     summaryEl.className = 'mapa-popup-summary';
     el.appendChild(summaryEl);
@@ -244,7 +282,30 @@
     });
     el.appendChild(btn);
 
-    return { el: el, summaryEl: summaryEl };
+    if (reemplazoEl && typeof contexto.onEvaluarReemplazo === 'function') {
+      var btnEvaluar = document.createElement('button');
+      btnEvaluar.type = 'button';
+      btnEvaluar.className = 'button mapa-popup-btn mapa-popup-btn-secundario';
+      btnEvaluar.textContent = 'Evaluar';
+      btnEvaluar.addEventListener('click', function () {
+        contexto.onEvaluarReemplazo(punto.wellId);
+      });
+      el.appendChild(btnEvaluar);
+    }
+
+    return { el: el, summaryEl: summaryEl, reemplazoEl: reemplazoEl };
+  }
+
+  // "Reemplazo: <badge>" con el estado ACTUAL (el del store, que se
+  // actualiza al evaluar). Sin textContent del usuario: solo etiquetas fijas.
+  function mapaController_pintarLineaReemplazo(el, wellId) {
+    var estadoR = reemplazoEstadosController_estadoDe(wellId) || 'SIN_EVALUAR';
+    el.innerHTML = '';
+    el.appendChild(document.createTextNode('Reemplazo:'));
+    var badge = document.createElement('span');
+    badge.className = 'reemplazo-badge reemplazo-badge-' + reemplazoLogic_claseEstado(estadoR);
+    badge.textContent = reemplazoResumenLogic_etiqueta(estadoR);
+    el.appendChild(badge);
   }
 
   // El summary (titular/departamento/distrito) NUNCA se pide para los
@@ -263,13 +324,22 @@
     // mapaEstado.setResaltado lo arma renderPuntos UNA vez por pasada (no
     // un Set nuevo por cada uno de los 13 mil markers).
     var seleccionado = !!mapaEstado.setResaltado && mapaEstado.setResaltado.has(punto.wellId);
+    // Aptitud para reemplazo (solo reemplazo=SI): un pozo evaluado lleva un
+    // ANILLO del color de su estado (en lugar del borde blanco); el relleno
+    // sigue siendo Confirmada/Disponible. La seleccion (borde magenta) tiene
+    // PRIORIDAD: ahi el estado se ve como un punto central (ver
+    // mapaController_dibujarBadgesReemplazo) y en el popup.
+    var estadoR = reemplazoResumenLogic_estadoDe(mapaEstado.resumenReemplazo, punto.wellId);
+    var evaluado = estadoR === 'APTO' || estadoR === 'DUDOSO' || estadoR === 'NO_APTO';
+    var conAnillo = evaluado && !seleccionado;
     var marker = L.circleMarker([punto.lat, punto.lon], {
-      radius: seleccionado ? 9 : 7,
-      color: seleccionado ? MAPA_COLOR_SELECCION : '#ffffff',
-      weight: seleccionado ? 3 : 1.5,
+      radius: seleccionado ? 9 : (conAnillo ? 8 : 7),
+      color: seleccionado ? MAPA_COLOR_SELECCION : (conAnillo ? MAPA_COLOR_REEMPLAZO[estadoR] : '#ffffff'),
+      weight: seleccionado ? 3 : (conAnillo ? 3 : 1.5),
       fillColor: color,
       fillOpacity: 0.9,
-      esSeleccionado: seleccionado // lo lee iconCreateFunction del clusterGroup
+      esSeleccionado: seleccionado, // lo lee iconCreateFunction del clusterGroup
+      estadoReemplazo: evaluado ? estadoR : null // idem: cluster "con evaluados"
     });
 
     var popupContent = mapaController_construirPopupInicial(punto, contexto);
@@ -277,6 +347,9 @@
 
     var yaConsultado = false;
     marker.on('popupopen', function () {
+      if (popupContent.reemplazoEl) {
+        mapaController_pintarLineaReemplazo(popupContent.reemplazoEl, punto.wellId);
+      }
       if (yaConsultado || !mapaLogic_debeConsultarSummary(contexto.permisos)) {
         return;
       }
@@ -792,6 +865,8 @@
     // conserva visible, y debe desaparecer al destildarlo.
     clave += '|' + [mapaEstado.departamentoActivos, mapaEstado.cuencaActivos, mapaEstado.condicionActivos]
       .map(function (a) { return Object.keys(a).sort().join(','); }).join('/');
+    // Aptitud: el resumen (version) y los chips activos tambien definen el universo pintado
+    clave += '|r' + (mapaEstado.resumenReemplazo ? reemplazoEstadosController_version() : 'x') + ':' + Object.keys(mapaEstado.reemplazoActivos).sort().join(',');
     if (clave === mapaEstado.claveUniverso) {
       return;
     }
@@ -815,6 +890,9 @@
       'valor', mapaEstado.condicionActivos
     );
     mapaEstado.conteoEstado = mapaLogic_contarPorEstado(universo);
+    // Aptitud para reemplazo: conteo CONTEXTUAL (mismo universo que el resto:
+    // todo el mapa / solo seleccion / solo vista previa)
+    mapaEstado.conteoReemplazo = mapaEstado.resumenReemplazo ? reemplazoResumenLogic_contar(universo, mapaEstado.resumenReemplazo) : null;
     mapaEstado.conteoNE = mapaLogic_contarEnSetNE(universo, mapaEstado.neWellIdSet);
 
     mapaController_renderChipsDepartamento();
@@ -822,6 +900,35 @@
     mapaController_renderChipsCondicion();
     mapaController_actualizarChipsEstado();
     mapaController_actualizarChipNE();
+    mapaController_renderChipsReemplazo();
+  }
+
+  // Grupo "Aptitud para reemplazo": solo existe con resumen disponible
+  // (reemplazo=SI). Sin permiso queda oculto y nunca se llamo al backend.
+  function mapaController_renderChipsReemplazo() {
+    if (!mapaEstado.conteoReemplazo) {
+      grupoReemplazoEl.hidden = true;
+      return;
+    }
+    grupoReemplazoEl.hidden = false;
+    reemplazoEstadosUI_pintarFiltro(reemplazoChipsEl, mapaEstado.reemplazoActivos, mapaEstado.conteoReemplazo, function (nuevos) {
+      mapaEstado.reemplazoActivos = nuevos;
+      if (mapaEstado.contextoActual && mapaEstado.puntosCrudos) {
+        mapaController_renderPuntos(mapaEstado.contextoActual);
+      }
+    });
+  }
+
+  // Al abrir el mapa: con reemplazo=SI y resumen cargado, el grupo se
+  // muestra; sin permiso (o si se perdio) se apaga cualquier filtro de
+  // aptitud que hubiera quedado, nunca aplicado "a escondidas".
+  function mapaController_prepararReemplazo() {
+    mapaEstado.resumenReemplazo = reemplazoEstadosController_resumen();
+    if (!mapaEstado.resumenReemplazo) {
+      mapaEstado.reemplazoActivos = {};
+      mapaEstado.conteoReemplazo = null;
+      grupoReemplazoEl.hidden = true;
+    }
   }
 
   function mapaController_actualizarChipNE() {
@@ -839,6 +946,7 @@
     mapaEstado.departamentoActivos = {};
     mapaEstado.estadosActivos = {};
     mapaEstado.condicionActivos = {};
+    mapaEstado.reemplazoActivos = {};
     mapaEstado.neActivo = false;
     chipNEEl.classList.remove('active');
     chipNEEl.setAttribute('aria-pressed', 'false');
@@ -915,6 +1023,11 @@
     // pedida. Se aplica sobre el resultado de los filtros (AND es
     // conmutativo), nunca se guarda como parte de ellos: "Limpiar filtros"
     // no toca el alcance. Con alcance "todo" el contexto solo se resalta.
+    // Aptitud para reemplazo: octavo filtro, AND con los demas (OR dentro de
+    // su grupo). Sin permiso el resumen es null y no filtra ni marca nada.
+    mapaEstado.resumenReemplazo = reemplazoEstadosController_resumen();
+    filtrados = reemplazoResumenLogic_filtrar(filtrados, mapaEstado.resumenReemplazo, mapaEstado.reemplazoActivos);
+
     var ctx = mapaController_sincronizarContexto();
     mapaEstado.setResaltado = ctx ? new Set(ctx.wellIds) : null;
     if (ctx && mapaEstado.alcance === 'solo') {
@@ -947,6 +1060,49 @@
     }
 
     mapaController_dibujarContexto(ctx);
+    mapaController_dibujarBadgesReemplazo(filtrados);
+  }
+
+  // Pozos SELECCIONADOS y evaluados: el borde magenta de la seleccion
+  // manda, asi que su aptitud se marca con un punto central del color del
+  // estado, en una capa aparte (no entra al cluster: no cambia los conteos).
+  // Solo visible desde el zoom donde los pozos ya se ven sueltos; mas
+  // alejado el cluster ya indica "con seleccion" y "con evaluados".
+  function mapaController_dibujarBadgesReemplazo(visibles) {
+    var capa = mapaEstado.badgesReemplazoLayer;
+    if (!capa) {
+      return;
+    }
+    capa.clearLayers();
+    if (mapaEstado.resumenReemplazo && mapaEstado.setResaltado) {
+      visibles.forEach(function (p) {
+        if (!mapaEstado.setResaltado.has(p.wellId)) {
+          return;
+        }
+        var e = reemplazoResumenLogic_estadoDe(mapaEstado.resumenReemplazo, p.wellId);
+        if (e === 'APTO' || e === 'DUDOSO' || e === 'NO_APTO') {
+          capa.addLayer(L.circleMarker([p.lat, p.lon], {
+            pane: 'mapaBadgesReemplazo', interactive: false, radius: 3.5,
+            fillColor: MAPA_COLOR_REEMPLAZO[e], fillOpacity: 1, color: '#ffffff', weight: 1.2
+          }));
+        }
+      });
+    }
+    mapaController_sincronizarBadgesReemplazo();
+  }
+
+  function mapaController_sincronizarBadgesReemplazo() {
+    var capa = mapaEstado.badgesReemplazoLayer;
+    if (!capa || !mapaEstado.mapa) {
+      return;
+    }
+    var debeVerse = mapaEstado.mapa.getZoom() >= MAPA_ZOOM_INDIVIDUAL && capa.getLayers().length > 0;
+    var estaPuesta = mapaEstado.mapa.hasLayer(capa);
+    if (debeVerse && !estaPuesta) {
+      mapaEstado.mapa.addLayer(capa);
+    } else if (!debeVerse && estaPuesta) {
+      mapaEstado.mapa.removeLayer(capa);
+    }
   }
 
   // True si hay CUALQUIER filtro del panel activo (los 7 de arriba) - el
@@ -956,6 +1112,7 @@
     var hayClaves = function (o) { return Object.keys(o).length > 0; };
     return hayClaves(mapaEstado.departamentoActivos) || hayClaves(mapaEstado.cuencaActivos) ||
       hayClaves(mapaEstado.estadosActivos) || hayClaves(mapaEstado.condicionActivos) ||
+      reemplazoResumenLogic_hayActivos(mapaEstado.reemplazoActivos) ||
       mapaEstado.neActivo ||
       mapaEstado.profundidadDesde !== null || mapaEstado.profundidadHasta !== null ||
       mapaEstado.tramoDesde !== null || mapaEstado.tramoHasta !== null;
@@ -1426,6 +1583,11 @@
       // cargo el otro, esto no vuelve a pedirlo a Apps Script.
       return mapaDataset_obtener(contexto.sessionToken);
     }).then(function (result) {
+      // Aptitud para reemplazo (Reemplazos v3): UNA llamada batch (o el
+      // cache de pocos minutos), solo con reemplazo=SI - sin permiso
+      // cargar() no hace ninguna llamada. Nunca rechaza.
+      return reemplazoEstadosController_cargar().then(function () { return result; });
+    }).then(function (result) {
       if (!result || aperturaId !== mapaEstado.aperturaId) {
         return;
       }
@@ -1458,6 +1620,7 @@
         mapaController_poblarChipsDepartamento(mapaEstado.puntosCrudos);
         mapaController_poblarChipsCuenca(mapaEstado.puntosCrudos);
         mapaController_poblarChipsCondicion(mapaEstado.puntosCrudos);
+        mapaController_prepararReemplazo();
         // Fuerza el recalculo de conteos (renderPuntos los pinta) - el
         // dataset pudo cambiar entre aperturas.
         mapaEstado.claveUniverso = null;

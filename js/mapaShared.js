@@ -48,6 +48,10 @@ var MAPA_COLOR_NE_NIVEL = '#4fa3c4';
 // mantener en sync).
 var MAPA_COLOR_SELECCION = '#e0007a';
 
+// Aptitud para reemplazo (anillo del marcador en el mapa): mismos hex que
+// --color-reemplazo-* en css/styles.css (Leaflet no lee variables CSS).
+var MAPA_COLOR_REEMPLAZO = { APTO: '#1f9d55', DUDOSO: '#e0a100', NO_APTO: '#d32f2f' };
+
 // Dibuja un contorno de seleccion como DOS capas: halo blanco ancho
 // debajo + linea magenta arriba. makeLayer(opcionesDeEstilo) crea la capa
 // Leaflet (L.polygon / L.circle / L.polyline) con las opciones que le

@@ -1182,6 +1182,8 @@
     sessionToken = null;
     currentEmail = null;
     permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false };
+    // el resumen de aptitud no sobrevive a la sesion
+    reemplazoEstadosController_reset();
     toggleAccesosUbicacion();
     if (gsiLoaded) {
       // Sin esto, auto_select podria volver a loguear silenciosamente a
@@ -1383,6 +1385,11 @@
       onSeleccionarPorRadio: function () {
         abrirCercaMio();
       },
+      // "Evaluar" del popup del pozo (solo reemplazo=SI): abre el modulo
+      // Reemplazo con ese wellId, sin cargar historial ni fotos desde el popup.
+      onEvaluarReemplazo: function (wellId) {
+        abrirReemplazo({ wellId: wellId });
+      },
       enfoque: enfoque
     });
   }
@@ -1480,6 +1487,9 @@
       },
       onVerEnMapa: function (wellId) {
         abrirMapaDesde({ tipo: 'pozo', wellId: wellId });
+      },
+      onEvaluarReemplazo: function (wellId) {
+        abrirReemplazo({ wellId: wellId });
       },
       // La busqueda radial ya quedo publicada como vista previa
       // (cercaMioController_publicarVistaPrevia) - el mapa dibuja punto,
@@ -1621,6 +1631,12 @@
         logout();
       }
     };
+  });
+
+  // Estado de aptitud de reemplazo compartido por mapa, Cerca Mio y Mi
+  // seleccion: sin reemplazo=SI (permisosActuales) no hace ninguna llamada.
+  reemplazoEstadosController_inicializar(function () {
+    return { sessionToken: sessionToken, permisos: permisosActuales };
   });
 
   document.getElementById('btn-abrir-reemplazo').addEventListener('click', function () {
