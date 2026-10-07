@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Plan (DRY-RUN) de importacion de un lote ya normalizado a FotosPozos. NO sube nada y NO toca produccion.
+"""Importacion de un lote ya normalizado a FotosPozos: plan en seco, subida al storage y CSV de staging.
 
 Lee scripts/out/fotos/<lote>/ (lo genera normalizar.py) y verifica, ANTES de cualquier subida real:
   * solo fotos CONFIRMADO (nunca POR_REVISAR ni EXCLUIDA_IMPORTACION) y sin fotoId repetidos;
@@ -12,22 +12,30 @@ Muestra: cantidad, fotoIds, entidades afectadas, peso, rutas de destino y las fi
 plan_importacion.json (con su huella) y reporte_dryrun.txt en la carpeta del lote.
 
 Uso (desde la raiz del repo):
-    python scripts/fotos/importar.py --lote piloto30 --dry-run [--sin-detalle]
+    python scripts/fotos/importar.py --lote piloto30 --dry-run [--sin-detalle]           # plan en seco (NO sube nada)
+    python scripts/fotos/importar.py subir --lote piloto30 --confirmar-huella <12+ hex>  # sube al storage (cuenta 2)
+    python scripts/fotos/importar.py exportar-filas --lote piloto30                      # CSV de staging para la hoja
 
-La importacion real todavia NO esta habilitada: exige que este plan se haya generado y que su huella coincida
-(ver docs/fotos-pozos-importacion.md). Sin --dry-run el script se niega a continuar.
+SUBIR exige el plan del dry-run: se niega si no existe, si algun archivo cambio desde entonces o si no se pasa la
+huella que mostro el dry-run. URL y secreto del storage SOLO por variables de entorno FOTOS_STORAGE_URL y
+FOTOS_STORAGE_SECRET (nunca se imprimen). Una foto por request, progreso reanudable en estado_subida.jsonl.
+Ver docs/fotos-pozos-importacion.md.
 """
 import argparse
 import collections
 import hashlib
 import json
 import re
+import csv
 import sys
+import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fotos_comun as C  # noqa: E402
+import storage_cliente as SC  # noqa: E402
 
 FUENTES = ('MONITOREO_NE', 'RELEVAMIENTO_2018', 'CAMPO_APP')
 TIPOS = ('CERCA', 'PANORAMICA', 'OTRA')
@@ -39,6 +47,7 @@ RE_WELL = re.compile(r'^\d{2}-\d{4}$')
 RE_UUID = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 RE_CARPETA_FECHA = re.compile(r'^(20\d{2}|sin_fecha)$')
 RE_SHA1 = re.compile(r'^[0-9a-f]{40}$')
+RE_DRIVE_ID = re.compile(r'^[A-Za-z0-9_-]{10,100}$')       # mismo formato que valida el storage al devolver ids
 # Cualquier rastro de ruta/archivo original en una celda (los nombres reales traen apellidos o lugares)
 RE_RASTRO_ARCHIVO = re.compile(r'[\\/]|\.(jpe?g|png|heic|thm|info)\b|^[A-Za-z]:', re.I)
 
@@ -55,7 +64,7 @@ def rutas_destino(fila):
     return base + '.jpg', base + '_thumb.jpg'
 
 
-def _validar_fila(fila, errores):
+def _validar_fila(fila, errores, con_ids=False):
     fid = fila.get('fotoId', '?')
 
     def err(msg):
@@ -89,10 +98,16 @@ def _validar_fila(fila, errores):
         err('mimeType debe ser image/jpeg')
     if not RE_SHA1.match(str(fila['sha1Original'])):
         err('sha1Original invalido')
-    if fila['driveFileId'] != '' or fila['driveThumbId'] != '':
+    if con_ids:
+        # fila ya subida (staging): ids de Drive validos y distintos entre si
+        if not RE_DRIVE_ID.match(str(fila['driveFileId'])) or not RE_DRIVE_ID.match(str(fila['driveThumbId'])):
+            err('driveFileId / driveThumbId con formato invalido')
+        elif fila['driveFileId'] == fila['driveThumbId']:
+            err('driveFileId y driveThumbId no pueden ser el mismo archivo')
+    elif fila['driveFileId'] != '' or fila['driveThumbId'] != '':
         err('un lote nuevo no puede traer ids de Drive (se completan al subir)')
     for col, v in fila.items():
-        if isinstance(v, str) and col not in ('procesamiento', 'mimeType') and RE_RASTRO_ARCHIVO.search(v):
+        if isinstance(v, str) and col not in ('procesamiento', 'mimeType', 'driveFileId', 'driveThumbId') and RE_RASTRO_ARCHIVO.search(v):
             err('la columna %s parece contener una ruta o nombre de archivo' % col)
     if fila['observacion']:
         err('las fotos historicas no llevan observacion (podria traer nombres)')
@@ -102,7 +117,7 @@ def _validar_archivo(carpeta, fila, errores, avisos):
     fid = fila['fotoId']
     img = carpeta / 'normalizado' / (fid + '.jpg')
     thumb = carpeta / 'thumbs' / (fid + '_thumb.jpg')
-    info = {'peso': 0, 'pesoThumb': 0}
+    info = {'peso': 0, 'pesoThumb': 0, 'sha256': '', 'sha256Thumb': ''}
     for nombre, ruta, minimo in (('imagen', img, 1), ('miniatura', thumb, 1)):
         if not ruta.is_file():
             errores.append('%s: falta el archivo de la %s (%s)' % (fid, nombre, ruta.name))
@@ -115,6 +130,7 @@ def _validar_archivo(carpeta, fila, errores, avisos):
         if meta:
             errores.append('%s: la %s conserva metadatos (%s): no se puede subir' % (fid, nombre, ','.join(meta)))
         if nombre == 'imagen':
+            info['sha256'] = hashlib.sha256(datos).hexdigest()
             info['peso'] = len(datos)
             if len(datos) != fila['tamanoBytes']:
                 errores.append('%s: el peso del archivo (%d) no coincide con tamanoBytes de la fila (%d)' % (fid, len(datos), fila['tamanoBytes']))
@@ -122,6 +138,7 @@ def _validar_archivo(carpeta, fila, errores, avisos):
                 avisos.append('%s: pesa %.2f MB (mas del objetivo de 1,5 MB)' % (fid, len(datos) / 1048576.0))
         else:
             info['pesoThumb'] = len(datos)
+            info['sha256Thumb'] = hashlib.sha256(datos).hexdigest()
     return info
 
 
@@ -167,7 +184,8 @@ def planificar(carpeta_lote):
             'fecha': f['fechaFotoValor'], 'precision': f['fechaFotoPrecision'], 'fechaFuente': f['fechaFotoFuente'],
             'gps': f['gpsLat'] != '', 'validadoContra': r.get('fuenteValidacionId'),
             'procesamiento': f['procesamiento'], 'ancho': f['ancho'], 'alto': f['alto'],
-            'peso': info['peso'], 'pesoThumb': info['pesoThumb'], 'destino': destino, 'destinoThumb': destino_thumb,
+            'peso': info['peso'], 'pesoThumb': info['pesoThumb'], 'sha256': info['sha256'], 'sha256Thumb': info['sha256Thumb'],
+            'destino': destino, 'destinoThumb': destino_thumb,
         })
 
     # 3) archivos huerfanos en la carpeta de salida (no deberian subirse sin fila)
@@ -183,7 +201,7 @@ def planificar(carpeta_lote):
     for e in elementos:
         entidades[e['wellId']].append(e['fotoId'])
     cuenta = collections.Counter
-    huella = hashlib.sha256(json.dumps([[e['fotoId'], e['destino'], e['peso']] for e in elementos], sort_keys=True).encode('utf-8')).hexdigest()
+    huella = hashlib.sha256(json.dumps([[e['fotoId'], e['destino'], e['peso'], e['sha256'], e['sha256Thumb']] for e in elementos], sort_keys=True).encode('utf-8')).hexdigest()
     return {
         'lote': carpeta.name,
         'loteImportacion': filas[0]['loteImportacion'] if filas else '',
@@ -252,7 +270,211 @@ def informe(plan, detalle=True):
     return '\n'.join(L)
 
 
-def main(argv=None):
+# ---------------------------------------------------------------- confirmacion
+
+class ErrorImportacion(Exception):
+    """El lote no esta en condiciones de subirse / exportarse (mensaje claro, sin datos sensibles)."""
+
+
+def _cargar_plan_guardado(carpeta):
+    ruta = Path(carpeta) / 'plan_importacion.json'
+    if not ruta.is_file():
+        raise ErrorImportacion('No existe plan_importacion.json: primero correr el dry-run (importar.py --lote <lote> --dry-run).')
+    return json.loads(ruta.read_text(encoding='utf-8'))
+
+
+def verificar_plan(carpeta, huella_confirmada=None):
+    """Exige un dry-run vigente: el plan guardado existe, no tiene errores y su huella coincide con el estado ACTUAL de
+    los archivos (nada cambio desde entonces). Si se pide huella_confirmada, tiene que ser el comienzo (>= 12 hex) de
+    la huella que mostro el dry-run. Devuelve el plan vigente."""
+    guardado = _cargar_plan_guardado(carpeta)
+    if guardado.get('errores'):
+        raise ErrorImportacion('El dry-run guardado tiene errores: corregirlos y volver a correrlo.')
+    actual = planificar(carpeta)
+    if actual['errores']:
+        raise ErrorImportacion('El lote actual tiene errores (%d): correr el dry-run para verlos.' % len(actual['errores']))
+    if actual['huella'] != guardado.get('huella'):
+        raise ErrorImportacion('El lote cambio desde el dry-run (archivos o filas distintos): volver a correr el dry-run.')
+    if huella_confirmada is not None:
+        h = (huella_confirmada or '').strip().lower()
+        if len(h) < 12 or not actual['huella'].startswith(h):
+            raise ErrorImportacion('La huella confirmada no coincide con la del dry-run (pasar --confirmar-huella con 12 o mas caracteres de "Huella del plan").')
+    return actual
+
+
+# ------------------------------------------------------------- estado reanudable
+
+ESTADOS_OK = ('SUBIDA', 'YA_EXISTE')
+ESTADO_ARCHIVO = 'estado_subida.jsonl'
+
+
+def leer_estado(carpeta):
+    """Ultimo registro de cada fotoId del archivo de progreso (append-only: gana el ultimo)."""
+    ruta = Path(carpeta) / ESTADO_ARCHIVO
+    ultimo = {}
+    if ruta.is_file():
+        for linea in ruta.read_text(encoding='utf-8').splitlines():
+            linea = linea.strip()
+            if not linea:
+                continue
+            try:
+                r = json.loads(linea)
+            except ValueError:
+                continue                     # linea cortada por una interrupcion: se ignora
+            if isinstance(r, dict) and r.get('fotoId'):
+                ultimo[r['fotoId']] = r
+    return ultimo
+
+
+def _registrar(carpeta, registro):
+    with open(str(Path(carpeta) / ESTADO_ARCHIVO), 'a', encoding='utf-8') as f:
+        f.write(json.dumps(registro, ensure_ascii=False) + '\n')
+        f.flush()
+        try:
+            import os
+            os.fsync(f.fileno())
+        except OSError:
+            pass
+
+
+def _subir_una(cliente, carpeta, e, fila, reintentos, esperar):
+    """Sube una foto (JPG + miniatura) con reintentos ante errores transitorios. Devuelve el registro de estado."""
+    import base64
+    base = {'fotoId': e['fotoId'], 'ts': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}
+    img = (Path(carpeta) / 'normalizado' / (e['fotoId'] + '.jpg')).read_bytes()
+    thumb = (Path(carpeta) / 'thumbs' / (e['fotoId'] + '_thumb.jpg')).read_bytes()
+    # cada archivo tiene que ser EXACTAMENTE el que se aprobo en el dry-run
+    if hashlib.sha256(img).hexdigest() != e['sha256'] or hashlib.sha256(thumb).hexdigest() != e['sha256Thumb']:
+        return dict(base, estado='FALLIDA', motivo='ARCHIVO_CAMBIO_DESPUES_DEL_DRY_RUN', intentos=0)
+    b64 = base64.b64encode(img).decode('ascii')
+    tb64 = base64.b64encode(thumb).decode('ascii')
+    espera = [2, 5, 10, 20, 30]
+    for intento in range(1, reintentos + 2):
+        try:
+            r = cliente.put_foto_pozo(e['fotoId'], e['fuente'], carpeta_fecha(fila), b64, tb64)
+        except SC.ErrorTransitorio as err:
+            if intento > reintentos:
+                return dict(base, estado='FALLIDA', motivo='TRANSITORIO_SIN_EXITO: %s' % err, intentos=intento)
+            esperar(espera[min(intento - 1, len(espera) - 1)])
+            continue
+        except SC.ErrorPermanente as err:
+            return dict(base, estado='FALLIDA', motivo='RECHAZADA: %s' % err.codigo, intentos=intento)
+        # existente=True -> ya estaba en Drive; False -> la acaba de crear; ausente (storage viejo) -> se informa SUBIDA
+        estado = 'YA_EXISTE' if r.get('existente') is True else 'SUBIDA'
+        if not RE_DRIVE_ID.match(str(r.get('driveFileId', ''))) or not RE_DRIVE_ID.match(str(r.get('driveThumbId', ''))):
+            return dict(base, estado='FALLIDA', motivo='RESPUESTA_SIN_IDS_VALIDOS', intentos=intento)
+        return dict(base, estado=estado, driveFileId=r['driveFileId'], driveThumbId=r['driveThumbId'],
+                    tamanoBytes=r.get('tamanoBytes'), enviadoBytes=len(img) + len(thumb), intentos=intento,
+                    storageIndicaExistencia='existente' in r)
+    return dict(base, estado='FALLIDA', motivo='SIN_INTENTOS', intentos=reintentos + 1)
+
+
+def subir(carpeta_lote, cliente, huella_confirmada, limite=None, reintentos=4, esperar=time.sleep, log=print):
+    """Sube el lote al storage, una foto por request. Reanudable e idempotente. Devuelve el resumen (dict)."""
+    carpeta = Path(carpeta_lote)
+    plan = verificar_plan(carpeta, huella_confirmada)
+    manifiesto = json.loads((carpeta / 'manifiesto_privado.json').read_text(encoding='utf-8'))
+    filas = {f['fotoId']: f for f in json.loads((carpeta / 'filas_FotosPozos.json').read_text(encoding='utf-8'))}
+    estado = leer_estado(carpeta)
+    omitidas = sum(1 for r in manifiesto if not r['subir'])           # POR_REVISAR / EXCLUIDA: nunca se suben
+    res = {'lote': carpeta.name, 'previstas': plan['cantidad'], 'omitidas': omitidas, 'subidas': 0, 'yaExisten': 0,
+           'fallidas': 0, 'yaConfirmadasAntes': 0, 'pendientes': 0, 'bytesEnviados': 0, 'fallos': {}, 'abortada': None}
+    t0 = time.time()
+    intentadas = 0
+    for i, e in enumerate(plan['elementos']):
+        previo = estado.get(e['fotoId'])
+        if previo and previo.get('estado') in ESTADOS_OK:
+            res['yaConfirmadasAntes'] += 1                           # confirmada en una corrida anterior: NO se vuelve a subir
+            continue
+        if limite is not None and intentadas >= limite:
+            res['pendientes'] += 1
+            continue
+        intentadas += 1
+        try:
+            reg = _subir_una(cliente, carpeta, e, filas[e['fotoId']], reintentos, esperar)
+        except SC.ErrorAutenticacion as err:
+            res['abortada'] = str(err)
+            res['pendientes'] += len(plan['elementos']) - i
+            log('ABORTADA: %s' % err)
+            break
+        _registrar(carpeta, reg)
+        if reg['estado'] == 'SUBIDA':
+            res['subidas'] += 1
+        elif reg['estado'] == 'YA_EXISTE':
+            res['yaExisten'] += 1
+        else:
+            res['fallidas'] += 1
+            res['fallos'][e['fotoId']] = reg.get('motivo')
+        res['bytesEnviados'] += reg.get('enviadoBytes') or 0
+        if intentadas % 10 == 0 or reg['estado'] == 'FALLIDA':
+            log('  %d/%d  %s  %s' % (i + 1, plan['cantidad'], e['fotoId'], reg['estado']))
+    res['segundos'] = round(time.time() - t0, 1)
+    texto = informe_subida(res)
+    (carpeta / 'reporte_subida.txt').write_text(texto, encoding='utf-8')
+    log(texto)
+    return res
+
+
+def informe_subida(res):
+    L = ['=== Subida del lote "%s" ===' % res['lote'],
+         'Previstas (CONFIRMADO): %d' % res['previstas'],
+         'SUBIDA (nuevas en Drive): %d' % res['subidas'],
+         'YA_EXISTE (ya estaban en Drive): %d' % res['yaExisten'],
+         'Ya confirmadas en corridas anteriores (no se reenviaron): %d' % res['yaConfirmadasAntes'],
+         'FALLIDA: %d' % res['fallidas'],
+         'OMITIDA (POR_REVISAR / EXCLUIDA del manifiesto, nunca se suben): %d' % res['omitidas'],
+         'Pendientes (sin intentar: --limite o corrida abortada): %d' % res['pendientes'],
+         'Enviado en esta corrida: %s en %ss' % (_mb(res['bytesEnviados']), res.get('segundos', 0))]
+    if res['abortada']:
+        L.append('CORRIDA ABORTADA: %s' % res['abortada'])
+    if res['fallos']:
+        L.append('Fallidas (se reintentan al volver a correr el mismo comando):')
+        L.extend('  %s  %s' % (k, v) for k, v in sorted(res['fallos'].items()))
+    return '\n'.join(L)
+
+
+# --------------------------------------------------------------------- staging
+
+STAGING_ARCHIVO = 'staging_FotosPozosImport.csv'
+
+
+def exportar_filas(carpeta_lote, log=print):
+    """CSV para la hoja de staging con las filas de las fotos cuya subida esta CONFIRMADA (SUBIDA o YA_EXISTE) y el
+    lote sin cambios desde el dry-run. Valida el esquema (con ids de Drive) ANTES de escribir. Devuelve el resumen."""
+    carpeta = Path(carpeta_lote)
+    plan = verificar_plan(carpeta)
+    estado = leer_estado(carpeta)
+    filas = {f['fotoId']: f for f in json.loads((carpeta / 'filas_FotosPozos.json').read_text(encoding='utf-8'))}
+    salida, errores, sin_confirmar = [], [], 0
+    for e in plan['elementos']:
+        reg = estado.get(e['fotoId'])
+        if not reg or reg.get('estado') not in ESTADOS_OK:
+            sin_confirmar += 1
+            continue
+        fila = dict(filas[e['fotoId']])
+        fila['driveFileId'] = reg['driveFileId']
+        fila['driveThumbId'] = reg['driveThumbId']
+        if reg.get('tamanoBytes') is not None and int(reg['tamanoBytes']) != int(fila['tamanoBytes']):
+            errores.append('%s: el peso en Drive (%s) no coincide con el de la fila (%s)' % (e['fotoId'], reg['tamanoBytes'], fila['tamanoBytes']))
+        _validar_fila(fila, errores, con_ids=True)
+        salida.append(fila)
+    ids_drive = collections.Counter(x for f in salida for x in (f['driveFileId'], f['driveThumbId']))
+    errores.extend('id de Drive repetido en el staging' for i, n in ids_drive.items() if n > 1)
+    if errores:
+        raise ErrorImportacion('No se exporta: el esquema no valida (%d): %s' % (len(errores), '; '.join(errores[:5])))
+    ruta = carpeta / STAGING_ARCHIVO
+    with open(str(ruta), 'w', encoding='utf-8', newline='') as f:
+        w = csv.writer(f, delimiter=',', quoting=csv.QUOTE_MINIMAL, lineterminator='\r\n')
+        w.writerow(C.FOTOSPOZOS_COLUMNAS)
+        for fila in salida:
+            w.writerow([fila[c] for c in C.FOTOSPOZOS_COLUMNAS])
+    res = {'lote': carpeta.name, 'exportadas': len(salida), 'sinSubidaConfirmada': sin_confirmar, 'archivo': STAGING_ARCHIVO}
+    log('CSV de staging: %d filas exportadas (%d sin subida confirmada, no incluidas) -> %s/%s' % (
+        len(salida), sin_confirmar, carpeta.name, STAGING_ARCHIVO))
+    return res
+
+
+def main_dry_run(argv):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--lote', required=True, help='subcarpeta de scripts/out/fotos/ con el lote normalizado (p. ej. piloto30)')
     ap.add_argument('--dry-run', action='store_true', help='OBLIGATORIO: genera el plan y no sube nada')
@@ -269,6 +491,40 @@ def main(argv=None):
     (carpeta / 'reporte_dryrun.txt').write_text(informe(plan, detalle=True), encoding='utf-8')
     print(texto)
     return 1 if plan['errores'] else 0
+
+
+def main(argv=None, cliente=None, esperar=time.sleep):
+    """Subcomandos: subir, exportar-filas. Sin subcomando: el dry-run (compatible con la forma anterior)."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == 'subir':
+        ap = argparse.ArgumentParser(prog='importar.py subir')
+        ap.add_argument('--lote', required=True)
+        ap.add_argument('--confirmar-huella', required=True, help='huella (12+ hex) que mostro el dry-run')
+        ap.add_argument('--limite', type=int, default=None, help='subir como mucho N fotos en esta corrida')
+        ap.add_argument('--reintentos', type=int, default=4)
+        ap.add_argument('--salida', default=str(C.OUT_FOTOS))
+        a = ap.parse_args(argv[1:])
+        try:
+            carpeta = Path(a.salida) / a.lote
+            verificar_plan(carpeta, a.confirmar_huella)             # antes de tocar variables de entorno o red
+            cli = cliente or SC.ClienteStorage.desde_entorno()
+            res = subir(carpeta, cli, a.confirmar_huella, a.limite, a.reintentos, esperar)
+        except (ErrorImportacion, SC.ErrorConfiguracion) as err:
+            print('No se sube: %s' % err, file=sys.stderr)
+            return 2
+        return 1 if (res['fallidas'] or res['abortada']) else 0
+    if argv and argv[0] == 'exportar-filas':
+        ap = argparse.ArgumentParser(prog='importar.py exportar-filas')
+        ap.add_argument('--lote', required=True)
+        ap.add_argument('--salida', default=str(C.OUT_FOTOS))
+        a = ap.parse_args(argv[1:])
+        try:
+            exportar_filas(Path(a.salida) / a.lote)
+        except ErrorImportacion as err:
+            print('No se exporta: %s' % err, file=sys.stderr)
+            return 2
+        return 0
+    return main_dry_run(argv)
 
 
 if __name__ == '__main__':

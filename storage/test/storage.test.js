@@ -361,6 +361,7 @@ describe('StorageDrive: galeria general de pozos (FotosPozos)', () => {
   test('putFotoPozo: FotosPozos/<fuente>/<anio>/<fotoId>.jpg + _thumb.jpg, privados, miniatura en la descripcion', () => {
     const r = Dr.storageDrive_putFotoPozo(payloadPozo());
     expect(r.status).toBe('ok');
+    expect(r.existente).toBe(false);
     const anio = carpetaHija(carpetaHija(drive.raizPozos, 'CAMPO_APP'), '2026');
     expect(anio).toBeTruthy();
     expect(anio._hijosArchivos.map((a) => a._nombre).sort()).toEqual([FOTO_POZO + '.jpg', FOTO_POZO + '_thumb.jpg']);
@@ -395,6 +396,9 @@ describe('StorageDrive: galeria general de pozos (FotosPozos)', () => {
     const b = Dr.storageDrive_putFotoPozo(payloadPozo());
     expect(b.driveFileId).toBe(a.driveFileId);
     expect(b.driveThumbId).toBe(a.driveThumbId);
+    // el importador historico distingue SUBIDA de YA_EXISTE por este indicador
+    expect(a.existente).toBe(false);
+    expect(b.existente).toBe(true);
     expect(carpetaHija(carpetaHija(drive.raizPozos, 'CAMPO_APP'), '2026')._hijosArchivos).toHaveLength(2);
   });
 

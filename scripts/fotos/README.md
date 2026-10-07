@@ -17,6 +17,8 @@ python scripts/fotos/revision.py                            # CSV de revision de
 python scripts/fotos/normalizar.py --seleccion piloto       # piloto de 200 fotos -> scripts/out/fotos/piloto/
 python scripts/fotos/normalizar.py --seleccion piloto30 --nombre piloto30 --sin-medir   # lote piloto de ~30 CONFIRMADAS
 python scripts/fotos/importar.py --lote piloto30 --dry-run  # plan de importacion en seco (no sube nada)
+python scripts/fotos/importar.py subir --lote piloto30 --confirmar-huella <huella>   # sube al storage (variables FOTOS_STORAGE_URL / FOTOS_STORAGE_SECRET)
+python scripts/fotos/importar.py exportar-filas --lote piloto30                      # CSV de staging para la hoja
 python scripts/fotos/informe.py --nombre piloto             # estadisticas, extrapolacion y auditoria de privacidad
 python scripts/fotos/calidad.py --nombre piloto             # comparacion de dimension x calidad JPEG
 python -m unittest discover -s scripts/fotos -p "test_*.py" # tests (no necesitan Fotos/ ni scripts/out/)

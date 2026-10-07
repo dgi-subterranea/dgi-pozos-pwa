@@ -108,6 +108,21 @@ class MuestraPiloto30Tests(unittest.TestCase):
         self.assertTrue(set(candidatos) <= presentes)
         self.assertTrue(all(self.por_sha[s]['estado'] == C.ESTADO_CONFIRMADO for s in sel))
 
+    def test_los_pozos_pedidos_que_no_entran_se_informan(self):
+        otros = {f['wellId'] for f in self.filas if f['estado'] == C.ESTADO_CONFIRMADO}
+        pedidos = ['99-9999', sorted(otros)[0]]
+        sel = N.muestra_piloto30(self.filas, incluir_wells=pedidos)
+        self.assertEqual(N.pozos_pedidos_sin_foto(self.filas, sel, pedidos), ['99-9999'])
+
+    def test_los_pozos_pedidos_no_rompen_la_representatividad(self):
+        base = N.muestra_piloto30(self.filas)
+        pedidos = sorted({f['wellId'] for f in self.filas if f['estado'] == C.ESTADO_CONFIRMADO and f['wellId'] not in {self.por_sha[s]['wellId'] for s in base}})[:2]
+        con = N.muestra_piloto30(self.filas, incluir_wells=pedidos)
+        # todas las fotos del lote base siguen estando (los pedidos se SUMAN, no desplazan a nadie)
+        self.assertTrue(set(base) <= set(con))
+        self.assertEqual(len(con) - len(base), len(pedidos))
+        self.assertEqual(N.cobertura(con, self.filas)['estado'], {C.ESTADO_CONFIRMADO: len(con)})
+
     def test_incluir_un_pozo_sin_fotos_confirmadas_se_ignora(self):
         w = next(f['wellId'] or 'XX' for f in self.filas if f['estado'] != C.ESTADO_CONFIRMADO)
         self.assertEqual(list(N.muestra_piloto30(self.filas, incluir_wells=['99-9999'])), list(self.sel))

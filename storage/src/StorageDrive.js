@@ -241,7 +241,8 @@ function storageDrive_putFotoPozo(p) {
   if (existentes.hasNext()) {
     var ya = existentes.next();
     var mDesc = /^thumb:([A-Za-z0-9_-]{10,100})$/.exec(ya.getDescription() || '');
-    return { status: 'ok', driveFileId: ya.getId(), driveThumbId: mDesc ? mDesc[1] : '', tamanoBytes: ya.getSize() };
+    // existente: true -> el archivo ya estaba (reintento o importacion repetida); el importador historico lo distingue de SUBIDA
+    return { status: 'ok', driveFileId: ya.getId(), driveThumbId: mDesc ? mDesc[1] : '', tamanoBytes: ya.getSize(), existente: true };
   }
 
   var archivo = carpeta.createFile(Utilities.newBlob(Utilities.base64Decode(p.imagenBase64), 'image/jpeg', nombre));
@@ -253,7 +254,7 @@ function storageDrive_putFotoPozo(p) {
   } catch (err) {
     // ver storageDrive_putFoto: los archivos nuevos ya nacen privados
   }
-  return { status: 'ok', driveFileId: archivo.getId(), driveThumbId: thumb.getId(), tamanoBytes: archivo.getSize() };
+  return { status: 'ok', driveFileId: archivo.getId(), driveThumbId: thumb.getId(), tamanoBytes: archivo.getSize(), existente: false };
 }
 
 function storageDrive_getFotoPozo(p) {

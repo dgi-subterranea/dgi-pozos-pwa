@@ -231,13 +231,6 @@ def muestra_piloto30(filas, semilla=20261007, incluir_wells=(), excluir_wells=()
             sel[f['sha1']] = {'categoria': cat, 'estrato': estrato}
             puestos += 1
 
-    # pozos pedidos a mano (1 foto cada uno; prefiere Monitoreo y luego la mas reciente)
-    for w in incluir_wells:
-        pool = [f for f in filas if f['estado'] == C.ESTADO_CONFIRMADO and f['wellId'] == w]
-        pool.sort(key=lambda f: (f['fuente'] != 'MONITOREO_NE', f['fecha']['valor'] or '', f['sha1']))
-        if pool:
-            sel[pool[0]['sha1']] = {'categoria': 'SOLICITADO', 'estrato': 'pozo_pedido'}
-
     por_pozo = collections.defaultdict(list)
     for f in conf:
         por_pozo[f['wellId']].append(f)
@@ -273,7 +266,27 @@ def muestra_piloto30(filas, semilla=20261007, incluir_wells=(), excluir_wells=()
     tomar('MONITOREO', 'imagen_muy_grande', [f for f in conf if 'MUY_GRANDE' in f['flags']], 1)
     tomar('RELEVAMIENTO', 'orientacion_EXIF_6_u_8', [f for f in rel if f['orientacionExif'] in (6, 8)], 2)
     tomar('RELEVAMIENTO', 'pozo_solo_Provincia', [f for f in rel if f['fuenteValidacionId'] == 'PADRON'], 2)
+
+    # Pozos pedidos a mano: se SUMAN al final (el lote base no cambia, asi la muestra sigue siendo representativa y
+    # reproducible). Una foto por pozo (prefiere Monitoreo y luego la mas reciente); si el pozo ya esta en el lote, no se repite.
+    en_lote = {f['wellId'] for f in filas if f['sha1'] in sel}
+    for w in incluir_wells:
+        if w in en_lote:
+            continue
+        pool = [f for f in filas if f['estado'] == C.ESTADO_CONFIRMADO and f['wellId'] == w]
+        pool.sort(key=lambda f: (f['fuente'] != 'MONITOREO_NE', f['fecha']['valor'] or '', f['sha1']))
+        if pool:
+            sel[pool[0]['sha1']] = {'categoria': 'SOLICITADO', 'estrato': 'pozo_pedido'}
+            en_lote.add(w)
     return sel
+
+
+def pozos_pedidos_sin_foto(filas, seleccion, incluir_wells):
+    """Pozos pedidos con --incluir-wells que NO quedaron en el lote porque no tienen ninguna foto CONFIRMADA
+    (p. ej. solo POR_REVISAR) o no existen en el corpus. Sirve para avisar en voz alta en vez de ignorarlos."""
+    por_sha = {f['sha1']: f for f in filas}
+    presentes = {por_sha[s]['wellId'] for s in seleccion}
+    return [w for w in incluir_wells if w not in presentes]
 
 
 def cobertura(seleccion, filas):
@@ -363,6 +376,8 @@ def main():
     elif args.seleccion == 'piloto30':
         sel = muestra_piloto30(filas, args.semilla if args.semilla != 20261006 else 20261007, lista(args.incluir_wells), lista(args.excluir_wells))
         print(json.dumps(cobertura(sel, filas), ensure_ascii=False))
+        for w in pozos_pedidos_sin_foto(filas, sel, lista(args.incluir_wells)):
+            print('AVISO: el pozo %s no entra al lote: no tiene fotos CONFIRMADAS en el corpus (o no existe).' % w)
     else:
         sel = collections.OrderedDict((f['sha1'], {'categoria': 'LOTE', 'estrato': None}) for f in filas if f['estado'] == C.ESTADO_CONFIRMADO)
     nombre = args.nombre or args.seleccion

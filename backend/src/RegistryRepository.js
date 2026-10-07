@@ -64,6 +64,19 @@ function registryRepository_getWellRecord(wellId) {
 // archivos de departamento.
 var REGISTRY_METADATA_CACHE_SECONDS = 600;
 
+// Claves (wellId) de UN archivo de la ficha, para validaciones masivas (una lectura por archivo en vez de una por
+// pozo; lo usa la importacion historica de fotos). {} si el archivo no existe.
+function registryRepository_getWellIdsDeArchivo(fileName) {
+  var files = DriveApp.getFolderById(getRegistryFolderId()).getFilesByName(fileName);
+  if (!files.hasNext()) {
+    return {};
+  }
+  var data = JSON.parse(files.next().getBlob().getDataAsString('UTF-8'));
+  var ids = {};
+  Object.keys(data).forEach(function (id) { ids[id] = true; });
+  return ids;
+}
+
 function registryRepository_getMetadata() {
   var cache = CacheService.getScriptCache();
   var cacheKey = 'registry_metadata';
@@ -88,6 +101,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     registryRepository_getWellRecord,
     registryRepository_resolveFileName,
+    registryRepository_getWellIdsDeArchivo,
     registryRepository_getMetadata
   };
 }

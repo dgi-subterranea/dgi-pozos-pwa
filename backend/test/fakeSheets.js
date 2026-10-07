@@ -8,6 +8,7 @@ function crearHoja(nombre, filas) {
     formatos: {},
     congeladas: 0,
     getName() { return this.nombre; },
+    getMaxRows() { return Math.max(this.filas.length, 1000); },
     getLastRow() { return this.filas.length; },
     getLastColumn() { return this.filas.reduce((m, f) => Math.max(m, f.length), 0); },
     getDataRange() { const self = this; return { getValues: () => self.filas.map((f) => f.slice()) }; },
@@ -32,6 +33,7 @@ function crearHoja(nombre, filas) {
             f.forEach((v, c) => { destino[col - 1 + c] = v; });
           });
         },
+        setNumberFormat(fmt) { self.formatoColumnas = self.formatoColumnas || []; self.formatoColumnas.push({ fila, col, nFilas, nCols, fmt }); },
         setNumberFormats(fmts) { fmts.forEach((f, r) => f.forEach((v, c) => { self.formatos[(fila + r) + ':' + (col + c)] = v; })); }
       };
     }

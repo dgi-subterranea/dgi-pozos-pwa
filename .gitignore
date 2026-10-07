@@ -25,3 +25,8 @@ mapeo_privado*
 excluidas_privado*
 inventario.json
 corpus.json
+
+# Secretos locales (nunca versionar: URL/secreto del storage para el importador de fotos)
+.env
+.env.*
+*.env

@@ -357,6 +357,8 @@ if (typeof module !== 'undefined' && module.exports) {
     fotosPozosRepository_esVisible,
     fotosPozosRepository_formatosFila,
     fotosPozosCambiosRepository_filaDesdeCambio,
+    fotosPozosRepository_abrirHoja,
+    fotosPozosRepository_leerTodas,
     fotosPozosRepository_listarVisiblesPorEntidad,
     fotosPozosRepository_buscarVisiblePorFotoId,
     fotosPozosRepository_contarVisiblesPorEntidad,
