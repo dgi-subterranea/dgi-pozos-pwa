@@ -536,3 +536,195 @@ describe('revision de seguridad (aprobacion de FotosPozos v1)', () => {
     expect(texto).not.toMatch(/driveFileId|driveThumbId|emailUsuarioCarga|sha1Original/);
   });
 });
+
+// =====================================================================================================
+// "Fotos del pozo > Agregar foto" es la galeria general FotosPozos (subirFotoPozo): NO usa evaluaciones. Una foto de esta
+// pantalla pertenece a un POZO (wellId) o a un punto NE especial (monitoringId), nunca a una evaluacion. Aca se fija que
+// el flujo no depende de FotosReemplazo y que cada causa de fallo tiene su codigo: STORAGE_UNAVAILABLE solo si falla la
+// llamada al storage (y el log dice POR QUE).
+describe('flujo "Fotos del pozo > Agregar foto" (FotosPozos): sin evaluaciones y con un codigo por causa', () => {
+  const Diag = () => require('../src/FotosDiagnostico');
+  const lineasLog = () => global.Logger.log.mock.calls.map((c) => String(c[0]));
+  const frontend = () => {
+    const sandbox = { JSON, Object, Promise, Math, String, Number, Array };
+    vm.createContext(sandbox);
+    ['js/reemplazoFotosLogic.js', 'js/fotosPozosLogic.js'].forEach((f) => vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), sandbox, { filename: f }));
+    return sandbox;
+  };
+  const firmadoDelStorage = (solicitudCrudo, datos) => {
+    const A = require('../../storage/src/StorageAuth');
+    const sol = JSON.parse(solicitudCrudo);
+    return JSON.stringify(A.storageAuth_firmarRespuesta(SECRET, sol.nonce, datos, Math.floor(Date.now() / 1000)));
+  };
+  const modos = {
+    'la Web App desplegada del storage no tiene la accion putFotoPozo (version vieja)': {
+      aplicar: () => global.UrlFetchApp.fetch.mockImplementation((u, o) => ({ getResponseCode: () => 200, getContentText: () => firmadoDelStorage(o.payload, { status: 'error', code: 'UNKNOWN_ACTION' }) })),
+      log: /UNKNOWN_ACTION/, pista: /NUEVA VERSION/
+    },
+    'falta correr setupFotosPozosStorage (no existe FOTOS_POZOS_ROOT_FOLDER_ID)': {
+      aplicar: () => { global.getStoragePozosRootFolderId = () => { throw new Error('FOTOS_POZOS_ROOT_FOLDER_ID no configurado'); }; },
+      log: /RESPUESTA_SIN_FIRMA \(el storage dijo INTERNAL\)/, pista: /setupFotosPozosStorage/
+    },
+    'el secreto del storage no coincide': {
+      aplicar: () => { global.getStorageSecret = () => 'otro-secreto-distinto-0123456789abcdef0123'; },
+      log: /RESPUESTA_SIN_FIRMA \(el storage dijo UNAUTHORIZED\)/, pista: /secreto/
+    },
+    'la plataforma responde HTTP 500': {
+      aplicar: () => global.UrlFetchApp.fetch.mockImplementation(() => ({ getResponseCode: () => 500, getContentText: () => 'Error interno' })),
+      log: /storage HTTP 500/, pista: /HTTP/
+    }
+  };
+
+  describe('no depende de evaluaciones ni de FotosReemplazo', () => {
+    test('el payload real de "Agregar foto" no lleva evaluacionId; si alguien lo inyectara el backend lo ignora y no consulta evaluaciones', () => {
+      global.reemplazoRepository_buscarPorEvaluacionId = jest.fn();
+      global.fotosRepository_agregarSiHayCupo = jest.fn();
+      global.fotosRepository_contarPorEvaluacionId = jest.fn();
+      const c = cuerpoSubida();
+      expect(Object.keys(c)).not.toContain('evaluacionId');
+      const r = post(Object.assign({}, c, { evaluacionId: '11111111-2222-4333-8444-555555555555' }));
+      expect(r.status).toBe('ok');
+      expect(global.reemplazoRepository_buscarPorEvaluacionId).not.toHaveBeenCalled();
+      expect(global.fotosRepository_agregarSiHayCupo).not.toHaveBeenCalled();
+      expect(global.fotosRepository_contarPorEvaluacionId).not.toHaveBeenCalled();
+      expect(Repo_columnas()).not.toContain('evaluacionId');
+    });
+
+    test('un pozo SIN ninguna evaluacion recibe su foto: queda en FotosPozos asociada al wellId (no huerfana)', () => {
+      const r = post(cuerpoSubida());
+      expect(r.status).toBe('ok');
+      expect(hojas.FotosPozos.filas).toHaveLength(2);
+      expect(hojas.FotosPozos.filas[1][hojas.FotosPozos.filas[0].indexOf('wellId')]).toBe(WELL);
+    });
+
+    test('el limite de 5 fotos y la asociacion a evaluacion NO existen en esta galeria (7 fotos seguidas al mismo pozo)', () => {
+      for (let i = 0; i < 7; i++) {
+        const c = cuerpoSubida({ imagenBase64: jpegB64(1600, 1200, 300 * 1024, 40 + i), sha1Original: String(i).padStart(2, '0').repeat(20) });
+        expect(post(c).status).toBe('ok');
+      }
+      expect(hojas.FotosPozos.filas).toHaveLength(8);
+    });
+
+    test('la accion no existe como ruta de FotosReemplazo: subirFotoReemplazo y subirFotoPozo son rutas, tablas y permisos distintos', () => {
+      permisos = { fotos: false, fotos_carga: true, reemplazo: false };
+      expect(post(cuerpoSubida()).status).toBe('ok');                       // basta fotos_carga
+      const rr = post({ action: 'subirFotoReemplazo', sessionToken: 't', wellId: WELL, evaluacionId: '11111111-2222-4333-8444-555555555555', nombreArchivo: 'foto.jpg', mimeType: 'image/jpeg', imagenBase64: IMG, thumbBase64: THUMB });
+      expect(rr.code).toBe('PERMISSION_DENIED');                            // reemplazo=NO
+    });
+  });
+
+  describe('cada fallo tiene su codigo; STORAGE_UNAVAILABLE solo cuando falla el storage', () => {
+    test.each(Object.keys(modos))('storage: %s -> STORAGE_UNAVAILABLE, sin fila ni archivo, auditado, y el log dice la causa', (nombre) => {
+      modos[nombre].aplicar();
+      const r = post(cuerpoSubida());
+      expect(r.code).toBe('STORAGE_UNAVAILABLE');
+      expect(hojas.FotosPozos.filas).toHaveLength(1);
+      expect(Object.keys(drive.archivos)).toHaveLength(0);
+      expect(global.logHistoryEvent).toHaveBeenCalledWith(EMAIL, 'subirFotoPozo', WELL, 'STORAGE_UNAVAILABLE');
+      const l = lineasLog().filter((x) => x.includes('Storage de fotos no disponible'));
+      expect(l).toHaveLength(1);
+      expect(l[0]).toMatch(modos[nombre].log);
+      expect(l[0]).not.toContain('STORAGE_E2E');
+      expect(l[0]).not.toContain(SECRET);
+    });
+
+    test('pozo inexistente: ENTIDAD_NOT_FOUND (no STORAGE_UNAVAILABLE) y sin llamar al storage', () => {
+      const r = post(cuerpoSubida({ wellId: '09-9999' }));
+      expect(r.code).toBe('ENTIDAD_NOT_FOUND');
+      expect(global.UrlFetchApp.fetch).not.toHaveBeenCalled();
+    });
+
+    test('entidad ambigua / mal formada / fuente o fecha invalida: su propio codigo, sin storage', () => {
+      const casos = [
+        [{ wellId: WELL, monitoringId: 'INA 2055', fuente: 'MONITOREO_NE' }, 'ENTIDAD_INCONSISTENTE'],
+        [{ wellId: '', monitoringId: '' }, 'INVALID_ENTIDAD'],
+        [{ wellId: 'xx-1' }, 'INVALID_ENTIDAD'],
+        [{ fuente: 'RELEVAMIENTO_2018' }, 'INVALID_FUENTE'],
+        [{ fechaFotoValor: '2999-01-01' }, 'INVALID_FECHA'],
+        [{ tipoFoto: 'X' }, 'INVALID_TIPO'],
+        [{ observacion: 'a'.repeat(141) }, 'INVALID_OBSERVACION'],
+        [{ mimeType: 'image/png' }, 'INVALID_MIME']
+      ];
+      casos.forEach(([extra, codigo]) => {
+        expect(post(cuerpoSubida(extra)).code).toBe(codigo);
+      });
+      expect(global.UrlFetchApp.fetch).not.toHaveBeenCalled();
+    });
+
+    test('sin permiso fotos_carga: PERMISSION_DENIED; sin la hoja FotosPozos: SERVICE_UNAVAILABLE (no STORAGE) y sin subir nada', () => {
+      permisos = { fotos: true, fotos_carga: false };
+      expect(post(cuerpoSubida()).code).toBe('PERMISSION_DENIED');
+      permisos = { fotos: true, fotos_carga: true };
+      delete hojas.FotosPozos;
+      const r = post(cuerpoSubida());
+      expect(r.code).toBe('SERVICE_UNAVAILABLE');
+      expect(Object.keys(drive.archivos)).toHaveLength(0);
+    });
+
+    test('si el storage guarda pero la hoja falla: SERVICE_UNAVAILABLE y el archivo se manda a la papelera (sin huerfanas)', () => {
+      fallaHoja = true;
+      const r = post(cuerpoSubida());
+      expect(r.code).toBe('SERVICE_UNAVAILABLE');
+      expect(Object.values(drive.archivos).every((a) => a._t)).toBe(true);
+    });
+
+    test('el frontend de "Fotos del pozo" muestra un mensaje DISTINTO por cada causa', () => {
+      const f = frontend();
+      const codigos = ['STORAGE_UNAVAILABLE', 'ENTIDAD_NOT_FOUND', 'INVALID_ENTIDAD', 'SERVICE_UNAVAILABLE', 'PERMISSION_DENIED', 'INVALID_FUENTE', 'INVALID_FECHA'];
+      const mensajes = codigos.map((c) => f.fotosPozosLogic_mensajeError(c));
+      expect(mensajes.every((m) => typeof m === 'string' && m.length > 5)).toBe(true);
+      expect(f.fotosPozosLogic_mensajeError('STORAGE_UNAVAILABLE')).toMatch(/almacenamiento/);
+      expect(f.fotosPozosLogic_mensajeError('ENTIDAD_NOT_FOUND')).toMatch(/ya no existe/);
+      expect(f.fotosPozosLogic_mensajeError('ENTIDAD_NOT_FOUND')).not.toMatch(/almacenamiento/);
+      expect(new Set([f.fotosPozosLogic_mensajeError('STORAGE_UNAVAILABLE'), f.fotosPozosLogic_mensajeError('ENTIDAD_NOT_FOUND'), f.fotosPozosLogic_mensajeError('PERMISSION_DENIED'), f.fotosPozosLogic_mensajeError('SERVICE_UNAVAILABLE')]).size).toBe(4);
+    });
+  });
+
+  describe('diagnosticarFotosPozos() (se corre a mano en el editor): dice la causa exacta de un STORAGE_UNAVAILABLE', () => {
+    test('storage sano: todo OK, la foto de prueba se manda a la papelera y NO se escribe ninguna fila', () => {
+      Diag().diagnosticarFotosPozos();
+      const l = lineasLog().join('\n');
+      expect(l).toContain('DIAGNOSTICO COMPLETO');
+      expect(l).not.toMatch(/FALLA/);
+      expect(hojas.FotosPozos.filas).toHaveLength(1);
+      const archivos = Object.values(drive.archivos);
+      expect(archivos).toHaveLength(2);
+      expect(archivos.every((a) => a._t)).toBe(true);
+      expect(l).not.toContain(SECRET);
+    });
+
+    test.each(Object.keys(modos))('%s: el diagnostico muestra el motivo exacto y la pista', (nombre) => {
+      modos[nombre].aplicar();
+      Diag().diagnosticarFotosPozos();
+      const falla = lineasLog().find((x) => x.startsWith('FALLA 1) putFotoPozo'));
+      expect(falla).toBeTruthy();
+      expect(falla).toMatch(modos[nombre].log);
+      expect(falla).toMatch(modos[nombre].pista);
+      expect(lineasLog().join('\n')).toContain('DIAGNOSTICO CON FALLAS');
+      expect(hojas.FotosPozos.filas).toHaveLength(1);
+      const todo = lineasLog().join('\n');
+      expect(todo).not.toContain(SECRET);
+      expect(todo).not.toContain('STORAGE_E2E');
+    });
+
+    test('pistas: una por causa tipica y vacia si no hay nada que sugerir', () => {
+      const p = Diag().fotosDiagnostico_pista;
+      expect(p('RESPUESTA_SIN_FIRMA (el storage dijo UNAUTHORIZED)')).toMatch(/secreto/);
+      expect(p('storage devolvio error: UNKNOWN_ACTION')).toMatch(/NUEVA VERSION/);
+      expect(p('RESPUESTA_SIN_FIRMA (el storage dijo INTERNAL)')).toMatch(/setupFotosPozosStorage/);
+      expect(p('storage HTTP 404')).toMatch(/HTTP/);
+      expect(p('storage devolvio error: INVALID_IMAGEN')).toMatch(/contenido/);
+      expect(p('algo raro')).toBe('');
+    });
+
+    test('el diagnostico no es una accion de la API (doPost no puede ejecutarlo)', () => {
+      const r = post({ action: 'diagnosticarFotosPozos', sessionToken: 't' });
+      expect(r.status).toBe('error');
+      expect(fs.readFileSync(path.join(ROOT, 'backend/src/Api.js'), 'utf8')).not.toMatch(/diagnosticarFotosPozos/);
+    });
+  });
+});
+
+function Repo_columnas() {
+  return require('../src/FotosPozosRepository').FOTOS_POZOS_COLUMNAS;
+}

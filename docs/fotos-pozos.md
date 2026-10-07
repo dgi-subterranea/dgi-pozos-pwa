@@ -98,3 +98,16 @@ sobrescribe). Esquemas en `backend/src/FotosPozosRepository.js` (`FOTOS_POZOS_CO
 
 No hay Script Properties nuevas en el proyecto principal (reutiliza `FOTOS_STORAGE_URL` y
 `FOTOS_STORAGE_SECRET`). El storage suma `FOTOS_POZOS_ROOT_FOLDER_ID`, que crea el setup.
+
+## Si "Agregar foto" muestra `STORAGE_UNAVAILABLE`
+
+Ese codigo solo sale cuando falla la llamada al storage (los demas fallos tienen su propio codigo: `ENTIDAD_NOT_FOUND`,
+`PERMISSION_DENIED`, `SERVICE_UNAVAILABLE`...). Correr `diagnosticarFotosPozos()` en el editor del proyecto principal: sube una foto de
+prueba, la lee y la manda a la papelera sin escribir ninguna fila, e imprime el motivo exacto del primer paso que falle. Causas tipicas:
+
+| Motivo en el log | Causa |
+|---|---|
+| `RESPUESTA_SIN_FIRMA (el storage dijo INTERNAL)` | falta correr `setupFotosPozosStorage()` en la cuenta del storage (propiedad `FOTOS_POZOS_ROOT_FOLDER_ID`) o `StorageDrive.js` / `StorageConfig.js` sin actualizar |
+| `storage devolvio error: UNKNOWN_ACTION` | la Web App desplegada del storage es una version vieja: publicar una NUEVA VERSION |
+| `RESPUESTA_SIN_FIRMA (el storage dijo UNAUTHORIZED)` | el secreto no coincide entre los dos proyectos o el reloj esta desfasado |
+

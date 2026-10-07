@@ -333,3 +333,199 @@ describe('logging permanente: seguro y con valor operativo', () => {
     expect(fuente).not.toMatch(/FOTOS_API_BUILD|fotosDiag_|fotosService_etapa|FOTOS_ACCIONES_DIAG/);
   });
 });
+
+// =====================================================================================================
+// REGRESION de la lectura de fotos de evaluacion: upload -> guardar metadata -> leer thumbnail -> leer original, con
+// IDs DISTINTOS de Drive para el original y la miniatura. Fija lo que viaja en cada lectura:
+//   thumbnail: getFotoReemplazo(variante=thumb) -> fotosService_obtenerImagen -> fotosStorageClient_obtener
+//              -> action 'getFoto' {driveFileId: <ID DEL ORIGINAL>, variante:'thumb'}
+//   original : getFotoReemplazo(variante=full)  -> fotosService_obtenerImagen -> fotosStorageClient_obtener
+//              -> action 'getFoto' {driveFileId: <ID DEL ORIGINAL>, variante:'full'}
+// El storage abre SIEMPRE primero el archivo principal por ese id; para 'thumb' ademas resuelve la miniatura
+// por 'thumb:<id>' en la descripcion.
+describe('lectura: upload -> metadata -> thumbnail -> original (IDs distintos)', () => {
+  const ORIGINAL_BYTES = 900 * 1024;
+  let trafico;
+
+  function espiarStorage() {
+    trafico = [];
+    const StorageApi = require('../../storage/src/StorageApi');
+    global.UrlFetchApp.fetch.mockImplementation((url, opts) => {
+      const salida = StorageApi.doPost({ postData: { contents: opts.payload } });
+      const solicitud = JSON.parse(opts.payload);
+      trafico.push({ url, opts, accion: solicitud.action, payload: JSON.parse(solicitud.payload), texto: salida.text });
+      return { getResponseCode: () => 200, getContentText: () => salida.text };
+    });
+  }
+
+  function subirYObtener() {
+    espiarStorage();
+    const e = bodyDeFrontend(ORIGINAL_BYTES);
+    const sube = post(JSON.stringify(e.cuerpo));
+    expect(sube.status).toBe('ok');
+    const fila = hojaFotos[0];
+    const principal = drive.archivos[fila.driveFileId];
+    const idThumb = /^thumb:(.+)$/.exec(principal._d)[1];
+    trafico.length = 0;                                                  // solo interesan las LECTURAS
+    const fotoId = sube.data.foto.fotoId;
+    const thumb = post(JSON.stringify({ action: 'getFotoReemplazo', sessionToken: 't', fotoId, variante: 'thumb' }));
+    const full = post(JSON.stringify({ action: 'getFotoReemplazo', sessionToken: 't', fotoId, variante: 'full' }));
+    return { e, fila, principal, idThumb, thumb, full };
+  }
+
+  test('el original y la miniatura son archivos DISTINTOS con ids distintos, y la hoja guarda solo el id del ORIGINAL', () => {
+    const { fila, principal, idThumb } = subirYObtener();
+    expect(fila.driveFileId).not.toBe(idThumb);
+    expect(principal._n).toMatch(/^[^/]+\.jpg$/);
+    expect(principal._n.endsWith('_thumb.jpg')).toBe(false);
+    expect(drive.archivos[idThumb]._n.endsWith('_thumb.jpg')).toBe(true);
+    expect(drive.archivos[fila.driveFileId]._b.length).toBe(ORIGINAL_BYTES);
+    expect(drive.archivos[idThumb]._b.length).toBe(12 * 1024 + 4);
+    expect(fila.tamanoBytes).toBe(ORIGINAL_BYTES);
+    expect(Object.keys(fila)).not.toContain('driveThumbId');           // Reemplazos: UN id por foto (la miniatura va en la descripcion)
+  });
+
+  test('las dos lecturas mandan la MISMA accion y el MISMO id (el del original); solo cambia la variante', () => {
+    const { fila } = subirYObtener();
+    const lecturas = trafico.filter((t) => t.accion === 'getFoto');
+    expect(lecturas).toHaveLength(2);
+    const [t, f] = lecturas;
+    expect(t.accion).toBe('getFoto');
+    expect(f.accion).toBe('getFoto');
+    expect(t.payload).toEqual({ driveFileId: fila.driveFileId, variante: 'thumb' });
+    expect(f.payload).toEqual({ driveFileId: fila.driveFileId, variante: 'full' });
+    // mismo destino, mismo metodo, mismas opciones de fetch
+    expect(f.url).toBe(t.url);
+    expect(f.opts.method).toBe(t.opts.method);
+    expect(f.opts.contentType).toBe(t.opts.contentType);
+    expect(f.opts.followRedirects).toBe(t.opts.followRedirects);
+    expect(f.opts.muteHttpExceptions).toBe(t.opts.muteHttpExceptions);
+    // solo se envia el id del original: la miniatura la resuelve el storage
+    expect(JSON.stringify(trafico)).not.toContain(drive.archivos[fila.driveFileId]._d.replace('thumb:', ''));
+  });
+
+  test('cada lectura devuelve los bytes del archivo que corresponde (miniatura != original)', () => {
+    const { e, thumb, full } = subirYObtener();
+    expect(thumb.status).toBe('ok');
+    expect(full.status).toBe('ok');
+    expect(thumb.data.imagenBase64).toBe(THUMB_B64);
+    expect(full.data.imagenBase64).toBe(e.cuerpo.imagenBase64);
+    expect(thumb.data.imagenBase64).not.toBe(full.data.imagenBase64);
+    expect(thumb.data.imagenBase64.length).toBeLessThan(full.data.imagenBase64.length / 10);
+    expect(thumb.data.mimeType).toBe('image/jpeg');
+    expect(full.data.mimeType).toBe('image/jpeg');
+  });
+
+  test('el storage responde las dos lecturas con HTTP 200 y JSON firmado status=ok: la unica diferencia es el tamano del cuerpo', () => {
+    subirYObtener();
+    const lecturas = trafico.filter((t) => t.accion === 'getFoto');
+    lecturas.forEach((l) => {
+      const cuerpo = JSON.parse(l.texto);
+      expect(typeof cuerpo.sig).toBe('string');
+      expect(JSON.parse(cuerpo.payload).status).toBe('ok');
+    });
+    expect(lecturas[1].texto.length).toBeGreaterThan(lecturas[0].texto.length * 10);
+  });
+
+  test('contrato del storage: todo resultado (ok, NOT_FOUND, INVALID, UNAUTHORIZED, JSON roto) es un JSON con status', () => {
+    subirYObtener();
+    const StorageApi = require('../../storage/src/StorageApi');
+    const fila = hojaFotos[0];
+    const envio = (accion, payload, malFirma) => {
+      const sol = Servicios.Client.fotosStorageClient_armarSolicitud(accion, payload, malFirma ? 'otro-secreto-distinto' : SECRET, Math.floor(Date.now() / 1000), crypto.randomUUID());
+      return JSON.parse(StorageApi.doPost({ postData: { contents: JSON.stringify(sol) } }).text);
+    };
+    expect(JSON.parse(envio('getFoto', { driveFileId: fila.driveFileId, variante: 'full' }).payload).status).toBe('ok');
+    expect(JSON.parse(envio('getFoto', { driveFileId: 'NoExisteEsteId0123456', variante: 'full' }).payload)).toEqual({ status: 'error', code: 'NOT_FOUND' });
+    expect(JSON.parse(envio('getFoto', { driveFileId: fila.driveFileId, variante: 'otra' }).payload)).toEqual({ status: 'error', code: 'INVALID_VARIANTE' });
+    expect(envio('getFoto', { driveFileId: fila.driveFileId, variante: 'full' }, true)).toEqual({ status: 'error', code: 'UNAUTHORIZED' });
+    expect(JSON.parse(StorageApi.doPost({ postData: { contents: '{roto' } }).text)).toEqual({ status: 'error', code: 'MALFORMED' });
+    expect(JSON.parse(envio('accionInexistente', {}).payload)).toEqual({ status: 'error', code: 'UNKNOWN_ACTION' });
+  });
+
+  test('el id que resuelve el original es el MISMO que usa la miniatura para encontrar su archivo (misma raiz, mismo nivel)', () => {
+    const { fila, idThumb } = subirYObtener();
+    expect(Global_estaBajoRaiz(drive.archivos[fila.driveFileId])).toBe(true);
+    expect(Global_estaBajoRaiz(drive.archivos[idThumb])).toBe(true);
+    function Global_estaBajoRaiz(file) { return global.storageDrive_estaBajoRaiz(file, ROOT_ID, 2); }
+  });
+
+  test('originales de 300 KB, 1,5 MB y 1,99 MB: la lectura completa vuelve entera por el MISMO camino que la miniatura', () => {
+    [300 * 1024, 1.5 * 1024 * 1024, 2 * 1024 * 1024 - 100].forEach((bytes) => {
+      const e = bodyDeFrontend(bytes);
+      const sube = post(JSON.stringify(e.cuerpo));
+      const fotoId = sube.data.foto.fotoId;
+      const thumb = post(JSON.stringify({ action: 'getFotoReemplazo', sessionToken: 't', fotoId, variante: 'thumb' }));
+      const full = post(JSON.stringify({ action: 'getFotoReemplazo', sessionToken: 't', fotoId, variante: 'full' }));
+      expect(thumb.data.imagenBase64).toBe(THUMB_B64);
+      expect(full.data.imagenBase64).toBe(e.cuerpo.imagenBase64);
+    });
+  });
+});
+
+// =====================================================================================================
+// Mapeo de errores de la subida de fotos de UNA EVALUACION (Nueva evaluacion > fotos > guardar): la asociacion con la
+// evaluacion se valida ANTES de tocar el storage y cada causa tiene su propio codigo y mensaje. STORAGE_UNAVAILABLE
+// queda reservado para un fallo real al hablar con el storage.
+describe('subida a una evaluacion: cada causa tiene su codigo (STORAGE_UNAVAILABLE solo si el storage falla)', () => {
+  const subirConCuerpo = (extra) => {
+    const e = bodyDeFrontend(200 * 1024);
+    return post(JSON.stringify({ ...e.cuerpo, ...extra }));
+  };
+  const frontend = () => {
+    const sandbox = { JSON, Object, Promise, Math, String, Number, Array };
+    vm.createContext(sandbox);
+    vm.runInContext(fs.readFileSync(path.join(ROOT, 'js/reemplazoFotosLogic.js'), 'utf8'), sandbox, { filename: 'js/reemplazoFotosLogic.js' });
+    return sandbox;
+  };
+
+  test('evaluacionId inexistente: EVALUACION_NOT_FOUND, sin llamar al storage ni escribir filas', () => {
+    const r = subirConCuerpo({ evaluacionId: '11111111-2222-4333-8444-555555555555' });
+    expect(r.code).toBe('EVALUACION_NOT_FOUND');
+    expect(global.UrlFetchApp.fetch).not.toHaveBeenCalled();
+    expect(hojaFotos).toHaveLength(0);
+    expect(Object.keys(drive.archivos)).toHaveLength(0);
+  });
+
+  test('evaluacionId vacio o mal formado: INVALID_EVALUACION_ID (tampoco llega al storage)', () => {
+    ['', 'abc', null].forEach((id) => {
+      const r = subirConCuerpo({ evaluacionId: id });
+      expect(r.code).toBe('INVALID_EVALUACION_ID');
+    });
+    expect(global.UrlFetchApp.fetch).not.toHaveBeenCalled();
+  });
+
+  test('la evaluacion es de otro pozo: EVALUACION_WELLID_MISMATCH', () => {
+    const r = subirConCuerpo({ wellId: '05-0001' });
+    expect(r.code).toBe('EVALUACION_WELLID_MISMATCH');
+    expect(global.UrlFetchApp.fetch).not.toHaveBeenCalled();
+  });
+
+  test('sexta foto de una evaluacion: FOTO_LIMIT (sin llamar al storage)', () => {
+    for (let i = 0; i < 5; i++) {
+      expect(subirConCuerpo({}).status).toBe('ok');
+    }
+    global.UrlFetchApp.fetch.mockClear();
+    const r = subirConCuerpo({});
+    expect(r.code).toBe('FOTO_LIMIT');
+    expect(global.UrlFetchApp.fetch).not.toHaveBeenCalled();
+    expect(hojaFotos).toHaveLength(5);
+  });
+
+  test('storage realmente caido: STORAGE_UNAVAILABLE', () => {
+    global.UrlFetchApp.fetch.mockImplementation(() => ({ getResponseCode: () => 503, getContentText: () => '' }));
+    expect(subirConCuerpo({}).code).toBe('STORAGE_UNAVAILABLE');
+    expect(hojaFotos).toHaveLength(0);
+  });
+
+  test('el frontend muestra un mensaje DISTINTO para cada una de esas causas (y el codigo real al lado)', () => {
+    const f = frontend();
+    const codigos = ['EVALUACION_NOT_FOUND', 'INVALID_EVALUACION_ID', 'EVALUACION_WELLID_MISMATCH', 'FOTO_LIMIT', 'STORAGE_UNAVAILABLE', 'PERMISSION_DENIED'];
+    const mensajes = codigos.map((c) => f.reemplazoFotosLogic_mensajeError(c));
+    expect(new Set(mensajes).size).toBe(codigos.length);
+    expect(f.reemplazoFotosLogic_mensajeError('EVALUACION_NOT_FOUND')).toMatch(/evaluación/);
+    expect(f.reemplazoFotosLogic_mensajeError('STORAGE_UNAVAILABLE')).toMatch(/almacenamiento/);
+    expect(f.reemplazoFotosLogic_mensajeError('EVALUACION_NOT_FOUND')).not.toMatch(/almacenamiento/);
+    expect(f.reemplazoFotosLogic_textoCodigo('EVALUACION_NOT_FOUND')).toBe('Código: EVALUACION_NOT_FOUND');
+  });
+});

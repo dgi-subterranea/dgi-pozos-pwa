@@ -113,6 +113,7 @@ var REEMPLAZO_FOTOS_MENSAJES = {
   // codigos del backend
   PERMISSION_DENIED: 'No tenés permiso para subir fotos.',
   EVALUACION_NOT_FOUND: 'La evaluación ya no existe.',
+  INVALID_EVALUACION_ID: 'La evaluación no es válida.',
   EVALUACION_WELLID_MISMATCH: 'La evaluación pertenece a otro pozo.',
   FOTO_LIMIT: 'La evaluación ya tiene el máximo de fotos.',
   FILE_TOO_LARGE: 'La foto es demasiado pesada.',

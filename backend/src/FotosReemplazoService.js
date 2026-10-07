@@ -33,7 +33,12 @@ function fotosService_error(code, message) {
 // largo con pinta de base64/id, y se recorta. Nunca se loguea base64,
 // secreto, URL del storage, driveFileId ni email.
 function fotosService_limpiar(mensaje) {
-  return String(mensaje).replace(/https?:\/\/\S+/g, '[url]').replace(/[A-Za-z0-9+\/=_-]{16,}/g, '[...]').substring(0, 160);
+  // Se enmascara toda corrida larga que PAREZCA un id o un base64 (lleva digitos o mezcla mayusculas y minusculas).
+  // Los codigos de error en MAYUSCULAS_Y_GUION_BAJO (RESPUESTA_SIN_FIRMA, UNKNOWN_ACTION...) se conservan: son justo
+  // lo que hace falta ver en el log para saber por que fallo el storage.
+  return String(mensaje).replace(/https?:\/\/\S+/g, '[url]').replace(/[A-Za-z0-9+\/=_-]{16,}/g, function (t) {
+    return (/\d/.test(t) || (/[a-z]/.test(t) && /[A-Z]/.test(t))) ? '[...]' : t;
+  }).substring(0, 160);
 }
 
 // Bytes que representa un base64 (sin decodificarlo entero).

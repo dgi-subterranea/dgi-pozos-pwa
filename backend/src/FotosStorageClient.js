@@ -59,7 +59,10 @@ function fotosStorageClient_armarSolicitud(accion, payloadObj, secret, ahoraSeg,
 // ya parseado: {status, code?, ...}) o {ok:false, reason}.
 function fotosStorageClient_verificarRespuesta(respuesta, secret, nonceEsperado, ahoraSeg) {
   if (!respuesta || typeof respuesta !== 'object' || typeof respuesta.payload !== 'string' || typeof respuesta.sig !== 'string') {
-    return { ok: false, reason: 'RESPUESTA_SIN_FIRMA' };
+    // El storage devuelve SIN firmar sus errores de autenticacion (UNAUTHORIZED) y de excepcion (INTERNAL, p. ej. falta una
+    // propiedad o una carpeta): se conserva el codigo para poder distinguirlos en el log (solo mayusculas y guion bajo).
+    var codigo = respuesta && typeof respuesta.code === 'string' && /^[A-Z_]{1,30}$/.test(respuesta.code) ? ' (el storage dijo ' + respuesta.code + ')' : '';
+    return { ok: false, reason: 'RESPUESTA_SIN_FIRMA' + codigo };
   }
   if (respuesta.nonce !== nonceEsperado) {
     return { ok: false, reason: 'NONCE_DISTINTO' };
