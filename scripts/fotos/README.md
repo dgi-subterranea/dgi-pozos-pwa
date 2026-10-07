@@ -15,6 +15,8 @@ python scripts/fotos/inventariar.py                         # SHA-1 + EXIF de ca
 python scripts/fotos/clasificar.py                          # un registro por contenido unico -> corpus.json + resumen
 python scripts/fotos/revision.py                            # CSV de revision de las POR_REVISAR (+ mapeos privados)
 python scripts/fotos/normalizar.py --seleccion piloto       # piloto de 200 fotos -> scripts/out/fotos/piloto/
+python scripts/fotos/normalizar.py --seleccion piloto30 --nombre piloto30 --sin-medir   # lote piloto de ~30 CONFIRMADAS
+python scripts/fotos/importar.py --lote piloto30 --dry-run  # plan de importacion en seco (no sube nada)
 python scripts/fotos/informe.py --nombre piloto             # estadisticas, extrapolacion y auditoria de privacidad
 python scripts/fotos/calidad.py --nombre piloto             # comparacion de dimension x calidad JPEG
 python -m unittest discover -s scripts/fotos -p "test_*.py" # tests (no necesitan Fotos/ ni scripts/out/)
@@ -48,3 +50,7 @@ unico modo que procesa todo el corpus; no se corrio todavia.
 fuenteValidacionId, motivoRevision, distanciaGpsMetros, sugerencia, decision, wellIdCorregido, monitoringIdCorregido,
 observacionRevision`. Se completan a mano las ultimas cuatro (`decision`: `CONFIRMAR`, `CORREGIR` o `DESCARTAR`). Para
 reconocer una foto, `mapeo_privado_revision.csv` relaciona `fotoId` con la ruta original (solo local).
+
+## Importacion
+
+Ver `docs/fotos-pozos-importacion.md` (flujo, garantias, lote piloto y plan en seco).
