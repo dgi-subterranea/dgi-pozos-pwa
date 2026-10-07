@@ -278,6 +278,37 @@ def resolver_fecha(exif_original, rutas, mtimes_ms, fuente, mtime_confiable):
     return {'valor': None, 'precision': 'DESCONOCIDA', 'fuente': None, 'flags': flags}
 
 
+MOTIVO_FECHA_SOSPECHOSA = 'FECHA_SOSPECHOSA'
+
+
+def fecha_sospechosa(fecha, fuente):
+    """True si la fecha sale SOLO del anio del nombre y ese anio cae fuera del rango plausible de la fuente (p. ej. un
+    Monitoreo "_2016_" cuando esa campania es de 2023 en adelante). No se corrige: se manda a revision."""
+    rango = MTIME_ANIOS_PLAUSIBLES.get(fuente)
+    if not rango or not fecha or fecha.get('fuente') != 'NOMBRE_ANIO' or not fecha.get('valor'):
+        return False
+    return not (rango[0] <= int(str(fecha['valor'])[:4]) <= rango[1])
+
+
+def aplicar_regla_fecha(rec):
+    """Marca la fecha sospechosa con el motivo FECHA_SOSPECHOSA (y la bandera ANIO_FUERA_DE_RANGO). Un contenido CONFIRMADO
+    pasa a POR_REVISAR (no se importa hasta que alguien lo revise); uno que ya estaba en revision conserva sus motivos y suma
+    este; una EXCLUIDA no se toca. La fecha NUNCA se corrige. Idempotente. Devuelve True si cambio algo."""
+    if rec['estado'] == ESTADO_EXCLUIDA or not fecha_sospechosa(rec['fecha'], rec['fuente']):
+        return False
+    cambio = False
+    if rec['estado'] == ESTADO_CONFIRMADO:
+        rec['estado'] = ESTADO_POR_REVISAR
+        cambio = True
+    if MOTIVO_FECHA_SOSPECHOSA not in rec['motivos']:
+        rec['motivos'] = list(rec['motivos']) + [MOTIVO_FECHA_SOSPECHOSA]
+        cambio = True
+    if 'ANIO_FUERA_DE_RANGO' not in rec['flags']:
+        rec['flags'] = list(rec['flags']) + ['ANIO_FUERA_DE_RANGO']
+        cambio = True
+    return cambio
+
+
 def formatear_fecha(valor, precision):
     """Lo que ve el usuario: '2025', '03/2018' o '14/06/2025'; vacio si se desconoce."""
     if not valor or precision == 'DESCONOCIDA':
@@ -403,6 +434,8 @@ def sugerencia_revision(rec):
             partes.append('El numero %s no figura en el padron ni en la red NE' % (ids[0] if ids else ''))
         elif m == 'GPS_LEJOS':
             partes.append('El GPS de la foto esta a %s m del pozo propuesto %s' % (rec.get('gpsDistM'), rec.get('wellId')))
+        elif m == 'FECHA_SOSPECHOSA':
+            partes.append('La fecha sale solo del anio del nombre (%s) y esta fuera del rango esperado para la fuente: verificar el anio' % ((rec.get('fecha') or {}).get('valor') or ''))
         elif m == 'IMAGEN_ILEGIBLE':
             partes.append('No se pudo abrir la imagen')
         elif m == 'FUENTES_MEZCLADAS':

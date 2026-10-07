@@ -61,6 +61,8 @@ python scripts/fotos/normalizar.py --seleccion piloto30 --nombre piloto30 --sin-
 
 # 2) Plan en seco (obligatorio). Imprime la "Huella del plan"
 python scripts/fotos/importar.py --lote piloto30 --dry-run
+#    con verificacion contra la hoja real: descargar FotosPozos como CSV (Archivo > Descargar) y pasarlo
+python scripts/fotos/importar.py --lote piloto30 --dry-run --existentes scripts/out/fotos/FotosPozos.csv
 
 # 3) Subida real (solo después de aprobar el plan). Reanudable: si se corta, volver a correr el mismo comando
 python scripts/fotos/importar.py subir --lote piloto30 --confirmar-huella <12 o mas caracteres de la huella>
@@ -73,6 +75,27 @@ python scripts/fotos/importar.py exportar-filas --lote piloto30
 `--incluir-wells` **suma** una foto CONFIRMADA por pozo pedido al lote base (no desplaza ninguna foto de la muestra);
 si el pozo no tiene fotos confirmadas, el comando avisa. Cambiar el lote obliga a normalizar y a repetir el dry-run
 (la huella cambia).
+
+### Verificación contra la hoja real (`--existentes`)
+
+El dry-run no puede ver la hoja `FotosPozos` por sí solo. Con `--existentes <csv>` (la hoja exportada completa, con coma o punto y coma)
+comprueba que **ninguna foto del lote ya esté registrada**: por `fotoId`, o por el mismo contenido (`sha1Original`) en el mismo pozo.
+Lee del CSV solo `fotoId`, `wellId`/`monitoringId` y `sha1Original` (la hoja trae e-mails e ids de Drive que no se usan ni se copian).
+Cualquier coincidencia es un error: el plan queda inválido y `subir` se niega. Sin el CSV el informe dice "Verificación contra
+FotosPozos: NO realizada". La verificación no cambia la huella del plan. El CSV exportado es privado: dejarlo bajo `scripts/out/`.
+
+### Fecha sospechosa (`FECHA_SOSPECHOSA`)
+
+Si la fecha de un contenido sale **solo del año del nombre** y ese año cae fuera del rango plausible de su fuente (Monitoreo: 2023 a 2026;
+Relevamiento 2018: 2018 a 2019), el contenido se marca `FECHA_SOSPECHOSA`: un confirmado pasa a `POR_REVISAR` y queda en el CSV de revisión
+con su explicación; uno que ya estaba en revisión conserva sus motivos y suma este. **La fecha nunca se corrige sola.** Para aplicarla
+al corpus ya generado sin releer las fotos: `python scripts/fotos/clasificar.py --reaplicar-reglas`.
+
+### Inventario por archivo (solo lectura)
+
+`python scripts/fotos/inventario_csv.py` genera `scripts/out/fotos/inventario_por_archivo.csv` (privado: trae rutas y nombres) y
+`resumen_inventario.json`, con una fila por archivo: categoría de asociación (`MATCH_EXACTO`, `MATCH_PROBABLE`, `AMBIGUO`, `SIN_MATCH`),
+método y confianza de la fecha, SHA-1, copias y estado de migrabilidad. No toca ninguna foto.
 
 ### Estados y reanudación
 

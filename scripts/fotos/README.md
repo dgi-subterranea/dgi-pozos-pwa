@@ -13,10 +13,13 @@ produccion.** Las salidas van a `scripts/out/fotos/` (ignorado por git). Requier
 ```bash
 python scripts/fotos/inventariar.py                         # SHA-1 + EXIF de cada imagen -> scripts/out/fotos/inventario.json
 python scripts/fotos/clasificar.py                          # un registro por contenido unico -> corpus.json + resumen
+python scripts/fotos/clasificar.py --reaplicar-reglas             # marca FECHA_SOSPECHOSA en el corpus ya generado (sin releer fotos)
+python scripts/fotos/inventario_csv.py                      # inventario POR ARCHIVO (CSV privado) + resumen, solo lectura
 python scripts/fotos/revision.py                            # CSV de revision de las POR_REVISAR (+ mapeos privados)
 python scripts/fotos/normalizar.py --seleccion piloto       # piloto de 200 fotos -> scripts/out/fotos/piloto/
 python scripts/fotos/normalizar.py --seleccion piloto30 --nombre piloto30 --sin-medir   # lote piloto de ~30 CONFIRMADAS
 python scripts/fotos/importar.py --lote piloto30 --dry-run  # plan de importacion en seco (no sube nada)
+python scripts/fotos/importar.py --lote piloto30 --dry-run --existentes scripts/out/fotos/FotosPozos.csv   # ademas verifica contra la hoja real
 python scripts/fotos/importar.py subir --lote piloto30 --confirmar-huella <huella>   # sube al storage (variables FOTOS_STORAGE_URL / FOTOS_STORAGE_SECRET)
 python scripts/fotos/importar.py exportar-filas --lote piloto30                      # CSV de staging para la hoja
 python scripts/fotos/informe.py --nombre piloto             # estadisticas, extrapolacion y auditoria de privacidad

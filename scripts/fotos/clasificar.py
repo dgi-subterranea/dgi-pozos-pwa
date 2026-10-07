@@ -91,6 +91,8 @@ def clasificar_inventario(inventario, refs, raiz_fotos):
             'camara': ((ex.get('marca') or '') + ' ' + (ex.get('modelo') or '')).strip() or None,
             'flags': flags, 'contenido': cont,
         })
+    for f in filas:
+        C.aplicar_regla_fecha(f)           # fecha solo por anio del nombre y fuera de rango -> POR_REVISAR
     return filas, inventario
 
 
@@ -116,8 +118,17 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--fotos', default=str(C.FOTOS_DEFAULT))
     ap.add_argument('--salida', default=str(C.OUT_FOTOS))
+    ap.add_argument('--reaplicar-reglas', action='store_true',
+                    help='no vuelve a leer las fotos: aplica las reglas de fecha al corpus.json ya generado')
     args = ap.parse_args()
     salida = Path(args.salida)
+    if args.reaplicar_reglas:
+        filas = json.loads((salida / 'corpus.json').read_text(encoding='utf-8'))
+        cambiadas = [f for f in filas if C.aplicar_regla_fecha(f)]
+        (salida / 'corpus.json').write_text(json.dumps(filas, ensure_ascii=False), encoding='utf-8')
+        print('reglas de fecha reaplicadas: %d contenido(s) pasan a POR_REVISAR (FECHA_SOSPECHOSA)' % len(cambiadas))
+        print('estado:', dict(collections.Counter(f['estado'] for f in filas)))
+        return
     inv = json.loads((salida / 'inventario.json').read_text(encoding='utf-8'))
     refs = C.cargar_referencias()
     filas, inv = clasificar_inventario(inv, refs, Path(args.fotos).resolve())

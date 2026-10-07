@@ -13,6 +13,7 @@ plan_importacion.json (con su huella) y reporte_dryrun.txt en la carpeta del lot
 
 Uso (desde la raiz del repo):
     python scripts/fotos/importar.py --lote piloto30 --dry-run [--sin-detalle]           # plan en seco (NO sube nada)
+    python scripts/fotos/importar.py --lote piloto30 --dry-run --existentes FotosPozos.csv   # ademas verifica que ninguna ya este en la hoja
     python scripts/fotos/importar.py subir --lote piloto30 --confirmar-huella <12+ hex>  # sube al storage (cuenta 2)
     python scripts/fotos/importar.py exportar-filas --lote piloto30                      # CSV de staging para la hoja
 
@@ -27,6 +28,7 @@ import hashlib
 import json
 import re
 import csv
+import io
 import sys
 import time
 import uuid
@@ -142,7 +144,37 @@ def _validar_archivo(carpeta, fila, errores, avisos):
     return info
 
 
-def planificar(carpeta_lote):
+class ErrorImportacionEntrada(Exception):
+    pass
+
+
+def cargar_existentes(ruta):
+    """CSV exportado de la hoja FotosPozos (Archivo > Descargar > .csv, coma o punto y coma). Lee SOLO las columnas
+    fotoId, wellId / monitoringId y sha1Original; no usa ni copia ninguna otra (la hoja tiene e-mails e ids de Drive).
+    Devuelve {'filas', 'fotoIds', 'contenido'}."""
+    texto = Path(ruta).read_text(encoding='utf-8-sig')
+    primera = texto.splitlines()[0] if texto else ''
+    delim = ';' if primera.count(';') > primera.count(',') else ','
+    lector = csv.DictReader(io.StringIO(texto), delimiter=delim)
+    cols = [c.strip() for c in (lector.fieldnames or [])]
+    faltan = [c for c in ('fotoId', 'sha1Original') if c not in cols] + ([] if ('wellId' in cols or 'monitoringId' in cols) else ['wellId'])
+    if faltan:
+        raise ErrorImportacionEntrada('El CSV de la hoja FotosPozos no tiene las columnas: %s (exportar la hoja completa).' % ', '.join(faltan))
+    ids, contenido, n = set(), set(), 0
+    for fila in lector:
+        fid = (fila.get('fotoId') or '').strip().lower()
+        if not fid:
+            continue
+        n += 1
+        ids.add(fid)
+        clave = ((fila.get('wellId') or '').strip() or (fila.get('monitoringId') or '').strip())
+        sha = (fila.get('sha1Original') or '').strip().lower()
+        if clave and sha:
+            contenido.add((clave, sha))
+    return {'filas': n, 'fotoIds': ids, 'contenido': contenido}
+
+
+def planificar(carpeta_lote, existentes=None):
     """Arma el plan del lote. Devuelve dict serializable con 'errores' (lista; vacia = apto para subir)."""
     carpeta = Path(carpeta_lote)
     errores, avisos = [], []
@@ -197,6 +229,19 @@ def planificar(carpeta_lote):
                 if not p.name.endswith(sufijo) or p.name[:-len(sufijo)] not in esperados:
                     avisos.append('archivo sin fila en %s/: %s (no se subira)' % (sub, p.name if RE_UUID.match(p.name[:36]) else '<nombre no estandar>'))
 
+    # verificacion contra lo que YA hay en la hoja FotosPozos (solo si se paso el CSV exportado)
+    coincidencias = []
+    if existentes is not None:
+        for f in filas:
+            if f['fotoId'].lower() in existentes['fotoIds']:
+                coincidencias.append('%s: ya existe en FotosPozos (mismo fotoId)' % f['fotoId'])
+            elif (f['wellId'] or f['monitoringId'], str(f['sha1Original']).lower()) in existentes['contenido']:
+                coincidencias.append('%s: ya hay una foto con el mismo contenido en el pozo %s' % (f['fotoId'], f['wellId']))
+        errores.extend(coincidencias)
+    progreso = leer_estado(carpeta)
+    previas = sum(1 for r in progreso.values() if r.get('estado') in ESTADOS_OK)
+    if previas:
+        avisos.append('hay progreso local previo: %d foto(s) ya figuran como subidas en estado_subida.jsonl (no se reenviaran)' % previas)
     entidades = collections.defaultdict(list)
     for e in elementos:
         entidades[e['wellId']].append(e['fotoId'])
@@ -219,6 +264,8 @@ def planificar(carpeta_lote):
         'elementos': elementos,
         'errores': errores, 'avisos': avisos,
         'huella': huella,
+        'verificacionHoja': ({'verificada': True, 'filasLeidas': existentes['filas'], 'coincidencias': len(coincidencias)} if existentes is not None else {'verificada': False}),
+        'progresoLocalPrevio': previas,
     }
 
 
@@ -258,6 +305,12 @@ def informe(plan, detalle=True):
                  'emailUsuarioCarga=IMPORTACION, mimeType=image/jpeg, observacion vacia, gpsOrigen=EXIF_ORIGINAL (solo con GPS).')
         L.append('Destino de cada foto: <carpeta>/<fotoId>.jpg y <fotoId>_thumb.jpg (ver arriba). Archivos nombrados SOLO por fotoId.')
     L.append('')
+    vh = plan.get('verificacionHoja') or {'verificada': False}
+    if vh['verificada']:
+        L.append('Verificacion contra FotosPozos (CSV exportado de la hoja, %d filas): %d coincidencia(s)%s' % (vh['filasLeidas'], vh['coincidencias'], ' -> NINGUNA de estas fotos esta ya en la hoja' if vh['coincidencias'] == 0 else ''))
+    else:
+        L.append('Verificacion contra FotosPozos: NO realizada (pasar --existentes con el CSV exportado de la hoja para comprobar que ninguna ya existe)')
+    L.append('Progreso local previo (estado_subida.jsonl): %d foto(s) ya subidas' % plan.get('progresoLocalPrevio', 0))
     if plan['avisos']:
         L.append('AVISOS (%d):' % len(plan['avisos']))
         L.extend('  - ' + a for a in plan['avisos'])
@@ -479,13 +532,21 @@ def main_dry_run(argv):
     ap.add_argument('--lote', required=True, help='subcarpeta de scripts/out/fotos/ con el lote normalizado (p. ej. piloto30)')
     ap.add_argument('--dry-run', action='store_true', help='OBLIGATORIO: genera el plan y no sube nada')
     ap.add_argument('--sin-detalle', action='store_true', help='no lista una por una las filas que se crearian')
+    ap.add_argument('--existentes', default=None, help='CSV exportado de la hoja FotosPozos: verifica que ninguna foto del lote ya exista (solo lectura)')
     ap.add_argument('--salida', default=str(C.OUT_FOTOS))
     args = ap.parse_args(argv)
     if not args.dry_run:
-        print('La importacion real todavia no esta habilitada: primero se aprueba el plan con --dry-run.', file=sys.stderr)
+        print('Falta --dry-run (el plan en seco es obligatorio antes de subir). Para subir: importar.py subir --lote <lote> --confirmar-huella <huella>.', file=sys.stderr)
         return 2
     carpeta = Path(args.salida) / args.lote
-    plan = planificar(carpeta)
+    existentes = None
+    if args.existentes:
+        try:
+            existentes = cargar_existentes(args.existentes)
+        except (ErrorImportacionEntrada, OSError) as err:
+            print('No se pudo leer el CSV de la hoja: %s' % err, file=sys.stderr)
+            return 2
+    plan = planificar(carpeta, existentes)
     texto = informe(plan, detalle=not args.sin_detalle)
     (carpeta / 'plan_importacion.json').write_text(json.dumps(plan, ensure_ascii=False, indent=1), encoding='utf-8')
     (carpeta / 'reporte_dryrun.txt').write_text(informe(plan, detalle=True), encoding='utf-8')

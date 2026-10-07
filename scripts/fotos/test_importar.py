@@ -6,13 +6,14 @@ No necesita Fotos/ ni scripts/out/: arma imagenes y corpus sinteticos.
 """
 import collections
 import copy
+import csv
 import io
 import json
 import random
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -291,6 +292,69 @@ class ImportarDryRunTests(unittest.TestCase):
             I.main(['--lote', 'lote', '--salida', str(self.out), '--dry-run'])
         self.assertEqual(antes, {p.name: p.read_bytes() for p in (self.lote / 'normalizado').iterdir()})
         self.assertEqual(filas, (self.lote / 'filas_FotosPozos.json').read_bytes())
+
+    # ---- verificacion contra el CSV exportado de la hoja FotosPozos
+    def _csv_hoja(self, filas, delim=','):
+        cols = ['fotoId', 'timestampRegistro', 'wellId', 'monitoringId', 'fuente', 'sha1Original', 'emailUsuarioCarga', 'driveFileId', 'estado']
+        ruta = self.out / 'FotosPozos.csv'
+        with open(str(ruta), 'w', encoding='utf-8-sig', newline='') as f:
+            w = csv.DictWriter(f, fieldnames=cols, delimiter=delim)
+            w.writeheader()
+            for fila in filas:
+                w.writerow(dict({c: '' for c in cols}, **fila))
+        return ruta
+
+    def test_sin_csv_la_verificacion_contra_la_hoja_queda_como_no_realizada(self):
+        plan = I.planificar(self.lote)
+        self.assertEqual(plan['verificacionHoja'], {'verificada': False})
+        self.assertIn('NO realizada', I.informe(plan))
+
+    def test_hoja_sin_coincidencias_verifica_que_ninguna_existe(self):
+        ruta = self._csv_hoja([{'fotoId': '11111111-1111-4111-8111-111111111111', 'wellId': '15-0268', 'sha1Original': 'f' * 40, 'emailUsuarioCarga': 'alguien@x.com'}])
+        plan = I.planificar(self.lote, I.cargar_existentes(ruta))
+        self.assertEqual(plan['errores'], [])
+        self.assertEqual(plan['verificacionHoja'], {'verificada': True, 'filasLeidas': 1, 'coincidencias': 0})
+        self.assertIn('NINGUNA de estas fotos esta ya en la hoja', I.informe(plan))
+
+    def test_un_fotoid_que_ya_esta_en_la_hoja_bloquea_el_plan_y_la_subida(self):
+        fid = I.planificar(self.lote)['elementos'][0]['fotoId']
+        ruta = self._csv_hoja([{'fotoId': fid.upper(), 'wellId': '15-0268', 'sha1Original': 'f' * 40}])
+        with redirect_stdout(io.StringIO()):
+            codigo = I.main(['--lote', 'lote', '--salida', str(self.out), '--dry-run', '--existentes', str(ruta)])
+        self.assertEqual(codigo, 1)
+        guardado = json.loads((self.lote / 'plan_importacion.json').read_text(encoding='utf-8'))
+        self.assertTrue(any('ya existe en FotosPozos' in e for e in guardado['errores']))
+        with self.assertRaises(I.ErrorImportacion):                       # subir se niega: el dry-run guardado tiene errores
+            I.verificar_plan(self.lote, guardado['huella'])
+
+    def test_el_mismo_contenido_en_el_mismo_pozo_tambien_es_coincidencia(self):
+        fila = json.loads((self.lote / 'filas_FotosPozos.json').read_text(encoding='utf-8'))[0]
+        ruta = self._csv_hoja([{'fotoId': '22222222-2222-4222-8222-222222222222', 'wellId': fila['wellId'], 'sha1Original': fila['sha1Original']}])
+        plan = I.planificar(self.lote, I.cargar_existentes(ruta))
+        self.assertTrue(any('mismo contenido' in e for e in plan['errores']))
+        otro = self._csv_hoja([{'fotoId': '22222222-2222-4222-8222-222222222222', 'wellId': '99-9999', 'sha1Original': fila['sha1Original']}])
+        self.assertEqual(I.planificar(self.lote, I.cargar_existentes(otro))['errores'], [])    # otro pozo: no es duplicado
+
+    def test_acepta_csv_con_punto_y_coma_y_exige_las_columnas(self):
+        ruta = self._csv_hoja([{'fotoId': '33333333-3333-4333-8333-333333333333', 'wellId': '15-0268', 'sha1Original': 'a' * 40}], delim=';')
+        self.assertEqual(I.cargar_existentes(ruta)['filas'], 1)
+        malo = self.out / 'malo.csv'
+        malo.write_text('a,b\n1,2\n', encoding='utf-8')
+        with self.assertRaises(I.ErrorImportacionEntrada):
+            I.cargar_existentes(malo)
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(I.main(['--lote', 'lote', '--salida', str(self.out), '--dry-run', '--existentes', str(malo)]), 2)
+
+    def test_la_verificacion_no_cambia_la_huella_del_plan(self):
+        ruta = self._csv_hoja([])
+        self.assertEqual(I.planificar(self.lote)['huella'], I.planificar(self.lote, I.cargar_existentes(ruta))['huella'])
+
+    def test_avisa_si_ya_hay_progreso_local_previo(self):
+        fid = I.planificar(self.lote)['elementos'][0]['fotoId']
+        (self.lote / I.ESTADO_ARCHIVO).write_text(json.dumps({'fotoId': fid, 'estado': 'SUBIDA'}) + '\n', encoding='utf-8')
+        plan = I.planificar(self.lote)
+        self.assertEqual(plan['progresoLocalPrevio'], 1)
+        self.assertTrue(any('progreso local previo' in a for a in plan['avisos']))
 
 
 if __name__ == '__main__':
