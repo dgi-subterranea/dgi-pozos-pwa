@@ -51,6 +51,60 @@ function fotosPozosLogic_entidadDePuntoNE(punto) {
   return { wellId: wellId, monitoringId: wellId ? '' : monitoringId, etiqueta: wellId || punto.nombreOriginal || monitoringId, esNE: true };
 }
 
+// Entidad de un pozo de Provincia identificado SOLO por su numero (popup del mapa
+// Provincia, Buscar reemplazo, Cerca Mio): siempre por wellId, nunca por
+// monitoringId. Es la misma clave que usa un punto NE con ese numero de pozo, asi que
+// ambos abren exactamente la misma galeria. Si el pozo esta en la red NE y se
+// entra desde NE, esa ruta (entidadDePuntoNE) agrega el origen MONITOREO_NE.
+function fotosPozosLogic_entidadDeWellId(wellId) {
+  if (typeof wellId !== 'string' || !/^\d{2}-\d{4}$/.test(wellId)) {
+    return null;
+  }
+  return { wellId: wellId, monitoringId: '', etiqueta: wellId, esNE: false };
+}
+
+// Referencia que manda un popup al abrir fotos: un wellId (texto, Provincia) o un
+// punto NE (objeto del mapa NE).
+function fotosPozosLogic_entidadDeRef(ref) {
+  return typeof ref === 'string' ? fotosPozosLogic_entidadDeWellId(ref) : fotosPozosLogic_entidadDePuntoNE(ref);
+}
+
+// Que ofrece la UI segun los permisos (misma regla para TODOS los popups/tarjetas):
+//   boton    -> hay boton/entrada "Fotos" (fotos=SI o fotos_carga=SI)
+//   contador -> se puede mostrar/pedir contador y galeria (solo fotos=SI)
+// fotos_carga solo entra a "Agregar foto": sin contador, sin galeria, sin pedir nada.
+function fotosPozosLogic_accesoUI(permisos) {
+  var p = permisos || {};
+  var ver = p.fotos === true;
+  var cargar = p.fotos_carga === true;
+  return { boton: ver || cargar, contador: ver, cargar: cargar };
+}
+
+// Contexto de "Fotos" para un popup de mapa (Provincia o NE), segun permisos:
+//   onVerFotos(ref)      solo con fotos o fotos_carga; abre la galeria de ESA entidad
+//   cantidadFotos(ref)   solo con fotos=SI; cantidad conocida o null si todavia no hay resumen
+// deps: {abrirFotos(entidad), cantidadDe(clave)} (inyectados: app.js usa los reales).
+// Con solo fotos_carga, cantidadFotos NO existe: nada pide ni revela si hay fotos.
+function fotosPozosLogic_accionesMapa(permisos, deps) {
+  var acceso = fotosPozosLogic_accesoUI(permisos);
+  return {
+    onVerFotos: acceso.boton
+      ? function (ref) { deps.abrirFotos(fotosPozosLogic_entidadDeRef(ref)); }
+      : undefined,
+    cantidadFotos: acceso.contador
+      ? function (ref) {
+        var entidad = fotosPozosLogic_entidadDeRef(ref);
+        return entidad ? deps.cantidadDe(fotosPozosLogic_claveEntidad(entidad)) : null;
+      }
+      : undefined
+  };
+}
+
+// Etiqueta del boton: 'Fotos (N)' si el contador ya se conoce y es > 0; si no, 'Fotos'.
+function fotosPozosLogic_textoBoton(n) {
+  return n > 0 ? 'Fotos (' + n + ')' : 'Fotos';
+}
+
 // Que fuentes puede elegir el usuario para esa entidad al cargar.
 function fotosPozosLogic_fuentesDisponibles(entidad) {
   return entidad && entidad.esNE ? FOTOS_POZOS_FUENTES_CARGA.slice() : ['CAMPO_APP'];
@@ -567,6 +621,11 @@ if (typeof module !== 'undefined' && module.exports) {
     fotosPozosLogic_claveEntidad,
     fotosPozosLogic_entidadDePozo,
     fotosPozosLogic_entidadDePuntoNE,
+    fotosPozosLogic_entidadDeWellId,
+    fotosPozosLogic_entidadDeRef,
+    fotosPozosLogic_accesoUI,
+    fotosPozosLogic_accionesMapa,
+    fotosPozosLogic_textoBoton,
     fotosPozosLogic_fuentesDisponibles,
     fotosPozosLogic_textoContador,
     fotosPozosLogic_formatearFecha,

@@ -316,6 +316,16 @@
     return permisosActuales.fotos === true || permisosActuales.fotos_carga === true;
   }
 
+  // Acciones de "Fotos" para los popups de los mapas (Provincia y NE) segun los permisos
+  // (fotosPozosLogic_accesoUI): onVerFotos solo con fotos o fotos_carga; cantidadFotos
+  // (contador) solo con fotos=SI. ref: wellId (Provincia) o punto NE.
+  function accionesFotosMapa() {
+    return fotosPozosLogic_accionesMapa(permisosActuales, {
+      abrirFotos: abrirFotos,
+      cantidadDe: fotosPozosResumenController_cantidadDe
+    });
+  }
+
   // Texto de la tarjeta Fotos del hub. Sin fotos=SI nunca se dice si hay fotos.
   function descFotosHub(wellId) {
     if (!permisosActuales.fotos) {
@@ -1476,8 +1486,14 @@
           puntoNEReferencia: buscarReemplazoLogic_puntoNEDeContexto(seleccionController_obtenerContextoGeografico(), wellId) || ''
         });
       },
+      // "Fotos" del popup (Provincia siempre por wellId): fotos=SI -> "Fotos (N)";
+      // solo fotos_carga -> "Fotos" sin contador ni galeria; ninguno -> sin boton.
+      onVerFotos: accionesFotosMapa().onVerFotos,
+      cantidadFotos: accionesFotosMapa().cantidadFotos,
       enfoque: enfoque
     });
+    // Resumen precargado para que el popup ya muestre el contador (sin fotos=SI no llama a nada)
+    fotosPozosResumenController_cargar();
   }
 
   function abrirMapaNE() {
@@ -1494,14 +1510,9 @@
       onBuscarReemplazo: buscarReemplazoLogic_puedeBuscar(permisosActuales)
         ? function (monitoringId) { abrirBuscarReemplazo(monitoringId); }
         : undefined,
-      // Popup de un punto NE: "Fotos" (galeria / carga) solo con fotos=SI y/o
-      // fotos_carga=SI; el contador solo con fotos=SI (resumen compartido).
-      onVerFotos: puedeFotos()
-        ? function (punto) { abrirFotos(fotosPozosLogic_entidadDePuntoNE(punto)); }
-        : undefined,
-      cantidadFotos: permisosActuales.fotos
-        ? function (punto) { return fotosPozosResumenController_cantidadDe(fotosPozosLogic_claveEntidad(fotosPozosLogic_entidadDePuntoNE(punto))); }
-        : undefined
+      // "Fotos" del popup: misma semantica que el popup de Pozos Provincia
+      onVerFotos: accionesFotosMapa().onVerFotos,
+      cantidadFotos: accionesFotosMapa().cantidadFotos
     });
     // Resumen precargado para que los popups ya muestren el contador (sin fotos=SI no llama a nada)
     fotosPozosResumenController_cargar();
@@ -1598,7 +1609,7 @@
       },
       // "Fotos" del pozo (solo con fotos=SI; sin permiso no se pasa la accion)
       onVerFotos: permisosActuales.fotos === true
-        ? function (wellId) { abrirFotos({ wellId: wellId, monitoringId: '', etiqueta: wellId, esNE: false }); }
+        ? function (wellId) { abrirFotos(fotosPozosLogic_entidadDeWellId(wellId)); }
         : undefined,
       // La busqueda radial ya quedo publicada como vista previa
       // (cercaMioController_publicarVistaPrevia) - el mapa dibuja punto,
@@ -1756,7 +1767,7 @@
       // "Fotos" de un candidato: solo si el contexto trae la accion (fotos=SI).
       // El contador sale del resumen compartido (sin fotos=SI no hay llamada).
       onVerFotos: permisosActuales.fotos === true
-        ? function (wellId) { abrirFotos({ wellId: wellId, monitoringId: '', etiqueta: wellId, esNE: false }); }
+        ? function (wellId) { abrirFotos(fotosPozosLogic_entidadDeWellId(wellId)); }
         : undefined,
       onSessionExpired: function () {
         logout();

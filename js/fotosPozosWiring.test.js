@@ -12,6 +12,8 @@ const app = leer(__dirname, 'app.js');
 const buscar = leer(__dirname, 'buscarReemplazo.js');
 const cerca = leer(__dirname, 'cercaMio.js');
 const shared = leer(__dirname, 'mapaShared.js');
+const mapaProvincia = leer(__dirname, 'mapa.js');
+const popup = leer(__dirname, 'fotosPopup.js');
 const resumen = leer(__dirname, 'fotosPozosResumen.js');
 const imagen = leer(__dirname, 'fotosImagen.js');
 const reemplazoFotos = leer(__dirname, 'reemplazoFotos.js');
@@ -134,14 +136,25 @@ describe('app.js', () => {
     expect(app).toMatch(/if \(permisosActuales\.fotos\) \{\s*fotosPozosResumenController_cargar\(\)\.then/);
   });
 
+  test('Buscar reemplazo y Cerca Mio abren la galeria por wellId (helper comun)', () => {
+    const usos = app.match(/abrirFotos\(fotosPozosLogic_entidadDeWellId\(wellId\)\)/g) || [];
+    expect(usos.length).toBe(2);
+  });
+
   test('Buscar reemplazo y Cerca Mio reciben "Fotos" solo con fotos=SI', () => {
     const ocurrencias = app.match(/onVerFotos: permisosActuales\.fotos === true/g) || [];
     expect(ocurrencias.length).toBe(2);
   });
 
-  test('popup NE: "Fotos" con fotos o fotos_carga; contador solo con fotos=SI', () => {
-    expect(app).toMatch(/onVerFotos: puedeFotos\(\)/);
-    expect(app).toMatch(/cantidadFotos: permisosActuales\.fotos/);
+  test('popups de Provincia Y de NE: mismo contexto de Fotos (permisos -> fotosPozosLogic_accionesMapa), con el resumen precargado', () => {
+    expect(app).toMatch(/return fotosPozosLogic_accionesMapa\(permisosActuales, \{\s*abrirFotos: abrirFotos,\s*cantidadDe: fotosPozosResumenController_cantidadDe\s*\}\)/);
+    const provincia = app.slice(app.indexOf('function abrirMapaDesde'), app.indexOf('function abrirMapaNE'));
+    const ne = app.slice(app.indexOf('function abrirMapaNE'), app.indexOf('function abrirMapaPrincipal'));
+    [provincia, ne].forEach((bloque) => {
+      expect(bloque).toMatch(/onVerFotos: accionesFotosMapa\(\)\.onVerFotos/);
+      expect(bloque).toMatch(/cantidadFotos: accionesFotosMapa\(\)\.cantidadFotos/);
+      expect(bloque).toMatch(/fotosPozosResumenController_cargar\(\)/);
+    });
   });
 
   test('inicializa los dos controladores con el contexto fresco', () => {
@@ -163,8 +176,29 @@ describe('Buscar reemplazo, Cerca Mio y popup NE', () => {
     expect(cerca).not.toMatch(/apiGetFotosPozo|apiGetFotoPozo/);
   });
 
-  test('el popup NE solo dibuja "Fotos" si el contexto trae la accion', () => {
-    expect(shared).toMatch(/if \(typeof contexto\.onVerFotos === 'function'\)/);
+  test('los dos popups usan el MISMO helper de boton, que solo dibuja "Fotos" si el contexto trae la accion', () => {
+    expect(shared).toMatch(/fotosPopup_crearBoton\(contexto, punto, marker\)/);
+    expect(mapaProvincia).toMatch(/fotosPopup_crearBoton\(contexto, punto\.wellId, marker\)/);
+    expect(popup).toMatch(/if \(!contexto \|\| typeof contexto\.onVerFotos !== 'function'\) \{\s*return null;/);
+    // Provincia identifica SIEMPRE por wellId
+    expect(mapaProvincia).not.toMatch(/fotosPopup_crearBoton\([^)]*monitoringId/);
+  });
+
+  test('el popup Provincia pone "Fotos" despues de Abrir pozo / Evaluar y recibe el marker para refrescar el contador', () => {
+    expect(mapaProvincia).toMatch(/function mapaController_construirPopupInicial\(punto, contexto, marker\)/);
+    expect(mapaProvincia).toMatch(/mapaController_construirPopupInicial\(punto, contexto, marker\)/);
+    const popupInicial = mapaProvincia.slice(mapaProvincia.indexOf('function mapaController_construirPopupInicial'), mapaProvincia.indexOf('function mapaController_pintarLineaReemplazo'));
+    expect(popupInicial.indexOf("'Abrir pozo'")).toBeLessThan(popupInicial.indexOf('btnEvaluar'));
+    expect(popupInicial.indexOf('btnEvaluar')).toBeLessThan(popupInicial.indexOf('fotosPopup_crearBoton'));
+  });
+
+  test('fotosPopup.js se carga antes de mapa.js y mapaNE.js (y despues de la logica de fotos no hace falta: se usa en runtime)', () => {
+    const pos = (a) => html.indexOf('src="js/' + a + '"');
+    expect(pos('fotosPopup.js')).toBeGreaterThan(-1);
+    expect(pos('fotosPopup.js')).toBeLessThan(pos('mapa.js'));
+    expect(pos('fotosPopup.js')).toBeLessThan(pos('mapaNE.js'));
+    expect(pos('fotosPopup.js')).toBeLessThan(pos('app.js'));
+    expect(pos('fotosPozosLogic.js')).toBeLessThan(pos('app.js'));
   });
 });
 

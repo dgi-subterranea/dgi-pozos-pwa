@@ -78,7 +78,8 @@ sobrescribe). Esquemas en `backend/src/FotosPozosRepository.js` (`FOTOS_POZOS_CO
 ## Dónde se ve
 
 - Hub: tarjeta "Fotos" (contador solo con `fotos=SI`).
-- Ficha NE y popup del mapa NE: botón "Fotos (N)" (incluye puntos NE especiales, por `monitoringId`).
+- Popups del mapa Pozos Provincia y del mapa NE (mismo helper, `js/fotosPopup.js`): botón "Fotos" con `fotos=SI` o `fotos_carga=SI`; "Fotos (N)" solo con `fotos=SI`. Provincia siempre por `wellId`; un punto NE con número de pozo abre la misma galería, y uno especial usa `monitoringId`.
+- Ficha NE: botón "Fotos (N)".
 - Buscar reemplazo y Pozos cerca mío: chip `📷 N` solo con `fotos=SI` y si el pozo tiene fotos.
 - Sin `fotos=SI` no se hace ninguna llamada de resumen ni se dibuja contador.
 

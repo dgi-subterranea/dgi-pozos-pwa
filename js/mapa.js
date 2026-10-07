@@ -245,7 +245,7 @@
   // pozo" - disponible de inmediato, sin ningun fetch (ver adjustment #2
   // de la Etapa 5B/5C: "wellId inmediato"). summaryEl queda vacio, listo
   // para que el listener de popupopen lo llene si corresponde.
-  function mapaController_construirPopupInicial(punto, contexto) {
+  function mapaController_construirPopupInicial(punto, contexto, marker) {
     var el = document.createElement('div');
     el.className = 'mapa-popup';
 
@@ -293,7 +293,15 @@
       el.appendChild(btnEvaluar);
     }
 
-    return { el: el, summaryEl: summaryEl, reemplazoEl: reemplazoEl };
+    // "Fotos" (FotosPozos): mismo boton y misma semantica de permisos que el popup NE.
+    // Siempre por wellId: el mismo pozo en NE abre la misma galeria. La etiqueta con
+    // contador se refresca al abrir el popup (el helper escucha popupopen del marker).
+    var btnFotos = fotosPopup_crearBoton(contexto, punto.wellId, marker);
+    if (btnFotos) {
+      el.appendChild(btnFotos);
+    }
+
+    return { el: el, summaryEl: summaryEl, reemplazoEl: reemplazoEl, fotosBtn: btnFotos };
   }
 
   // "Reemplazo: <badge>" con el estado ACTUAL (el del store, que se
@@ -342,7 +350,7 @@
       estadoReemplazo: evaluado ? estadoR : null // idem: cluster "con evaluados"
     });
 
-    var popupContent = mapaController_construirPopupInicial(punto, contexto);
+    var popupContent = mapaController_construirPopupInicial(punto, contexto, marker);
     marker.bindPopup(popupContent.el);
 
     var yaConsultado = false;
