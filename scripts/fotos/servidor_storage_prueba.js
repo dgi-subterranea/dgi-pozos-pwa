@@ -5,7 +5,8 @@
 //
 //   node scripts/fotos/servidor_storage_prueba.js        -> imprime "PORT <n>" y atiende hasta que se lo mata
 // Entorno: PRUEBA_SECRETO (secreto del storage de prueba), PRUEBA_500_PRIMEROS=N (las primeras N solicitudes
-// responden HTTP 500, para probar reintentos), PRUEBA_INTERNAL_PRIMEROS=N (INTERNAL firmado... sin firma, como el real).
+// responden HTTP 500, para probar reintentos), PRUEBA_INTERNAL_PRIMEROS=N (INTERNAL firmado... sin firma, como el real),
+// PRUEBA_LATENCIA_MS=N (demora cada respuesta N ms, como la red + Apps Script reales: sirve para medir la concurrencia).
 const http = require('http');
 const path = require('path');
 const crypto = require('crypto');
@@ -15,6 +16,7 @@ const RAIZ_POZOS = 'RAIZ_POZOS_PRUEBA_0001';
 const RAIZ_REEMPLAZO = 'RAIZ_REEMPLAZO_PRUEBA_01';
 let fallar500 = parseInt(process.env.PRUEBA_500_PRIMEROS || '0', 10);
 let fallarInternal = parseInt(process.env.PRUEBA_INTERNAL_PRIMEROS || '0', 10);
+const LATENCIA_MS = parseInt(process.env.PRUEBA_LATENCIA_MS || '0', 10);
 
 function iter(lista) { let i = 0; return { hasNext: () => i < lista.length, next: () => lista[i++] }; }
 let n = 0;
@@ -57,6 +59,7 @@ global.DriveApp = {
   getFolderById: (id) => carpetas[id] || null,
   getFileById: (id) => { if (!archivos[id]) { throw new Error('no existe'); } return archivos[id]; }
 };
+global.LockService = { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) };   // el codigo real se serializa solo: este servidor es de un hilo
 global.getStorageSecret = () => SECRETO;
 global.getStorageRootFolderId = () => RAIZ_REEMPLAZO;
 global.getStoragePozosRootFolderId = () => RAIZ_POZOS;
@@ -75,7 +78,7 @@ const servidor = http.createServer((req, res) => {
     return;
   }
   if (req.method === 'GET' && req.url.startsWith('/estado')) {          // inspeccion para los tests
-    const lista = Object.values(archivos).map((a) => ({ nombre: a._n, carpeta: a._p._n, padre: a._p._p ? a._p._p._n : '', bytes: a._b.length }));
+    const lista = Object.values(archivos).map((a) => ({ nombre: a._n, carpeta: a._p._n, padre: a._p._p ? a._p._p._n : '', bytes: a._b.length, papelera: a._t }));
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ archivos: lista }));
     return;
@@ -91,8 +94,8 @@ const servidor = http.createServer((req, res) => {
     }
     const id = crypto.randomUUID();
     resultados[id] = JSON.stringify(salida);
-    res.writeHead(302, { Location: 'http://127.0.0.1:' + servidor.address().port + '/resultado/' + id });
-    res.end();
+    const responder = () => { res.writeHead(302, { Location: 'http://127.0.0.1:' + servidor.address().port + '/resultado/' + id }); res.end(); };
+    if (LATENCIA_MS > 0) { setTimeout(responder, LATENCIA_MS); } else { responder(); }
   });
 });
 servidor.listen(0, '127.0.0.1', () => {

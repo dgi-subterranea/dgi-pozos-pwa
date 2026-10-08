@@ -3,7 +3,7 @@
 // falta para que UrlFetchApp del backend principal pueda llamarlo sin
 // OAuth): por eso NINGUNA operacion se ejecuta sin una solicitud firmada
 // valida (ver StorageAuth.js). Un GET o un POST sin firma no revelan nada.
-// Acciones: putFoto, getFoto, trashFoto (Reemplazos) y putFotoPozo, getFotoPozo,
+// Acciones: putFoto, getFoto, trashFoto (Reemplazos) y putFotoPozo, putFotosPozoLote (varias fotos por solicitud), getFotoPozo,
 // trashFotoPozo (galeria general de pozos, otra raiz de Drive).
 function doGet() {
   return ContentService.createTextOutput('ok').setMimeType(ContentService.MimeType.TEXT);
@@ -45,6 +45,8 @@ function storageApi_procesar(contenido) {
     resultado = storageDrive_trashFoto(auth.payload);
   } else if (auth.accion === 'putFotoPozo') {
     resultado = storageDrive_putFotoPozo(auth.payload);
+  } else if (auth.accion === 'putFotosPozoLote') {
+    resultado = storageDrive_putFotosPozoLote(auth.payload);
   } else if (auth.accion === 'getFotoPozo') {
     resultado = storageDrive_getFotoPozo(auth.payload);
   } else if (auth.accion === 'trashFotoPozo') {

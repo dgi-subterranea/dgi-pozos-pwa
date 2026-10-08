@@ -126,6 +126,9 @@ beforeEach(() => {
   cacheStore = instalarGlobals();
   drive = crearDriveEnMemoria();
   global.DriveApp = drive.DriveApp;
+  // LockService en memoria (cuenta cuantas veces se tomo y se libero)
+  global.__lock = { esperas: 0, liberaciones: 0 };
+  global.LockService = { getScriptLock: () => ({ waitLock: () => { global.__lock.esperas += 1; }, releaseLock: () => { global.__lock.liberaciones += 1; } }) };
   Auth = require('../src/StorageAuth');
   Dr = require('../src/StorageDrive');
   Api = require('../src/StorageApi');
@@ -546,5 +549,240 @@ describe('StorageApi: acciones de Pozos (extremo a extremo)', () => {
     const put = datos(llamar('putFoto', { fotoId: FOTO_ID, evaluacionId: EVAL_ID, wellId: '04-0263', nombreArchivo: '04-0263_' + EVAL_ID + '_' + FOTO_ID + '.jpg', mimeType: 'image/jpeg', imagenBase64: JPEG_B64, thumbBase64: THUMB_B64 }));
     expect(put.status).toBe('ok');
     expect(datos(llamar('getFoto', { driveFileId: put.driveFileId, variante: 'thumb' })).imagenBase64).toBe(THUMB_B64);
+  });
+});
+
+// ===========================================================================
+// Importacion historica: cronometro por paso, lote de varias fotos y carpetas con lock
+// ===========================================================================
+describe('StorageDrive: cronometro, lote de fotos y carpetas bajo lock', () => {
+  const ids = ['a1111111-1111-4111-8111-111111111111', 'b2222222-2222-4222-8222-222222222222', 'c3333333-3333-4333-8333-333333333333', 'd4444444-4444-4444-8444-444444444444'];
+  const item = (i, extra) => Object.assign({ fotoId: ids[i], fuente: 'MONITOREO_NE', carpetaFecha: '2025', mimeType: 'image/jpeg', imagenBase64: JPEG_B64, thumbBase64: THUMB_B64 }, extra || {});
+  const carpeta = (padre, nombre) => padre._hijosCarpetas.find((c) => c._nombre === nombre);
+
+  describe('tiempos por paso dentro del storage', () => {
+    test('una foto nueva informa cuanto tardo cada paso (solo numeros)', () => {
+      const r = Dr.storageDrive_putFotoPozo(item(0));
+      expect(r.existente).toBe(false);
+      expect(Object.keys(r.tiempos).sort()).toEqual(['carpetas', 'compartir', 'descripcion', 'existe', 'imagen', 'miniatura', 'total']);
+      Object.values(r.tiempos).forEach((v) => { expect(Number.isInteger(v)).toBe(true); expect(v).toBeGreaterThanOrEqual(0); });
+    });
+
+    test('una foto que ya existia informa solo los pasos que hizo', () => {
+      Dr.storageDrive_putFotoPozo(item(0));
+      const r = Dr.storageDrive_putFotoPozo(item(0));
+      expect(r.existente).toBe(true);
+      expect(Object.keys(r.tiempos).sort()).toEqual(['carpetas', 'existe', 'total']);
+    });
+
+    test('el cronometro mide la diferencia entre marcas', () => {
+      const t = jest.spyOn(Date, 'now');
+      t.mockReturnValueOnce(1000).mockReturnValueOnce(1250).mockReturnValueOnce(1300).mockReturnValueOnce(2000);
+      const c = Dr.storageDrive_cronometro();
+      c.marca('a');
+      c.marca('b');
+      expect(c.fin()).toEqual({ a: 250, b: 50, total: 1000 });
+      t.mockRestore();
+    });
+  });
+
+  describe('recuperacion de una subida cortada a medias (se completa sin duplicar)', () => {
+    const carpetaDe = () => carpeta(carpeta(drive.raizPozos, 'MONITOREO_NE'), '2025');
+
+    test('se corto entre el original y la miniatura: el reintento crea SOLO la miniatura y devuelve ids validos', () => {
+      const carpetaPrevia = Dr.storageDrive_putFotoPozo(item(1));                // crea la jerarquia de carpetas
+      const c = carpetaDe();
+      const original = c.createFile;
+      c.createFile = (blob) => { if (blob.nombre === ids[0] + '_thumb.jpg') { throw new Error('corte'); } return original.call(c, blob); };
+      expect(() => Dr.storageDrive_putFotoPozo(item(0))).toThrow('corte');
+      c.createFile = original;
+      expect(carpetaPrevia.status).toBe('ok');
+      const r = Dr.storageDrive_putFotoPozo(item(0));
+      expect(r.status).toBe('ok');
+      expect(r.existente).toBe(true);
+      expect(r.driveThumbId).toMatch(/^[A-Za-z0-9_-]{10,100}$/);
+      expect(c._hijosArchivos.filter((a) => a._nombre.startsWith(ids[0])).map((a) => a._nombre).sort()).toEqual([ids[0] + '.jpg', ids[0] + '_thumb.jpg']);
+      expect(Dr.storageDrive_putFotoPozo(item(0)).driveThumbId).toBe(r.driveThumbId);   // y ya queda estable
+    });
+
+    test('se corto despues de crear la miniatura y antes de registrarla: se reutiliza la miniatura existente', () => {
+      Dr.storageDrive_putFotoPozo(item(1));
+      const c = carpetaDe();
+      const original = c.createFile;
+      c.createFile = (blob) => {
+        const a = original.call(c, blob);
+        if (blob.nombre === ids[0] + '.jpg') {
+          const real = a.setDescription;
+          a.setDescription = function (d) { a.setDescription = real; throw new Error('corte'); };      // falla UNA vez
+        }
+        return a;
+      };
+      expect(() => Dr.storageDrive_putFotoPozo(item(0))).toThrow('corte');
+      c.createFile = original;
+      const hijos = c._hijosArchivos.filter((a) => a._nombre.startsWith(ids[0]));
+      expect(hijos).toHaveLength(2);
+      const thumbExistente = hijos.find((a) => a._nombre.endsWith('_thumb.jpg'));
+      const r = Dr.storageDrive_putFotoPozo(item(0));
+      expect(r.driveThumbId).toBe(thumbExistente._id);
+      expect(c._hijosArchivos.filter((a) => a._nombre.startsWith(ids[0]))).toHaveLength(2);   // no se duplico
+    });
+  });
+
+  describe('autocurado dentro de un lote', () => {
+    test('un lote que incluye una foto cortada a medias la completa, y las demas siguen normales, sin duplicar', () => {
+      Dr.storageDrive_putFotoPozo(item(1));
+      const c = carpeta(carpeta(drive.raizPozos, 'MONITOREO_NE'), '2025');
+      const original = c.createFile;
+      c.createFile = (blob) => { if (blob.nombre === ids[0] + '_thumb.jpg') { throw new Error('corte'); } return original.call(c, blob); };
+      expect(() => Dr.storageDrive_putFotoPozo(item(0))).toThrow('corte');
+      c.createFile = original;
+      const r = Dr.storageDrive_putFotosPozoLote({ fotos: [item(0), item(1), item(2)] });
+      expect(r.resultados.map((x) => [x.status, x.existente])).toEqual([['ok', true], ['ok', true], ['ok', false]]);
+      expect(r.resultados.every((x) => /^[A-Za-z0-9_-]{10,100}$/.test(x.driveThumbId))).toBe(true);
+      expect(c._hijosArchivos.map((a) => a._nombre).sort()).toEqual(
+        [ids[0] + '.jpg', ids[0] + '_thumb.jpg', ids[1] + '.jpg', ids[1] + '_thumb.jpg', ids[2] + '.jpg', ids[2] + '_thumb.jpg']);
+    });
+  });
+
+  describe('putFotosPozoLote', () => {
+    test('guarda cada foto con su carpeta, ids distintos y el fotoId de cada una', () => {
+      const r = Dr.storageDrive_putFotosPozoLote({ fotos: [item(0), item(1), item(2, { fuente: 'RELEVAMIENTO_2018', carpetaFecha: '2018' })] });
+      expect(r.status).toBe('ok');
+      expect(r.resultados.map((x) => x.fotoId)).toEqual(ids.slice(0, 3));
+      expect(r.resultados.every((x) => x.status === 'ok' && x.existente === false)).toBe(true);
+      expect(new Set(r.resultados.map((x) => x.driveFileId)).size).toBe(3);
+      expect(carpeta(carpeta(drive.raizPozos, 'MONITOREO_NE'), '2025')._hijosArchivos.map((a) => a._nombre).sort()).toEqual([ids[0] + '.jpg', ids[0] + '_thumb.jpg', ids[1] + '.jpg', ids[1] + '_thumb.jpg']);
+      expect(carpeta(carpeta(drive.raizPozos, 'RELEVAMIENTO_2018'), '2018')._hijosArchivos).toHaveLength(2);
+      expect(typeof r.tiempos.total).toBe('number');
+    });
+
+    test('reenviar el mismo lote es seguro: todo vuelve como existente y no se duplica nada', () => {
+      const lote = { fotos: [item(0), item(1)] };
+      const a = Dr.storageDrive_putFotosPozoLote(lote);
+      const cuenta = Object.keys(drive.archivos).length;
+      const b = Dr.storageDrive_putFotosPozoLote(lote);
+      expect(b.resultados.every((x) => x.status === 'ok' && x.existente === true)).toBe(true);
+      expect(b.resultados.map((x) => x.driveFileId)).toEqual(a.resultados.map((x) => x.driveFileId));
+      expect(Object.keys(drive.archivos)).toHaveLength(cuenta);
+    });
+
+    test('una foto invalida o que falla no frena a las demas (resultados independientes)', () => {
+      const original = drive.raizPozos.createFolder.bind(drive.raizPozos);
+      drive.raizPozos.createFolder = (n) => { if (n === 'BOOM') { throw new Error('Drive fallo'); } return original(n); };
+      const r = Dr.storageDrive_putFotosPozoLote({ fotos: [item(0), item(1, { mimeType: 'image/png' }), item(2, { fuente: 'BOOM' }), item(3)] });
+      expect(r.status).toBe('ok');
+      expect(r.resultados.map((x) => [x.status, x.code || (x.existente === false ? 'nueva' : 'x')])).toEqual([['ok', 'nueva'], ['error', 'INVALID_MIME'], ['error', 'INTERNAL'], ['ok', 'nueva']]);
+      expect(JSON.stringify(r)).not.toContain('Drive fallo');                     // nunca el detalle de la excepcion
+    });
+
+    test.each([
+      ['sin fotos', { fotos: [] }],
+      ['no es una lista', { fotos: 'x' }],
+      ['sin payload', null],
+      ['mas de 10 fotos', { fotos: Array.from({ length: 11 }, (_, i) => item(0, { fotoId: '0000000' + i + '-1111-4111-8111-111111111111' })) }],
+      ['un item que no es un objeto', { fotos: [item(0), 5] }],
+      ['un item sin base64', { fotos: [item(0), { fotoId: ids[1] }] }]
+    ])('lote invalido (%s): INVALID_LOTE y no se guarda nada', (n, payload) => {
+      const antes = Object.keys(drive.archivos).length;
+      expect(Dr.storageDrive_putFotosPozoLote(payload)).toEqual({ status: 'error', code: 'INVALID_LOTE' });
+      expect(Object.keys(drive.archivos)).toHaveLength(antes);
+    });
+
+    test('un lote que supera el tope de caracteres se rechaza antes de procesar nada', () => {
+      const grande = 'A'.repeat(5 * 1024 * 1024);
+      const antes = Object.keys(drive.archivos).length;
+      expect(Dr.storageDrive_putFotosPozoLote({ fotos: [item(0, { imagenBase64: grande }), item(1, { imagenBase64: grande })] })).toEqual({ status: 'error', code: 'INVALID_LOTE' });
+      expect(Object.keys(drive.archivos)).toHaveLength(antes);
+    });
+
+    test('si se agota el tiempo, lo no procesado vuelve como TIEMPO_AGOTADO para reintentar (lo ya guardado se conserva)', () => {
+      let reloj = 0;
+      const t = jest.spyOn(Date, 'now').mockImplementation(() => { reloj += 100000; return reloj; });
+      const r = Dr.storageDrive_putFotosPozoLote({ fotos: [item(0), item(1), item(2)] });
+      t.mockRestore();
+      expect(r.resultados.map((x) => x.code || x.status)).toEqual(['ok', 'TIEMPO_AGOTADO', 'TIEMPO_AGOTADO']);
+      const reintento = Dr.storageDrive_putFotosPozoLote({ fotos: [item(0), item(1), item(2)] });
+      expect(reintento.resultados.map((x) => x.existente)).toEqual([true, false, false]);
+    });
+
+    test('el tope es de 10 fotos por solicitud', () => {
+      expect(Dr.STORAGE_LOTE_MAX_FOTOS).toBe(10);
+    });
+  });
+
+  describe('carpetas: doble verificacion bajo lock', () => {
+    function padreFalso(existentesLuegoDelLock) {
+      const llamadas = { buscar: 0, crear: 0 };
+      const hecha = { getId: () => 'CARPETA_CREADA_POR_OTRA_SOLICITUD' };
+      return {
+        llamadas,
+        getFoldersByName: () => {
+          llamadas.buscar += 1;
+          const hay = llamadas.buscar > 1 && existentesLuegoDelLock;           // otra solicitud la creo mientras esperabamos el lock
+          let leida = false;
+          return { hasNext: () => hay && !leida, next: () => { leida = true; return hecha; } };
+        },
+        createFolder: () => { llamadas.crear += 1; return { getId: () => 'CARPETA_NUEVA' }; },
+        hecha
+      };
+    }
+
+    test('si otra solicitud ya la creo mientras se esperaba el lock, se usa esa y NO se crea otra', () => {
+      const p = padreFalso(true);
+      expect(Dr.storageDrive_carpetaHija(p, '2025')).toBe(p.hecha);
+      expect(p.llamadas).toEqual({ buscar: 2, crear: 0 });
+      expect(global.__lock).toEqual({ esperas: 1, liberaciones: 1 });
+    });
+
+    test('si de verdad no existe, la crea una sola vez bajo lock', () => {
+      const p = padreFalso(false);
+      Dr.storageDrive_carpetaHija(p, '2025');
+      expect(p.llamadas).toEqual({ buscar: 2, crear: 1 });
+      expect(global.__lock).toEqual({ esperas: 1, liberaciones: 1 });
+    });
+
+    test('el camino normal (la carpeta ya existe) no toma el lock', () => {
+      Dr.storageDrive_putFotoPozo(item(0));
+      global.__lock.esperas = 0;
+      global.__lock.liberaciones = 0;
+      Dr.storageDrive_putFotoPozo(item(1));                                  // misma carpeta
+      expect(global.__lock).toEqual({ esperas: 0, liberaciones: 0 });
+    });
+
+    test('el lock se libera aunque la creacion falle', () => {
+      const p = padreFalso(false);
+      p.createFolder = () => { throw new Error('Drive'); };
+      expect(() => Dr.storageDrive_carpetaHija(p, '2025')).toThrow('Drive');
+      expect(global.__lock).toEqual({ esperas: 1, liberaciones: 1 });
+    });
+  });
+
+  describe('por la API firmada', () => {
+    const SECRETO = SECRET;
+    const llamarApi = (accion, payload, firma) => {
+      const sol = Client.fotosStorageClient_armarSolicitud(accion, payload, firma || SECRETO, ahora(), require('crypto').randomUUID());
+      return { sol, cuerpo: JSON.parse(Api.doPost({ postData: { contents: JSON.stringify(sol) } }).text) };
+    };
+    const datosApi = (r) => Client.fotosStorageClient_verificarRespuesta(r.cuerpo, SECRETO, r.sol.nonce, ahora()).data;
+
+    test('putFotosPozoLote firmado: respuesta firmada con un resultado por foto', () => {
+      const r = llamarApi('putFotosPozoLote', { fotos: [item(0), item(1)] });
+      const d = datosApi(r);
+      expect(d.status).toBe('ok');
+      expect(d.resultados).toHaveLength(2);
+      expect(d.resultados.every((x) => x.status === 'ok')).toBe(true);
+    });
+
+    test('sin firma valida: UNAUTHORIZED y no se guarda nada', () => {
+      const antes = Object.keys(drive.archivos).length;
+      const r = llamarApi('putFotosPozoLote', { fotos: [item(0)] }, 'otro-secreto-distinto-0123456789abcdef');
+      expect(r.cuerpo).toEqual({ status: 'error', code: 'UNAUTHORIZED' });
+      expect(Object.keys(drive.archivos)).toHaveLength(antes);
+    });
+
+    test('el lote de pozos nunca toca la raiz de Reemplazos', () => {
+      llamarApi('putFotosPozoLote', { fotos: [item(0), item(1)] });
+      expect(drive.raiz._hijosCarpetas).toHaveLength(0);
+    });
   });
 });

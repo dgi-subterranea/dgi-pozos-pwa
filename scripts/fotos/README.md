@@ -22,6 +22,7 @@ python scripts/fotos/normalizar.py --seleccion validacion100 --nombre validacion
 python scripts/fotos/importar.py --lote piloto30 --dry-run  # plan de importacion en seco (no sube nada)
 python scripts/fotos/importar.py --lote piloto30 --dry-run --existentes scripts/out/fotos/FotosPozos.csv   # ademas verifica contra la hoja real
 python scripts/fotos/importar.py subir --lote piloto30 --confirmar-huella <huella>   # sube al storage (variables FOTOS_STORAGE_URL / FOTOS_STORAGE_SECRET)
+#   opcional: --concurrencia N (1-8) y/o --lote-tamano K (1-10); medir primero con benchmark_subida.py (ver docs/fotos-pozos-importacion.md)
 python scripts/fotos/importar.py exportar-filas --lote piloto30                      # CSV de staging para la hoja
 python scripts/fotos/informe.py --nombre piloto             # estadisticas, extrapolacion y auditoria de privacidad
 python scripts/fotos/calidad.py --nombre piloto             # comparacion de dimension x calidad JPEG

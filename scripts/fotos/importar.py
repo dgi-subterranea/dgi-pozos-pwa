@@ -15,6 +15,7 @@ Uso (desde la raiz del repo):
     python scripts/fotos/importar.py --lote piloto30 --dry-run [--sin-detalle]           # plan en seco (NO sube nada)
     python scripts/fotos/importar.py --lote piloto30 --dry-run --existentes FotosPozos.csv   # ademas verifica que ninguna ya este en la hoja
     python scripts/fotos/importar.py subir --lote piloto30 --confirmar-huella <12+ hex>  # sube al storage (cuenta 2)
+        opciones de velocidad (por defecto: de a una, una foto por solicitud):  --concurrencia N   --lote-tamano K
     python scripts/fotos/importar.py exportar-filas --lote piloto30                      # CSV de staging para la hoja
 
 SUBIR exige el plan del dry-run: se niega si no existe, si algun archivo cambio desde entonces o si no se pasa la
@@ -463,40 +464,192 @@ def _registrar(carpeta, registro):
             pass
 
 
-def _subir_una(cliente, carpeta, e, fila, reintentos, esperar):
-    """Sube una foto (JPG + miniatura) con reintentos ante errores transitorios. Devuelve el registro de estado."""
+ESPERAS = [2, 5, 10, 20, 30]           # segundos entre reintentos (crece y se queda en 30)
+CODIGOS_TRANSITORIOS_LOTE = ('INTERNAL', 'TIEMPO_AGOTADO')
+MAX_CONCURRENCIA = 8
+MAX_LOTE = 10
+
+
+def _ms(t0):
+    return int(round((time.time() - t0) * 1000))
+
+
+def _leer_y_verificar(carpeta, e):
+    """Lee JPG y miniatura y comprueba que sean EXACTAMENTE los que se aprobaron en el dry-run (SHA-256). Devuelve un dict
+    con los bytes, los base64 y lo que tardo cada paso, o None si algun archivo cambio."""
     import base64
-    base = {'fotoId': e['fotoId'], 'ts': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}
+    t0 = time.time()
     img = (Path(carpeta) / 'normalizado' / (e['fotoId'] + '.jpg')).read_bytes()
     thumb = (Path(carpeta) / 'thumbs' / (e['fotoId'] + '_thumb.jpg')).read_bytes()
-    # cada archivo tiene que ser EXACTAMENTE el que se aprobo en el dry-run
+    ms_leer = _ms(t0)
     if hashlib.sha256(img).hexdigest() != e['sha256'] or hashlib.sha256(thumb).hexdigest() != e['sha256Thumb']:
-        return dict(base, estado='FALLIDA', motivo='ARCHIVO_CAMBIO_DESPUES_DEL_DRY_RUN', intentos=0)
+        return None
+    t1 = time.time()
     b64 = base64.b64encode(img).decode('ascii')
     tb64 = base64.b64encode(thumb).decode('ascii')
-    espera = [2, 5, 10, 20, 30]
+    return {'b64': b64, 'tb64': tb64, 'bytes': len(img) + len(thumb), 'leer': ms_leer, 'b64ms': _ms(t1)}
+
+
+def _ahora_utc():
+    return datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def _registro_ok(base, e, r, p, intentos, http_ms):
+    """Registro de una foto que el storage acepto (SUBIDA / YA_EXISTE) o FALLIDA si la respuesta no trae ids validos."""
+    if not RE_DRIVE_ID.match(str(r.get('driveFileId', ''))) or not RE_DRIVE_ID.match(str(r.get('driveThumbId', ''))):
+        return dict(base, estado='FALLIDA', motivo='RESPUESTA_SIN_IDS_VALIDOS', intentos=intentos)
+    # existente=True -> ya estaba en Drive; False -> la acaba de crear; ausente (storage viejo) -> se informa SUBIDA
+    estado = 'YA_EXISTE' if r.get('existente') is True else 'SUBIDA'
+    reg = dict(base, estado=estado, driveFileId=r['driveFileId'], driveThumbId=r['driveThumbId'],
+               tamanoBytes=r.get('tamanoBytes'), enviadoBytes=p['bytes'], intentos=intentos,
+               storageIndicaExistencia='existente' in r,
+               ms={'leer': p['leer'], 'b64': p['b64ms'], 'http': http_ms})
+    if isinstance(r.get('tiempos'), dict):
+        reg['tiemposStorage'] = {k: v for k, v in r['tiempos'].items() if isinstance(v, int)}
+    return reg
+
+
+def _subir_una(cliente, carpeta, e, fila, reintentos, esperar):
+    """Sube una foto (JPG + miniatura) con reintentos ante errores transitorios. Devuelve el registro de estado."""
+    base = {'fotoId': e['fotoId'], 'ts': _ahora_utc()}
+    p = _leer_y_verificar(carpeta, e)
+    if p is None:
+        return dict(base, estado='FALLIDA', motivo='ARCHIVO_CAMBIO_DESPUES_DEL_DRY_RUN', intentos=0)
     for intento in range(1, reintentos + 2):
+        t0 = time.time()
         try:
-            r = cliente.put_foto_pozo(e['fotoId'], e['fuente'], carpeta_fecha(fila), b64, tb64)
+            r = cliente.put_foto_pozo(e['fotoId'], e['fuente'], carpeta_fecha(fila), p['b64'], p['tb64'])
         except SC.ErrorTransitorio as err:
             if intento > reintentos:
                 return dict(base, estado='FALLIDA', motivo='TRANSITORIO_SIN_EXITO: %s' % err, intentos=intento)
-            esperar(espera[min(intento - 1, len(espera) - 1)])
+            esperar(ESPERAS[min(intento - 1, len(ESPERAS) - 1)])
             continue
         except SC.ErrorPermanente as err:
             return dict(base, estado='FALLIDA', motivo='RECHAZADA: %s' % err.codigo, intentos=intento)
-        # existente=True -> ya estaba en Drive; False -> la acaba de crear; ausente (storage viejo) -> se informa SUBIDA
-        estado = 'YA_EXISTE' if r.get('existente') is True else 'SUBIDA'
-        if not RE_DRIVE_ID.match(str(r.get('driveFileId', ''))) or not RE_DRIVE_ID.match(str(r.get('driveThumbId', ''))):
-            return dict(base, estado='FALLIDA', motivo='RESPUESTA_SIN_IDS_VALIDOS', intentos=intento)
-        return dict(base, estado=estado, driveFileId=r['driveFileId'], driveThumbId=r['driveThumbId'],
-                    tamanoBytes=r.get('tamanoBytes'), enviadoBytes=len(img) + len(thumb), intentos=intento,
-                    storageIndicaExistencia='existente' in r)
+        return _registro_ok(base, e, r, p, intento, _ms(t0))
     return dict(base, estado='FALLIDA', motivo='SIN_INTENTOS', intentos=reintentos + 1)
 
 
-def subir(carpeta_lote, cliente, huella_confirmada, limite=None, reintentos=4, esperar=time.sleep, log=print):
-    """Sube el lote al storage, una foto por request. Reanudable e idempotente. Devuelve el resumen (dict)."""
+def _subir_lote(cliente, carpeta, elementos, filas, reintentos, esperar):
+    """Sube VARIAS fotos en una sola solicitud (putFotosPozoLote). Un registro por foto, en el mismo orden. El resultado de
+    cada foto es independiente: lo transitorio (INTERNAL / TIEMPO_AGOTADO / respuesta incompleta o error de red) se reenvia
+    SOLO para esas fotos; un rechazo (INVALID_*) es definitivo. Reenviar es seguro: lo ya guardado vuelve como YA_EXISTE."""
+    registros, preparados = {}, {}
+    for e in elementos:
+        base = {'fotoId': e['fotoId'], 'ts': _ahora_utc()}
+        p = _leer_y_verificar(carpeta, e)
+        if p is None:
+            registros[e['fotoId']] = dict(base, estado='FALLIDA', motivo='ARCHIVO_CAMBIO_DESPUES_DEL_DRY_RUN', intentos=0)
+        else:
+            preparados[e['fotoId']] = (base, p, e)
+    pendientes = [e['fotoId'] for e in elementos if e['fotoId'] in preparados]
+    motivo = {}
+    intento = 0
+    while pendientes and intento <= reintentos:
+        intento += 1
+        items = [{'fotoId': i, 'fuente': preparados[i][2]['fuente'], 'carpetaFecha': carpeta_fecha(filas[i]), 'mimeType': 'image/jpeg',
+                  'imagenBase64': preparados[i][1]['b64'], 'thumbBase64': preparados[i][1]['tb64']} for i in pendientes]
+        t0 = time.time()
+        try:
+            r = cliente.put_fotos_pozo_lote(items)
+        except SC.ErrorTransitorio as err:
+            for i in pendientes:
+                motivo[i] = 'TRANSITORIO_SIN_EXITO: %s' % err
+            if intento <= reintentos:
+                esperar(ESPERAS[min(intento - 1, len(ESPERAS) - 1)])
+            continue
+        except SC.ErrorPermanente as err:
+            if err.codigo == 'UNKNOWN_ACTION':
+                raise SC.ErrorAutenticacion('el storage desplegado no soporta lotes (falta publicar la version nueva de StorageApi.js y StorageDrive.js): usar --lote-tamano 1')
+            for i in pendientes:
+                registros[i] = dict(preparados[i][0], estado='FALLIDA', motivo='RECHAZADA: %s' % err.codigo, intentos=intento)
+            pendientes = []
+            break
+        http_ms = _ms(t0)
+        por_id = {x.get('fotoId'): x for x in (r.get('resultados') or []) if isinstance(x, dict)}
+        siguientes = []
+        for i in pendientes:
+            base, p, e = preparados[i]
+            x = por_id.get(i)
+            if x is None:
+                motivo[i] = 'TRANSITORIO_SIN_EXITO: RESPUESTA_INCOMPLETA'
+                siguientes.append(i)
+            elif x.get('status') == 'ok':
+                registros[i] = _registro_ok(base, e, x, p, intento, http_ms)
+                registros[i]['ms']['lote'] = len(items)
+            elif str(x.get('code')) in CODIGOS_TRANSITORIOS_LOTE:
+                motivo[i] = 'TRANSITORIO_SIN_EXITO: %s' % x.get('code')
+                siguientes.append(i)
+            else:
+                registros[i] = dict(base, estado='FALLIDA', motivo='RECHAZADA: %s' % x.get('code'), intentos=intento)
+        pendientes = siguientes
+        if pendientes and intento <= reintentos:
+            esperar(ESPERAS[min(intento - 1, len(ESPERAS) - 1)])
+    for i in pendientes:
+        registros[i] = dict(preparados[i][0], estado='FALLIDA', motivo=motivo.get(i, 'SIN_INTENTOS'), intentos=intento)
+    return [registros[e['fotoId']] for e in elementos]
+
+
+def ejecutar_unidades(unidades, procesar, concurrencia, al_terminar, log=print):
+    """Motor de la subida (lo usan tambien el benchmark y los tests). Procesa cada unidad (lista de elementos) con
+    procesar(unidad) -> [(elemento, registro)], de a una (concurrencia=1) o con hasta N a la vez. Cada resultado se entrega
+    APENAS termina a al_terminar(elemento, registro), siempre desde el hilo principal (no hace falta lock en el que anota).
+    Solo un ErrorAutenticacion corta la corrida: no se lanzan mas unidades, las que ya estaban en vuelo terminan y se anotan.
+    Devuelve (error_de_autenticacion_o_None, cantidad_de_elementos_no_intentados)."""
+    if concurrencia == 1:
+        for idx, unidad in enumerate(unidades):
+            try:
+                pares = procesar(unidad)
+            except SC.ErrorAutenticacion as err:
+                log('ABORTADA: %s' % err)
+                return err, sum(len(u) for u in unidades[idx:])
+            for e, reg in pares:
+                al_terminar(e, reg)
+        return None, 0
+    from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+    siguientes = iter(unidades)
+    en_vuelo = {}
+    error = [None]
+    no_intentadas = 0
+    with ThreadPoolExecutor(max_workers=concurrencia) as pool:
+        def lanzar():
+            while error[0] is None and len(en_vuelo) < concurrencia * 2:      # pocas en cola: no se leen todos los archivos de golpe
+                u = next(siguientes, None)
+                if u is None:
+                    return
+                en_vuelo[pool.submit(procesar, u)] = u
+
+        lanzar()
+        while en_vuelo:
+            terminadas, _ = wait(list(en_vuelo), return_when=FIRST_COMPLETED)
+            for f in terminadas:
+                u = en_vuelo.pop(f)
+                try:
+                    pares = f.result()
+                except SC.ErrorAutenticacion as err:
+                    if error[0] is None:
+                        error[0] = err
+                        log('ABORTADA: %s' % err)
+                        for otra in list(en_vuelo):
+                            if otra.cancel():                                 # las que todavia no arrancaron
+                                no_intentadas += len(en_vuelo.pop(otra))
+                    no_intentadas += len(u)
+                    continue
+                for e, reg in pares:                                          # las que ya estaban corriendo se anotan igual
+                    al_terminar(e, reg)
+            lanzar()
+    if error[0] is not None:
+        no_intentadas += sum(len(u) for u in siguientes)
+    return error[0], no_intentadas
+
+
+def subir(carpeta_lote, cliente, huella_confirmada, limite=None, reintentos=4, esperar=time.sleep, log=print,
+          concurrencia=1, tamano_lote=1):
+    """Sube el lote al storage. Reanudable e idempotente. Por defecto UNA foto por solicitud y de a una (lo de siempre);
+    concurrencia=N sube N solicitudes a la vez y tamano_lote=K manda K fotos por solicitud. Devuelve el resumen (dict).
+    Pase lo que pase se sigue anotando CADA foto en estado_subida.jsonl apenas termina."""
+    if not (1 <= int(concurrencia) <= MAX_CONCURRENCIA) or not (1 <= int(tamano_lote) <= MAX_LOTE):
+        raise ErrorImportacion('concurrencia entre 1 y %d y tamano de lote entre 1 y %d.' % (MAX_CONCURRENCIA, MAX_LOTE))
     carpeta = Path(carpeta_lote)
     plan = verificar_plan(carpeta, huella_confirmada)
     manifiesto = json.loads((carpeta / 'manifiesto_privado.json').read_text(encoding='utf-8'))
@@ -504,25 +657,27 @@ def subir(carpeta_lote, cliente, huella_confirmada, limite=None, reintentos=4, e
     estado = leer_estado(carpeta)
     omitidas = sum(1 for r in manifiesto if not r['subir'])           # POR_REVISAR / EXCLUIDA: nunca se suben
     res = {'lote': carpeta.name, 'previstas': plan['cantidad'], 'omitidas': omitidas, 'subidas': 0, 'yaExisten': 0,
-           'fallidas': 0, 'yaConfirmadasAntes': 0, 'pendientes': 0, 'bytesEnviados': 0, 'fallos': {}, 'abortada': None}
-    t0 = time.time()
-    intentadas = 0
-    for i, e in enumerate(plan['elementos']):
+           'fallidas': 0, 'yaConfirmadasAntes': 0, 'pendientes': 0, 'bytesEnviados': 0, 'fallos': {}, 'abortada': None,
+           'concurrencia': int(concurrencia), 'tamanoLote': int(tamano_lote), 'ms': collections.defaultdict(list), 'msStorage': collections.defaultdict(list)}
+    pendientes_el = []
+    for e in plan['elementos']:
         previo = estado.get(e['fotoId'])
         if previo and previo.get('estado') in ESTADOS_OK:
             res['yaConfirmadasAntes'] += 1                           # confirmada en una corrida anterior: NO se vuelve a subir
-            continue
-        if limite is not None and intentadas >= limite:
-            res['pendientes'] += 1
-            continue
-        intentadas += 1
-        try:
-            reg = _subir_una(cliente, carpeta, e, filas[e['fotoId']], reintentos, esperar)
-        except SC.ErrorAutenticacion as err:
-            res['abortada'] = str(err)
-            res['pendientes'] += len(plan['elementos']) - i
-            log('ABORTADA: %s' % err)
-            break
+        else:
+            pendientes_el.append(e)
+    a_intentar = pendientes_el if limite is None else pendientes_el[:limite]
+    res['pendientes'] = len(pendientes_el) - len(a_intentar)
+    unidades = [a_intentar[i:i + int(tamano_lote)] for i in range(0, len(a_intentar), int(tamano_lote))]
+    hechas = [0]
+
+    def procesar(unidad):
+        if int(tamano_lote) == 1:
+            return [(unidad[0], _subir_una(cliente, carpeta, unidad[0], filas[unidad[0]['fotoId']], reintentos, esperar))]
+        regs = _subir_lote(cliente, carpeta, unidad, filas, reintentos, esperar)
+        return list(zip(unidad, regs))
+
+    def anotar(e, reg):
         _registrar(carpeta, reg)
         if reg['estado'] == 'SUBIDA':
             res['subidas'] += 1
@@ -532,13 +687,30 @@ def subir(carpeta_lote, cliente, huella_confirmada, limite=None, reintentos=4, e
             res['fallidas'] += 1
             res['fallos'][e['fotoId']] = reg.get('motivo')
         res['bytesEnviados'] += reg.get('enviadoBytes') or 0
-        if intentadas % 10 == 0 or reg['estado'] == 'FALLIDA':
-            log('  %d/%d  %s  %s' % (i + 1, plan['cantidad'], e['fotoId'], reg['estado']))
-    res['segundos'] = round(time.time() - t0, 1)
+        for k, v in (reg.get('ms') or {}).items():
+            if k != 'lote':
+                res['ms'][k].append(v)
+        for k, v in (reg.get('tiemposStorage') or {}).items():
+            res['msStorage'][k].append(v)
+        hechas[0] += 1
+        if hechas[0] % 10 == 0 or reg['estado'] == 'FALLIDA':
+            log('  %d/%d  %s  %s' % (hechas[0], len(a_intentar), e['fotoId'], reg['estado']))
+
+    t0 = time.time()
+    err, no_intentadas = ejecutar_unidades(unidades, procesar, int(concurrencia), anotar, log)
+    if err is not None:
+        res['abortada'] = str(err)
+        res['pendientes'] += no_intentadas
+    res['segundos'] = round(time.time() - t0, 3)
+    res['ms'], res['msStorage'] = dict(res['ms']), dict(res['msStorage'])
     texto = informe_subida(res)
     (carpeta / 'reporte_subida.txt').write_text(texto, encoding='utf-8')
     log(texto)
     return res
+
+
+def _media(lista):
+    return sum(lista) / float(len(lista)) if lista else 0.0
 
 
 def informe_subida(res):
@@ -550,7 +722,17 @@ def informe_subida(res):
          'FALLIDA: %d' % res['fallidas'],
          'OMITIDA (POR_REVISAR / EXCLUIDA del manifiesto, nunca se suben): %d' % res['omitidas'],
          'Pendientes (sin intentar: --limite o corrida abortada): %d' % res['pendientes'],
-         'Enviado en esta corrida: %s en %ss' % (_mb(res['bytesEnviados']), res.get('segundos', 0))]
+         'Enviado en esta corrida: %s en %.1f s' % (_mb(res['bytesEnviados']), res.get('segundos', 0))]
+    hechas = res['subidas'] + res['yaExisten'] + res['fallidas']
+    seg = res.get('segundos') or 0
+    if hechas and seg:
+        L.append('Ritmo: %.1f s por foto, %.1f fotos por minuto (concurrencia %d, %d foto(s) por solicitud)' % (
+            seg / float(hechas), hechas * 60.0 / seg, res.get('concurrencia', 1), res.get('tamanoLote', 1)))
+    if res.get('ms'):
+        L.append('Tiempo medio por foto en el cliente: leer %.0f ms | base64 %.0f ms | solicitud HTTP %.0f ms' % (
+            _media(res['ms'].get('leer')), _media(res['ms'].get('b64')), _media(res['ms'].get('http'))))
+    if res.get('msStorage'):
+        L.append('Tiempo medio por foto DENTRO del storage (ms): ' + ' | '.join('%s %.0f' % (k, _media(v)) for k, v in sorted(res['msStorage'].items())))
     if res['abortada']:
         L.append('CORRIDA ABORTADA: %s' % res['abortada'])
     if res['fallos']:
@@ -637,13 +819,15 @@ def main(argv=None, cliente=None, esperar=time.sleep):
         ap.add_argument('--confirmar-huella', required=True, help='huella (12+ hex) que mostro el dry-run')
         ap.add_argument('--limite', type=int, default=None, help='subir como mucho N fotos en esta corrida')
         ap.add_argument('--reintentos', type=int, default=4)
+        ap.add_argument('--concurrencia', type=int, default=1, help='solicitudes simultaneas al storage (1 a %d; por defecto 1 = de a una)' % MAX_CONCURRENCIA)
+        ap.add_argument('--lote-tamano', type=int, default=1, help='fotos por solicitud (1 a %d; por defecto 1 = una por solicitud)' % MAX_LOTE)
         ap.add_argument('--salida', default=str(C.OUT_FOTOS))
         a = ap.parse_args(argv[1:])
         try:
             carpeta = Path(a.salida) / a.lote
             verificar_plan(carpeta, a.confirmar_huella)             # antes de tocar variables de entorno o red
             cli = cliente or SC.ClienteStorage.desde_entorno()
-            res = subir(carpeta, cli, a.confirmar_huella, a.limite, a.reintentos, esperar)
+            res = subir(carpeta, cli, a.confirmar_huella, a.limite, a.reintentos, esperar, concurrencia=a.concurrencia, tamano_lote=a.lote_tamano)
         except (ErrorImportacion, SC.ErrorConfiguracion) as err:
             print('No se sube: %s' % err, file=sys.stderr)
             return 2

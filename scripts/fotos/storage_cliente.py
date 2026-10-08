@@ -22,7 +22,9 @@ VERSION = 'v1'
 TOLERANCIA_SEG = 300
 ENV_URL = 'FOTOS_STORAGE_URL'
 ENV_SECRETO = 'FOTOS_STORAGE_SECRET'
-TIMEOUT_SEG = 120
+# Mayor que el limite de 6 minutos (360 s) de una ejecucion de Apps Script: si la solicitud se corta por tiempo es porque la
+# ejecucion del storage YA termino o murio, y reintentar no puede cruzarse con una subida todavia en curso de la misma foto.
+TIMEOUT_SEG = 400
 SECRETO_MIN = 16
 
 
@@ -97,8 +99,9 @@ def configuracion_desde_entorno(entorno=None):
 
 
 class ClienteStorage(object):
-    def __init__(self, url, secreto, abrir=None, reloj=None, generar_nonce=None):
+    def __init__(self, url, secreto, abrir=None, reloj=None, generar_nonce=None, timeout=None):
         self._url = url
+        self._timeout = timeout or TIMEOUT_SEG
         self._secreto = secreto
         self._abrir = abrir or self._abrir_urllib
         self._reloj = reloj or time.time
@@ -116,7 +119,7 @@ class ClienteStorage(object):
         pedido = urllib.request.Request(self._url, data=cuerpo_bytes, method='POST',
                                         headers={'Content-Type': 'text/plain;charset=utf-8'})
         # Apps Script responde la ejecucion con un 302 al resultado: urllib lo sigue (POST -> GET), igual que un navegador.
-        with urllib.request.urlopen(pedido, timeout=TIMEOUT_SEG) as r:
+        with urllib.request.urlopen(pedido, timeout=self._timeout) as r:
             return r.status, r.read()
 
     def llamar(self, accion, payload_obj):
@@ -156,3 +159,8 @@ class ClienteStorage(object):
         return self.llamar('putFotoPozo', {
             'fotoId': fotoId, 'fuente': fuente, 'carpetaFecha': carpeta_fecha, 'mimeType': 'image/jpeg',
             'imagenBase64': imagen_b64, 'thumbBase64': thumb_b64})
+
+    def put_fotos_pozo_lote(self, items):
+        """items: lista de dicts {fotoId, fuente, carpetaFecha, mimeType, imagenBase64, thumbBase64}. Devuelve el dict del
+        storage con 'resultados' (uno por foto, en cualquier orden, cada uno con su fotoId y su propio status)."""
+        return self.llamar('putFotosPozoLote', {'fotos': items})

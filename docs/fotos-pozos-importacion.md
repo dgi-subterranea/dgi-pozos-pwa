@@ -186,7 +186,30 @@ año; GPS histórico consistente (≤200 m) y de 200–500 m; pozo solo de Provi
 con varias fotos y otro con fotos de las dos fuentes; PNG, imagen muy grande y orientación EXIF 6/8. No existe ninguna foto
 `CONFIRMADO` de un punto NE especial (sin `wellId`): ese caso se valida con una carga manual desde la app.
 
-## Si la subida individual resultara lenta para las 4.116
+## Velocidad de la subida (opcional, mismas garantías)
 
-Se mide con el piloto. Si hiciera falta, se agrega una acción por lotes `putFotosPozoLote` en el storage (misma firma HMAC,
-varias fotos por request); hoy no se optimiza.
+Medición real (piloto + `validacion100`): el costo por foto es una **latencia fija de ~8–9 s** entre la solicitud HTTP y el
+Web App de Apps Script (carpetas, búsqueda, dos `createFile`, `setSharing`), casi independiente del tamaño. Ni Python
+(leer/base64 < 100 ms) ni el ancho de banda son el cuello. Por eso se puede acelerar enviando **varias solicitudes a la vez**
+o **varias fotos por solicitud**; por defecto sigue siendo una foto por vez (sin cambios):
+
+    python scripts/fotos/importar.py subir --lote <lote> --confirmar-huella <huella> --concurrencia 3
+    python scripts/fotos/importar.py subir --lote <lote> --confirmar-huella <huella> --lote-tamano 5 --concurrencia 2
+
+- `--concurrencia N` (1–8): N solicitudes simultáneas. `--lote-tamano K` (1–10): K fotos por solicitud (`putFotosPozoLote`;
+  requiere publicar la versión nueva de `StorageApi.js` + `StorageDrive.js`; si el storage no la tiene, la corrida se detiene
+  sin marcar fallidas y avisa).
+- Idempotencia intacta: `fotoId` determinístico, `YA_EXISTE`, `estado_subida.jsonl` (una línea por foto apenas termina),
+  reanudable. Una foto que falla no frena a las demás; solo un error de firma/autenticación corta la corrida (las solicitudes
+  en vuelo terminan y se anotan; el resto queda pendiente, no fallida). Reenviar lo ya guardado es seguro (vuelve `YA_EXISTE`).
+- El storage crea las carpetas **bajo `LockService`** con doble verificación, así dos solicitudes simultáneas no duplican
+  `FotosPozos/<fuente>/<año>/`. El tiempo de cada paso interno viaja en la respuesta (`tiempos`, solo números) y queda en
+  `estado_subida.jsonl` y en `reporte_subida.txt` (ritmo, fotos/min, medias por paso).
+- El timeout del cliente es 400 s (> los 360 s máximos de una ejecución de Apps Script): una solicitud cortada por tiempo
+  significa que la ejecución ya terminó, así que reintentar no puede cruzarse con una subida en curso de la misma foto.
+- **Benchmark controlado antes de elegir** (fotos descartables, `fotoId` nuevos en `BENCHMARK_TEMP`, sin filas en ninguna hoja,
+  todo a la papelera al final; `limpiar` recupera lo que quede si se corta):
+
+      python scripts/fotos/benchmark_subida.py medir --lote validacion100                        # solo muestra el plan
+      python scripts/fotos/benchmark_subida.py medir --lote validacion100 --confirmar-benchmark  # sube y mide: s,c2,c4,l5,l5c2
+      python scripts/fotos/benchmark_subida.py limpiar

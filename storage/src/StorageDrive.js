@@ -220,9 +220,40 @@ function storageDrive_validarPutPozo(p) {
   return null;
 }
 
+// Busca la subcarpeta y, si no existe, la crea BAJO LOCK con doble verificacion: con subidas simultaneas dos
+// solicitudes que llegan a la vez a una carpeta nueva no pueden crear dos carpetas iguales. El camino normal
+// (la carpeta ya existe) no toma el lock.
 function storageDrive_carpetaHija(padre, nombre) {
   var it = padre.getFoldersByName(nombre);
-  return it.hasNext() ? it.next() : padre.createFolder(nombre);
+  if (it.hasNext()) {
+    return it.next();
+  }
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    it = padre.getFoldersByName(nombre);
+    return it.hasNext() ? it.next() : padre.createFolder(nombre);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Cronometro de pasos (milisegundos) para medir donde se va el tiempo de una subida DENTRO del storage. Solo numeros.
+function storageDrive_cronometro() {
+  var inicio = Date.now();
+  var ultimo = inicio;
+  var t = {};
+  return {
+    marca: function (nombre) {
+      var ahora = Date.now();
+      t[nombre] = ahora - ultimo;
+      ultimo = ahora;
+    },
+    fin: function () {
+      t.total = Date.now() - inicio;
+      return t;
+    }
+  };
 }
 
 // Guarda foto + miniatura en FotosPozos/<fuente>/<anio|sin_fecha>/. El nombre
@@ -233,28 +264,92 @@ function storageDrive_putFotoPozo(p) {
   if (error) {
     return { status: 'error', code: error };
   }
+  var cron = storageDrive_cronometro();
   var raiz = DriveApp.getFolderById(getStoragePozosRootFolderId());
   var carpeta = storageDrive_carpetaHija(storageDrive_carpetaHija(raiz, p.fuente), p.carpetaFecha);
+  cron.marca('carpetas');
   var nombre = p.fotoId + '.jpg';
 
   var existentes = carpeta.getFilesByName(nombre);
   if (existentes.hasNext()) {
     var ya = existentes.next();
     var mDesc = /^thumb:([A-Za-z0-9_-]{10,100})$/.exec(ya.getDescription() || '');
+    var thumbId = mDesc ? mDesc[1] : '';
+    if (!thumbId) {
+      // Quedo a medias (se corto entre crear el original y registrar su miniatura): se completa SIN duplicar nada.
+      var nombreThumb = p.fotoId + '_thumb.jpg';
+      var previas = carpeta.getFilesByName(nombreThumb);
+      var completada = previas.hasNext() ? previas.next()
+        : carpeta.createFile(Utilities.newBlob(Utilities.base64Decode(p.thumbBase64), 'image/jpeg', nombreThumb));
+      ya.setDescription('thumb:' + completada.getId());
+      thumbId = completada.getId();
+    }
     // existente: true -> el archivo ya estaba (reintento o importacion repetida); el importador historico lo distingue de SUBIDA
-    return { status: 'ok', driveFileId: ya.getId(), driveThumbId: mDesc ? mDesc[1] : '', tamanoBytes: ya.getSize(), existente: true };
+    cron.marca('existe');
+    return { status: 'ok', driveFileId: ya.getId(), driveThumbId: thumbId, tamanoBytes: ya.getSize(), existente: true, tiempos: cron.fin() };
   }
+  cron.marca('existe');
 
   var archivo = carpeta.createFile(Utilities.newBlob(Utilities.base64Decode(p.imagenBase64), 'image/jpeg', nombre));
+  cron.marca('imagen');
   var thumb = carpeta.createFile(Utilities.newBlob(Utilities.base64Decode(p.thumbBase64), 'image/jpeg', p.fotoId + '_thumb.jpg'));
+  cron.marca('miniatura');
   archivo.setDescription('thumb:' + thumb.getId());
+  cron.marca('descripcion');
   try {
     archivo.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE);
     thumb.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE);
   } catch (err) {
     // ver storageDrive_putFoto: los archivos nuevos ya nacen privados
   }
-  return { status: 'ok', driveFileId: archivo.getId(), driveThumbId: thumb.getId(), tamanoBytes: archivo.getSize(), existente: false };
+  cron.marca('compartir');
+  return { status: 'ok', driveFileId: archivo.getId(), driveThumbId: thumb.getId(), tamanoBytes: archivo.getSize(), existente: false, tiempos: cron.fin() };
+}
+
+// VARIAS fotos en una sola solicitud (acelera la importacion historica: una sola ida y vuelta, una sola ejecucion).
+// Cada foto se procesa con storageDrive_putFotoPozo y su resultado es INDEPENDIENTE: una invalida o que falla no frena a
+// las demas, y reenviar el lote es seguro (lo ya guardado vuelve como existente). Topes para no acercarse al limite de
+// 6 minutos de una ejecucion ni al de memoria; lo que no alcanzo a procesar vuelve como TIEMPO_AGOTADO para reintentarlo.
+var STORAGE_LOTE_MAX_FOTOS = 10;
+var STORAGE_LOTE_MAX_CARACTERES = 9 * 1024 * 1024;     // suma de los base64 (imagenes + miniaturas) de un lote
+var STORAGE_LOTE_MAX_MS = 240000;
+
+function storageDrive_putFotosPozoLote(p) {
+  if (!p || !Array.isArray(p.fotos) || p.fotos.length === 0 || p.fotos.length > STORAGE_LOTE_MAX_FOTOS) {
+    return { status: 'error', code: 'INVALID_LOTE' };
+  }
+  var caracteres = 0;
+  for (var k = 0; k < p.fotos.length; k++) {
+    var f = p.fotos[k];
+    if (!f || typeof f !== 'object' || typeof f.imagenBase64 !== 'string' || typeof f.thumbBase64 !== 'string') {
+      return { status: 'error', code: 'INVALID_LOTE' };
+    }
+    caracteres += f.imagenBase64.length + f.thumbBase64.length;
+  }
+  if (caracteres > STORAGE_LOTE_MAX_CARACTERES) {
+    return { status: 'error', code: 'INVALID_LOTE' };
+  }
+  var inicio = Date.now();
+  var resultados = [];
+  for (var i = 0; i < p.fotos.length; i++) {
+    var item = p.fotos[i];
+    var id = typeof item.fotoId === 'string' ? item.fotoId : '';
+    var r;
+    if (Date.now() - inicio > STORAGE_LOTE_MAX_MS) {
+      r = { status: 'error', code: 'TIEMPO_AGOTADO' };
+    } else {
+      try {
+        r = storageDrive_putFotoPozo(item);
+      } catch (err) {
+        r = { status: 'error', code: 'INTERNAL' };
+      }
+    }
+    var salida = {};
+    Object.keys(r).forEach(function (clave) { salida[clave] = r[clave]; });
+    salida.fotoId = id;
+    resultados.push(salida);
+  }
+  return { status: 'ok', resultados: resultados, tiempos: { total: Date.now() - inicio } };
 }
 
 function storageDrive_getFotoPozo(p) {
@@ -274,6 +369,10 @@ if (typeof module !== 'undefined' && module.exports) {
     storageDrive_estaBajoRaiz,
     storageDrive_validarPutPozo,
     storageDrive_putFotoPozo,
+    storageDrive_putFotosPozoLote,
+    storageDrive_carpetaHija,
+    storageDrive_cronometro,
+    STORAGE_LOTE_MAX_FOTOS,
     storageDrive_getFotoPozo,
     storageDrive_trashFotoPozo
   };
