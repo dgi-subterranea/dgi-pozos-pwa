@@ -11,6 +11,8 @@ Uso (desde la raiz del repo, despues de clasificar.py):
     python scripts/fotos/normalizar.py --seleccion piloto [--n 200] [--semilla 20261006] [--nombre piloto]
     python scripts/fotos/normalizar.py --seleccion piloto30 --nombre piloto30 [--incluir-wells 03-0652] [--excluir-wells 04-0263]
     python scripts/fotos/normalizar.py --seleccion validacion100 --nombre validacion100 --sin-medir   # 100 CONFIRMADAS repartidas, sin las ya migradas
+    python scripts/fotos/normalizar.py --seleccion produccion500 --nombre produccion500 --sin-medir   # primeras 500 CONFIRMADAS pendientes (por SHA-1), sin las ya migradas
+    python scripts/fotos/normalizar.py --seleccion produccion500 --n 3485 --nombre produccion_resto --sin-medir   # el resto, una vez validado el tramo anterior
     python scripts/fotos/normalizar.py --seleccion confirmadas --nombre lote1      # todas las CONFIRMADO
 
 Salida (PRIVADA, ignorada por git) en scripts/out/fotos/<nombre>/ :
@@ -333,6 +335,17 @@ def sha1_ya_migrados(base):
     return res
 
 
+def muestra_produccion(filas, excluir_sha1=(), n=500):
+    """Tramo de la migracion productiva: los primeros n contenidos unicos CONFIRMADOS (con pozo; nunca POR_REVISAR ni EXCLUIDA)
+    que todavia no se migraron, ordenados por SHA-1 ascendente. Determinista y sin azar: mismo corpus y mismas exclusiones,
+    mismo tramo. Como lo ya subido se excluye por SHA-1 (= por fotoId, que es uuid5 del SHA-1), el tramo siguiente
+    (--n con el resto) arranca justo donde termina este."""
+    excl = set(excluir_sha1)
+    conf = sorted((f for f in filas if f['estado'] == C.ESTADO_CONFIRMADO and f['wellId'] and f['sha1'] not in excl),
+                  key=lambda f: f['sha1'])
+    return collections.OrderedDict((f['sha1'], {'categoria': 'PRODUCCION', 'estrato': None}) for f in conf[:n])
+
+
 def muestra_validacion100(filas, semilla=20261008, excluir_sha1=(), n=100):
     """Lote intermedio de validacion: n contenidos unicos CONFIRMADOS (nunca POR_REVISAR ni EXCLUIDA), sin los ya migrados.
     Reparto: ~45 % Monitoreo (mitad CERCA, mitad PANORAMICA) y ~55 % Relevamiento (OTRA); anios repartidos en partes iguales
@@ -493,8 +506,8 @@ def ejecutar(filas, seleccion, salida, fotos_dir, lote, medir=True):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--seleccion', choices=['piloto', 'piloto30', 'validacion100', 'confirmadas'], required=True)
-    ap.add_argument('--n', type=int, default=200, help='tamano del piloto (solo orientativo: la muestra son 200)')
+    ap.add_argument('--seleccion', choices=['piloto', 'piloto30', 'validacion100', 'produccion500', 'confirmadas'], required=True)
+    ap.add_argument('--n', type=int, default=None, help='produccion500: cantidad de fotos del tramo (default 500); piloto: orientativo (la muestra son 200)')
     ap.add_argument('--semilla', type=int, default=20261006)
     ap.add_argument('--nombre', default=None, help='subcarpeta de salida (default: el nombre de la seleccion)')
     ap.add_argument('--lote', default=None, help='etiqueta loteImportacion de las filas (default PILOTO-AAAA-MM o LOTE-AAAA-MM)')
@@ -515,6 +528,11 @@ def main():
         sel = muestra_validacion100(filas, args.semilla if args.semilla != 20261006 else 20261008, excluidos)
         print('excluidos por estar ya migrados (o en curso): %d contenidos' % len(excluidos))
         print(json.dumps(resumen_lote(sel, filas), ensure_ascii=False))
+    elif args.seleccion == 'produccion500':
+        excluidos = sha1_ya_migrados(base)
+        sel = muestra_produccion(filas, excluidos, 500 if args.n is None else args.n)
+        print('excluidos por estar ya migrados (o en curso): %d contenidos' % len(excluidos))
+        print(json.dumps(resumen_lote(sel, filas), ensure_ascii=False))
     elif args.seleccion == 'piloto30':
         sel = muestra_piloto30(filas, args.semilla if args.semilla != 20261006 else 20261007, lista(args.incluir_wells), lista(args.excluir_wells))
         print(json.dumps(cobertura(sel, filas), ensure_ascii=False))
@@ -524,7 +542,7 @@ def main():
         sel = collections.OrderedDict((f['sha1'], {'categoria': 'LOTE', 'estrato': None}) for f in filas if f['estado'] == C.ESTADO_CONFIRMADO)
     nombre = args.nombre or args.seleccion
     import datetime as dt
-    lote = args.lote or ('PILOTO-' if args.seleccion.startswith('piloto') else ('VALIDACION-' if args.seleccion == 'validacion100' else 'LOTE-')) + dt.date.today().strftime('%Y-%m')
+    lote = args.lote or ('PILOTO-' if args.seleccion.startswith('piloto') else ('VALIDACION-' if args.seleccion == 'validacion100' else ('PRODUCCION-' if args.seleccion == 'produccion500' else 'LOTE-'))) + dt.date.today().strftime('%Y-%m')
     print('seleccion %s: %d contenidos unicos' % (args.seleccion, len(sel)))
     ejecutar(filas, sel, base / nombre, args.fotos, lote, medir=not args.sin_medir)
 

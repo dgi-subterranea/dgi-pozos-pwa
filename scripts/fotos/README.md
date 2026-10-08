@@ -19,6 +19,7 @@ python scripts/fotos/revision.py                            # CSV de revision de
 python scripts/fotos/normalizar.py --seleccion piloto       # piloto de 200 fotos -> scripts/out/fotos/piloto/
 python scripts/fotos/normalizar.py --seleccion piloto30 --nombre piloto30 --sin-medir   # lote piloto de ~30 CONFIRMADAS
 python scripts/fotos/normalizar.py --seleccion validacion100 --nombre validacion100 --sin-medir   # 100 CONFIRMADAS repartidas, sin las ya migradas
+python scripts/fotos/normalizar.py --seleccion produccion500 --nombre produccion500 --sin-medir   # primeras 500 CONFIRMADAS pendientes (SHA-1 ascendente), sin lo ya migrado; --n 3485 para el resto
 python scripts/fotos/importar.py --lote piloto30 --dry-run  # plan de importacion en seco (no sube nada)
 python scripts/fotos/importar.py --lote piloto30 --dry-run --existentes scripts/out/fotos/FotosPozos.csv   # ademas verifica contra la hoja real
 python scripts/fotos/importar.py subir --lote piloto30 --confirmar-huella <huella>   # sube al storage (variables FOTOS_STORAGE_URL / FOTOS_STORAGE_SECRET)
