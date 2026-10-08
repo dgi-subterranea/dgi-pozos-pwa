@@ -10,6 +10,7 @@ le quitan los metadatos sin tocar la imagen. Se corrige la orientacion EXIF (JPE
 Uso (desde la raiz del repo, despues de clasificar.py):
     python scripts/fotos/normalizar.py --seleccion piloto [--n 200] [--semilla 20261006] [--nombre piloto]
     python scripts/fotos/normalizar.py --seleccion piloto30 --nombre piloto30 [--incluir-wells 03-0652] [--excluir-wells 04-0263]
+    python scripts/fotos/normalizar.py --seleccion validacion100 --nombre validacion100 --sin-medir   # 100 CONFIRMADAS repartidas, sin las ya migradas
     python scripts/fotos/normalizar.py --seleccion confirmadas --nombre lote1      # todas las CONFIRMADO
 
 Salida (PRIVADA, ignorada por git) en scripts/out/fotos/<nombre>/ :
@@ -310,6 +311,142 @@ def cobertura(seleccion, filas):
     ])
 
 
+def sha1_ya_migrados(base):
+    """SHA-1 de los contenidos que YA se subieron (o estan en curso) desde cualquier lote de scripts/out/fotos/: los lotes que
+    tienen estado_subida.jsonl con fotos SUBIDA / YA_EXISTE. Un lote nuevo los excluye de su seleccion."""
+    res = set()
+    for d in sorted(Path(base).iterdir()) if Path(base).is_dir() else []:
+        est, man = d / 'estado_subida.jsonl', d / 'manifiesto_privado.json'
+        if not (d.is_dir() and est.is_file() and man.is_file()):
+            continue
+        ok = set()
+        for linea in est.read_text(encoding='utf-8').splitlines():
+            try:
+                r = json.loads(linea)
+            except ValueError:
+                continue
+            if isinstance(r, dict) and r.get('estado') in ('SUBIDA', 'YA_EXISTE'):
+                ok.add(r.get('fotoId'))
+        for rec in json.loads(man.read_text(encoding='utf-8')):
+            if rec.get('fotoId') in ok:
+                res.add(rec['sha1'])
+    return res
+
+
+def muestra_validacion100(filas, semilla=20261008, excluir_sha1=(), n=100):
+    """Lote intermedio de validacion: n contenidos unicos CONFIRMADOS (nunca POR_REVISAR ni EXCLUIDA), sin los ya migrados.
+    Reparto: ~45 % Monitoreo (mitad CERCA, mitad PANORAMICA) y ~55 % Relevamiento (OTRA); anios repartidos en partes iguales
+    dentro de cada fuente; ~12 % con GPS (la mitad por fuente, si hay); tamanos de original repartidos por cuartiles del
+    universo elegible; pozos y departamentos lo mas distintos posible (se prefiere un pozo nuevo y un departamento poco
+    representado; un pozo repite solo si no queda otra opcion). Determinista: misma semilla, mismo lote."""
+    rnd = random.Random(semilla)
+    excl = set(excluir_sha1)
+    conf = sorted((f for f in filas if f['estado'] == C.ESTADO_CONFIRMADO and f['wellId'] and f['sha1'] not in excl), key=lambda f: f['sha1'])
+    if not conf:
+        return collections.OrderedDict()
+    tams = sorted(f['tam'] for f in conf)
+    cortes = [tams[len(tams) * k // 4] for k in (1, 2, 3)]
+    cuartil = lambda f: sum(1 for c in cortes if f['tam'] >= c)
+    anio = lambda f: (f['fecha']['valor'] or '')[:4]
+
+    inicio_anio = {}
+
+    def estratos(fuente, tipo, cuota):
+        # los anios de cada fuente se reparten en partes iguales, de corrido entre los tipos de esa fuente
+        años = sorted({anio(f) for f in conf if f['fuente'] == fuente})
+        if not años or cuota <= 0:
+            return []
+        desde = inicio_anio.setdefault(fuente, 0)
+        inicio_anio[fuente] = desde + cuota
+        return [(fuente, tipo, años[(desde + i) % len(años)]) for i in range(cuota)]
+
+    n_mon = int(round(n * 0.45))
+    n_rel = n - n_mon
+    slots = (estratos('MONITOREO_NE', 'CERCA', n_mon // 2) + estratos('MONITOREO_NE', 'PANORAMICA', n_mon - n_mon // 2)
+             + estratos('RELEVAMIENTO_2018', 'OTRA', n_rel))
+    # cuartil de tamano: se reparte parejo dentro de cada (fuente, tipo)
+    por_estrato = collections.defaultdict(list)
+    for i, s in enumerate(slots):
+        por_estrato[(s[0], s[1])].append(i)
+    q_de = {}
+    for idxs in por_estrato.values():
+        qs = [k % 4 for k in range(len(idxs))]
+        rnd.shuffle(qs)
+        for i, q in zip(idxs, qs):
+            q_de[i] = q
+    # GPS: la mitad del cupo en cada fuente
+    gps_slots = set()
+    cupo_gps = int(round(n * 0.12))
+    for fuente, cupo in (('MONITOREO_NE', cupo_gps // 2), ('RELEVAMIENTO_2018', cupo_gps - cupo_gps // 2)):
+        idxs = [i for i, s in enumerate(slots) if s[0] == fuente]
+        rnd.shuffle(idxs)
+        gps_slots.update(idxs[:cupo])
+
+    sel = collections.OrderedDict()
+    pozos, deptos = collections.Counter(), collections.Counter()
+
+    def elegir(i):
+        fuente, tipo, a = slots[i]
+        base = [f for f in conf if f['sha1'] not in sel and f['fuente'] == fuente and f['tipoFoto'] == tipo and anio(f) == a]
+        q = q_de[i]
+        if i in gps_slots:
+            # El GPS es raro (~5 % del universo): se busca primero en el estrato exacto y, si no hay, en el mismo
+            # fuente/tipo de otro anio y luego en la misma fuente (un par de cupos de anio se corren, el total no cambia).
+            for amplitud in (base,
+                             [f for f in conf if f['sha1'] not in sel and f['fuente'] == fuente and f['tipoFoto'] == tipo],
+                             [f for f in conf if f['sha1'] not in sel and f['fuente'] == fuente]):
+                con_gps = [f for f in amplitud if f['gps']]
+                if con_gps:
+                    en_q = [f for f in con_gps if cuartil(f) == q]
+                    return min(en_q or con_gps, key=lambda f: (pozos[f['wellId']], deptos[f['wellId'][:2]], rnd.random()))
+        # con GPS solo en los cupos de GPS; en los demas se prefiere una foto sin GPS (es raro: ~5 % del universo).
+        # (exige GPS: True / False / None = indistinto, exige el cuartil de tamano)
+        intentos = ((True, True), (True, False), (None, True), (None, False)) if i in gps_slots else ((False, True), (False, False), (None, True), (None, False))
+        for gps_req, q_req in intentos:
+            pool = [f for f in base if (gps_req is None or bool(f['gps']) == gps_req) and (not q_req or cuartil(f) == q)]
+            if pool:
+                break
+        else:
+            pool = [f for f in conf if f['sha1'] not in sel and f['fuente'] == fuente]
+        if not pool:
+            return None
+        return min(pool, key=lambda f: (pozos[f['wellId']], deptos[f['wellId'][:2]], rnd.random()))
+
+    orden = sorted(range(len(slots)), key=lambda i: (i not in gps_slots, i))      # los cupos con GPS primero (son los escasos)
+    for i in orden:
+        f = elegir(i)
+        if f is None:
+            continue
+        sel[f['sha1']] = {'categoria': slots[i][0], 'estrato': '%s/%s/%s' % slots[i]}
+        pozos[f['wellId']] += 1
+        deptos[f['wellId'][:2]] += 1
+    return sel
+
+
+def resumen_lote(seleccion, filas):
+    """Como quedo repartido un lote (para mostrar y verificar)."""
+    por_sha = {f['sha1']: f for f in filas}
+    fs = [por_sha[s] for s in seleccion]
+    n = collections.Counter
+    tams = sorted(f['tam'] for f in fs)
+    pozos = n(f['wellId'] for f in fs)
+    return collections.OrderedDict([
+        ('total', len(fs)),
+        ('estado', dict(n(f['estado'] for f in fs))),
+        ('fuente', dict(n(f['fuente'] for f in fs))),
+        ('fuenteTipo', dict(n('%s/%s' % (f['fuente'], f['tipoFoto']) for f in fs))),
+        ('anio', dict(sorted(n((f['fecha']['valor'] or '')[:4] for f in fs).items()))),
+        ('conGps', sum(1 for f in fs if f['gps'])),
+        ('sinGps', sum(1 for f in fs if not f['gps'])),
+        ('pozos', len(pozos)),
+        ('maxFotosPorPozo', max(pozos.values()) if pozos else 0),
+        ('departamentos', len({f['wellId'][:2] for f in fs})),
+        ('tamanoOriginalBytes', {'min': tams[0], 'mediana': tams[len(tams) // 2], 'max': tams[-1]} if tams else {}),
+        ('formato', dict(n(f['formato'] for f in fs))),
+        ('validadoContra', dict(n(f['fuenteValidacionId'] for f in fs))),
+    ])
+
+
 # ---------------------------------------------------------------------- corrida
 
 def _registro(f, meta=None):
@@ -356,7 +493,7 @@ def ejecutar(filas, seleccion, salida, fotos_dir, lote, medir=True):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--seleccion', choices=['piloto', 'piloto30', 'confirmadas'], required=True)
+    ap.add_argument('--seleccion', choices=['piloto', 'piloto30', 'validacion100', 'confirmadas'], required=True)
     ap.add_argument('--n', type=int, default=200, help='tamano del piloto (solo orientativo: la muestra son 200)')
     ap.add_argument('--semilla', type=int, default=20261006)
     ap.add_argument('--nombre', default=None, help='subcarpeta de salida (default: el nombre de la seleccion)')
@@ -373,6 +510,11 @@ def main():
     lista = lambda t: [x.strip() for x in t.split(',') if x.strip()]
     if args.seleccion == 'piloto':
         sel = muestra_piloto(filas, args.semilla)
+    elif args.seleccion == 'validacion100':
+        excluidos = sha1_ya_migrados(base)
+        sel = muestra_validacion100(filas, args.semilla if args.semilla != 20261006 else 20261008, excluidos)
+        print('excluidos por estar ya migrados (o en curso): %d contenidos' % len(excluidos))
+        print(json.dumps(resumen_lote(sel, filas), ensure_ascii=False))
     elif args.seleccion == 'piloto30':
         sel = muestra_piloto30(filas, args.semilla if args.semilla != 20261006 else 20261007, lista(args.incluir_wells), lista(args.excluir_wells))
         print(json.dumps(cobertura(sel, filas), ensure_ascii=False))
@@ -382,7 +524,7 @@ def main():
         sel = collections.OrderedDict((f['sha1'], {'categoria': 'LOTE', 'estrato': None}) for f in filas if f['estado'] == C.ESTADO_CONFIRMADO)
     nombre = args.nombre or args.seleccion
     import datetime as dt
-    lote = args.lote or ('PILOTO-' if args.seleccion.startswith('piloto') else 'LOTE-') + dt.date.today().strftime('%Y-%m')
+    lote = args.lote or ('PILOTO-' if args.seleccion.startswith('piloto') else ('VALIDACION-' if args.seleccion == 'validacion100' else 'LOTE-')) + dt.date.today().strftime('%Y-%m')
     print('seleccion %s: %d contenidos unicos' % (args.seleccion, len(sel)))
     ejecutar(filas, sel, base / nombre, args.fotos, lote, medir=not args.sin_medir)
 

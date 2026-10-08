@@ -97,6 +97,28 @@ al corpus ya generado sin releer las fotos: `python scripts/fotos/clasificar.py 
 `resumen_inventario.json`, con una fila por archivo: categoría de asociación (`MATCH_EXACTO`, `MATCH_PROBABLE`, `AMBIGUO`, `SIN_MATCH`),
 método y confianza de la fecha, SHA-1, copias y estado de migrabilidad. No toca ninguna foto.
 
+### Lote intermedio de validación (`validacion100`)
+
+Antes de migrar todo, un lote de 100 contenidos únicos `CONFIRMADO`, sin los ya migrados por cualquier lote (los que tienen
+`estado_subida.jsonl` con subidas confirmadas):
+
+```bash
+python scripts/fotos/normalizar.py --seleccion validacion100 --nombre validacion100 --sin-medir
+python scripts/fotos/importar.py --lote validacion100 --dry-run --lote-nuevo --existentes scripts/out/fotos/FotosPozos.csv
+```
+
+Reparto determinista: ~45 % Monitoreo (mitad CERCA, mitad PANORAMICA) y ~55 % Relevamiento; años en partes iguales dentro de cada fuente;
+~12 % con GPS (la mitad por fuente); tamaños de original repartidos por cuartiles; pozos y departamentos lo más variados posible
+(un pozo repite solo si no hay otra opción). Nunca toma `POR_REVISAR` ni `EXCLUIDA_IMPORTACION`.
+
+### Bloqueos y veredicto del dry-run
+
+El plan queda **BLOQUEADO** (y `subir` se niega) si hay: un `fotoId` o un contenido ya presente en la hoja (`--existentes`); un `fotoId` o un
+contenido ya subido por **otro lote** (aunque el CSV esté desactualizado); o, con `--lote-nuevo`, cualquier progreso local previo
+(`progreso local inesperado`). Es **NO CONCLUYENTE** si no se pasó `--existentes`, o si el CSV de la hoja no contiene fotos que otros lotes
+ya subieron (CSV viejo, o ese lote todavía no se importó a la hoja). Solo es **APTO PARA SUBIR** con la hoja verificada y sin conflictos.
+El informe también muestra con/sin GPS y el rango de tamaños (originales y procesadas).
+
 ### Estados y reanudación
 
 Cada foto queda en `scripts/out/fotos/<lote>/estado_subida.jsonl` (append-only):

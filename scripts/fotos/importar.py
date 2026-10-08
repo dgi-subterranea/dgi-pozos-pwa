@@ -174,7 +174,44 @@ def cargar_existentes(ruta):
     return {'filas': n, 'fotoIds': ids, 'contenido': contenido}
 
 
-def planificar(carpeta_lote, existentes=None):
+def otros_lotes_confirmados(carpeta):
+    """Fotos ya SUBIDAS (SUBIDA / YA_EXISTE) por OTROS lotes de la misma carpeta de salida: {'ids': fotoId -> lote,
+    'contenido': (pozo, sha1) -> lote}. Un lote nuevo nunca puede repetir lo ya migrado por otro."""
+    base = Path(carpeta).parent
+    ids, contenido = {}, {}
+    if not base.is_dir():
+        return {'ids': ids, 'contenido': contenido}
+    for d in sorted(base.iterdir()):
+        if d.resolve() == Path(carpeta).resolve() or not d.is_dir() or not (d / 'estado_subida.jsonl').is_file() or not (d / 'filas_FotosPozos.json').is_file():
+            continue
+        ok = {fid for fid, r in leer_estado(d).items() if r.get('estado') in ESTADOS_OK}
+        if not ok:
+            continue
+        for f in json.loads((d / 'filas_FotosPozos.json').read_text(encoding='utf-8')):
+            if f['fotoId'] in ok:
+                ids[f['fotoId'].lower()] = d.name
+                contenido[(f['wellId'] or f['monitoringId'], str(f['sha1Original']).lower())] = d.name
+    return {'ids': ids, 'contenido': contenido}
+
+
+def _rango(valores):
+    v = sorted(valores)
+    return {'min': v[0], 'mediana': v[len(v) // 2], 'max': v[-1]} if v else {}
+
+
+def resultado_plan(plan):
+    """Veredicto: BLOQUEADO (hay errores), NO CONCLUYENTE (falta o esta desactualizada la verificacion contra la hoja)
+    o APTO PARA SUBIR."""
+    if plan['errores']:
+        return 'BLOQUEADO'
+    if not plan['verificacionHoja']['verificada']:
+        return 'NO CONCLUYENTE (falta --existentes con el CSV exportado de la hoja FotosPozos)'
+    if plan.get('hojaSinFotosDeOtrosLotes'):
+        return 'NO CONCLUYENTE (el CSV de la hoja no contiene %d foto(s) ya subidas de otros lotes: exportarlo de nuevo, o falta importar ese lote a la hoja)' % plan['hojaSinFotosDeOtrosLotes']
+    return 'APTO PARA SUBIR'
+
+
+def planificar(carpeta_lote, existentes=None, lote_nuevo=False):
     """Arma el plan del lote. Devuelve dict serializable con 'errores' (lista; vacia = apto para subir)."""
     carpeta = Path(carpeta_lote)
     errores, avisos = [], []
@@ -242,12 +279,29 @@ def planificar(carpeta_lote, existentes=None):
     previas = sum(1 for r in progreso.values() if r.get('estado') in ESTADOS_OK)
     if previas:
         avisos.append('hay progreso local previo: %d foto(s) ya figuran como subidas en estado_subida.jsonl (no se reenviaran)' % previas)
+    if lote_nuevo and (previas or progreso):
+        errores.append('progreso local inesperado: se declaro un lote nuevo pero ya existe estado_subida.jsonl con %d registro(s)' % len(progreso))
+    # cruce con lo que YA subieron otros lotes (mismo fotoId o mismo contenido en el mismo pozo)
+    otros = otros_lotes_confirmados(carpeta)
+    cruces = []
+    for f in filas:
+        lote_previo = otros['ids'].get(f['fotoId'].lower())
+        if lote_previo:
+            cruces.append('%s: ya subida por el lote %s (mismo fotoId)' % (f['fotoId'], lote_previo))
+            continue
+        lote_previo = otros['contenido'].get((f['wellId'] or f['monitoringId'], str(f['sha1Original']).lower()))
+        if lote_previo:
+            cruces.append('%s: el mismo contenido ya fue migrado por el lote %s' % (f['fotoId'], lote_previo))
+    errores.extend(cruces)
+    sin_en_hoja = 0
+    if existentes is not None:
+        sin_en_hoja = sum(1 for fid in otros['ids'] if fid not in existentes['fotoIds'])
     entidades = collections.defaultdict(list)
     for e in elementos:
         entidades[e['wellId']].append(e['fotoId'])
     cuenta = collections.Counter
     huella = hashlib.sha256(json.dumps([[e['fotoId'], e['destino'], e['peso'], e['sha256'], e['sha256Thumb']] for e in elementos], sort_keys=True).encode('utf-8')).hexdigest()
-    return {
+    plan = {
         'lote': carpeta.name,
         'loteImportacion': filas[0]['loteImportacion'] if filas else '',
         'cantidad': len(filas),
@@ -266,7 +320,14 @@ def planificar(carpeta_lote, existentes=None):
         'huella': huella,
         'verificacionHoja': ({'verificada': True, 'filasLeidas': existentes['filas'], 'coincidencias': len(coincidencias)} if existentes is not None else {'verificada': False}),
         'progresoLocalPrevio': previas,
+        'cruceConOtrosLotes': {'lotesConSubidas': sorted(set(otros['ids'].values())), 'coincidencias': len(cruces)},
+        'hojaSinFotosDeOtrosLotes': sin_en_hoja,
+        'rangoPesoFinalBytes': _rango([e['peso'] for e in elementos]),
+        'rangoPesoOriginalBytes': _rango([por_id[e['fotoId']]['pesoOriginal'] for e in elementos if e['fotoId'] in por_id and 'pesoOriginal' in por_id[e['fotoId']]]),
+        'conflictos': len(errores),
     }
+    plan['resultado'] = resultado_plan(plan)
+    return plan
 
 
 def _mb(b):
@@ -281,6 +342,12 @@ def informe(plan, detalle=True):
     L.append('Fotos a importar (solo CONFIRMADO): %d   | pozos afectados: %d   | con GPS historico: %d' % (plan['cantidad'], plan['pozos'], plan['conGps']))
     L.append('Omitidas del manifiesto por estado (nunca se importan): %s' % (plan['omitidasPorEstado'] or 'ninguna'))
     L.append('Peso: imagenes %s + miniaturas %s = %s' % (_mb(plan['pesoImagenesBytes']), _mb(plan['pesoMiniaturasBytes']), _mb(plan['pesoImagenesBytes'] + plan['pesoMiniaturasBytes'])))
+    L.append('GPS historico: %d con GPS / %d sin GPS' % (plan['conGps'], plan['cantidad'] - plan['conGps']))
+    if plan.get('rangoPesoFinalBytes'):
+        r1, r0 = plan['rangoPesoFinalBytes'], plan.get('rangoPesoOriginalBytes') or {}
+        L.append('Tamano de cada foto procesada: min %s | mediana %s | max %s' % (_mb(r1['min']), _mb(r1['mediana']), _mb(r1['max'])))
+        if r0:
+            L.append('Tamano de cada original: min %s | mediana %s | max %s' % (_mb(r0['min']), _mb(r0['mediana']), _mb(r0['max'])))
     L.append('Por fuente: %s' % plan['porFuente'])
     L.append('Por tipo: %s' % plan['porTipo'])
     L.append('Fecha: precision %s | anio %s' % (plan['porPrecisionFecha'], plan['porAnio']))
@@ -311,6 +378,10 @@ def informe(plan, detalle=True):
     else:
         L.append('Verificacion contra FotosPozos: NO realizada (pasar --existentes con el CSV exportado de la hoja para comprobar que ninguna ya existe)')
     L.append('Progreso local previo (estado_subida.jsonl): %d foto(s) ya subidas' % plan.get('progresoLocalPrevio', 0))
+    cr = plan.get('cruceConOtrosLotes') or {'lotesConSubidas': [], 'coincidencias': 0}
+    L.append('Cruce con otros lotes ya subidos %s: %d coincidencia(s)' % (cr['lotesConSubidas'] or '(ninguno)', cr['coincidencias']))
+    if plan.get('hojaSinFotosDeOtrosLotes'):
+        L.append('ATENCION: el CSV de la hoja NO contiene %d foto(s) ya subidas por otros lotes (CSV desactualizado, o ese lote todavia no se importo a la hoja)' % plan['hojaSinFotosDeOtrosLotes'])
     if plan['avisos']:
         L.append('AVISOS (%d):' % len(plan['avisos']))
         L.extend('  - ' + a for a in plan['avisos'])
@@ -320,6 +391,8 @@ def informe(plan, detalle=True):
     else:
         L.append('Verificaciones OK: solo CONFIRMADO, sin fotoId ni contenido repetido, JPEG sin metadatos, nombres solo por fotoId, esquema valido.')
     L.append('Huella del plan: %s' % plan['huella'])
+    L.append('Conflictos: %d' % plan.get('conflictos', len(plan['errores'])))
+    L.append('RESULTADO: %s' % plan.get('resultado', ''))
     return '\n'.join(L)
 
 
@@ -532,6 +605,7 @@ def main_dry_run(argv):
     ap.add_argument('--lote', required=True, help='subcarpeta de scripts/out/fotos/ con el lote normalizado (p. ej. piloto30)')
     ap.add_argument('--dry-run', action='store_true', help='OBLIGATORIO: genera el plan y no sube nada')
     ap.add_argument('--sin-detalle', action='store_true', help='no lista una por una las filas que se crearian')
+    ap.add_argument('--lote-nuevo', action='store_true', help='el lote no debe tener progreso previo: cualquier estado_subida.jsonl existente lo bloquea')
     ap.add_argument('--existentes', default=None, help='CSV exportado de la hoja FotosPozos: verifica que ninguna foto del lote ya exista (solo lectura)')
     ap.add_argument('--salida', default=str(C.OUT_FOTOS))
     args = ap.parse_args(argv)
@@ -546,7 +620,7 @@ def main_dry_run(argv):
         except (ErrorImportacionEntrada, OSError) as err:
             print('No se pudo leer el CSV de la hoja: %s' % err, file=sys.stderr)
             return 2
-    plan = planificar(carpeta, existentes)
+    plan = planificar(carpeta, existentes, lote_nuevo=args.lote_nuevo)
     texto = informe(plan, detalle=not args.sin_detalle)
     (carpeta / 'plan_importacion.json').write_text(json.dumps(plan, ensure_ascii=False, indent=1), encoding='utf-8')
     (carpeta / 'reporte_dryrun.txt').write_text(informe(plan, detalle=True), encoding='utf-8')
