@@ -1,5 +1,10 @@
 node_modules/
 .clasp.json
+# clasp (Apps Script): scriptId reales, credenciales OAuth y trabajo local del wrapper scripts/gas/. Nada de esto se versiona.
+.clasprc.json
+.gas.local.json
+.gas-remote/
+.gas-state/
 *.log
 .DS_Store
 __pycache__/

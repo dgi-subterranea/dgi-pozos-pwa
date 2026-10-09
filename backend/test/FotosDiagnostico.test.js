@@ -52,3 +52,18 @@ describe('diagnosticarFotosReemplazo (sin tocar Google)', () => {
     expect(logs()).toMatch(/FALLA .*FOTOS_STORAGE_SECRET/);
   });
 });
+
+describe('fotosDiagnostico_pista: errores HTTP de la plataforma', () => {
+  test('un error HTTP (con el detalle que ahora trae el mensaje) remite a ese detalle', () => {
+    const p = Diag.fotosDiagnostico_pista;
+    expect(p('storage HTTP 404 getFotoPozo/thumb 1210c text/html 230ms "Error 404"')).toBe('La plataforma de Google respondio con un error HTTP (ver el detalle del mensaje).');
+    expect(p('storage HTTP 500')).toMatch(/error HTTP.*detalle del mensaje/);
+    expect(p('storage HTTP 502 putFotoPozo 11c text/plain 90ms "Bad Gateway"')).toMatch(/HTTP/);
+  });
+
+  test('las demas pistas no cambian', () => {
+    const p = Diag.fotosDiagnostico_pista;
+    expect(p('RESPUESTA_SIN_FIRMA (el storage dijo UNAUTHORIZED)')).toMatch(/secreto/);
+    expect(p('algo raro')).toBe('');
+  });
+});

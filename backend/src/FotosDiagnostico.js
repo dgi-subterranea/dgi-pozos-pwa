@@ -47,7 +47,7 @@ function fotosDiagnostico_pista(mensaje) {
     return 'El storage rechazo el contenido de la foto de prueba (ver el codigo).';
   }
   if (/HTTP \d{3}/.test(m)) {
-    return 'La plataforma de Google respondio con un error HTTP (no es un error de la logica del storage: reintentar y revisar el estado de la implementacion).';
+    return 'La plataforma de Google respondio con un error HTTP (ver el detalle del mensaje).';
   }
   if (/sin firma|RESPUESTA_|NONCE|FIRMA/.test(m)) {
     return 'La respuesta del storage no es valida: revisar el secreto y que la URL sea la de la Web App del storage.';

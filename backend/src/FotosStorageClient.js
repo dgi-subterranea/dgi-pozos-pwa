@@ -82,6 +82,31 @@ function fotosStorageClient_verificarRespuesta(respuesta, secret, nonceEsperado,
   }
 }
 
+// Detalle SEGURO de una respuesta HTTP que no fue 200, para el log: la accion y la
+// variante (nunca ids ni el payload), el tamano del cuerpo, el tipo de contenido, cuanto
+// tardo y los primeros caracteres del cuerpo sin etiquetas HTML (una pagina de error de
+// Google dice si fue un 404 de la plataforma y por que). Nunca incluye URL ni secreto.
+function fotosStorageClient_detalleHttp(respuesta, accion, payloadObj, ms) {
+  var texto = '';
+  try {
+    texto = String(respuesta.getContentText() || '');
+  } catch (err) {
+    texto = '';
+  }
+  var tipo = '';
+  try {
+    var h = respuesta.getHeaders ? respuesta.getHeaders() : null;
+    tipo = h ? String(h['Content-Type'] || h['content-type'] || '') : '';
+  } catch (err2) {
+    tipo = '';
+  }
+  tipo = tipo.split(';')[0].trim();
+  var extracto = texto.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 70);
+  var variante = payloadObj && payloadObj.variante ? '/' + payloadObj.variante : '';
+  // corto a proposito: el log recorta los mensajes a 160 caracteres
+  return accion + variante + ' ' + texto.length + 'c ' + (tipo || 'sin-tipo') + ' ' + ms + 'ms' + (extracto ? ' "' + extracto + '"' : '');
+}
+
 // Llamada completa. Lanza Error (message = motivo tecnico, sin secreto ni
 // payload) si el storage no responde, responde mal o devuelve error; el
 // Service lo traduce a STORAGE_UNAVAILABLE.
@@ -91,6 +116,7 @@ function fotosStorageClient_llamar(accion, payloadObj) {
   var ahora = Math.floor(Date.now() / 1000);
   var solicitud = fotosStorageClient_armarSolicitud(accion, payloadObj, secret, ahora, nonce);
 
+  var inicio = Date.now();
   var http = UrlFetchApp.fetch(getFotosStorageUrl(), {
     method: 'post',
     contentType: 'text/plain;charset=utf-8',
@@ -99,7 +125,7 @@ function fotosStorageClient_llamar(accion, payloadObj) {
     followRedirects: true
   });
   if (http.getResponseCode() !== 200) {
-    throw new Error('storage HTTP ' + http.getResponseCode());
+    throw new Error('storage HTTP ' + http.getResponseCode() + ' ' + fotosStorageClient_detalleHttp(http, accion, payloadObj, Date.now() - inicio));
   }
   var cuerpo;
   try {
@@ -172,6 +198,7 @@ if (typeof module !== 'undefined' && module.exports) {
     fotosStorageClient_armarSolicitud,
     fotosStorageClient_verificarRespuesta,
     fotosStorageClient_llamar,
+    fotosStorageClient_detalleHttp,
     fotosStorageClient_subir,
     fotosStorageClient_obtener,
     fotosStorageClient_descartar

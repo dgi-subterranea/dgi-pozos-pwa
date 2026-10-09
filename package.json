@@ -2,9 +2,18 @@
   "name": "dgi-pozos-pwa",
   "private": true,
   "scripts": {
-    "test": "jest"
+    "test": "jest",
+    "gas:pull:main": "node scripts/gas/gas.js pull main",
+    "gas:pull:storage": "node scripts/gas/gas.js pull storage",
+    "gas:status:main": "node scripts/gas/gas.js status main",
+    "gas:status:storage": "node scripts/gas/gas.js status storage",
+    "gas:diff:main": "node scripts/gas/gas.js diff main",
+    "gas:diff:storage": "node scripts/gas/gas.js diff storage",
+    "gas:adopt:main": "node scripts/gas/gas.js adopt main",
+    "gas:adopt:storage": "node scripts/gas/gas.js adopt storage"
   },
   "devDependencies": {
+    "@google/clasp": "3.4.1",
     "jest": "^29.7.0"
   }
 }
