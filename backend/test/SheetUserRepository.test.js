@@ -9,16 +9,16 @@ const {
 } = require('../src/SheetUserRepository');
 
 describe('sheetUserRepository_indiceColumnas', () => {
-  test('encuentra las 11 columnas en el orden original', () => {
-    const header = ['email', 'nombre', 'estado', 'fecha_alta', 'perfil', 'datos', 'ubicacion', 'ne', 'reemplazo', 'fotos', 'fotos_carga'];
+  test('encuentra las 13 columnas en el orden original', () => {
+    const header = ['email', 'nombre', 'estado', 'fecha_alta', 'perfil', 'datos', 'ubicacion', 'ne', 'reemplazo', 'fotos', 'fotos_carga', 'ubicacion_corregir', 'ubicacion_validar'];
     const idx = sheetUserRepository_indiceColumnas(header);
-    expect(idx).toEqual({ email: 0, nombre: 1, estado: 2, fecha_alta: 3, perfil: 4, datos: 5, ubicacion: 6, ne: 7, reemplazo: 8, fotos: 9, fotos_carga: 10 });
+    expect(idx).toEqual({ email: 0, nombre: 1, estado: 2, fecha_alta: 3, perfil: 4, datos: 5, ubicacion: 6, ne: 7, reemplazo: 8, fotos: 9, fotos_carga: 10, ubicacion_corregir: 11, ubicacion_validar: 12 });
   });
 
   test('encuentra las columnas aunque esten reordenadas', () => {
-    const header = ['fotos_carga', 'fotos', 'reemplazo', 'ne', 'ubicacion', 'datos', 'perfil', 'fecha_alta', 'estado', 'nombre', 'email'];
+    const header = ['ubicacion_validar', 'ubicacion_corregir', 'fotos_carga', 'fotos', 'reemplazo', 'ne', 'ubicacion', 'datos', 'perfil', 'fecha_alta', 'estado', 'nombre', 'email'];
     const idx = sheetUserRepository_indiceColumnas(header);
-    expect(idx).toEqual({ fotos_carga: 0, fotos: 1, reemplazo: 2, ne: 3, ubicacion: 4, datos: 5, perfil: 6, fecha_alta: 7, estado: 8, nombre: 9, email: 10 });
+    expect(idx).toEqual({ ubicacion_validar: 0, ubicacion_corregir: 1, fotos_carga: 2, fotos: 3, reemplazo: 4, ne: 5, ubicacion: 6, datos: 7, perfil: 8, fecha_alta: 9, estado: 10, nombre: 11, email: 12 });
   });
 
   test('una hoja SIN las columnas fotos / fotos_carga (todavia no agregadas) las da como -1: fail-closed', () => {

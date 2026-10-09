@@ -123,6 +123,12 @@ function installAppsScriptFakes() {
   global.fotosPozosService_obtenerImagen = jest.fn();
   global.fotosPozosService_resumen = jest.fn();
   global.fotosPozosService_subir = jest.fn();
+  global.ubicacionCorreccionService_proponer = jest.fn();
+  global.ubicacionCorreccionService_getPorPozo = jest.fn();
+  global.ubicacionCorreccionService_getPendientes = jest.fn();
+  global.ubicacionCorreccionService_validar = jest.fn();
+  global.ubicacionCorreccionService_rechazar = jest.fn();
+  global.ubicacionCorreccionService_revertir = jest.fn();
   global.FOTOS_UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 }
 

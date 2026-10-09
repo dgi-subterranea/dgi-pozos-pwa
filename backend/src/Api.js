@@ -93,6 +93,28 @@ function doPost(e) {
           procesamiento: body.procesamiento,
           tamanoOriginalBytes: body.tamanoOriginalBytes
         });
+      } else if (body.action === 'proponerCorreccionUbicacion') {
+        // Lista BLANCA de campos: la identidad sale de la sesion; irrLat/irrLon/irrEstado/distanciaM/estado... que mande el
+        // cliente se ignoran (el snapshot de Irrigacion, la distancia y las banderas las calcula el backend).
+        response = handleProponerCorreccionUbicacion(body.sessionToken, {
+          wellId: body.wellId,
+          lat: body.lat,
+          lon: body.lon,
+          metodo: body.metodo,
+          precisionGpsM: body.precisionGpsM,
+          observacion: body.observacion,
+          clientRequestId: body.clientRequestId
+        });
+      } else if (body.action === 'getCorreccionesUbicacionPozo') {
+        response = handleGetCorreccionesUbicacionPozo(body.sessionToken, body.wellId);
+      } else if (body.action === 'getCorreccionesUbicacionPendientes') {
+        response = handleGetCorreccionesUbicacionPendientes(body.sessionToken);
+      } else if (body.action === 'validarCorreccionUbicacion') {
+        response = handleValidarCorreccionUbicacion(body.sessionToken, body.correccionId, body.motivo);
+      } else if (body.action === 'rechazarCorreccionUbicacion') {
+        response = handleRechazarCorreccionUbicacion(body.sessionToken, body.correccionId, body.motivo);
+      } else if (body.action === 'revertirCorreccionUbicacion') {
+        response = handleRevertirCorreccionUbicacion(body.sessionToken, body.correccionId, body.motivo);
       } else {
         Logger.log('doPost: accion desconocida: ' + api_limpiarMensajeLog(body.action));
         response = { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'accion desconocida: ' + body.action };
@@ -1000,9 +1022,168 @@ function handleSubirFotoPozo(sessionToken, datos) {
   return { status: 'ok', data: { foto: resultado.foto, duplicada: resultado.duplicada } };
 }
 
+// --- Correcciones de ubicacion de pozos (etapa backend base) ---
+// La ubicacion corregida en campo NUNCA toca el padron: vive en dos hojas append-only (ver UbicacionCorreccionRepository.js) y
+// su estado se deriva del log. Permisos (todos fail-closed, mas el usuario activo que ya exige validateSession):
+//   leer correcciones de un pozo ..... ubicacion
+//   proponer ......................... ubicacion + ubicacion_corregir
+//   cola de validacion / validar /
+//   rechazar / revertir .............. ubicacion + ubicacion_validar   (validar ademas exige que NO sea quien propuso)
+// Orden de chequeos, igual que el resto: sesion -> formato de wellId -> permisos -> contenido. email/nombre SIEMPRE de la
+// sesion + hoja Usuarios, nunca del cliente. Las respuestas no incluyen emails (solo nombres y el booleano "propia").
+// Auditoria en Historial: propuesta/validacion/rechazo/reversion (OK), permisos denegados, transiciones invalidas y demas
+// errores; los reenvios idempotentes (duplicada) y las lecturas no, salvo el autocurado de una escritura parcial (AUTOCURADA).
+// Sin Telegram.
+
+function validarPermisosTodos(session, accion, wellId, modulos) {
+  for (var i = 0; i < modulos.length; i++) {
+    var permiso = validarPermiso(session, accion, wellId, modulos[i]);
+    if (!permiso.ok) {
+      return permiso;
+    }
+  }
+  return { ok: true };
+}
+
+function respuestaErrorCorreccion(resultado) {
+  var r = { status: 'error', code: resultado.code, message: resultado.message };
+  if (resultado.distanciaM !== undefined && resultado.distanciaM !== null) {
+    r.distanciaM = resultado.distanciaM;
+  }
+  return r;
+}
+
+function handleProponerCorreccionUbicacion(sessionToken, datos) {
+  var d = datos || {};
+  var validation = validateSessionAndWellId(sessionToken, d.wellId, 'proponerCorreccionUbicacion');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var permisos = validarPermisosTodos(session, 'proponerCorreccionUbicacion', d.wellId, ['ubicacion', 'ubicacion_corregir']);
+  if (!permisos.ok) {
+    return permisos.response;
+  }
+
+  var access = getUserAccess(session.email);
+  var resultado;
+  try {
+    resultado = ubicacionCorreccionService_proponer(session.email, access.nombre, d.wellId, {
+      lat: d.lat,
+      lon: d.lon,
+      metodo: d.metodo,
+      precisionGpsM: d.precisionGpsM,
+      observacion: d.observacion,
+      clientRequestId: d.clientRequestId
+    });
+  } catch (err) {
+    logHistoryEvent(session.email, 'proponerCorreccionUbicacion', d.wellId, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+  if (!resultado.ok) {
+    logHistoryEvent(session.email, 'proponerCorreccionUbicacion', d.wellId, resultado.code);
+    return respuestaErrorCorreccion(resultado);
+  }
+  if (!resultado.duplicada) {
+    logHistoryEvent(session.email, 'proponerCorreccionUbicacion', d.wellId, 'OK');
+  } else if (resultado.curada) {
+    // el reintento completo una correccion que habia quedado sin su evento PROPUESTA: queda constancia en Historial
+    logHistoryEvent(session.email, 'proponerCorreccionUbicacion', d.wellId, 'AUTOCURADA');
+  }
+  return { status: 'ok', data: { correccion: resultado.correccion, duplicada: resultado.duplicada, curada: resultado.curada === true } };
+}
+
+function handleGetCorreccionesUbicacionPozo(sessionToken, wellId) {
+  var validation = validateSessionAndWellId(sessionToken, wellId, 'getCorreccionesUbicacionPozo');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var permiso = validarPermiso(session, 'getCorreccionesUbicacionPozo', wellId, 'ubicacion');
+  if (!permiso.ok) {
+    return permiso.response;
+  }
+
+  try {
+    return { status: 'ok', data: ubicacionCorreccionService_getPorPozo(session.email, wellId) };
+  } catch (err) {
+    logHistoryEvent(session.email, 'getCorreccionesUbicacionPozo', wellId, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+}
+
+function handleGetCorreccionesUbicacionPendientes(sessionToken) {
+  var validation = validateSession(sessionToken, 'getCorreccionesUbicacionPendientes');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var permisos = validarPermisosTodos(session, 'getCorreccionesUbicacionPendientes', null, ['ubicacion', 'ubicacion_validar']);
+  if (!permisos.ok) {
+    return permisos.response;
+  }
+
+  try {
+    return { status: 'ok', data: ubicacionCorreccionService_getPendientes(session.email) };
+  } catch (err) {
+    logHistoryEvent(session.email, 'getCorreccionesUbicacionPendientes', null, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+}
+
+// validar / rechazar / revertir comparten sesion, permisos y auditoria; solo cambia la rutina del servicio.
+function resolverCorreccionUbicacion(accion, ejecutar, sessionToken, correccionId, motivo) {
+  var validation = validateSession(sessionToken, accion);
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var permisos = validarPermisosTodos(session, accion, null, ['ubicacion', 'ubicacion_validar']);
+  if (!permisos.ok) {
+    return permisos.response;
+  }
+
+  var access = getUserAccess(session.email);
+  var resultado;
+  try {
+    resultado = ejecutar(session.email, access.nombre, correccionId, motivo);
+  } catch (err) {
+    logHistoryEvent(session.email, accion, null, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+  if (!resultado.ok) {
+    logHistoryEvent(session.email, accion, resultado.wellId || null, resultado.code);
+    return respuestaErrorCorreccion(resultado);
+  }
+  logHistoryEvent(session.email, accion, resultado.correccion.wellId, 'OK');
+  return { status: 'ok', data: { correccion: resultado.correccion, supersedidas: resultado.supersedidas || [] } };
+}
+
+function handleValidarCorreccionUbicacion(sessionToken, correccionId, motivo) {
+  return resolverCorreccionUbicacion('validarCorreccionUbicacion', function (e, n, id, m) { return ubicacionCorreccionService_validar(e, n, id, m); }, sessionToken, correccionId, motivo);
+}
+
+function handleRechazarCorreccionUbicacion(sessionToken, correccionId, motivo) {
+  return resolverCorreccionUbicacion('rechazarCorreccionUbicacion', function (e, n, id, m) { return ubicacionCorreccionService_rechazar(e, n, id, m); }, sessionToken, correccionId, motivo);
+}
+
+function handleRevertirCorreccionUbicacion(sessionToken, correccionId, motivo) {
+  return resolverCorreccionUbicacion('revertirCorreccionUbicacion', function (e, n, id, m) { return ubicacionCorreccionService_revertir(e, n, id, m); }, sessionToken, correccionId, motivo);
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     doPost,
+    handleProponerCorreccionUbicacion,
+    handleGetCorreccionesUbicacionPozo,
+    handleGetCorreccionesUbicacionPendientes,
+    handleValidarCorreccionUbicacion,
+    handleRechazarCorreccionUbicacion,
+    handleRevertirCorreccionUbicacion,
     handleGetFotosPozo,
     handleGetFotoPozo,
     handleGetResumenFotosPozos,
