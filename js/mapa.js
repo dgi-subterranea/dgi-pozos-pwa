@@ -362,7 +362,7 @@
         return;
       }
       yaConsultado = true;
-      popupContent.summaryEl.textContent = 'Cargando datos...';
+      popupContent.summaryEl.innerHTML = cargando_html('Cargando datos…', { tam: 'sm', fila: true });
 
       apiGetWellSummary(contexto.sessionToken, punto.wellId).then(function (result) {
         popupContent.summaryEl.innerHTML = '';

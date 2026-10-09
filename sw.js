@@ -23,6 +23,7 @@ var SHELL_FILES = [
   './js/api.js',
   './js/wellIdValidator.js',
   './js/errorMessages.js',
+  './js/cargando.js',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png'

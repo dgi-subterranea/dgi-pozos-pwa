@@ -24,7 +24,7 @@
   </svg>
 
   <div id="screen-loading" class="screen">
-    <p>Cargando...</p>
+    <div class="cargando cargando-lg" data-cargando>Cargando…</div>
   </div>
 
   <div id="screen-login" class="screen" hidden>
@@ -37,8 +37,7 @@
 
     <div class="gsi-slot">
       <div id="google-signin-loading" class="gsi-loading">
-        <span class="gsi-spinner" aria-hidden="true"></span>
-        <span>Cargando acceso con Google…</span>
+        <div class="cargando cargando-sm cargando-fila" data-cargando>Cargando acceso con Google…</div>
       </div>
       <div id="google-signin-button" hidden></div>
       <div id="google-signin-error" class="gsi-error" hidden>
@@ -490,8 +489,7 @@
     <div id="mapa-contador" class="mapa-contador" hidden></div>
     <div class="mapa-viewport">
       <div id="mapa-loading" class="mapa-loading">
-        <span class="spinner" aria-hidden="true"></span>
-        <span>Cargando mapa...</span>
+        <div class="cargando" data-cargando>Cargando mapa...</div>
       </div>
       <div id="mapa-error" class="mapa-error" hidden>
         <p id="mapa-error-mensaje">No se pudo cargar el mapa.</p>
@@ -647,8 +645,7 @@
     <div id="mapa-ne-contador" class="mapa-contador" hidden></div>
     <div class="mapa-viewport">
       <div id="mapa-ne-loading" class="mapa-loading">
-        <span class="spinner" aria-hidden="true"></span>
-        <span>Cargando mapa...</span>
+        <div class="cargando" data-cargando>Cargando mapa...</div>
       </div>
       <div id="mapa-ne-error" class="mapa-error" hidden>
         <p id="mapa-ne-error-mensaje">No se pudo cargar el mapa.</p>
@@ -707,8 +704,7 @@
 
     <div class="cercamio-viewport">
       <div id="cercamio-pidiendo-permiso" class="cercamio-estado">
-        <span class="spinner" aria-hidden="true"></span>
-        <span>Solicitando tu ubicación...</span>
+        <div class="cargando" data-cargando>Solicitando tu ubicación...</div>
       </div>
 
       <div id="cercamio-permiso-denegado" class="cercamio-estado" hidden>
@@ -780,8 +776,7 @@
     </div>
 
     <div id="bre-cargando" class="cercamio-estado">
-      <span class="spinner" aria-hidden="true"></span>
-      <span>Cargando pozos...</span>
+      <div class="cargando" data-cargando>Cargando pozos...</div>
     </div>
     <div id="bre-error" class="cercamio-estado" hidden>
       <p id="bre-error-mensaje">No se pudo cargar la búsqueda.</p>
@@ -951,8 +946,7 @@
       </div>
     </div>
     <div id="seleccion-itf-loading" class="mapa-loading">
-      <span class="spinner" aria-hidden="true"></span>
-      <span>Verificando disponibilidad...</span>
+      <div class="cargando" data-cargando>Verificando disponibilidad...</div>
     </div>
     <div id="seleccion-itf-contenido" hidden>
       <div id="seleccion-itf-lotes" class="seleccion-itf-lotes"></div>
@@ -998,8 +992,7 @@
     </form>
 
     <div id="reemplazo-cargando" class="mapa-loading reemplazo-cargando" hidden>
-      <span class="spinner" aria-hidden="true"></span>
-      <span>Cargando evaluaciones...</span>
+      <div class="cargando" data-cargando>Cargando evaluaciones...</div>
     </div>
     <div id="reemplazo-error" class="reemplazo-bloque" hidden>
       <p id="reemplazo-error-texto" class="error-message"></p>
@@ -1087,7 +1080,7 @@
     <div class="reemplazo-visor-escenario">
       <button type="button" id="btn-reemplazo-visor-anterior" class="reemplazo-visor-nav" aria-label="Foto anterior">&#8249;</button>
       <div class="reemplazo-visor-imagen-caja">
-        <span id="reemplazo-visor-cargando" class="spinner" aria-hidden="true"></span>
+        <div id="reemplazo-visor-cargando" class="cargando cargando-sm cargando-solo-icono" data-cargando>Cargando foto…</div>
         <p id="reemplazo-visor-error" class="reemplazo-visor-error" hidden></p>
         <img id="reemplazo-visor-img" class="reemplazo-visor-img" alt="Foto de la evaluación" hidden>
       </div>
@@ -1115,8 +1108,7 @@
     </div>
 
     <div id="fotos-cargando" class="mapa-loading reemplazo-cargando" hidden>
-      <span class="spinner" aria-hidden="true"></span>
-      <span>Cargando fotos...</span>
+      <div class="cargando" data-cargando>Cargando fotos...</div>
     </div>
     <div id="fotos-error" class="reemplazo-bloque" hidden>
       <p id="fotos-error-texto" class="error-message"></p>
@@ -1227,7 +1219,7 @@
     <div class="reemplazo-visor-escenario">
       <button type="button" id="btn-fotos-visor-anterior" class="reemplazo-visor-nav" aria-label="Foto anterior">&#8249;</button>
       <div class="reemplazo-visor-imagen-caja">
-        <span id="fotos-visor-cargando" class="spinner" aria-hidden="true"></span>
+        <div id="fotos-visor-cargando" class="cargando cargando-sm cargando-solo-icono" data-cargando>Cargando foto…</div>
         <p id="fotos-visor-error" class="reemplazo-visor-error" hidden></p>
         <img id="fotos-visor-img" class="reemplazo-visor-img" alt="Foto del pozo" hidden>
       </div>
@@ -1297,6 +1289,7 @@
 
   <script src="js/wellIdValidator.js"></script>
   <script src="js/errorMessages.js"></script>
+  <script src="js/cargando.js"></script>
   <script src="js/api.js"></script>
   <script src="js/hubIdentificacion.js"></script>
   <script src="js/mapaLogic.js"></script>

@@ -161,17 +161,118 @@ h1 {
   color: var(--color-text-soft);
   font-size: 0.86rem;
 }
-.gsi-spinner {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  border: 2px solid var(--color-border);
-  border-top-color: var(--color-primary);
-  animation: gsi-spin 0.8s linear infinite;
-  flex: none;
+/* Componente comun de "cargando" (js/cargando.js): pozo con entubado, columna de agua que asciende y ondas
+   del nivel freatico. Todo se anima con transform/opacity (sin layout, sin repintar la pagina); los colores salen
+   de los tokens de la app. La demora de ~150 ms (opacidad 0 al principio) evita el destello cuando la respuesta
+   es rapida y se repite sola cada vez que el bloque pasa de [hidden] a visible. */
+.cargando {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--color-text-soft);
+  font-size: 0.9rem;
+  text-align: center;
+  animation: cargando-aparecer 0.2s ease-out 150ms both;
 }
-@keyframes gsi-spin {
-  to { transform: rotate(360deg); }
+.cargando-fila {
+  flex-direction: row;
+  gap: 10px;
+}
+.cargando-svg {
+  display: block;
+  flex: none;
+  width: 56px;
+  height: 56px;
+  overflow: hidden;
+}
+.cargando-sm .cargando-svg { width: 28px; height: 28px; }
+.cargando-lg .cargando-svg { width: 84px; height: 84px; }
+.cargando-solo-icono .cargando-texto {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.cargando-tubo {
+  fill: none;
+  stroke: var(--color-primary);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.cargando-boca { fill: var(--color-accent); }
+.cargando-suelo {
+  fill: none;
+  stroke: var(--color-text-faint);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+.cargando-freatico {
+  fill: var(--color-mapa-disponible);
+  opacity: 0.22;
+}
+.cargando-onda {
+  fill: none;
+  stroke: var(--color-mapa-disponible);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  animation: cargando-oleaje 2.4s linear infinite;
+}
+.cargando-expansiva {
+  fill: none;
+  stroke: var(--color-primary);
+  stroke-width: 1;
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: cargando-ondas 2.4s ease-out infinite;
+}
+.cargando-expansiva-2 { animation-delay: -1.2s; }
+.cargando-agua {
+  fill: var(--color-mapa-disponible);
+  animation: cargando-sube 1.6s ease-in-out infinite alternate;
+}
+.cargando-gota {
+  fill: var(--color-mapa-disponible);
+  opacity: 0;
+  animation: cargando-gota 3.2s ease-in infinite;
+}
+@keyframes cargando-aparecer {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes cargando-sube {
+  from { transform: translateY(40px); }
+  to { transform: translateY(0); }
+}
+@keyframes cargando-oleaje {
+  to { transform: translateX(16px); }
+}
+@keyframes cargando-ondas {
+  0% { transform: scale(0.4); opacity: 0.7; }
+  100% { transform: scale(3.2); opacity: 0; }
+}
+@keyframes cargando-gota {
+  0%, 45% { transform: translateY(0); opacity: 0; }
+  52% { transform: translateY(0); opacity: 1; }
+  80%, 100% { transform: translateY(14px); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Sin movimiento: el pozo queda dibujado con el agua a mitad de camino. */
+  .cargando *,
+  .cargando-agua,
+  .cargando-onda,
+  .cargando-expansiva,
+  .cargando-gota {
+    animation: none;
+  }
+  .cargando-agua { transform: translateY(16px); }
+  .cargando-expansiva { opacity: 0.45; transform: scale(2); }
+  .cargando-expansiva-2 { display: none; }
 }
 .gsi-error {
   width: 100%;
@@ -1763,15 +1864,6 @@ table.ne-table tr:last-child td {
   margin: 0;
   max-width: 260px;
 }
-.mapa-loading .spinner {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  border: 2.5px solid var(--color-border);
-  border-top-color: var(--color-primary);
-  animation: gsi-spin 0.8s linear infinite;
-  flex: none;
-}
 
 /* Popup de Leaflet: se pisan las reglas por defecto de la libreria (usa
    su propio font-family/padding) para que se vea consistente con el
@@ -2015,15 +2107,6 @@ table.ne-table tr:last-child td {
 .cercamio-estado p {
   margin: 0;
   max-width: 320px;
-}
-.cercamio-estado .spinner {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  border: 2.5px solid var(--color-border);
-  border-top-color: var(--color-primary);
-  animation: gsi-spin 0.8s linear infinite;
-  flex: none;
 }
 
 .cercamio-lista {

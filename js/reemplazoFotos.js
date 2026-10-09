@@ -131,7 +131,7 @@
         img.src = 'data:image/jpeg;base64,' + it.thumbBase64;
         marco.appendChild(img);
       } else if (it.estado === 'procesando') {
-        marco.appendChild(el('span', 'spinner'));
+        marco.appendChild(cargando_crear('Procesando foto…', { tam: 'sm', soloIcono: true }));
       } else {
         marco.appendChild(el('span', 'reemplazo-foto-preview-error-icono', '!'));
       }

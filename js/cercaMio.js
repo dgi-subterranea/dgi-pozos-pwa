@@ -480,7 +480,7 @@
 
       if (abriendo && !yaConsultado && mapaLogic_debeConsultarSummary(contexto.permisos)) {
         yaConsultado = true;
-        summaryEl.textContent = 'Cargando datos...';
+        summaryEl.innerHTML = cargando_html('Cargando datos…', { tam: 'sm', fila: true });
 
         apiGetWellSummary(contexto.sessionToken, resultado.wellId).then(function (result) {
           summaryEl.innerHTML = '';

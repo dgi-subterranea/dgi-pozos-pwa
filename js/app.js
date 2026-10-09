@@ -183,7 +183,7 @@
   }
 
   function renderHubSearching(wellId) {
-    hubArea.innerHTML = '<p class="status">Buscando ' + escapeHtml(wellId) + '...</p>';
+    hubArea.innerHTML = cargando_html('Buscando pozo ' + wellId + '…');
   }
 
   function renderHubNotFound(wellId) {
