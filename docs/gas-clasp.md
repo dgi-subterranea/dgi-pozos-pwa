@@ -78,7 +78,7 @@ Copiar `.gas.local.json.example` a `.gas.local.json` y completarlo. Nada de esto
 ```
 npm run gas:push:main     -- --confirmar-huella <sha256 completo> [--simular] [--permitir-sucio] [--permitir-manifest]
 npm run gas:version:main  -- --descripcion "<texto>"             [--permitir-sucio]
-npm run gas:deploy:main   -- --version <n> [--descripcion "<texto>"] [--confirmar-despliegue vN@xxxxxx] [--permitir-retroceso] [--permitir-distinta]
+npm run gas:deploy:main   -- --version <n> [--descripcion "<texto>"] [--confirmar-despliegue vN@xxxxxx] [--permitir-retroceso] [--permitir-distinta] [--permitir-head-distinto]
 npm run gas:deployments:main  [-- --mostrar-ids]                  (solo lectura)
 ```
 (lo mismo con `:storage`). Flujo normal: `gas:diff` → revisar → `gas:push -- --confirmar-huella <hex>` → `gas:version -- --descripcion "..."` → `gas:deploy -- --version N`
@@ -94,18 +94,35 @@ npm run gas:deployments:main  [-- --mostrar-ids]                  (solo lectura)
 6. Proyecto **adoptado** y **sin deriva**: el remoto no cambió desde `adopt` (ni archivos editados a mano en el editor web, ni nuevos, ni borrados, ni manifiesto).
 7. Archivos **solo-remotos**: solo se permiten (y se eliminan) los aprobados en `.gas-state/<proyecto>.json` → `descartados`; cualquier otro archivo remoto no reconocido bloquea.
 8. `appsscript.json` local igual al remoto; si difiere, solo con `--permitir-manifest`; si falta localmente, nunca.
+9a. **Destino de escritura exacto** (vale también para `version` y `deploy`): `clasp` solo se ejecuta con `cwd` = la carpeta del proyecto (`backend/` o `storage/`), nunca desde `.gas-remote/*`
+   (copias de HEAD que pueden ser viejas) ni desde otra carpeta o ruta relativa; y el `.clasp.json` de esa carpeta, **releído del disco justo antes de escribir**, debe tener el scriptId
+   esperado (el del inicio del comando), distinto del del otro proyecto y con `rootDir: "src"`. Si algo no cuadra: exit 2 y no se escribe nada.
 9. Nada no permitido dentro de `src` y **contraste con `clasp show-file-status`**: ningún archivo local queda sin subir y ningún archivo inesperado se sube (si la salida de clasp
    no se reconoce, se aborta: correr `gas:status` y revisarla).
 10. `clasp push --user <u>` (sin `--force`) → **pull de nuevo → verifica remoto == repo** (archivos, contenido y manifiesto). Si no coincide: exit 3 y el estado adoptado **no** se actualiza.
-11. Informa **agregados / modificados / eliminados** y actualiza `.gas-state` (nuevo estado base, `descartados` vacío, `ultimoPush`).
+11. Informa **agregados / modificados / eliminados** y actualiza `.gas-state` (nuevo estado base, `descartados` vacío, `ultimoPush` con `huellaPrevia` y `remotoPrevio`, la firma del contenido remoto anterior).
 
 **`gas:version`:** solo `create-version "<descripción>"` (obligatoria, ≤ 200 caracteres); exige proyecto adoptado, árbol limpio y **remoto == repo** (no versiona un HEAD roto o sin subir);
 verifica con `list-versions` y **informa el número creado**. Nunca despliega.
+**HEAD se verifica antes y después:** antes de crear la versión (remoto == repo) y de nuevo **después** (pull de HEAD). Si HEAD cambió o ya no coincide con el repo, la versión **igual existe**
+(clasp no se puede deshacer), pero el comando sale con **código 3**, lo dice ("VERSION CREADA: N … pero HEAD quedó INCONSISTENTE") y deja `ultimaVersion.headConsistente = false` en `.gas-state`.
 
 **`gas:deploy`:** solo `update-deployment <deploymentId> -V <n>` sobre el `deploymentId` de `.gas.local.json` (nunca crea un deployment). Antes: el ID debe figurar en los deployments **de este proyecto**
 (y distinto del del otro proyecto), **no puede ser `@HEAD`**, la versión debe existir, no puede ser la que ya tiene ni un retroceso (salvo `--permitir-retroceso`), y la versión debe ser
 **idéntica al repo local** (salvo `--permitir-distinta`). Muestra la versión actual → destino y exige `--confirmar-despliegue vN@<últimos 6 del deploymentId>`. Después verifica con `list-deployments`.
 Los IDs se imprimen siempre enmascarados.
+**HEAD se verifica antes y después:** antes de `update-deployment` se trae HEAD y debe coincidir con el repo; si no, **aborta con código 3 sin tocar ningún deployment** (`--permitir-head-distinto` lo permite
+a conciencia, por ejemplo para un rollback de emergencia). Después del update se verifica **el deployment** (`list-deployments`) y **HEAD** (de nuevo). Si HEAD difiere del repo o **cambió durante el deploy**:
+código 3 y un mensaje que distingue ambas cosas — "DEPLOY APLICADO Y VERIFICADO" (el deployment sí quedó actualizado) *pero* "HEAD quedó INCONSISTENTE". Un deployment versionado no depende de HEAD: lo que sirve `/exec` no cambia por esto.
+
+## Si HEAD "vuelve" a un estado viejo (revert)
+`gas:diff` y `gas:status` avisan **"El remoto volvió al estado anterior al último push"** cuando el remoto actual es el que había antes del último push registrado (por `huellaPrevia`, o por el contenido remoto previo
+`remotoPrevio`), junto con las fechas del último push / versión / deploy. `status` no llama a Google: usa el último pull guardado en `.gas-remote/` (corré `gas:diff` para confirmarlo).
+- **Qué pasó:** algo subió una copia vieja de **todo** el proyecto después del push. El API de clasp solo escribe archivos con `push`, y `create-version` / `update-deployment` no tocan HEAD; los sospechosos son una
+  **pestaña vieja del editor web de Apps Script** (guardar, ejecutar o desplegar desde ella sube todo su contenido) o un `clasp push` desde otra carpeta o equipo. En Drive → Detalles → Actividad figura cuándo y quién.
+- **Qué NO pasa:** las versiones numeradas (lo desplegado en `/exec`) no cambian. Solo HEAD (y `@HEAD`, el deployment de pruebas).
+- **Recuperación:** (1) cerrar todas las pestañas del editor de ese proyecto; (2) `gas:diff` → `gas:adopt -- --confirmar-huella <hex> --descartar <solo-remotos aprobados>`; (3) `gas:push -- --confirmar-huella <hex>`;
+  (4) `gas:version` solo si el repo cambió (si no, la última versión ya es el código correcto); (5) `gas:deploy`. Mientras HEAD no coincida con el repo, `push`, `version` y `deploy` se niegan.
 
 ## Seguridad
 - Ningún scriptId ni token se versiona; los mensajes de error enmascaran el scriptId.

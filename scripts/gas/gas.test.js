@@ -27,6 +27,8 @@ let fallaPush;
 let fallaUpdate;
 let updateNoCambia;
 let statusOverride;
+let hooksDespues;          // {comando: fn(scriptId, args)}: se ejecuta cuando el comando simulado ya termino (simula a alguien que toca HEAD en ese momento)
+let pullHeadFalla;         // true => los pull de HEAD (no los de versiones) fallan
 
 const DEP_MAIN_HEAD = 'AKfycbMainHeadDeployment000001';
 const DEP_MAIN = 'AKfycbMainProdDeployment000002';
@@ -65,12 +67,19 @@ function remotosIguales() {
 const scriptIdDe = (cwd) => JSON.parse(fs.readFileSync(path.join(cwd, '.clasp.json'), 'utf8')).scriptId;
 
 function ejecutarClasp(args, o) {
+  const r = ejecutarClaspBase(args, o);
+  if (hooksDespues[args[0]]) { hooksDespues[args[0]](scriptIdDe(o.cwd), args); }
+  return r;
+}
+
+function ejecutarClaspBase(args, o) {
   llamadasClasp.push({ args: args.slice(), cwd: o.cwd });
   const cmd = args[0];
   const ok = (stdout) => ({ codigo: 0, stdout: stdout || '', stderr: '' });
   if (cmd === 'pull') {
     const id = scriptIdDe(o.cwd);
     const iv = args.indexOf('--versionNumber');
+    if (pullHeadFalla && iv === -1) { return { codigo: 1, stdout: '', stderr: 'network error' }; }
     const archivos = iv === -1 ? remotos[id] : (versiones[id] || [])[parseInt(args[iv + 1], 10) - 1];
     if (!archivos) { return { codigo: 1, stdout: '', stderr: 'Could not find script ' + id + ' (login required)' }; }
     Object.keys(archivos).forEach((n) => {
@@ -176,6 +185,8 @@ beforeEach(() => {
   fallaUpdate = false;
   updateNoCambia = false;
   statusOverride = null;
+  hooksDespues = {};
+  pullHeadFalla = false;
   repoBase();
   remotosIguales();
   configurar({});
@@ -947,7 +958,7 @@ describe('version', () => {
     const r = version('--descripcion', 'Correcciones de ubicacion');
     expect(r.codigo).toBe(0);
     expect(r.texto).toMatch(/VERSION CREADA: 4 \("Correcciones de ubicacion"\)\. No se desplego nada/);
-    expect(subcomandos()).toEqual(['pull', 'list-versions', 'create-version', 'list-versions']);
+    expect(subcomandos()).toEqual(['pull', 'list-versions', 'create-version', 'list-versions', 'pull']);      // HEAD se trae ANTES y DESPUES de crear la version
     expect(llamadasClasp.find((c) => c.args[0] === 'create-version').args).toEqual(['create-version', 'Correcciones de ubicacion', '--user', 'main']);
     expect(versiones[ID_MAIN]).toHaveLength(4);
     expect(despliegues[ID_MAIN].find((d) => d.id === DEP_MAIN).version).toBe(3);        // el deployment NO se movio
@@ -1114,7 +1125,7 @@ describe('deploy', () => {
     expect(r.codigo).toBe(2);
     expect(r.texto).toMatch(/La version 4 NO coincide con el repo local: Config\.js/);
     expect(escrituras()).toHaveLength(0);
-    const ok = deploy('--version', '4', '--confirmar-despliegue', TOKEN, '--permitir-distinta');
+    const ok = deploy('--version', '4', '--confirmar-despliegue', TOKEN, '--permitir-distinta', '--permitir-head-distinto');       // el repo avanzo => HEAD tampoco coincide con el repo
     expect(ok.codigo).toBe(0);
     expect(ok.texto).toMatch(/ADVERTENCIA: --permitir-distinta/);
   });
@@ -1144,6 +1155,448 @@ describe('deploy', () => {
     expect(despliegues[ID_STORAGE].find((d) => d.id === DEP_ST).version).toBe(3);
     expect(despliegues[ID_MAIN].find((d) => d.id === DEP_MAIN).version).toBe(3);        // main intacto
     expect(r.texto).not.toContain(DEP_ST);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Hardening tras la anomalia de HEAD revertido: version / deploy verifican HEAD antes y despues; diff / status detectan el revert;
+// toda escritura exige cwd exacto + scriptId esperado.
+// ---------------------------------------------------------------------------------------------------------------------------------
+const copiaRemota = (id) => Object.assign({}, remotos[id]);
+const ESCRITURAS = ['push', 'create-version', 'update-deployment', 'create-deployment'];
+const escriturasClasp = () => llamadasClasp.filter((c) => ESCRITURAS.indexOf(c.args[0]) !== -1);
+const VIEJO_MAIN = () => ({ 'Api.js': 'function doPost(e) { return 1; }\n', 'Config.js': 'function getX() { return 2; }\n', 'Servicio.js': 'function s() { return 3; }\n', 'Codigo.js': 'function dup() {}\n', 'appsscript.json': MANIFIESTO });
+
+describe('version: HEAD antes, durante y despues', () => {
+  beforeEach(() => {
+    configurar({ main: { pushHabilitado: true, deploymentId: DEP_MAIN } });
+    adoptar('main');
+  });
+  const version = (...extra) => correr.apply(null, ['version', 'main', '--descripcion', 'Backend correccion ubicacion'].concat(extra));
+
+  test('version NO altera HEAD: el contenido remoto es identico antes y despues, y la unica escritura es create-version', () => {
+    const antes = copiaRemota(ID_MAIN);
+    const r = version();
+    expect(r.codigo).toBe(0);
+    expect(remotos[ID_MAIN]).toEqual(antes);
+    expect(escriturasClasp().map((c) => c.args[0])).toEqual(['create-version']);
+    expect(subcomandos().filter((c) => c === 'pull')).toHaveLength(2);                 // antes y despues
+    expect(r.texto).toMatch(/Verificando que HEAD siga igual al repo despues de crear la version/);
+    expect(r.texto).toMatch(/HEAD sigue idéntico al repo/);
+    expect(estadoDe('main').ultimaVersion).toMatchObject({ numero: 4, headConsistente: true });
+    expect(estadoDe('main').ultimaVersion.headProblemas).toBeUndefined();
+  });
+
+  test('REVERT durante create-version (HEAD vuelve a un estado viejo): version creada, exit 3, marcada con HEAD inconsistente', () => {
+    hooksDespues['create-version'] = (id) => { remotos[id] = VIEJO_MAIN(); };
+    const r = version();
+    expect(r.codigo).toBe(3);
+    expect(versiones[ID_MAIN]).toHaveLength(4);                                          // la version SI se creo
+    expect(r.texto).toMatch(/VERSION CREADA: 4 \("Backend correccion ubicacion"\) — pero HEAD quedo INCONSISTENTE/);
+    expect(r.texto).toMatch(/La version 4 EXISTE y no se desplego nada/);
+    expect(r.texto).toMatch(/HEAD remoto actual NO coincide con el repo/);
+    expect(r.texto).toMatch(/Codigo\.js/);
+    expect(r.texto).toMatch(/HEAD CAMBIO durante la operacion/);
+    expect(estadoDe('main').ultimaVersion).toMatchObject({ numero: 4, headConsistente: false });
+    expect(estadoDe('main').ultimaVersion.headProblemas.join(' ')).toMatch(/Codigo\.js/);
+    expect(subcomandos()).not.toContain('update-deployment');
+    expect(despliegues[ID_MAIN].find((d) => d.id === DEP_MAIN).version).toBe(3);
+  });
+
+  test('REVERT justo DESPUES de crear la version (entre create-version y la verificacion): mismo resultado', () => {
+    let n = 0;
+    hooksDespues['list-versions'] = (id) => { n += 1; if (n === 2) { remotos[id] = VIEJO_MAIN(); } };       // la 2da lectura es la posterior a create-version
+    const r = version();
+    expect(r.codigo).toBe(3);
+    expect(r.texto).toMatch(/VERSION CREADA: 4 .* pero HEAD quedo INCONSISTENTE/s);
+    expect(estadoDe('main').ultimaVersion.headConsistente).toBe(false);
+  });
+
+  test('HEAD cambia a otro contenido valido durante la version (no es un archivo de mas): tambien exit 3', () => {
+    hooksDespues['create-version'] = (id) => { remotos[id]['Config.js'] = 'function getX() { return 777; }\n'; };
+    const r = version();
+    expect(r.codigo).toBe(3);
+    expect(r.texto).toMatch(/el contenido remoto no coincide con el local: Config\.js/);
+    expect(r.texto).toMatch(/HEAD CAMBIO durante la operacion/);
+  });
+
+  test('no se puede traer HEAD despues de crear la version: exit 3, la version queda registrada como creada con HEAD sin verificar', () => {
+    hooksDespues['create-version'] = () => { pullHeadFalla = true; };
+    const r = version();
+    expect(r.codigo).toBe(3);
+    expect(r.texto).toMatch(/VERSION CREADA: 4/);
+    expect(r.texto).toMatch(/no se pudo traer HEAD para verificarlo/);
+    expect(estadoDe('main').ultimaVersion).toMatchObject({ numero: 4, headConsistente: false });
+  });
+
+  test('si ademas no se confirma el numero de la version, tambien se informa el estado de HEAD', () => {
+    const c = crearCli({
+      raiz: raiz, salida: (t) => salida.push(String(t)), ejecutarGit: ejecutarGit, generarDiff: () => '', ahora: () => new Date('2026-10-09T12:00:00Z'),
+      ejecutarClasp: (args, o) => {
+        const r = ejecutarClasp(args, o);
+        if (args[0] === 'create-version') { remotos[ID_MAIN] = VIEJO_MAIN(); return { codigo: 0, stdout: 'ok', stderr: '' }; }
+        return r;
+      }
+    });
+    salida = [];
+    versiones[ID_MAIN].pop();                                                             // simula que create-version no dejo una version nueva
+    const orig = versiones[ID_MAIN].push.bind(versiones[ID_MAIN]);
+    versiones[ID_MAIN].push = () => versiones[ID_MAIN].length;                            // ... y que create-version no agrega nada
+    expect(c.ejecutar(['version', 'main', '--descripcion', 'x'])).toBe(3);
+    versiones[ID_MAIN].push = orig;
+    expect(salida.join('\n')).toMatch(/no se pudo confirmar el numero de la version creada/);
+    expect(salida.join('\n')).toMatch(/Ademas, HEAD NO esta como se esperaba/);
+  });
+});
+
+describe('deploy: HEAD antes y despues', () => {
+  beforeEach(() => {
+    configurar({ main: { pushHabilitado: true, deploymentId: DEP_MAIN }, storage: { pushHabilitado: true, deploymentId: DEP_ST } });
+    adoptar('main');
+    versiones[ID_MAIN].push(copiaRemota(ID_MAIN));          // version 4 == repo == HEAD
+  });
+  const TOKEN = 'v4@' + DEP_MAIN.slice(-6);
+  const deploy = (...extra) => correr.apply(null, ['deploy', 'main', '--version', '4', '--confirmar-despliegue', TOKEN].concat(extra));
+  const versionDe = () => despliegues[ID_MAIN].find((d) => d.id === DEP_MAIN).version;
+
+  test('deploy normal: HEAD se verifica antes y despues, no cambia y solo se escribe update-deployment', () => {
+    const antes = copiaRemota(ID_MAIN);
+    const r = deploy();
+    expect(r.codigo).toBe(0);
+    expect(remotos[ID_MAIN]).toEqual(antes);
+    expect(escriturasClasp().map((c) => c.args[0])).toEqual(['update-deployment']);
+    expect(r.texto).toMatch(/Verificando HEAD antes del deploy/);
+    expect(r.texto).toMatch(/HEAD coincide con el repo\./);
+    expect(r.texto).toMatch(/DEPLOY VERIFICADO/);
+    expect(r.texto).toMatch(/HEAD sigue idéntico al repo y no cambió durante el deploy/);
+    expect(estadoDe('main').ultimoDeploy).toMatchObject({ version: 4, anterior: 3, headConsistente: true });
+  });
+
+  test('HEAD distinto del repo ANTES del deploy: aborta con exit 3 y no modifica ningun deployment', () => {
+    remotos[ID_MAIN] = VIEJO_MAIN();                       // HEAD viejo (con Codigo.js), la version 4 sigue siendo la correcta
+    const r = deploy();
+    expect(r.codigo).toBe(3);
+    expect(r.texto).toMatch(/HEAD remoto NO coincide con el repo \(antes del deploy\)/);
+    expect(r.texto).toMatch(/Codigo\.js/);
+    expect(r.texto).toMatch(/ABORTADO: no se modifico ningun deployment/);
+    expect(escriturasClasp()).toHaveLength(0);
+    expect(versionDe()).toBe(3);
+  });
+
+  test('HEAD distinto ANTES con --permitir-head-distinto: se despliega, se advierte, y si HEAD no cambia sale 0', () => {
+    remotos[ID_MAIN] = VIEJO_MAIN();
+    const r = deploy('--permitir-head-distinto');
+    expect(r.codigo).toBe(0);
+    expect(r.texto).toMatch(/ADVERTENCIA: --permitir-head-distinto/);
+    expect(r.texto).toMatch(/DEPLOY VERIFICADO/);
+    expect(r.texto).toMatch(/ADVERTENCIA: HEAD sigue distinto del repo/);
+    expect(versionDe()).toBe(4);
+    expect(estadoDe('main').ultimoDeploy.headConsistente).toBe(false);
+  });
+
+  test('no se puede traer HEAD antes del deploy: aborta (exit 3) sin tocar nada', () => {
+    pullHeadFalla = true;
+    const r = deploy();
+    expect(r.codigo).toBe(3);
+    expect(r.texto).toMatch(/no se pudo traer HEAD para verificarlo/);
+    expect(escriturasClasp()).toHaveLength(0);
+  });
+
+  test('REVERT DURANTE el deploy: el deployment SI quedo actualizado, HEAD quedo inconsistente => exit 3 y el mensaje distingue ambas cosas', () => {
+    hooksDespues['update-deployment'] = (id) => { remotos[id] = VIEJO_MAIN(); };
+    const r = deploy();
+    expect(r.codigo).toBe(3);
+    expect(versionDe()).toBe(4);                           // el deployment cambio de verdad
+    expect(r.texto).toMatch(/DEPLOY APLICADO Y VERIFICADO: el deployment …000002 paso de la version 3 a la 4/);
+    expect(r.texto).toMatch(/PERO HEAD quedo INCONSISTENTE \(esto es aparte del deployment, que SI quedo actualizado\)/);
+    expect(r.texto).toMatch(/Codigo\.js/);
+    expect(r.texto).toMatch(/HEAD CAMBIO durante la operacion/);
+    expect(r.texto).not.toMatch(/DEPLOY VERIFICADO/);
+    expect(r.texto).not.toContain(DEP_MAIN);
+    expect(estadoDe('main').ultimoDeploy).toMatchObject({ version: 4, anterior: 3, headConsistente: false });
+  });
+
+  test('HEAD ya distinto (permitido) que ademas CAMBIA durante el deploy: exit 3 aunque se haya pasado el flag', () => {
+    remotos[ID_MAIN] = VIEJO_MAIN();
+    hooksDespues['update-deployment'] = (id) => { remotos[id]['Servicio.js'] = 'function s() { return 33; }\n'; };
+    const r = deploy('--permitir-head-distinto');
+    expect(r.codigo).toBe(3);
+    expect(r.texto).toMatch(/PERO HEAD quedo INCONSISTENTE/);
+    expect(r.texto).toMatch(/HEAD CAMBIO durante la operacion/);
+    expect(versionDe()).toBe(4);
+  });
+
+  test('el deployment no queda en la version pedida y ademas HEAD cambio: exit 3, sin afirmar que se actualizo', () => {
+    updateNoCambia = true;
+    hooksDespues['update-deployment'] = (id) => { remotos[id] = VIEJO_MAIN(); };
+    const r = deploy();
+    expect(r.codigo).toBe(3);
+    expect(r.texto).toMatch(/no se pudo confirmar que el deployment quedo en la version 4/);
+    expect(r.texto).toMatch(/El deployment PUEDE haber cambiado/);
+    expect(r.texto).toMatch(/Ademas, HEAD NO esta como se esperaba/);
+    expect(r.texto).not.toMatch(/DEPLOY APLICADO/);
+  });
+
+  test('sin confirmar (solo plan): igual informa el estado de HEAD y no escribe', () => {
+    const r = correr('deploy', 'main', '--version', '4');
+    expect(r.codigo).toBe(2);
+    expect(r.texto).toMatch(/HEAD coincide con el repo/);
+    expect(escriturasClasp()).toHaveLength(0);
+  });
+});
+
+describe('remoto revertido: deteccion en diff / status / push', () => {
+  const push = (h, ...extra) => correr.apply(null, ['push', 'main', '--confirmar-huella', h].concat(extra));
+  let previo;
+  const AVISO = /El remoto volvió al estado anterior al último push/;
+
+  // push real simulado (el remoto previo tiene un duplicado viejo, aprobado para descarte); despues "alguien" vuelve a subir EXACTAMENTE el estado previo
+  function pushYRevert() {
+    configurar({ main: { pushHabilitado: true, deploymentId: DEP_MAIN } });
+    remotos[ID_MAIN]['Codigo.js'] = 'function dup() {}\n';
+    adoptar('main', 'Codigo.js');
+    escribir('backend/src/Config.js', 'function getX() { return 22; }\n');
+    escribir('backend/src/Nuevo.js', 'function n() {}\n');
+    previo = copiaRemota(ID_MAIN);
+    const r = push(huellaProyecto('main'));
+    expect(r.codigo).toBe(0);
+    expect(remotos[ID_MAIN]['Codigo.js']).toBeUndefined();
+    remotos[ID_MAIN] = Object.assign({}, previo);
+  }
+
+  test('diff: el remoto coincide con la huella previa al ultimo push => lo dice, con los timestamps de push (estado como el real: solo huellaPrevia)', () => {
+    pushYRevert();
+    const e = estadoDe('main');
+    delete e.ultimoPush.remotoPrevio;                                   // estados escritos antes de este hardening solo tienen huellaPrevia
+    fs.writeFileSync(path.join(raiz, '.gas-state/main.json'), JSON.stringify(e, null, 2));
+    const r = correr('diff', 'main');
+    expect(r.texto).toMatch(AVISO);
+    expect(r.texto).toMatch(/detectado por la huella previa/);
+    expect(r.texto).toMatch(/pestaña vieja del editor de Apps Script/);
+    expect(r.texto).toMatch(/Las versiones numeradas \(lo desplegado en \/exec\) NO se modifican/);
+    expect(r.texto).toMatch(/Operaciones registradas: ultimo push: 2026-10-09T12:00:00\.000Z/);
+    expect(r.texto).toMatch(/el remoto CAMBIO desde la adopcion/);
+  });
+
+  test('diff: con un estado nuevo (remotoPrevio registrado) el revert se detecta por el contenido', () => {
+    pushYRevert();
+    expect(estadoDe('main').ultimoPush.remotoPrevio).toMatch(/^[0-9a-f]{64}$/);
+    expect(correr('diff', 'main').texto).toMatch(/detectado por el contenido remoto previo/);
+  });
+
+  test('diff: incluye ultima version y ultimo deploy si existen', () => {
+    pushYRevert();
+    const e = estadoDe('main');
+    e.ultimaVersion = { numero: 36, en: '2026-10-12T04:09:06.054Z' };
+    e.ultimoDeploy = { version: 36, anterior: 35, en: '2026-10-12T04:27:32.162Z', deployment: '…000002' };
+    fs.writeFileSync(path.join(raiz, '.gas-state/main.json'), JSON.stringify(e, null, 2));
+    const r = correr('diff', 'main');
+    expect(r.texto).toMatch(/ultimo push: 2026-10-09T12:00:00\.000Z \| ultima version: 36 \(2026-10-12T04:09:06\.054Z\) \| ultimo deploy: v36 \(2026-10-12T04:27:32\.162Z\)/);
+  });
+
+  test('diff: detecta el revert por contenido aunque el repo haya cambiado despues (la huella ya no coincide)', () => {
+    pushYRevert();
+    escribir('backend/src/Config.js', 'function getX() { return 2222; }\n');
+    const r = correr('diff', 'main');
+    expect(r.texto).toMatch(AVISO);
+    expect(r.texto).toMatch(/detectado por el contenido remoto previo/);
+  });
+
+  test('sin falsos positivos: tras un push correcto el diff no avisa; tampoco tras un push que no cambio nada', () => {
+    configurar({ main: { pushHabilitado: true, deploymentId: DEP_MAIN } });
+    adoptar('main');
+    const sinCambios = push(huellaProyecto('main'));                    // repo == remoto: el push no cambia nada
+    expect(sinCambios.codigo).toBe(0);
+    expect(correr('diff', 'main').texto).not.toMatch(AVISO);
+    escribir('backend/src/Config.js', 'function getX() { return 22; }\n');
+    expect(push(huellaProyecto('main')).codigo).toBe(0);
+    const r = correr('diff', 'main');
+    expect(r.texto).not.toMatch(AVISO);
+    expect(r.texto).toMatch(/el remoto coincide con lo adoptado/);
+  });
+
+  test('push: con el remoto revertido NO sube (la huella coincide pero hay deriva), muestra el aviso y no hay clasp push', () => {
+    pushYRevert();
+    const h = huellaProyecto('main');
+    llamadasClasp = [];
+    const r = push(h);
+    expect(r.codigo).toBe(2);
+    expect(r.texto).toMatch(AVISO);
+    expect(r.texto).toMatch(/el remoto CAMBIO desde la adopcion/);
+    expect(escriturasClasp()).toHaveLength(0);
+  });
+
+  test('status: muestra los timestamps; y si el ultimo pull guardado es un remoto revertido, avisa (indicando que es segun el pull)', () => {
+    pushYRevert();
+    const sinPull = correr('status', 'main');
+    expect(sinPull.texto).toMatch(/Operaciones registradas: ultimo push: 2026-10-09T12:00:00\.000Z/);
+    expect(sinPull.texto).not.toMatch(AVISO);                         // el pull guardado es el posterior al push, aun sano
+    correr('pull', 'main');                                           // ahora el pull guardado es el revertido
+    const r = correr('status', 'main');
+    expect(r.texto).toMatch(AVISO);
+    expect(r.texto).toMatch(/según el último pull del 2026-10-09T12:00:00\.000Z; para confirmarlo: gas:diff/);
+  });
+
+  test('status sin estado adoptado ni operaciones: no inventa avisos', () => {
+    const r = correr('status', 'main');
+    expect(r.texto).not.toMatch(AVISO);
+    expect(r.texto).not.toMatch(/Operaciones registradas/);
+  });
+});
+
+describe('destino de escritura: cwd exacto y scriptId esperado', () => {
+  const push = (h, ...extra) => correr.apply(null, ['push', 'main', '--confirmar-huella', h].concat(extra));
+  beforeEach(() => {
+    configurar({ main: { pushHabilitado: true, deploymentId: DEP_MAIN }, storage: { pushHabilitado: true, deploymentId: DEP_ST } });
+    adoptar('main');
+    escribir('backend/src/Config.js', 'function getX() { return 22; }\n');
+  });
+  const directo = (nombre, args, cwd) => { salida = []; return cli()._escribirParaPruebas(nombre, args, cwd); };
+
+  test('un push normal corre desde backend/ exactamente (cwd de la carpeta del proyecto)', () => {
+    const r = push(huellaProyecto('main'));
+    expect(r.codigo).toBe(0);
+    expect(llamadasClasp.find((c) => c.args[0] === 'push').cwd).toBe(path.join(raiz, 'backend'));
+  });
+
+  test('intento de escribir desde .gas-remote/main (una copia, posiblemente un HEAD viejo): rechazado ANTES de llamar a clasp', () => {
+    correr('pull', 'main');
+    llamadasClasp = [];
+    expect(() => directo('main', ['push', '--user', 'main'], path.join(raiz, '.gas-remote', 'main'))).toThrow(/escritura rechazada \(push\).*\.gas-remote.*HEAD viejo/);
+    expect(llamadasClasp).toHaveLength(0);
+    expect(() => directo('main', ['create-version', 'x', '--user', 'main'], path.join(raiz, '.gas-remote', 'main-v36'))).toThrow(/escritura rechazada \(create-version\)/);
+    expect(() => directo('main', ['update-deployment', DEP_MAIN, '-V', '4', '--user', 'main'], path.join(raiz, '.gas-remote', 'main'))).toThrow(/escritura rechazada \(update-deployment\)/);
+    expect(llamadasClasp).toHaveLength(0);
+  });
+
+  test('otras carpetas (raiz del repo, storage, backend/src, relativa) tambien se rechazan; la carpeta correcta pasa', () => {
+    [raiz, path.join(raiz, 'storage'), path.join(raiz, 'backend', 'src'), os.tmpdir(), '.', 'backend'].forEach((c) => {
+      expect(() => directo('main', ['push', '--user', 'main'], c)).toThrow(/escritura rechazada/);
+    });
+    expect(llamadasClasp.filter((c) => c.args[0] === 'push')).toHaveLength(0);
+    expect(() => directo('main', ['push', '--user', 'main'], path.join(raiz, 'backend'))).not.toThrow();
+    expect(llamadasClasp.filter((c) => c.args[0] === 'push')).toHaveLength(1);
+  });
+
+  test('storage tampoco puede escribir desde backend/ (ni al reves): el scriptId del cwd no es el esperado', () => {
+    expect(() => directo('storage', ['push', '--user', 'storage'], path.join(raiz, 'backend'))).toThrow(/escritura rechazada/);
+    expect(() => directo('main', ['push', '--user', 'main'], path.join(raiz, 'storage'))).toThrow(/escritura rechazada/);
+    expect(llamadasClasp.filter((c) => c.args[0] === 'push')).toHaveLength(0);
+  });
+
+  test('scriptId INCORRECTO: el .clasp.json cambia durante la ejecucion (despues del pull) => push abortado (exit 2), sin clasp push', () => {
+    const h = huellaProyecto('main');
+    llamadasClasp = [];
+    hookPull = () => { escribir('backend/.clasp.json', JSON.stringify({ scriptId: '1OtroOtroOtroOtroOtroOtroOtro0003', rootDir: 'src' })); };
+    const r = push(h);
+    expect(r.codigo).toBe(2);
+    expect(r.texto).toMatch(/DESTINO DE ESCRITURA INVALIDO/);
+    expect(r.texto).toMatch(/NO es el esperado/);
+    expect(r.texto).toMatch(/No se escribio nada en Apps Script/);
+    expect(r.texto).not.toContain('1OtroOtroOtroOtroOtroOtroOtro0003');
+    expect(r.texto).not.toContain(ID_MAIN);
+    expect(escriturasClasp()).toHaveLength(0);
+  });
+
+  test('el .clasp.json desaparece o apunta al OTRO proyecto durante la ejecucion: tampoco se escribe', () => {
+    const h = huellaProyecto('main');
+    hookPull = () => { fs.rmSync(path.join(raiz, 'backend/.clasp.json')); };
+    const r = push(h);
+    expect(r.codigo).toBe(2);
+    expect(r.texto).toMatch(/DESTINO DE ESCRITURA INVALIDO.*no se pudo leer el \.clasp\.json/s);
+    escribir('backend/.clasp.json', JSON.stringify({ scriptId: ID_MAIN, rootDir: 'src' }));
+    hookPull = () => { escribir('backend/.clasp.json', JSON.stringify({ scriptId: ID_STORAGE, rootDir: 'src' })); };
+    llamadasClasp = [];
+    expect(push(h).codigo).toBe(2);
+    escribir('backend/.clasp.json', JSON.stringify({ scriptId: ID_MAIN, rootDir: 'src' }));
+    expect(escriturasClasp()).toHaveLength(0);
+  });
+
+  test('version y deploy aplican la misma guarda: scriptId cambiado durante la ejecucion => exit 2 y sin escrituras', () => {
+    // version
+    escribir('backend/src/Config.js', 'function getX() { return 2; }\n');       // repo == remoto
+    hookPull = () => { escribir('backend/.clasp.json', JSON.stringify({ scriptId: '1OtroOtroOtroOtroOtroOtroOtro0003', rootDir: 'src' })); };
+    let r = correr('version', 'main', '--descripcion', 'x');
+    expect(r.codigo).toBe(2);
+    expect(r.texto).toMatch(/DESTINO DE ESCRITURA INVALIDO/);
+    expect(escriturasClasp()).toHaveLength(0);
+    // deploy
+    escribir('backend/.clasp.json', JSON.stringify({ scriptId: ID_MAIN, rootDir: 'src' }));
+    versiones[ID_MAIN].push(copiaRemota(ID_MAIN));
+    llamadasClasp = [];
+    r = correr('deploy', 'main', '--version', '4', '--confirmar-despliegue', 'v4@' + DEP_MAIN.slice(-6));
+    expect(r.codigo).toBe(2);
+    expect(r.texto).toMatch(/DESTINO DE ESCRITURA INVALIDO/);
+    expect(r.texto).toMatch(/No se modifico ningun deployment/);
+    escribir('backend/.clasp.json', JSON.stringify({ scriptId: ID_MAIN, rootDir: 'src' }));
+    expect(escriturasClasp()).toHaveLength(0);
+    expect(despliegues[ID_MAIN].find((d) => d.id === DEP_MAIN).version).toBe(3);
+  });
+});
+
+describe('recuperacion completa tras un HEAD revertido', () => {
+  test('push -> revert -> deteccion -> push bloqueado -> adopt con descarte -> push -> version -> deploy -> sin avisos', () => {
+    configurar({ main: { pushHabilitado: true, deploymentId: DEP_MAIN } });
+    remotos[ID_MAIN]['Codigo.js'] = 'function dup() {}\n';
+    adoptar('main', 'Codigo.js');
+    escribir('backend/src/Config.js', 'function getX() { return 22; }\n');
+    escribir('backend/src/Nuevo.js', 'function n() {}\n');
+    const previo = copiaRemota(ID_MAIN);
+
+    // 1) push correcto
+    let r = correr('push', 'main', '--confirmar-huella', huellaProyecto('main'));
+    expect(r.codigo).toBe(0);
+    expect(remotos[ID_MAIN]['Nuevo.js']).toBeDefined();
+
+    // 2) alguien (pestaña vieja del editor) vuelve a subir el proyecto previo exacto (con su duplicado)
+    expect(remotos[ID_MAIN]['Codigo.js']).toBeUndefined();
+    remotos[ID_MAIN] = Object.assign({}, previo);
+
+    // 3) deteccion
+    r = correr('diff', 'main');
+    expect(r.texto).toMatch(/El remoto volvió al estado anterior al último push/);
+    const h = huellaDe(r.texto);
+
+    // 4) el push se niega (deriva + solo-remoto sin reconocer) y no escribe
+    llamadasClasp = [];
+    r = correr('push', 'main', '--confirmar-huella', h);
+    expect(r.codigo).toBe(2);
+    expect(escriturasClasp()).toHaveLength(0);
+
+    // 5) version y deploy tambien se niegan mientras HEAD no coincide con el repo
+    expect(correr('version', 'main', '--descripcion', 'x').codigo).toBe(2);
+    expect(escriturasClasp()).toHaveLength(0);
+
+    // 6) re-adopcion del estado actual reconociendo el descarte del duplicado (el aviso desaparece: es el nuevo estado base)
+    adoptar('main', 'Codigo.js');
+    expect(estadoDe('main').ultimoPush).toBeUndefined();
+    expect(correr('diff', 'main').texto).not.toMatch(/El remoto volvió al estado anterior/);
+
+    // 7) push real, verificado
+    r = correr('push', 'main', '--confirmar-huella', huellaProyecto('main'));
+    expect(r.codigo).toBe(0);
+    expect(r.texto).toMatch(/PUSH VERIFICADO/);
+    expect(remotos[ID_MAIN]['Codigo.js']).toBeUndefined();
+    expect(remotos[ID_MAIN]['Nuevo.js']).toBeDefined();
+    expect(remotos[ID_MAIN]['Config.js']).toBe('function getX() { return 22; }\n');
+
+    // 8) version con HEAD verificado antes y despues
+    r = correr('version', 'main', '--descripcion', 'Recuperacion tras revert');
+    expect(r.codigo).toBe(0);
+    expect(r.texto).toMatch(/VERSION CREADA: 4/);
+    expect(r.texto).toMatch(/HEAD sigue idéntico al repo/);
+
+    // 9) deploy con HEAD verificado antes y despues
+    r = correr('deploy', 'main', '--version', '4', '--confirmar-despliegue', 'v4@' + DEP_MAIN.slice(-6));
+    expect(r.codigo).toBe(0);
+    expect(r.texto).toMatch(/DEPLOY VERIFICADO/);
+    expect(despliegues[ID_MAIN].find((d) => d.id === DEP_MAIN).version).toBe(4);
+    expect(estadoDe('main')).toMatchObject({ ultimaVersion: { numero: 4, headConsistente: true }, ultimoDeploy: { version: 4, headConsistente: true } });
+
+    // 10) estado final limpio: sin avisos, remoto == repo
+    r = correr('diff', 'main');
+    expect(r.texto).not.toMatch(/El remoto volvió al estado anterior/);
+    expect(r.texto).toMatch(/Identicos: 4 \| Modificados: 0 \| Solo local \(se agregarian\): 0 \| Solo remoto \(un push los BORRARIA\): 0/);
   });
 });
 

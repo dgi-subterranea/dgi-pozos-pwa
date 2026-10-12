@@ -26,7 +26,7 @@ const USO = [
   '  deployments   lista deployments y versiones (IDs enmascarados)   [--mostrar-ids]',
   '  push     sube src al proyecto remoto   --confirmar-huella <sha256 completo> [--simular] [--permitir-sucio] [--permitir-manifest]',
   '  version  crea una version (no despliega)   --descripcion "<texto>" [--permitir-sucio]',
-  '  deploy   actualiza un deployment EXISTENTE   --version <n> [--descripcion "<texto>"] [--confirmar-despliegue vN@xxxxxx] [--permitir-retroceso] [--permitir-distinta]'
+  '  deploy   actualiza un deployment EXISTENTE   --version <n> [--descripcion "<texto>"] [--confirmar-despliegue vN@xxxxxx] [--permitir-retroceso] [--permitir-distinta] [--permitir-head-distinto]'
 ].join('\n');
 
 function claspPorDefecto(raiz) {
@@ -65,10 +65,33 @@ function crearCli(opts) {
   // Unico camino hacia un comando de clasp que ESCRIBE en Apps Script: push / create-version / update-deployment, solo con su forma exacta.
   const claspW = (args, o) => { L.verificarComandoClasp(args, { escritura: true }); return clasp0(args, o); };
   const rel = (p) => path.relative(raiz, p).split(path.sep).join('/');
+  const real = (x) => { try { return fs.realpathSync(x); } catch (e) { return x; } };
   const dirRemoto = (nombre) => path.join(raiz, '.gas-remote', nombre);
   const archivoEstado = (nombre) => path.join(raiz, '.gas-state', nombre + '.json');
 
   // ---------------------------------------------------------------- filesystem
+  // Destino de TODA escritura: cwd EXACTO de la carpeta del proyecto (nunca .gas-remote/* ni otra) y .clasp.json con el scriptId esperado,
+  // releido del disco en cada escritura (si cambio durante la ejecucion, se rechaza).
+  function erroresDestinoEscritura(p, cwd) {
+    const esperado = path.join(raiz, p.def.carpeta);
+    const destino = cwd === undefined ? esperado : cwd;
+    let claspJson = null;
+    if (typeof destino === 'string' && path.isAbsolute(destino)) {
+      try { claspJson = JSON.parse(fs.readFileSync(path.join(destino, '.clasp.json'), 'utf8')); } catch (e) { claspJson = null; }
+    }
+    return L.validarDestinoEscritura({
+      raiz: raiz, cwd: typeof destino === 'string' && path.isAbsolute(destino) ? real(destino) : destino, esperado: real(esperado), claspJson: claspJson,
+      scriptIdEsperado: p.scriptId, scriptIdOtro: idsDeAmbos()[otroProyecto(p.nombre)] || null
+    });
+  }
+
+  function claspEscritura(p, args, cwd) {
+    const destino = cwd === undefined ? path.join(raiz, p.def.carpeta) : cwd;
+    const errores = erroresDestinoEscritura(p, destino);
+    if (errores.length) { throw new L.ErrorGas('escritura rechazada (' + args[0] + '): ' + errores.join('; ')); }
+    return claspW(args, { cwd: destino });
+  }
+
   function listar(dir, conOcultos) {
     const res = [];
     (function rec(d, prefijo) {
@@ -230,6 +253,47 @@ function crearCli(opts) {
     if (ev.cruce.length) { fs.writeFileSync(path.join(p.remotoDir, '.CRUZADO'), ev.cruce.join('\n') + '\n', 'utf8'); }
   }
 
+  // Trae HEAD de nuevo (SOLO LECTURA) y lo compara con el repo. firmaReferencia: firma de HEAD antes de la operacion (detecta cambios DURANTE ella).
+  function inspeccionarHead(p, firmaReferencia) {
+    let r;
+    try { r = evaluarProyecto(p, pullProyecto(p)); } catch (e) {
+      if (!(e instanceof L.ErrorGas) || /INCONSISTENCIA GRAVE/.test(e.message)) { throw e; }
+      return { verificable: false, problemasRepo: [], cambio: false, falla: e.message.replace(/^ERROR: /, ''), firma: null, ev: null, remoto: null };
+    }
+    marcarCruce(p, r.ev);
+    const firma = L.firmaRemoto(r.remoto.codigo, r.remoto.manifiesto);
+    return {
+      verificable: true, problemasRepo: L.evaluarHead(r.ev, r.local.extras).problemas, cambio: !!firmaReferencia && firma !== firmaReferencia,
+      falla: null, firma: firma, ev: r.ev, remoto: r.remoto
+    };
+  }
+
+  function headOk(h) { return h.verificable && !h.cambio && !h.problemasRepo.length; }
+
+  function describirHead(h) {
+    const l = [];
+    if (!h.verificable) { l.push('  - no se pudo traer HEAD para verificarlo: ' + h.falla); }
+    h.problemasRepo.forEach((m) => l.push('  - ' + m));
+    if (h.cambio) { l.push('  - HEAD CAMBIO durante la operacion (su contenido ya no es el que tenia antes)'); }
+    return l;
+  }
+
+  // Aviso de "remoto revertido": el remoto actual es el estado anterior al ultimo push registrado en .gas-state.
+  function avisoRevertido(estado, ev, remoto, fuente) {
+    const d = L.detectarRevertido({ estado: estado, huella: ev.huella, firma: L.firmaRemoto(remoto.codigo, remoto.manifiesto) });
+    if (!d.revertido) { return []; }
+    return [
+      'ATENCION: El remoto volvió al estado anterior al último push' + (fuente ? ' (' + fuente + ')' : '') + ' [detectado por ' + (d.por === 'contenido' ? 'el contenido remoto previo' : 'la huella previa') + '].',
+      '  Algo subió una copia vieja del proyecto DESPUES del push: tipicamente una pestaña vieja del editor de Apps Script (guardar/ejecutar/desplegar desde ella sube todo su contenido), o un clasp push desde otra carpeta o equipo.',
+      '  Las versiones numeradas (lo desplegado en /exec) NO se modifican por esto; HEAD (y @HEAD) si. Cerrá las pestañas del editor, y recién despues repetí gas:diff, gas:adopt y gas:push.'
+    ];
+  }
+
+  function lineasOperaciones(estado) {
+    const r = L.resumenOperaciones(estado);
+    return r ? ['Operaciones registradas: ' + r] : [];
+  }
+
   function lista(titulo, nombres, max) {
     if (!nombres.length) { return; }
     out('  ' + titulo + ' (' + nombres.length + '): ' + nombres.slice(0, max || 60).join(', ') + (nombres.length > (max || 60) ? ', …' : ''));
@@ -295,12 +359,30 @@ function crearCli(opts) {
     if (comunes.length) { out('AVISO: hay nombres de archivo que existen en AMBOS proyectos: ' + comunes.join(', ')); }
     const est = leerEstado(p);
     out('Estado adoptado: ' + (est ? 'si (' + est.adoptadoEn + ', git ' + est.gitHead + (est.ultimoPush ? ', ultimo push ' + est.ultimoPush.en : '') + ')' : 'ninguno todavia'));
+    lineasOperaciones(est).forEach((l) => out(l));
+    const rv = revertidoSegunUltimoPull(p, est);
+    if (rv.length) { rv.forEach((l) => out(l)); }
     out(describirConfigLocal(nombre));
     out(codigoSalida === 0 ? 'OK (sin bloqueantes locales).' : 'Hay bloqueantes.');
     return codigoSalida;
   }
 
   function def0(p) { return p.def.carpeta; }
+
+  // status no llama a Google: usa el ultimo pull guardado en .gas-remote/<proyecto> (si existe) para avisar si el remoto quedo revertido.
+  function revertidoSegunUltimoPull(p, est) {
+    if (!est || !est.ultimoPush || !fs.existsSync(p.remotoDir)) { return []; }
+    try {
+      const remoto = leerRemoto(p.remotoDir);
+      if (!remoto.codigo.size) { return []; }
+      let cuando = '';
+      try { cuando = JSON.parse(fs.readFileSync(path.join(p.remotoDir, '.gas-meta.json'), 'utf8')).traidoEn || ''; } catch (e) { cuando = ''; }
+      const r = evaluarProyecto(p, remoto);
+      return avisoRevertido(est, r.ev, r.remoto, 'según el último pull' + (cuando ? ' del ' + cuando : '') + '; para confirmarlo: gas:diff');
+    } catch (e) {
+      return [];
+    }
+  }
 
   // Contrasta lo que clasp subiria (show-file-status, solo local) con nuestro inventario: valida la semantica de ignorado de clasp y detecta
   // archivos locales que NO se subirian o archivos inesperados que SI.
@@ -355,6 +437,9 @@ function crearCli(opts) {
     imprimirResumenManifiesto(ev.resumenLocal, 'local ');
     imprimirResumenManifiesto(ev.resumenRemoto, 'remoto');
     if (ev.deriva) { out('Estado adoptado: ' + (ev.deriva.hayDeriva ? 'el remoto CAMBIO desde la adopcion' : 'el remoto coincide con lo adoptado')); } else { out('Estado adoptado: ninguno todavia (gas:adopt)'); }
+    const estadoDiff = leerEstado(p);
+    lineasOperaciones(estadoDiff).forEach((l) => out(l));
+    avisoRevertido(estadoDiff, ev, r.remoto, '').forEach((l) => out(l));
     out('Git: ' + (r.git.head ? 'HEAD ' + r.git.head : 'sin HEAD') + ' | ' + rel(p.src) + ': ' + (r.git.sucio.length ? r.git.sucio.length + ' cambio(s) sin commitear' : 'limpio'));
     ev.cmp.modificados.slice(0, maxArchivos).forEach((n) => {
       const d = generarDiff(rel(r.remoto.rutas.get(n)), rel(path.join(p.src, n))).split(/\r?\n/);
@@ -508,6 +593,7 @@ function crearCli(opts) {
       return 2;
     }
     const estado = leerEstado(p);
+    avisoRevertido(estado, r.ev, r.remoto, '').forEach((l) => out(l));
     const pe = L.evaluarPush({
       ev: r.ev, estado: estado, extras: r.local.extras, cantidadLocal: r.local.codigo.size,
       permitirManifest: o['permitir-manifest'] === true, clasp: consultarClaspStatus(p, r.local)
@@ -529,8 +615,15 @@ function crearCli(opts) {
       return 0;
     }
 
+    const destinoPush = erroresDestinoEscritura(p);
+    if (destinoPush.length) {
+      destinoPush.forEach((m) => out('ABORTADO — DESTINO DE ESCRITURA INVALIDO: ' + m));
+      out('No se escribio nada en Apps Script.');
+      return 2;
+    }
+    const firmaPrevia = L.firmaRemoto(r.remoto.codigo, r.remoto.manifiesto);
     out('Subiendo con clasp push (reemplaza el contenido remoto por el del repo; sin --force)…');
-    const rp = claspW(['push', '--user', p.def.usuario], { cwd: path.join(raiz, p.def.carpeta) });
+    const rp = claspEscritura(p, ['push', '--user', p.def.usuario]);
     if (rp.codigo !== 0) {
       out('ERROR: clasp push fallo (codigo ' + rp.codigo + '): ' + L.enmascarar((rp.stderr || rp.stdout).trim(), [p.scriptId]).slice(0, 400) + pistaDeError(rp.stderr + rp.stdout));
       out('El estado remoto es INCIERTO: verificalo con npm run gas:diff:' + nombre + '. El estado adoptado no se actualizo.');
@@ -553,7 +646,7 @@ function crearCli(opts) {
       version: 1, proyecto: nombre, adoptadoEn: (estado && estado.adoptadoEn) || ahora().toISOString(), sincronizadoEn: ahora().toISOString(), huella: r2.ev.huella,
       gitHead: r2.git.head, descartados: [], remoto: { archivos: archivos, manifiestoSha: L.hashManifiesto(r2.remoto.manifiesto) },
       ultimaVersion: estado && estado.ultimaVersion ? estado.ultimaVersion : undefined,
-      ultimoPush: { en: ahora().toISOString(), huellaPrevia: huella.toLowerCase(), gitHead: r2.git.head, agregados: pe.agregados, modificados: pe.modificados, eliminados: pe.eliminados }
+      ultimoPush: { en: ahora().toISOString(), huellaPrevia: huella.toLowerCase(), remotoPrevio: firmaPrevia, gitHead: r2.git.head, agregados: pe.agregados, modificados: pe.modificados, eliminados: pe.eliminados }
     });
     out('PUSH VERIFICADO: el remoto quedo identico al repo (' + r2.remoto.codigo.size + ' archivo(s) + manifiesto).');
     out('  Agregados (' + pe.agregados.length + '): ' + (pe.agregados.join(', ') || '-'));
@@ -585,9 +678,16 @@ function crearCli(opts) {
       out('Corré gas:push primero (y revisá gas:diff:' + nombre + ').');
       return 2;
     }
+    const firmaAntes = L.firmaRemoto(r.remoto.codigo, r.remoto.manifiesto);     // HEAD verificado == repo justo antes de crear la version
+    const destinoVersion = erroresDestinoEscritura(p);
+    if (destinoVersion.length) {
+      destinoVersion.forEach((m) => out('ABORTADO — DESTINO DE ESCRITURA INVALIDO: ' + m));
+      out('No se escribio nada en Apps Script.');
+      return 2;
+    }
     const antes = L.maximaVersion(listarVersiones(p));
     out('Creando version (sin desplegar nada)…');
-    const rc = claspW(['create-version', desc, '--user', p.def.usuario], { cwd: path.join(raiz, p.def.carpeta) });
+    const rc = claspEscritura(p, ['create-version', desc, '--user', p.def.usuario]);
     if (rc.codigo !== 0) {
       out('ERROR: clasp create-version fallo (codigo ' + rc.codigo + '): ' + L.enmascarar((rc.stderr || rc.stdout).trim(), [p.scriptId]).slice(0, 300) + pistaDeError(rc.stderr + rc.stdout));
       return 3;
@@ -595,11 +695,27 @@ function crearCli(opts) {
     const despues = L.maximaVersion(listarVersiones(p));
     const informada = L.parsearVersionCreada(rc.stdout);
     const creada = informada !== null ? informada : despues;
-    if (!(despues > antes) || creada !== despues) {
+    const numeroOk = despues > antes && creada === despues;
+    out('Verificando que HEAD siga igual al repo despues de crear la version (SOLO LECTURA)…');
+    const h = inspeccionarHead(p, firmaAntes);
+    if (!numeroOk) {
       out('ATENCION: no se pudo confirmar el numero de la version creada (antes ' + antes + ', despues ' + despues + ', informada ' + informada + '). Revisá con npm run gas:deployments:' + nombre + '.');
+      if (!headOk(h)) { out('Ademas, HEAD NO esta como se esperaba:'); describirHead(h).forEach((l) => out(l)); }
       return 3;
     }
-    escribirEstado(p, Object.assign({}, estado, { ultimaVersion: { numero: creada, descripcion: desc, en: ahora().toISOString(), gitHead: r.git.head } }));
+    const registro = { numero: creada, descripcion: desc, en: ahora().toISOString(), gitHead: r.git.head, headConsistente: headOk(h) };
+    if (!headOk(h)) { registro.headProblemas = describirHead(h).map((l) => l.replace(/^ {2}- /, '')); }
+    escribirEstado(p, Object.assign({}, estado, { ultimaVersion: registro }));
+    if (!headOk(h)) {
+      out('VERSION CREADA: ' + creada + ' ("' + desc + '") — pero HEAD quedo INCONSISTENTE.');
+      out('  La version ' + creada + ' EXISTE y no se desplego nada. Su contenido no se pudo dar por bueno aqui: gas:deploy la compara contra el repo antes de desplegarla.');
+      out('HEAD remoto actual NO coincide con el repo:');
+      describirHead(h).forEach((l) => out(l));
+      if (h.ev && h.remoto) { avisoRevertido(estado, h.ev, h.remoto, '').forEach((l) => out(l)); }
+      out('No hagas push, version ni deploy hasta revisarlo: npm run gas:diff:' + nombre + '. Salida con codigo 3.');
+      return 3;
+    }
+    out('HEAD sigue idéntico al repo.');
     out('VERSION CREADA: ' + creada + ' ("' + desc + '"). No se desplego nada: los deployments siguen en la version que tenian.');
     out('Siguiente: npm run gas:deploy:' + nombre + ' -- --version ' + creada);
     return 0;
@@ -656,6 +772,21 @@ function crearCli(opts) {
     } else {
       out('La version ' + version + ' coincide exactamente con el repo local.');
     }
+    out('Verificando HEAD antes del deploy (SOLO LECTURA)…');
+    const hAntes = inspeccionarHead(p);
+    const permitirHead = o['permitir-head-distinto'] === true;
+    if (headOk(hAntes)) {
+      out('HEAD coincide con el repo.');
+    } else {
+      out('HEAD remoto NO coincide con el repo (antes del deploy):');
+      describirHead(hAntes).forEach((l) => out(l));
+      if (hAntes.ev && hAntes.remoto) { avisoRevertido(leerEstado(p), hAntes.ev, hAntes.remoto, '').forEach((l) => out(l)); }
+      if (!permitirHead) {
+        out('ABORTADO: no se modifico ningun deployment. HEAD inconsistente = alguien modifico el proyecto fuera de este flujo: revisá npm run gas:diff:' + nombre + '. (Un deployment versionado no depende de HEAD; si igual queres desplegar: --permitir-head-distinto.)');
+        return 3;
+      }
+      out('ADVERTENCIA: --permitir-head-distinto: se despliega con HEAD distinto del repo.');
+    }
     const token = L.confirmacionDeploy(version, deploymentId);
     if (o['confirmar-despliegue'] !== token) {
       out('Para confirmar este cambio en PRODUCCION, repetir el comando agregando:  --confirmar-despliegue ' + token);
@@ -663,20 +794,39 @@ function crearCli(opts) {
       return 2;
     }
     out('Actualizando el deployment (update-deployment; no se crea ninguno nuevo)…');
-    const rd = claspW(['update-deployment', deploymentId, '-V', String(version), '-d', descripcion, '--user', p.def.usuario], { cwd: path.join(raiz, p.def.carpeta) });
+    const destinoDeploy = erroresDestinoEscritura(p);
+    if (destinoDeploy.length) {
+      destinoDeploy.forEach((m) => out('ABORTADO — DESTINO DE ESCRITURA INVALIDO: ' + m));
+      out('No se modifico ningun deployment.');
+      return 2;
+    }
+    const rd = claspEscritura(p, ['update-deployment', deploymentId, '-V', String(version), '-d', descripcion, '--user', p.def.usuario]);
     if (rd.codigo !== 0) {
       out('ERROR: clasp update-deployment fallo (codigo ' + rd.codigo + '): ' + L.enmascarar((rd.stderr || rd.stdout).trim(), [p.scriptId, deploymentId]).slice(0, 300) + pistaDeError(rd.stderr + rd.stdout));
       out('Verificá el estado con npm run gas:deployments:' + nombre + '.');
       return 3;
     }
+    out('Verificando el deployment y HEAD despues del deploy (SOLO LECTURA)…');
+    const hDespues = inspeccionarHead(p, hAntes.firma);
     const despues = listarDeployments(p).find((d) => d.id === deploymentId);
     if (!despues || despues.head || despues.version !== version) {
-      out('ATENCION: no se pudo confirmar que el deployment quedo en la version ' + version + ' (ahora: ' + (despues ? (despues.head ? '@HEAD' : despues.version) : 'no figura') + ').');
+      out('ATENCION: no se pudo confirmar que el deployment quedo en la version ' + version + ' (ahora: ' + (despues ? (despues.head ? '@HEAD' : despues.version) : 'no figura') + '). El deployment PUEDE haber cambiado: verificá con npm run gas:deployments:' + nombre + '.');
+      if (!headOk(hDespues)) { out('Ademas, HEAD NO esta como se esperaba:'); describirHead(hDespues).forEach((l) => out(l)); }
       return 3;
     }
     const estado = leerEstado(p);
-    if (estado) { escribirEstado(p, Object.assign({}, estado, { ultimoDeploy: { version: version, anterior: ev.actual, en: ahora().toISOString(), deployment: L.ultimos(deploymentId) } })); }
+    const headMalo = !hDespues.verificable || hDespues.cambio || (hDespues.problemasRepo.length > 0 && !permitirHead);
+    if (estado) { escribirEstado(p, Object.assign({}, estado, { ultimoDeploy: { version: version, anterior: ev.actual, en: ahora().toISOString(), deployment: L.ultimos(deploymentId), headConsistente: !headMalo && !hDespues.problemasRepo.length } })); }
+    if (headMalo) {
+      out('DEPLOY APLICADO Y VERIFICADO: el deployment ' + L.ultimos(deploymentId) + ' paso de la version ' + ev.actual + ' a la ' + version + '. La URL /exec no cambia.');
+      out('PERO HEAD quedo INCONSISTENTE (esto es aparte del deployment, que SI quedo actualizado):');
+      describirHead(hDespues).forEach((l) => out(l));
+      if (hDespues.ev && hDespues.remoto) { avisoRevertido(estado, hDespues.ev, hDespues.remoto, '').forEach((l) => out(l)); }
+      out('No hagas push ni version hasta revisarlo: npm run gas:diff:' + nombre + '. Salida con codigo 3.');
+      return 3;
+    }
     out('DEPLOY VERIFICADO: el deployment ' + L.ultimos(deploymentId) + ' paso de la version ' + ev.actual + ' a la ' + version + '. La URL /exec no cambia.');
+    if (hDespues.problemasRepo.length) { out('ADVERTENCIA: HEAD sigue distinto del repo (igual que antes del deploy; --permitir-head-distinto).'); } else { out('HEAD sigue idéntico al repo y no cambió durante el deploy.'); }
     return 0;
   }
 
@@ -712,9 +862,9 @@ function crearCli(opts) {
   const OPCIONES = {
     pull: [], status: [], diff: ['lineas', 'max-archivos', 'sin-pull'], adopt: ['confirmar-huella', 'descartar'], deployments: ['mostrar-ids'],
     push: ['confirmar-huella', 'simular', 'permitir-sucio', 'permitir-manifest'], version: ['descripcion', 'permitir-sucio'],
-    deploy: ['version', 'descripcion', 'confirmar-despliegue', 'permitir-retroceso', 'permitir-distinta']
+    deploy: ['version', 'descripcion', 'confirmar-despliegue', 'permitir-retroceso', 'permitir-distinta', 'permitir-head-distinto']
   };
-  const OPCIONES_BOOLEANAS = ['sin-pull', 'mostrar-ids', 'simular', 'permitir-sucio', 'permitir-manifest', 'permitir-retroceso', 'permitir-distinta'];
+  const OPCIONES_BOOLEANAS = ['sin-pull', 'mostrar-ids', 'simular', 'permitir-sucio', 'permitir-manifest', 'permitir-retroceso', 'permitir-distinta', 'permitir-head-distinto'];
 
   function validarOpciones(a) {
     if (a.opciones.force !== undefined || a.opciones.f !== undefined) { throw new L.ErrorGas('no existe --force: este wrapper nunca fuerza una escritura en Apps Script'); }
@@ -749,7 +899,8 @@ function crearCli(opts) {
     }
   }
 
-  return { ejecutar: ejecutar };
+  // _escribirParaPruebas: solo para tests (ejercita la guarda de destino con un cwd arbitrario); nunca lo usa la CLI.
+  return { ejecutar: ejecutar, _escribirParaPruebas: (nombre, args, cwd) => claspEscritura(cargarProyecto(nombre, false), args, cwd) };
 }
 
 if (require.main === module) {

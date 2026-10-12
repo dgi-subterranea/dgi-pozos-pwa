@@ -579,3 +579,125 @@ describe('evaluarDeploy (guardas puras)', () => {
     expect(L.evaluarDeploy(base({ otroDeploymentId: MAIN })).errores.join(' ')).toMatch(/main y en storage/);
   });
 });
+
+describe('destino de escritura (cwd + scriptId)', () => {
+  const path = require('path');
+  const RAIZ = path.resolve('/repo-falso');
+  const ESPERADO = path.join(RAIZ, 'backend');
+  const ID = '1MainMainMainMainMainMainMain0001';
+  const OTRO = '1StorageStorageStorageStorage0002';
+  const base = (o) => Object.assign({ raiz: RAIZ, cwd: ESPERADO, esperado: ESPERADO, claspJson: { scriptId: ID, rootDir: 'src' }, scriptIdEsperado: ID, scriptIdOtro: OTRO }, o);
+
+  test('cwd exacto + scriptId esperado: sin errores', () => {
+    expect(L.validarDestinoEscritura(base())).toEqual([]);
+  });
+
+  test('desde .gas-remote/*: rechazado y explicado (puede ser un HEAD viejo)', () => {
+    const e = L.validarDestinoEscritura(base({ cwd: path.join(RAIZ, '.gas-remote', 'main') }));
+    expect(e.join(' ')).toMatch(/se ejecutaria desde ".gas-remote\/main".*\.gas-remote.*HEAD viejo.*solo se permite desde "backend"/);
+    expect(L.validarDestinoEscritura(base({ cwd: path.join(RAIZ, '.gas-remote', 'main-v36') })).length).toBeGreaterThan(0);
+  });
+
+  test('desde cualquier otra carpeta (raiz, storage, src, un padre) tambien', () => {
+    [RAIZ, path.join(RAIZ, 'storage'), path.join(ESPERADO, 'src'), path.dirname(RAIZ), path.join(ESPERADO, '..', 'storage')].forEach((c) => {
+      expect(L.validarDestinoEscritura(base({ cwd: c })).length).toBeGreaterThan(0);
+    });
+  });
+
+  test('cwd relativo, vacio o ausente: rechazado (no se resuelve contra el cwd del proceso)', () => {
+    ['.', 'backend', '', undefined, null].forEach((c) => {
+      expect(L.validarDestinoEscritura(base({ cwd: c })).join(' ')).toMatch(/no es una ruta absoluta/);
+    });
+  });
+
+  test('con "..": se normaliza, y solo vale si cae exactamente en la carpeta del proyecto', () => {
+    expect(L.validarDestinoEscritura(base({ cwd: path.join(ESPERADO, 'src', '..') }))).toEqual([]);
+    expect(L.validarDestinoEscritura(base({ cwd: path.join(ESPERADO, '..', '.gas-remote', 'main') })).length).toBeGreaterThan(0);
+  });
+
+  test('scriptId distinto del esperado: rechazado (enmascarado, sin imprimirlo)', () => {
+    const e = L.validarDestinoEscritura(base({ claspJson: { scriptId: '1OtroOtroOtroOtroOtroOtroOtro0003', rootDir: 'src' } })).join(' ');
+    expect(e).toMatch(/scriptId de \.clasp\.json \(…ro0003\) NO es el esperado \(…in0001\)/);
+    expect(e).not.toContain('1OtroOtroOtroOtroOtroOtroOtro0003');
+    expect(e).not.toContain(ID);
+  });
+
+  test('scriptId del OTRO proyecto: rechazado', () => {
+    const e = L.validarDestinoEscritura(base({ claspJson: { scriptId: OTRO, rootDir: 'src' } })).join(' ');
+    expect(e).toMatch(/OTRO proyecto/);
+  });
+
+  test('.clasp.json ausente / ilegible / con rootDir distinto de src / con scriptId de marcador: rechazado', () => {
+    expect(L.validarDestinoEscritura(base({ claspJson: null })).join(' ')).toMatch(/no se pudo leer el \.clasp\.json/);
+    expect(L.validarDestinoEscritura(base({ claspJson: { scriptId: ID, rootDir: '.' } })).join(' ')).toMatch(/rootDir/);
+    expect(L.validarDestinoEscritura(base({ claspJson: { scriptId: 'PEGAR_SCRIPT_ID_AQUI_XXXXXXXXX', rootDir: 'src' } })).length).toBeGreaterThan(0);
+  });
+});
+
+describe('HEAD remoto: firma, evaluacion y deteccion de revert', () => {
+  const codigo = (o) => new Map(Object.entries(o));
+  const MANIF = JSON.stringify({ runtimeVersion: 'V8' });
+
+  test('firmaRemoto: depende del contenido y del manifiesto, no del orden ni de CRLF en el manifiesto', () => {
+    const a = L.firmaRemoto(codigo({ 'A.js': 'h1', 'B.js': 'h2' }), MANIF);
+    expect(L.firmaRemoto(codigo({ 'B.js': 'h2', 'A.js': 'h1' }), MANIF)).toBe(a);
+    expect(L.firmaRemoto(codigo({ 'A.js': 'h1', 'B.js': 'hX' }), MANIF)).not.toBe(a);
+    expect(L.firmaRemoto(codigo({ 'A.js': 'h1' }), MANIF)).not.toBe(a);
+    expect(L.firmaRemoto(codigo({ 'A.js': 'h1', 'B.js': 'h2' }), JSON.stringify({ runtimeVersion: 'STABLE' }))).not.toBe(a);
+    expect(L.firmaRemoto(codigo({ 'A.js': 'h1', 'B.js': 'h2' }), '{\r\n  "runtimeVersion": "V8"\r\n}')).toBe(a);
+  });
+
+  const evaluarCon = (local, remoto, extra) => L.evaluar(Object.assign({
+    proyecto: 'main', local: { codigo: codigo(local), manifiesto: MANIF }, remoto: { codigo: codigo(remoto), manifiesto: MANIF }, extras: [], scriptIds: {}, nombresAjenos: new Set(), estadoAdoptado: null
+  }, extra));
+
+  test('evaluarHead: idem repo => ok; archivo de mas, faltante, distinto, cruce y extras => problemas', () => {
+    expect(L.evaluarHead(evaluarCon({ 'A.js': '1' }, { 'A.js': '1' }), []).ok).toBe(true);
+    expect(L.evaluarHead(evaluarCon({ 'A.js': '1' }, { 'A.js': '1', 'Codigo.js': '9' }), []).problemas.join(' ')).toMatch(/Codigo\.js/);
+    expect(L.evaluarHead(evaluarCon({ 'A.js': '1', 'U.js': '2' }, { 'A.js': '1' }), []).problemas.join(' ')).toMatch(/sin subir: U\.js/);
+    expect(L.evaluarHead(evaluarCon({ 'A.js': '1' }, { 'A.js': '2' }), []).problemas.join(' ')).toMatch(/no coincide con el local: A\.js/);
+    expect(L.evaluarHead(evaluarCon({ 'A.js': '1' }, { 'A.js': '1' }), ['x.txt']).problemas.join(' ')).toMatch(/no permitidos en src: x\.txt/);
+    expect(L.evaluarHead(evaluarCon({ 'A.js': '1' }, { 'A.js': '1' }, { scriptIds: { main: 'idrepetidoidrepetidoidrepetido', storage: 'idrepetidoidrepetidoidrepetido' } }), []).ok).toBe(false);
+  });
+
+  // estado tras un push: adoptado == remoto NUEVO; ultimoPush recuerda el remoto/huella PREVIOS
+  const PREVIO = { 'A.js': 'viejo', 'Codigo.js': 'dup' };
+  const NUEVO = { 'A.js': 'nuevo', 'U.js': 'u' };
+  const estadoTrasPush = () => ({
+    huella: 'h-post-push', remoto: { archivos: NUEVO, manifiestoSha: L.hashManifiesto(MANIF) },
+    ultimoPush: { en: '2026-10-12T03:48:57.258Z', huellaPrevia: 'H-PRE-PUSH', remotoPrevio: L.firmaRemoto(codigo(PREVIO), MANIF) }
+  });
+
+  test('revertido por huella: la huella actual es la previa al ultimo push', () => {
+    expect(L.detectarRevertido({ estado: estadoTrasPush(), huella: 'h-pre-push', firma: 'otra' })).toEqual({ revertido: true, por: 'huella' });
+  });
+
+  test('revertido por contenido, aunque el repo haya cambiado (la huella ya no sirve)', () => {
+    expect(L.detectarRevertido({ estado: estadoTrasPush(), huella: 'huella-distinta', firma: L.firmaRemoto(codigo(PREVIO), MANIF) })).toEqual({ revertido: true, por: 'contenido' });
+  });
+
+  test('sin falsos positivos: el remoto actual es lo adoptado, o es otro estado cualquiera, o no hubo push', () => {
+    const e = estadoTrasPush();
+    expect(L.detectarRevertido({ estado: e, huella: 'h-post-push', firma: L.firmaRemoto(codigo(NUEVO), MANIF) }).revertido).toBe(false);
+    expect(L.detectarRevertido({ estado: e, huella: 'otra', firma: 'otra' }).revertido).toBe(false);
+    expect(L.detectarRevertido({ estado: null, huella: 'h-pre-push', firma: 'x' }).revertido).toBe(false);
+    expect(L.detectarRevertido({ estado: { huella: 'x', remoto: { archivos: {} } }, huella: 'h-pre-push', firma: 'x' }).revertido).toBe(false);
+  });
+
+  test('un push que no cambio nada (remoto previo == adoptado) nunca se marca como revertido', () => {
+    const e = estadoTrasPush();
+    e.ultimoPush.remotoPrevio = L.firmaRemoto(codigo(NUEVO), MANIF);
+    e.ultimoPush.huellaPrevia = e.huella;
+    expect(L.detectarRevertido({ estado: e, huella: e.huella, firma: L.firmaRemoto(codigo(NUEVO), MANIF) }).revertido).toBe(false);
+  });
+
+  test('resumenOperaciones: fechas de ultimo push / version / deploy, con la marca de HEAD inconsistente', () => {
+    expect(L.resumenOperaciones(null)).toBe('');
+    expect(L.resumenOperaciones({ adoptadoEn: 'x' })).toBe('');
+    const r = L.resumenOperaciones({
+      ultimoPush: { en: '2026-10-12T03:48:57.258Z' }, ultimaVersion: { numero: 36, en: '2026-10-12T04:09:06.054Z' },
+      ultimoDeploy: { version: 36, en: '2026-10-12T04:27:32.162Z', headConsistente: false }
+    });
+    expect(r).toBe('ultimo push: 2026-10-12T03:48:57.258Z | ultima version: 36 (2026-10-12T04:09:06.054Z) | ultimo deploy: v36 (2026-10-12T04:27:32.162Z, HEAD inconsistente)');
+  });
+});

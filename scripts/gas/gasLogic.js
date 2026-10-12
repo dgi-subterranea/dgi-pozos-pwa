@@ -3,6 +3,7 @@
 // manifiesto, huella determinista, deteccion de proyectos cruzados, deriva del remoto y validacion de .clasp.json.
 // Los conteos de archivos NUNCA se escriben a mano en ningun lado: siempre se derivan del filesystem real que se les pasa.
 const crypto = require('crypto');
+const path = require('path');
 
 const MANIFIESTO = 'appsscript.json';
 const ROOT_DIR_ESPERADO = 'src';
@@ -309,6 +310,81 @@ function verificarPostPush(ev) {
   return { ok: problemas.length === 0, problemas: problemas };
 }
 
+// Destino de una ESCRITURA en Apps Script (push / create-version / update-deployment). Solo se acepta ejecutar clasp con cwd EXACTAMENTE la carpeta
+// del proyecto (la que tiene el .clasp.json real): nunca .gas-remote/* (copias de HEAD, posiblemente viejas) ni otra carpeta; y el .clasp.json
+// de ese cwd, leido del disco AHORA, debe tener el scriptId esperado (el del inicio del comando) y no el del otro proyecto.
+// o: {raiz, cwd, esperado, claspJson (objeto | null), scriptIdEsperado, scriptIdOtro}
+function validarDestinoEscritura(o) {
+  const errores = [];
+  const norm = (x) => { const r = path.resolve(String(x)); return process.platform === 'win32' ? r.toLowerCase() : r; };
+  const etiqueta = (x) => { const r = path.relative(o.raiz, path.resolve(String(x))); return r === '' ? '.' : r.split(path.sep).join('/'); };
+  if (typeof o.cwd !== 'string' || !o.cwd || !path.isAbsolute(o.cwd)) {
+    errores.push('el directorio de trabajo de la escritura no es una ruta absoluta (' + JSON.stringify(o.cwd) + ')');
+  } else if (norm(o.cwd) !== norm(o.esperado)) {
+    const enRemoto = /(^|[\\/])\.gas-remote([\\/]|$)/.test(path.resolve(o.cwd));
+    errores.push('la escritura se ejecutaria desde "' + etiqueta(o.cwd) + '"' + (enRemoto ? ' (una copia de .gas-remote: puede ser un HEAD viejo)' : '') + ' y solo se permite desde "' + etiqueta(o.esperado) + '"');
+  }
+  if (!o.claspJson) {
+    errores.push('no se pudo leer el .clasp.json de la carpeta de escritura');
+  } else {
+    const v = validarClaspJson(o.claspJson);
+    if (!v.ok) {
+      errores.push('.clasp.json de la carpeta de escritura: ' + v.errores.join('; '));
+    } else {
+      if (o.claspJson.scriptId !== o.scriptIdEsperado) { errores.push('el scriptId de .clasp.json (' + ultimos(o.claspJson.scriptId) + ') NO es el esperado (' + ultimos(o.scriptIdEsperado) + '): cambio durante la ejecucion o carpeta equivocada'); }
+      if (o.scriptIdOtro && o.claspJson.scriptId === o.scriptIdOtro) { errores.push('el scriptId de .clasp.json es el del OTRO proyecto (' + ultimos(o.scriptIdOtro) + ')'); }
+    }
+  }
+  return errores;
+}
+
+// Firma del contenido de HEAD remoto (archivos + manifiesto): dos pulls con distinta firma => HEAD cambio entre ambos.
+function firmaDe(entradas, hashManif) {
+  return sha256(JSON.stringify({ v: 1, archivos: entradas, manifiesto: hashManif || '-' }));
+}
+
+function firmaRemoto(codigo, manifiestoTexto) {
+  return firmaDe(Array.from(codigo.keys()).sort().map((n) => [n, codigo.get(n)]), hashManifiesto(manifiestoTexto));
+}
+
+// La misma firma, calculada desde el remoto REGISTRADO en .gas-state (archivos {nombre: sha} + manifiestoSha).
+function firmaDeEstado(estado) {
+  if (!estado || !estado.remoto || !estado.remoto.archivos) { return null; }
+  const a = estado.remoto.archivos;
+  return firmaDe(Object.keys(a).sort().map((n) => [n, a[n]]), estado.remoto.manifiestoSha);
+}
+
+// HEAD remoto vs repo (mismas condiciones que despues de un push) + proyectos cruzados + archivos no permitidos en src.
+function evaluarHead(ev, extras) {
+  const problemas = verificarPostPush(ev).problemas
+    .concat(ev.cruce.map((m) => 'PROYECTOS CRUZADOS: ' + m), extras && extras.length ? ['archivos no permitidos en src: ' + extras.join(', ')] : []);
+  return { ok: problemas.length === 0, problemas: problemas };
+}
+
+// ¿El remoto actual es el estado ANTERIOR al ultimo push (alguien subio una copia vieja despues)? Se detecta por la huella (remoto + repo) que
+// quedo registrada como "huellaPrevia" y, si existe, por la firma del contenido remoto previo (que no depende del repo). Nunca se marca como
+// revertido si el remoto actual es justamente lo adoptado (p. ej. un push que no cambio nada).
+// o: {estado, huella (del evaluar actual), firma (firmaRemoto del pull actual)}
+function detectarRevertido(o) {
+  const up = o.estado && o.estado.ultimoPush;
+  if (!up) { return { revertido: false }; }
+  const adoptada = firmaDeEstado(o.estado);
+  if (adoptada && o.firma && adoptada === o.firma) { return { revertido: false }; }
+  if (typeof up.remotoPrevio === 'string' && o.firma && up.remotoPrevio === o.firma) { return { revertido: true, por: 'contenido' }; }
+  if (typeof up.huellaPrevia === 'string' && o.huella && up.huellaPrevia.toLowerCase() === String(o.huella).toLowerCase() && o.estado.huella !== o.huella) { return { revertido: true, por: 'huella' }; }
+  return { revertido: false };
+}
+
+// Una linea con las fechas de la ultima operacion de escritura registrada (vacia si no hay ninguna).
+function resumenOperaciones(estado) {
+  if (!estado) { return ''; }
+  const partes = [];
+  if (estado.ultimoPush && estado.ultimoPush.en) { partes.push('ultimo push: ' + estado.ultimoPush.en); }
+  if (estado.ultimaVersion && estado.ultimaVersion.en) { partes.push('ultima version: ' + estado.ultimaVersion.numero + ' (' + estado.ultimaVersion.en + (estado.ultimaVersion.headConsistente === false ? ', HEAD inconsistente' : '') + ')'); }
+  if (estado.ultimoDeploy && estado.ultimoDeploy.en) { partes.push('ultimo deploy: v' + estado.ultimoDeploy.version + ' (' + estado.ultimoDeploy.en + (estado.ultimoDeploy.headConsistente === false ? ', HEAD inconsistente' : '') + ')'); }
+  return partes.join(' | ');
+}
+
 // Guardas de DEPLOY, puras. despliegues = parsearDeployments(); versiones = parsearVersiones().
 function evaluarDeploy(o) {
   const errores = [];
@@ -415,5 +491,6 @@ module.exports = {
   sha256, normalizarTexto, nombreNormalizado, clasificarLocal, compararInventarios, resumenManifiesto, compararManifiestos, hashManifiesto,
   calcularHuella, huellaCoincide, detectarCruce, evaluarDeriva, validarClaspJson, verificarComandoClasp, extraerArchivosDeStatus,
   enmascarar, ultimos, parsearArgs, evaluar, condicionesAdopcion,
-  validarConfigLocal, parsearDeployments, parsearVersiones, parsearVersionCreada, maximaVersion, evaluarPush, verificarPostPush, evaluarDeploy, confirmacionDeploy
+  validarConfigLocal, parsearDeployments, parsearVersiones, parsearVersionCreada, maximaVersion, evaluarPush, verificarPostPush, evaluarDeploy, confirmacionDeploy,
+  validarDestinoEscritura, firmaRemoto, evaluarHead, detectarRevertido, resumenOperaciones
 };
