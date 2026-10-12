@@ -231,10 +231,16 @@ function ubicacionCorreccionRepository_agregarEventos(eventos) {
 // haber escrito nada. Si igual se corta entre las dos escrituras, la correccion queda sin eventos y el reintento con el mismo
 // clientRequestId agrega el PROPUESTA faltante (ver UbicacionCorreccionService.js). Llamar SOLO dentro de conLock.
 function ubicacionCorreccionRepository_agregarCorreccionConEvento(correccion, evento) {
+  ubicacionCorreccionRepository_agregarCorreccionConEventos(correccion, [evento]);
+}
+
+// Igual, con VARIOS eventos del log (p. ej. PROPUESTA + SUPERADA de la anterior + VALIDADA cuando quien crea ya tiene ubicacion_validar):
+// todos van en UNA sola escritura contigua del log, asi que el log queda con el grupo completo o sin ninguno. Llamar SOLO dentro de conLock.
+function ubicacionCorreccionRepository_agregarCorreccionConEventos(correccion, eventos) {
   var hojaCorrecciones = ubicacionCorreccionRepository_hojaCorrecciones();
   var hojaLog = ubicacionCorreccionRepository_hojaLog();
   ubicacionCorreccionRepository_agregarFilas(hojaCorrecciones, [correccion]);
-  ubicacionCorreccionRepository_agregarFilas(hojaLog, [evento]);
+  ubicacionCorreccionRepository_agregarFilas(hojaLog, eventos);
 }
 
 // Serializa leer -> decidir -> escribir entre ejecuciones simultaneas (lock de script). Siempre se libera.
@@ -281,6 +287,7 @@ if (typeof module !== 'undefined' && module.exports) {
     ubicacionCorreccionRepository_agregarCorreccion,
     ubicacionCorreccionRepository_agregarEventos,
     ubicacionCorreccionRepository_agregarCorreccionConEvento,
+    ubicacionCorreccionRepository_agregarCorreccionConEventos,
     ubicacionCorreccionRepository_conLock,
     setupUbicacionCorreccionesSheets
   };

@@ -105,7 +105,7 @@ const porPozo = (u, wellId) => post(u, { action: 'getCorreccionesUbicacionPozo',
 const celdas = (hoja, nombre) => hojas[hoja].filas.slice(1).map((f) => f[hojas[hoja].filas[0].indexOf(nombre)]);
 
 describe('ciclo de vida completo por la API real', () => {
-  test('proponer -> auto-validacion bloqueada -> validar -> otra propuesta supera a la vigente -> revertir', () => {
+  test('proponer -> validar -> otra propuesta supera a la vigente -> revertir', () => {
     // 1) Ana propone (GPS 9 m, a ~80 m de Irrigacion)
     const a = proponer('ana@x.com', { observacion: 'Boca corrida' });
     expect(a.status).toBe('ok');
@@ -113,11 +113,10 @@ describe('ciclo de vida completo por la API real', () => {
     expect(a.data.correccion).toMatchObject({ wellId: W, estado: 'PROPUESTA', metodo: 'GPS_ACTUAL', precisionGpsM: 9, nombrePropone: 'Ana', propia: true });
     const idA = a.data.correccion.correccionId;
 
-    // 2) Ana no puede validar (sin el permiso); Carla (con ambos) tampoco puede validar la suya
+    // 2) Ana no puede validar (sin el permiso); Beto propone otra, no puede rechazarla el mismo (sin el permiso) y Valeria si
     expect(validar('ana@x.com', idA).code).toBe('PERMISSION_DENIED');
-    const c = proponer('carla@x.com', {});
-    expect(validar('carla@x.com', c.data.correccion.correccionId).code).toBe('SELF_VALIDATION');
-    expect(rechazar('carla@x.com', c.data.correccion.correccionId, 'La retiro yo').code).toBe('SELF_REJECTION');   // el autor no rechaza la suya
+    const c = proponer('beto@x.com', {});
+    expect(rechazar('beto@x.com', c.data.correccion.correccionId, 'La retiro yo').code).toBe('PERMISSION_DENIED');
     expect(rechazar('valeria@x.com', c.data.correccion.correccionId, 'No coincide con la boca').status).toBe('ok');
 
     // 3) Valeria valida
@@ -260,10 +259,8 @@ describe('validaciones de punta a punta', () => {
 });
 
 describe('reversion por la API real', () => {
-  test('quien propuso (y hoy tiene ubicacion_validar) revierte lo que valido OTRO: queda auditada con usuario, nombre, fecha y motivo', () => {
+  test('quien creo directo (corregir + validar) revierte su propia correccion: queda auditada con usuario, nombre, fecha y motivo', () => {
     const id = proponer('carla@x.com', { observacion: 'ok' }).data.correccion.correccionId;
-    expect(validar('carla@x.com', id).code).toBe('SELF_VALIDATION');
-    expect(validar('valeria@x.com', id).status).toBe('ok');
     expect(revertir('carla@x.com', id, '').code).toBe('INVALID_MOTIVO');                  // motivo obligatorio
     const r = revertir('carla@x.com', id, 'Era el pozo de al lado');
     expect(r.status).toBe('ok');
@@ -368,13 +365,15 @@ describe('seguridad', () => {
     expect(post('lector@x.com', { action: 'getCorreccionesUbicacionPendientes' }).code).toBe('PERMISSION_DENIED');
   });
 
-  test('la cola de validacion la ve quien valida, con nombres y el booleano "propia" (nunca emails)', () => {
+  test('la cola de validacion la ve quien valida, con nombres y el booleano "propia" (nunca emails); lo creado directo no es pendiente', () => {
     proponer('ana@x.com');
-    proponer('carla@x.com');
+    proponer('beto@x.com');
+    proponer('carla@x.com');                                                    // corregir + validar: nace VALIDADA, no entra a la cola
     const cola = post('carla@x.com', { action: 'getCorreccionesUbicacionPendientes' });
     expect(cola.status).toBe('ok');
     expect(cola.data.total).toBe(2);
-    expect(cola.data.pendientes.map((p) => [p.nombrePropone, p.propia])).toEqual([['Ana', false], ['Carla', true]]);
+    expect(cola.data.pendientes.map((p) => [p.nombrePropone, p.propia])).toEqual([['Ana', false], ['Beto', false]]);
+    expect(porPozo('ana@x.com').data.pendientes.map((p) => [p.nombrePropone, p.propia])).toEqual([['Beto', false], ['Ana', true]]);       // mas nueva primero; "propia" es de quien consulta
   });
 
   test('ninguna respuesta de toda la prueba contiene un email ni el titular del padron', () => {
@@ -389,5 +388,116 @@ describe('seguridad', () => {
     expect(todo).not.toMatch(/@/);
     expect(todo).not.toContain('TITULAR RESERVADO');
     expect(todo).not.toContain('emailPropone');
+  });
+});
+
+describe('creacion directa y autoria por la API real (corregir + validar)', () => {
+  const sinValidar = (usuario, fn) => {                                 // simula "este usuario todavia no tenia ubicacion_validar" (como la propuesta de prueba preexistente)
+    const original = USUARIOS[usuario].permisos.ubicacion_validar;
+    USUARIOS[usuario].permisos.ubicacion_validar = false;
+    try { return fn(); } finally { USUARIOS[usuario].permisos.ubicacion_validar = original; }
+  };
+  const eventosLog = () => celdas('UbicacionCorreccionesLog', 'evento');
+  const emailsLog = () => celdas('UbicacionCorreccionesLog', 'email');
+
+  test('corregir=SI, validar=NO (Ana): la propuesta queda PENDIENTE y aparece en la cola', () => {
+    const r = proponer('ana@x.com');
+    expect(r.status).toBe('ok');
+    expect(r.data.correccion.estado).toBe('PROPUESTA');
+    expect(r.data.autoValidada).toBeUndefined();
+    expect(eventosLog()).toEqual(['PROPUESTA']);
+    expect(post('valeria@x.com', { action: 'getCorreccionesUbicacionPendientes' }).data.total).toBe(1);
+    expect(porPozo('lector@x.com').data.vigente).toBeNull();
+  });
+
+  test('corregir=SI, validar=SI (Carla): la correccion queda VIGENTE de inmediato, sin que nadie la valide, y es visible para quien solo lee', () => {
+    const r = proponer('carla@x.com', { observacion: 'Boca corrida' });
+    expect(r.status).toBe('ok');
+    expect(r.data).toMatchObject({ duplicada: false, curada: false, autoValidada: true, supersedidas: [] });
+    expect(r.data.correccion).toMatchObject({ estado: 'VALIDADA', nombrePropone: 'Carla', propia: true, resolucion: { evento: 'VALIDADA', nombre: 'Carla' } });
+    expect(porPozo('lector@x.com').data.vigente.correccionId).toBe(r.data.correccion.correccionId);
+    expect(post('valeria@x.com', { action: 'getCorreccionesUbicacionPendientes' }).data.total).toBe(0);
+  });
+
+  test('auditoria de los DOS eventos: log de dominio (PROPUESTA, VALIDADA, mismo usuario) e Historial (proponer OK + validar OK)', () => {
+    proponer('carla@x.com');
+    expect(eventosLog()).toEqual(['PROPUESTA', 'VALIDADA']);
+    expect(emailsLog()).toEqual(['carla@x.com', 'carla@x.com']);
+    expect(celdas('UbicacionCorreccionesLog', 'nombre')).toEqual(['Carla', 'Carla']);
+    expect(celdas('UbicacionCorreccionesLog', 'motivo')[1]).toMatch(/Validada automaticamente al crearla/);
+    expect(historial).toEqual([
+      ['carla@x.com', 'proponerCorreccionUbicacion', W, 'OK'],
+      ['carla@x.com', 'validarCorreccionUbicacion', W, 'OK']
+    ]);
+  });
+
+  test('IDEMPOTENCIA por la API: reenviar la misma creacion directa no agrega eventos ni una segunda VALIDADA, y no vuelve a auditarse', () => {
+    const cuerpo = { clientRequestId: 'directa-0000001' };
+    const a = proponer('carla@x.com', cuerpo);
+    const b = proponer('carla@x.com', cuerpo);
+    expect(b.data).toMatchObject({ duplicada: true, correccion: { correccionId: a.data.correccion.correccionId, estado: 'VALIDADA' } });
+    expect(b.data.autoValidada).toBeUndefined();
+    expect(eventosLog()).toEqual(['PROPUESTA', 'VALIDADA']);
+    expect(hojas.UbicacionCorrecciones.filas).toHaveLength(2);
+    expect(historial).toHaveLength(2);
+  });
+
+  test('una creacion directa SUPERA a la vigente del pozo y deja el log completo y en orden', () => {
+    const a = proponer('ana@x.com', { observacion: 'x' });
+    validar('valeria@x.com', a.data.correccion.correccionId);
+    const c = proponer('carla@x.com', { observacion: 'Mas precisa' });
+    expect(c.data.supersedidas).toEqual([a.data.correccion.correccionId]);
+    expect(eventosLog()).toEqual(['PROPUESTA', 'VALIDADA', 'PROPUESTA', 'SUPERADA', 'VALIDADA']);
+    const estado = porPozo('lector@x.com').data;
+    expect(estado.vigente.correccionId).toBe(c.data.correccion.correccionId);
+    expect(estado.historial.filter((x) => x.estado === 'VALIDADA')).toHaveLength(1);
+  });
+
+  test('CASO REAL: una propuesta hecha cuando el usuario aun no tenia ubicacion_validar (queda PENDIENTE) la puede validar el mismo usuario hoy', () => {
+    const p = sinValidar('carla@x.com', () => proponer('carla@x.com', { observacion: 'Propuesta de prueba' }));
+    const id = p.data.correccion.correccionId;
+    expect(p.data.correccion.estado).toBe('PROPUESTA');
+    const cola = post('carla@x.com', { action: 'getCorreccionesUbicacionPendientes' });
+    expect(cola.data.pendientes.map((x) => [x.correccionId, x.propia])).toEqual([[id, true]]);
+
+    const v = validar('carla@x.com', id, 'Confirmada en campo');
+    expect(v.status).toBe('ok');
+    expect(v.data.correccion).toMatchObject({ estado: 'VALIDADA', propia: true, resolucion: { evento: 'VALIDADA', nombre: 'Carla', motivo: 'Confirmada en campo' } });
+    expect(eventosLog()).toEqual(['PROPUESTA', 'VALIDADA']);
+    expect(emailsLog()).toEqual(['carla@x.com', 'carla@x.com']);
+    expect(historial).toContainEqual(['carla@x.com', 'validarCorreccionUbicacion', W, 'OK']);
+    expect(JSON.stringify(respuestas)).not.toContain('SELF_VALIDATION');
+  });
+
+  test('validar una propuesta AJENA: permitido para quien tiene ubicacion_validar', () => {
+    const a = proponer('ana@x.com');
+    expect(validar('carla@x.com', a.data.correccion.correccionId).status).toBe('ok');
+  });
+
+  test('validar SIN permiso de validar: PERMISSION_DENIED (ni siquiera sobre su propia propuesta), y la propuesta sigue pendiente', () => {
+    const a = proponer('ana@x.com');
+    const id = a.data.correccion.correccionId;
+    expect(validar('ana@x.com', id).code).toBe('PERMISSION_DENIED');
+    expect(validar('lector@x.com', id).code).toBe('PERMISSION_DENIED');
+    expect(rechazar('ana@x.com', id, 'x').code).toBe('PERMISSION_DENIED');
+    expect(eventosLog()).toEqual(['PROPUESTA']);
+  });
+
+  test('rechazar la PROPIA propuesta sigue vedado (SELF_REJECTION); otro validador si puede rechazarla', () => {
+    const p = sinValidar('carla@x.com', () => proponer('carla@x.com'));
+    const id = p.data.correccion.correccionId;
+    expect(rechazar('carla@x.com', id, 'La retiro yo').code).toBe('SELF_REJECTION');
+    expect(rechazar('valeria@x.com', id, 'No coincide con la boca').status).toBe('ok');
+  });
+
+  test('la coordenada de Irrigacion no cambia con la creacion directa y el padron no se escribe', () => {
+    const r = proponer('carla@x.com', { lat: norte(300), observacion: 'a 300 m' });
+    expect(r.data.correccion.irrigacion).toMatchObject({ lat: OFICIAL.lat, lon: OFICIAL.lon });
+    expect(drive.escrituras).toEqual([]);
+  });
+
+  test('un usuario inactivo no puede crear nada (ni directo)', () => {
+    expect(proponer('inactivo@x.com').status).toBe('error');
+    expect(hojas.UbicacionCorrecciones.filas).toHaveLength(1);
   });
 });

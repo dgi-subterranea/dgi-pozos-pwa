@@ -1027,8 +1027,10 @@ function handleSubirFotoPozo(sessionToken, datos) {
 // su estado se deriva del log. Permisos (todos fail-closed, mas el usuario activo que ya exige validateSession):
 //   leer correcciones de un pozo ..... ubicacion
 //   proponer ......................... ubicacion + ubicacion_corregir
+//                                      (si ADEMAS tiene ubicacion_validar la correccion nace VALIDADA: es una correccion directa, sin
+//                                       validacion de otra persona; si no, queda PROPUESTA pendiente)
 //   cola de validacion / validar /
-//   rechazar / revertir .............. ubicacion + ubicacion_validar   (validar ademas exige que NO sea quien propuso)
+//   rechazar / revertir .............. ubicacion + ubicacion_validar   (validar puede ser una propuesta propia; rechazar la propia, no)
 // Orden de chequeos, igual que el resto: sesion -> formato de wellId -> permisos -> contenido. email/nombre SIEMPRE de la
 // sesion + hoja Usuarios, nunca del cliente. Las respuestas no incluyen emails (solo nombres y el booleano "propia").
 // Auditoria en Historial: propuesta/validacion/rechazo/reversion (OK), permisos denegados, transiciones invalidas y demas
@@ -1067,6 +1069,9 @@ function handleProponerCorreccionUbicacion(sessionToken, datos) {
   }
 
   var access = getUserAccess(session.email);
+  // Corregir + validar = correccion directa: el permiso se consulta aca (fail-closed: hasPermission es false ante cualquier duda) y el servicio
+  // solo recibe el booleano; el cliente no puede pedirlo.
+  var autoValidar = hasPermission(session.email, 'ubicacion_validar') === true;
   var resultado;
   try {
     resultado = ubicacionCorreccionService_proponer(session.email, access.nombre, d.wellId, {
@@ -1076,7 +1081,7 @@ function handleProponerCorreccionUbicacion(sessionToken, datos) {
       precisionGpsM: d.precisionGpsM,
       observacion: d.observacion,
       clientRequestId: d.clientRequestId
-    });
+    }, { autoValidar: autoValidar });
   } catch (err) {
     logHistoryEvent(session.email, 'proponerCorreccionUbicacion', d.wellId, 'SERVICE_UNAVAILABLE');
     return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
@@ -1091,7 +1096,14 @@ function handleProponerCorreccionUbicacion(sessionToken, datos) {
     // el reintento completo una correccion que habia quedado sin su evento PROPUESTA: queda constancia en Historial
     logHistoryEvent(session.email, 'proponerCorreccionUbicacion', d.wellId, 'AUTOCURADA');
   }
-  return { status: 'ok', data: { correccion: resultado.correccion, duplicada: resultado.duplicada, curada: resultado.curada === true } };
+  var data = { correccion: resultado.correccion, duplicada: resultado.duplicada, curada: resultado.curada === true };
+  if (resultado.autoValidada === true) {
+    // la validacion directa queda auditada como lo que es: una validacion (ademas de la propuesta), a nombre del mismo usuario
+    logHistoryEvent(session.email, 'validarCorreccionUbicacion', d.wellId, 'OK');
+    data.autoValidada = true;
+    data.supersedidas = resultado.supersedidas || [];
+  }
+  return { status: 'ok', data: data };
 }
 
 function handleGetCorreccionesUbicacionPozo(sessionToken, wellId) {

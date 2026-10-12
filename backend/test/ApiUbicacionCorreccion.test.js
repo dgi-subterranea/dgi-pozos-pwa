@@ -160,7 +160,7 @@ describe('identidad y lista blanca de campos (por doPost)', () => {
     expect(r.status).toBe('ok');
     expect(global.ubicacionCorreccionService_proponer).toHaveBeenCalledWith('sesion@example.com', 'Nombre Sesion', W, {
       lat: -32.9, lon: -68.8, metodo: 'GPS_ACTUAL', precisionGpsM: 12, observacion: 'ok', clientRequestId: 'req-00000001'
-    });
+    }, { autoValidar: false });
   });
 
   test.each(['validar', 'rechazar', 'revertir'])('%s: usa la identidad de la sesion; solo correccionId y motivo del cliente', (n) => {
@@ -256,7 +256,7 @@ describe('auditoria en Historial', () => {
   });
 
   test.each([
-    ['validar', 'INVALID_TRANSITION'], ['validar', 'SELF_VALIDATION'], ['rechazar', 'INVALID_TRANSITION'], ['revertir', 'INVALID_TRANSITION'],
+    ['validar', 'INVALID_TRANSITION'], ['rechazar', 'INVALID_TRANSITION'], ['revertir', 'INVALID_TRANSITION'],
     ['validar', 'CORRECCION_NOT_FOUND'], ['rechazar', 'INVALID_MOTIVO'], ['rechazar', 'SELF_REJECTION'], ['validar', 'INCONSISTENT_STATE'],
     ['rechazar', 'INCONSISTENT_STATE'], ['revertir', 'INCONSISTENT_STATE']
   ])('%s: el error %s se audita con el wellId de la correccion (o null si no se encontro)', (n, code) => {
@@ -278,5 +278,103 @@ describe('auditoria en Historial', () => {
     expect(global.telegramRepository_sendMessage).not.toHaveBeenCalled();
     expect(global.notificationService_notifyWellSearch).not.toHaveBeenCalled();
     expect(global.notificationService_notifyDescargaItf).not.toHaveBeenCalled();
+  });
+});
+
+describe('creacion directa (corregir + validar) en la capa Api', () => {
+  const resultadoDirecto = { ok: true, correccion: Object.assign({}, vista, { estado: 'VALIDADA' }), duplicada: false, curada: false, autoValidada: true, supersedidas: [ID] };
+  const opcionesDeLaLlamada = () => global.ubicacionCorreccionService_proponer.mock.calls[0][4];
+
+  test('corregir=SI, validar=NO: autoValidar=false (propuesta pendiente) y la respuesta no trae autoValidada', () => {
+    servicioOk();
+    sesion({ ubicacion: true, ubicacion_corregir: true });
+    const r = llamadas.proponer();
+    expect(r.status).toBe('ok');
+    expect(opcionesDeLaLlamada()).toEqual({ autoValidar: false });
+    expect(r.data).toEqual({ correccion: vista, duplicada: false, curada: false });
+    expect(global.logHistoryEvent).toHaveBeenCalledTimes(1);
+    expect(global.logHistoryEvent).toHaveBeenCalledWith('sesion@example.com', 'proponerCorreccionUbicacion', W, 'OK');
+  });
+
+  test('corregir=SI, validar=SI: autoValidar=true; la respuesta suma autoValidada y supersedidas; Historial registra proponer OK y validar OK del mismo usuario', () => {
+    global.ubicacionCorreccionService_proponer.mockReturnValue(resultadoDirecto);
+    sesion({ ubicacion: true, ubicacion_corregir: true, ubicacion_validar: true });
+    const r = llamadas.proponer();
+    expect(opcionesDeLaLlamada()).toEqual({ autoValidar: true });
+    expect(r).toEqual({ status: 'ok', data: { correccion: resultadoDirecto.correccion, duplicada: false, curada: false, autoValidada: true, supersedidas: [ID] } });
+    expect(global.logHistoryEvent.mock.calls).toEqual([
+      ['sesion@example.com', 'proponerCorreccionUbicacion', W, 'OK'],
+      ['sesion@example.com', 'validarCorreccionUbicacion', W, 'OK']
+    ]);
+  });
+
+  test('el cliente NO puede pedir la validacion directa: el campo autoValidar del cuerpo se ignora (solo cuenta el permiso de la hoja Usuarios)', () => {
+    servicioOk();
+    sesion({ ubicacion: true, ubicacion_corregir: true });
+    const r = JSON.parse(Api.doPost({ postData: { contents: JSON.stringify(Object.assign({ action: 'proponerCorreccionUbicacion', sessionToken: 'tok', autoValidar: true, validar: true, estado: 'VALIDADA' }, CUERPO)) } }).text);
+    expect(r.status).toBe('ok');
+    expect(opcionesDeLaLlamada()).toEqual({ autoValidar: false });
+  });
+
+  test('FAIL-CLOSED: un permiso de validar con valor no booleano (1, "SI") no activa la validacion directa', () => {
+    servicioOk();
+    sesion({ ubicacion: true, ubicacion_corregir: true, ubicacion_validar: 1 });
+    llamadas.proponer();
+    expect(opcionesDeLaLlamada()).toEqual({ autoValidar: false });
+  });
+
+  test('con el usuario inactivo no se llama al servicio ni se valida nada', () => {
+    servicioOk();
+    sesion({ ubicacion: true, ubicacion_corregir: true, ubicacion_validar: true }, false);
+    expect(llamadas.proponer().status).toBe('error');
+    expect(global.ubicacionCorreccionService_proponer).not.toHaveBeenCalled();
+  });
+
+  test('validar=SI sin corregir=SI NO puede proponer ni crear directo (PERMISSION_DENIED)', () => {
+    servicioOk();
+    sesion({ ubicacion: true, ubicacion_validar: true });
+    expect(llamadas.proponer().code).toBe('PERMISSION_DENIED');
+    expect(global.ubicacionCorreccionService_proponer).not.toHaveBeenCalled();
+  });
+
+  test('un reenvio idempotente de una creacion directa (duplicada, sin autoValidada) no se vuelve a auditar', () => {
+    global.ubicacionCorreccionService_proponer.mockReturnValue({ ok: true, correccion: Object.assign({}, vista, { estado: 'VALIDADA' }), duplicada: true, curada: false });
+    sesion({ ubicacion: true, ubicacion_corregir: true, ubicacion_validar: true });
+    const r = llamadas.proponer();
+    expect(r.data).toEqual({ correccion: Object.assign({}, vista, { estado: 'VALIDADA' }), duplicada: true, curada: false });
+    expect(global.logHistoryEvent).not.toHaveBeenCalled();
+  });
+
+  test('un autocurado que ademas deja vigente la correccion audita AUTOCURADA y la validacion', () => {
+    global.ubicacionCorreccionService_proponer.mockReturnValue(Object.assign({}, resultadoDirecto, { duplicada: true, curada: true, supersedidas: [] }));
+    sesion({ ubicacion: true, ubicacion_corregir: true, ubicacion_validar: true });
+    const r = llamadas.proponer();
+    expect(r.data).toMatchObject({ duplicada: true, curada: true, autoValidada: true, supersedidas: [] });
+    expect(global.logHistoryEvent.mock.calls).toEqual([
+      ['sesion@example.com', 'proponerCorreccionUbicacion', W, 'AUTOCURADA'],
+      ['sesion@example.com', 'validarCorreccionUbicacion', W, 'OK']
+    ]);
+  });
+
+  test('un error del servicio en la creacion directa se audita como proponer y no registra ninguna validacion', () => {
+    global.ubicacionCorreccionService_proponer.mockReturnValue({ ok: false, code: 'OBSERVACION_REQUERIDA', message: 'x', distanciaM: 400 });
+    sesion({ ubicacion: true, ubicacion_corregir: true, ubicacion_validar: true });
+    expect(llamadas.proponer()).toMatchObject({ status: 'error', code: 'OBSERVACION_REQUERIDA', distanciaM: 400 });
+    expect(global.logHistoryEvent.mock.calls).toEqual([['sesion@example.com', 'proponerCorreccionUbicacion', W, 'OBSERVACION_REQUERIDA']]);
+  });
+
+  test('validar sin permiso de validar: PERMISSION_DENIED y el servicio no se llama (aunque la correccion sea propia)', () => {
+    servicioOk();
+    sesion({ ubicacion: true, ubicacion_corregir: true });
+    expect(llamadas.validar().code).toBe('PERMISSION_DENIED');
+    expect(global.ubicacionCorreccionService_validar).not.toHaveBeenCalled();
+    expect(global.logHistoryEvent).toHaveBeenCalledWith('sesion@example.com', 'validarCorreccionUbicacion', null, 'PERMISSION_DENIED');
+  });
+
+  test('con ubicacion_validar, validar una correccion propia llega al servicio sin ninguna restriccion de autoria en esta capa', () => {
+    servicioOk();
+    sesion({ ubicacion: true, ubicacion_corregir: true, ubicacion_validar: true });
+    expect(llamadas.validar().status).toBe('ok');
+    expect(global.ubicacionCorreccionService_validar).toHaveBeenCalledWith('sesion@example.com', 'Nombre Sesion', ID, 'ok');
   });
 });

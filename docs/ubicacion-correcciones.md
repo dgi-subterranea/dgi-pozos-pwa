@@ -16,8 +16,14 @@ no cambia ni el mapa provincial, ni Cerca Mío, ni el mapa NE, ni la ficha, ni S
 
    | Columna | Valor | Efecto |
    |---|---|---|
-   | `ubicacion_corregir` | `SI` | puede **proponer** correcciones (además necesita `ubicacion=SI`) |
-   | `ubicacion_validar` | `SI` | puede ver la cola, **validar, rechazar y revertir** (además necesita `ubicacion=SI`) |
+   | `ubicacion_corregir` | `SI` | puede **proponer** correcciones (además necesita `ubicacion=SI`). Solo con esto, la corrección queda `PROPUESTA` pendiente de validación |
+   | `ubicacion_validar` | `SI` | puede ver la cola, **validar, rechazar y revertir** (además necesita `ubicacion=SI`). Si **además** tiene `ubicacion_corregir=SI`, lo que crea queda **vigente de inmediato** (ver *Corrección directa*) |
+
+   | `ubicacion_corregir` | `ubicacion_validar` | Qué pasa al crear una corrección |
+   |---|---|---|
+   | `SI` | `NO` | queda `PROPUESTA`, pendiente de que valide otra persona |
+   | `SI` | `SI` | **corrección directa**: `PROPUESTA` → `VALIDADA` en la misma operación, a nombre del mismo usuario |
+   | `NO` | cualquiera | no puede crear nada (`PERMISSION_DENIED`) |
 
    Cualquier otro valor, celda vacía o columna inexistente = **NO** (fail-closed). Los permisos viajan en el mismo cache de usuario
    (hasta 5 minutos para reflejarse, igual que el resto).
@@ -67,7 +73,7 @@ cadena válida: sin `PROPUESTA` inicial, eventos desconocidos, saltos imposibles
 
 | Desde | Hacia | Quién |
 |---|---|---|
-| `PROPUESTA` | `VALIDADA` | `ubicacion_validar`, y **no** quien la propuso |
+| `PROPUESTA` | `VALIDADA` | `ubicacion_validar` (**puede ser quien la propuso**; también al crearla, ver *Corrección directa*) |
 | `PROPUESTA` | `RECHAZADA` | `ubicacion_validar` (motivo obligatorio), y **no** quien la propuso |
 | `VALIDADA` | `REVERTIDA` | `ubicacion_validar` (motivo obligatorio) |
 | `VALIDADA` | `SUPERADA` | automático al validar otra del mismo pozo |
@@ -76,9 +82,28 @@ cadena válida: sin `PROPUESTA` inicial, eventos desconocidos, saltos imposibles
 `INVALID_TRANSITION`. **Una sola `VALIDADA` vigente por pozo**: al validar, en **una sola escritura contigua** se registra `SUPERADA`
 para la anterior y después `VALIDADA` para la nueva. Pueden coexistir varias `PROPUESTA` del mismo pozo.
 
-Quien propone **no puede validar ni rechazar su propia propuesta** (`SELF_VALIDATION` / `SELF_REJECTION`), aunque tenga
-`ubicacion_validar`. `RECHAZADA` queda reservada a quien valida. No existe `RETIRADA`: si más adelante el autor pudiera retirar la suya,
-se modelaría como un evento separado.
+Quien tiene `ubicacion_validar` **puede validar una propuesta propia ya existente** (no hay restricción de autoría al validar: el antiguo
+`SELF_VALIDATION` se eliminó). Lo que sigue vedado es **rechazar la propia** (`SELF_REJECTION`): `RECHAZADA` es una decisión de quien valida
+lo de otra persona. No existe `RETIRADA`: si más adelante el autor pudiera retirar la suya, se modelaría como un evento separado.
+
+## Corrección directa (`ubicacion_corregir=SI` + `ubicacion_validar=SI`)
+Es un usuario autorizado a modificar la ubicación directamente: **no necesita que otra persona valide**. El permiso lo decide el backend
+(`Api.js`, hoja `Usuarios`, fail-closed); el cliente no puede pedirlo ni forzarlo.
+- **Mismo modelo de eventos, misma operación.** Dentro de **un solo lock** se escriben `PROPUESTA`, `SUPERADA` de la vigente anterior del pozo (si hay) y
+  `VALIDADA`, **todos a nombre del mismo usuario**, en **una sola escritura contigua** del log: queda el grupo completo o ninguno. El motivo del
+  evento `VALIDADA` dice *«Validada automaticamente al crearla…»*, así que en la auditoría se distingue de una validación manual.
+- **Historial**: se registran `proponerCorreccionUbicacion` `OK` y `validarCorreccionUbicacion` `OK` (mismo usuario). La respuesta suma
+  `autoValidada:true` y `supersedidas[]`.
+- **Idempotente.** Reenviar la misma solicitud (mismo usuario y `clientRequestId`) devuelve la ya creada (`duplicada:true`) y **no agrega ningún
+  evento**: nunca puede haber una segunda `VALIDADA`. Un reenvío tampoco valida una `PROPUESTA` que ya estaba escrita (esa se valida con
+  `validar`). Con dos ejecuciones a la vez manda el lock: la segunda ve lo escrito por la primera.
+- **Escritura parcial.** Si se cortó entre la fila y los eventos, el reintento del mismo usuario completa el `PROPUESTA` y, **si hoy tiene
+  `ubicacion_validar`**, también la `VALIDADA` en la misma escritura (`curada:true`, `autoValidada:true`); sin el permiso solo completa el `PROPUESTA`.
+- **Reglas de contenido iguales** (observación obligatoria a más de 250 m, Mendoza, precisión GPS). La coordenada de Irrigación sigue siendo
+  **inmutable**: es el snapshot que toma el backend; el padrón no se escribe.
+- Revertir lo propio funciona como siempre (`VALIDADA` → `REVERTIDA`, con motivo).
+- **Propuestas anteriores a este cambio** (creadas cuando el usuario no tenía `ubicacion_validar`, o antes de la regla) siguen `PROPUESTA` y
+  pendientes: nada se migra ni se valida solo; las valida quien tenga el permiso, incluido su autor.
 
 ## Escritura parcial: autocurado y fail-closed
 Crear una corrección escribe **dos hojas**: primero la fila de la corrección y después su evento inicial `PROPUESTA`. Sheets no tiene
@@ -100,7 +125,7 @@ transacciones entre hojas, así que **no es atómico** y no se finge que lo sea.
 
 | Acción | Permisos (todos fail-closed + usuario activo) | Cuerpo | Respuesta `data` |
 |---|---|---|---|
-| `proponerCorreccionUbicacion` | `ubicacion` + `ubicacion_corregir` | `wellId, lat, lon, metodo, precisionGpsM, observacion, clientRequestId` | `{correccion, duplicada, curada}` |
+| `proponerCorreccionUbicacion` | `ubicacion` + `ubicacion_corregir` | `wellId, lat, lon, metodo, precisionGpsM, observacion, clientRequestId` | `{correccion, duplicada, curada}` (+ `autoValidada:true, supersedidas[]` si el usuario también tiene `ubicacion_validar`) |
 | `getCorreccionesUbicacionPozo` | `ubicacion` | `wellId` | `{wellId, vigente, pendientes[], historial[]}` |
 | `getCorreccionesUbicacionPendientes` | `ubicacion` + `ubicacion_validar` | — | `{total, inconsistentes, pendientes[]}` (más viejas primero, máx. 200) |
 | `validarCorreccionUbicacion` | `ubicacion` + `ubicacion_validar` | `correccionId, motivo?` | `{correccion, supersedidas[]}` |
@@ -133,7 +158,8 @@ distancia, estado, emails— se ignora).
 
 ## Auditoría
 Hoja `Historial` (como el resto): `proponer/validar/rechazar/revertirCorreccionUbicacion` con `OK`, `PERMISSION_DENIED`, `INVALID_TRANSITION`,
-`SELF_VALIDATION`, `SELF_REJECTION`, `INCONSISTENT_STATE`, `AUTOCURADA` y los demás códigos de error. No se auditan las lecturas ni los
+`SELF_REJECTION`, `INCONSISTENT_STATE`, `AUTOCURADA` y los demás códigos de error. Una corrección directa registra `proponerCorreccionUbicacion` `OK` y
+`validarCorreccionUbicacion` `OK`. No se auditan las lecturas ni los
 reenvíos idempotentes. **Sin Telegram.** Además
 `UbicacionCorreccionesLog` es el registro de dominio (quién, cuándo, motivo).
 

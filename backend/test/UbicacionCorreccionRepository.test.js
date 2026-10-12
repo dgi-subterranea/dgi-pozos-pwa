@@ -174,6 +174,23 @@ describe('hojas en memoria', () => {
     expect(roto.UbicacionCorrecciones.filas).toHaveLength(1);
   });
 
+  test('agregarCorreccionConEventos: la correccion y TODOS sus eventos (PROPUESTA + SUPERADA + VALIDADA) en UNA sola escritura contigua del log; verifica ambas hojas antes', () => {
+    const h = hojas();
+    let llamadas = 0;
+    const original = h.UbicacionCorreccionesLog.getRange.bind(h.UbicacionCorreccionesLog);
+    h.UbicacionCorreccionesLog.getRange = (f, c, nf, nc) => {
+      const r = original(f, c, nf, nc);
+      return Object.assign({}, r, { setValues: (v) => { llamadas += 1; return r.setValues(v); } });
+    };
+    Repo.ubicacionCorreccionRepository_agregarCorreccionConEventos(correccion({ correccionId: 'n' }), [ev('n', 'PROPUESTA'), ev('v', 'SUPERADA'), ev('n', 'VALIDADA')]);
+    expect(llamadas).toBe(1);
+    expect(h.UbicacionCorrecciones.filas).toHaveLength(2);
+    expect(Repo.ubicacionCorreccionRepository_listarEventos().map((e) => [e.correccionId, e.evento])).toEqual([['n', 'PROPUESTA'], ['v', 'SUPERADA'], ['n', 'VALIDADA']]);
+    const solo = instalarSheetsFalsos({ UbicacionCorrecciones: [Repo.UBICACION_CORRECCIONES_COLUMNAS] });
+    expect(() => Repo.ubicacionCorreccionRepository_agregarCorreccionConEventos(correccion(), [ev('a', 'PROPUESTA'), ev('a', 'VALIDADA')])).toThrow(/UbicacionCorreccionesLog/);
+    expect(solo.UbicacionCorrecciones.filas).toHaveLength(1);
+  });
+
   test('agregar una lista vacia no escribe nada', () => {
     const h = hojas();
     Repo.ubicacionCorreccionRepository_agregarEventos([]);

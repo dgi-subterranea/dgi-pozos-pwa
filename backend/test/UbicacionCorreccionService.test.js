@@ -792,18 +792,57 @@ describe('validar / rechazar / revertir', () => {
     expect(validar('99999999-9999-4999-8999-999999999999')).toMatchObject({ ok: false, code: 'CORRECCION_NOT_FOUND' });
   });
 
-  describe('quien propone no puede validar su propia propuesta', () => {
-    test('SELF_VALIDATION (aunque cambien mayusculas/espacios del email) y no se escribe nada', () => {
-      const id = propuesta({}, 'ana@x.com');
+  describe('autoria: quien tiene ubicacion_validar puede validar tambien una propuesta propia ya existente', () => {
+    test('validar la PROPIA propuesta esta permitido (aunque cambien mayusculas/espacios del email) y queda auditado con el mismo usuario en ambos eventos', () => {
       ['ana@x.com', 'ANA@X.COM', '  Ana@x.com '].forEach((email) => {
-        expect(validar(id, email)).toMatchObject({ ok: false, code: 'SELF_VALIDATION', wellId: W });
+        const id = propuesta({}, 'ana@x.com');
+        const r = validar(id, email);
+        expect(r).toMatchObject({ ok: true, supersedidas: expect.any(Array) });
+        expect(r.correccion).toMatchObject({ estado: 'VALIDADA', propia: true });
+        expect(eventosDe(id)).toEqual(['PROPUESTA', 'VALIDADA']);
+        const log = eventos().filter((f) => f[0] === id);
+        expect(log.map((f) => f[3])).toEqual(['ana@x.com', 'ana@x.com']);
       });
-      expect(eventosDe(id)).toEqual(['PROPUESTA']);
     });
 
-    test('otro usuario si puede validarla', () => {
+    test('el codigo SELF_VALIDATION ya no existe en el servicio', () => {
+      const fuente = require('fs').readFileSync(require('path').join(__dirname, '../src/UbicacionCorreccionService.js'), 'utf8');
+      expect(fuente).not.toContain('SELF_VALIDATION');
+    });
+
+    test('validar dos veces la propia: la segunda es INVALID_TRANSITION y no suma una segunda VALIDADA', () => {
       const id = propuesta({}, 'ana@x.com');
-      expect(validar(id, 'otro@x.com').ok).toBe(true);
+      expect(validar(id, 'ana@x.com').ok).toBe(true);
+      expect(validar(id, 'ana@x.com')).toMatchObject({ ok: false, code: 'INVALID_TRANSITION', wellId: W });
+      expect(eventosDe(id)).toEqual(['PROPUESTA', 'VALIDADA']);
+    });
+
+    test('CARRERA: otro validador valida la propuesta mientras su autor la valida -> solo una VALIDADA (la segunda es INVALID_TRANSITION)', () => {
+      const id = propuesta({}, 'ana@x.com');
+      instalarLock((n) => {
+        if (n === 1) {
+          Repo.ubicacionCorreccionRepository_agregarEventos([{ correccionId: id, timestamp: new Date(), evento: 'VALIDADA', email: 'otro@x.com', nombre: 'Otro', motivo: '' }]);
+        }
+      });
+      expect(validar(id, 'ana@x.com')).toMatchObject({ ok: false, code: 'INVALID_TRANSITION' });
+      expect(eventosDe(id)).toEqual(['PROPUESTA', 'VALIDADA']);
+    });
+
+    test('validar una propuesta AJENA esta permitido', () => {
+      const id = propuesta({}, 'ana@x.com');
+      const r = validar(id, 'otro@x.com');
+      expect(r.ok).toBe(true);
+      expect(r.correccion.propia).toBe(false);
+      expect(eventos().filter((f) => f[0] === id).map((f) => f[3])).toEqual(['ana@x.com', 'otro@x.com']);
+    });
+
+    test('la propia propuesta preexistente tambien SUPERA a la vigente del pozo al validarla', () => {
+      const a = propuesta({}, 'beto@x.com');
+      validar(a, 'val@x.com');
+      const propia = propuesta({}, 'ana@x.com');
+      const r = validar(propia, 'ana@x.com');
+      expect(r.supersedidas).toEqual([a]);
+      expect(S.ubicacionCorreccionService_getPorPozo('x@x.com', W).vigente.correccionId).toBe(propia);
     });
 
     test('quien propone TAMPOCO puede rechazarla (SELF_REJECTION): RECHAZADA es de quien valida; no se escribe nada', () => {
@@ -815,7 +854,7 @@ describe('validar / rechazar / revertir', () => {
       expect(S.ubicacionCorreccionService_getPendientes('x@x.com').pendientes.map((c) => c.correccionId)).toEqual([id]);
     });
 
-    test('ni siquiera con ubicacion_validar: quien valida pero tambien propuso no rechaza la suya; otro validador si', () => {
+    test('ni siquiera con ubicacion_validar: quien valida pero tambien propuso no RECHAZA la suya (aunque si puede validarla); otro validador si la rechaza', () => {
       const id = propuesta({}, 'carla@x.com');
       expect(rechazar(id, 'x', 'carla@x.com').code).toBe('SELF_REJECTION');
       expect(rechazar(id, 'La coordenada no coincide', 'val@x.com').ok).toBe(true);
@@ -923,9 +962,8 @@ describe('REVERTIDA: motivo, registro del usuario y reversion por quien propuso'
     expect(r.correccion.resolucion.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
-  test('quien PROPUSO puede revertirla despues de que OTRO usuario la valido (no es auto-validacion)', () => {
+  test('quien PROPUSO puede revertirla despues de que OTRO usuario la valido', () => {
     const id = propuesta({}, 'carla@x.com');
-    expect(S.ubicacionCorreccionService_validar('carla@x.com', 'Carla', id).code).toBe('SELF_VALIDATION');
     expect(validar(id, 'val@x.com').ok).toBe(true);                                    // la valida otro usuario
     const r = S.ubicacionCorreccionService_revertir('carla@x.com', 'Carla', id, 'Fue un error mio, el punto no era ese');
     expect(r.ok).toBe(true);
@@ -1005,5 +1043,284 @@ describe('sin fuga de emails', () => {
   test('las respuestas de error tampoco incluyen emails', () => {
     const id = propuesta({}, 'ana.secreta@x.com');
     expect(JSON.stringify(validar(id, 'ana.secreta@x.com'))).not.toMatch(/@/);
+  });
+});
+
+describe('creacion directa: corregir + validar (opciones.autoValidar)', () => {
+  const AUTO = { autoValidar: true };
+  const proponerDirecto = (d, email, nombre, wellId) => S.ubicacionCorreccionService_proponer(email || 'carla@x.com', nombre === undefined ? 'Carla' : nombre, wellId || W, d || datos(), AUTO);
+  const filasLog = (id) => eventos().filter((f) => f[0] === id);
+
+  test('corregir=SI, validar=NO (sin autoValidar): queda PROPUESTA pendiente, con un solo evento', () => {
+    const r = S.ubicacionCorreccionService_proponer('ana@x.com', 'Ana', W, datos());
+    expect(r).toMatchObject({ ok: true, duplicada: false });
+    expect(r.autoValidada).toBeUndefined();
+    expect(r.correccion.estado).toBe('PROPUESTA');
+    expect(eventosDe(r.correccion.correccionId)).toEqual(['PROPUESTA']);
+    expect(S.ubicacionCorreccionService_getPendientes('x@x.com').pendientes.map((c) => c.correccionId)).toEqual([r.correccion.correccionId]);
+    expect(S.ubicacionCorreccionService_getPorPozo('x@x.com', W).vigente).toBeNull();
+  });
+
+  test('autoValidar distinto de true (false, 1, "true", undefined) NO valida: es una propuesta comun', () => {
+    [false, 1, 'true', undefined, null].forEach((valor) => {
+      const r = S.ubicacionCorreccionService_proponer('ana@x.com', 'Ana', W, datos(), { autoValidar: valor });
+      expect(r.correccion.estado).toBe('PROPUESTA');
+      expect(r.autoValidada).toBeUndefined();
+    });
+  });
+
+  test('corregir=SI, validar=SI: la correccion nace VIGENTE; PROPUESTA -> VALIDADA a nombre del MISMO usuario, en la misma operacion y bajo un solo lock', () => {
+    const lock = instalarLock();
+    const r = proponerDirecto(datos({ observacion: 'Boca corrida' }), 'Carla@X.com ', 'Carla Gomez');
+    expect(r).toMatchObject({ ok: true, duplicada: false, curada: false, autoValidada: true, supersedidas: [] });
+    expect(r.correccion).toMatchObject({ estado: 'VALIDADA', nombrePropone: 'Carla Gomez', propia: true, resolucion: { evento: 'VALIDADA', nombre: 'Carla Gomez' } });
+    expect(lock).toEqual({ waits: 1, releases: 1 });
+    const id = r.correccion.correccionId;
+    expect(correcciones()).toHaveLength(1);
+    expect(eventosDe(id)).toEqual(['PROPUESTA', 'VALIDADA']);
+    const log = filasLog(id);
+    expect(log.map((f) => [f[3], f[4]])).toEqual([['carla@x.com', 'Carla Gomez'], ['carla@x.com', 'Carla Gomez']]);     // el mismo usuario en ambos eventos
+    expect(log[0][1]).toBeInstanceOf(Date);
+    expect(log[1][1].getTime()).toBe(log[0][1].getTime());                                                              // misma operacion = misma marca de tiempo
+    expect(log[0][5]).toBe('');
+    expect(log[1][5]).toBe('Validada automaticamente al crearla: quien la creo tiene permiso para validar ubicaciones');    // la validacion directa es reconocible en la auditoria
+    const estado = S.ubicacionCorreccionService_getPorPozo('x@x.com', W);
+    expect(estado.vigente.correccionId).toBe(id);
+    expect(estado.pendientes).toHaveLength(0);
+    expect(S.ubicacionCorreccionService_getPendientes('x@x.com').total).toBe(0);
+  });
+
+  test('los eventos van en UNA sola escritura contigua del log (todos o ninguno)', () => {
+    const a = propuesta({}, 'ana@x.com');
+    validar(a);
+    const escrituras = [];
+    const hoja = hojas.UbicacionCorreccionesLog;
+    const original = hoja.getRange.bind(hoja);
+    hoja.getRange = (f, c, nf, nc) => {
+      const r = original(f, c, nf, nc);
+      return Object.assign({}, r, { setValues: (v) => { escrituras.push(v.map((fila) => fila[2])); return r.setValues(v); } });
+    };
+    const r = proponerDirecto();
+    expect(r.supersedidas).toEqual([a]);
+    expect(escrituras).toEqual([['PROPUESTA', 'SUPERADA', 'VALIDADA']]);
+  });
+
+  test('la coordenada de Irrigacion es inmutable: el snapshot lo toma el backend y la correccion directa no toca el padron', () => {
+    const r = proponerDirecto(datos({ lat: norte(300).lat, lon: norte(300).lon, observacion: 'Esta a 300 m' }));
+    expect(r.correccion.irrigacion).toMatchObject({ lat: OFICIAL.lat, lon: OFICIAL.lon, estado: 'unica' });
+    expect(r.correccion.distanciaM).toBeGreaterThan(250);
+    expect(ubicacion[W]).toEqual(OFICIAL);
+  });
+
+  test('las reglas de contenido siguen valiendo para quien corrige directo (observacion obligatoria a mas de 250 m, Mendoza, precision GPS)', () => {
+    expect(proponerDirecto(datos({ lat: norte(400).lat, lon: norte(400).lon })).code).toBe('OBSERVACION_REQUERIDA');
+    expect(proponerDirecto(datos({ lat: 0.5, lon: 0.5 })).code).toBe('FUERA_DE_MENDOZA');
+    expect(proponerDirecto(datos({ metodo: 'GPS_ACTUAL', precisionGpsM: 80 })).code).toBe('PRECISION_INSUFICIENTE');
+    expect(proponerDirecto(datos(), 'carla@x.com', 'Carla', '99-9999').code).toBe('WELL_NOT_FOUND');
+    expect(correcciones()).toHaveLength(0);
+    expect(eventos()).toHaveLength(0);
+  });
+
+  test('si el pozo ya tenia una vigente, la nueva la SUPERA en la misma escritura (PROPUESTA, SUPERADA de la anterior, VALIDADA); una sola vigente', () => {
+    const a = propuesta({}, 'ana@x.com');
+    validar(a);
+    const r = proponerDirecto();
+    const id = r.correccion.correccionId;
+    expect(r.supersedidas).toEqual([a]);
+    expect(eventos().slice(-3).map((f) => [f[0], f[2], f[3]])).toEqual([[id, 'PROPUESTA', 'carla@x.com'], [a, 'SUPERADA', 'carla@x.com'], [id, 'VALIDADA', 'carla@x.com']]);
+    const estado = S.ubicacionCorreccionService_getPorPozo('x@x.com', W);
+    expect(estado.vigente.correccionId).toBe(id);
+    expect(estado.historial.filter((c) => c.estado === 'VALIDADA')).toHaveLength(1);
+    expect(estado.historial.find((c) => c.correccionId === a).estado).toBe('SUPERADA');
+  });
+
+  test('solo supera a la vigente del MISMO pozo; la de otro pozo y las pendientes quedan como estaban', () => {
+    const otra = propuesta({}, 'ana@x.com', OTRO_POZO);
+    validar(otra);
+    const pendiente = propuesta({}, 'beto@x.com');
+    const r = proponerDirecto();
+    expect(r.supersedidas).toEqual([]);
+    expect(S.ubicacionCorreccionService_getPorPozo('x@x.com', OTRO_POZO).vigente.correccionId).toBe(otra);
+    expect(S.ubicacionCorreccionService_getPorPozo('x@x.com', W).pendientes.map((c) => c.correccionId)).toEqual([pendiente]);
+  });
+
+  test('IDEMPOTENTE: repetir la misma creacion directa devuelve lo ya creado y NO agrega eventos (jamas una segunda VALIDADA)', () => {
+    const d = datos();
+    const primera = proponerDirecto(d);
+    const antesEventos = eventos().length;
+    const antesFilas = correcciones().length;
+    for (let i = 0; i < 3; i += 1) {
+      const otra = proponerDirecto(d);
+      expect(otra).toMatchObject({ ok: true, duplicada: true, curada: false });
+      expect(otra.autoValidada).toBeUndefined();                    // esta llamada NO dejo nada vigente: ya lo estaba
+      expect(otra.correccion).toMatchObject({ correccionId: primera.correccion.correccionId, estado: 'VALIDADA' });
+    }
+    expect(eventos()).toHaveLength(antesEventos);
+    expect(correcciones()).toHaveLength(antesFilas);
+    expect(eventosDe(primera.correccion.correccionId)).toEqual(['PROPUESTA', 'VALIDADA']);
+  });
+
+  test('el reenvio sin autoValidar (p. ej. quien ya no tiene el permiso) tambien devuelve lo creado y no escribe nada', () => {
+    const d = datos();
+    const primera = proponerDirecto(d);
+    const antes = eventos().length;
+    const otra = S.ubicacionCorreccionService_proponer('carla@x.com', 'Carla', W, d);
+    expect(otra).toMatchObject({ ok: true, duplicada: true });
+    expect(otra.correccion.correccionId).toBe(primera.correccion.correccionId);
+    expect(eventos()).toHaveLength(antes);
+  });
+
+  test('un reenvio con autoValidar de una solicitud que quedo PROPUESTA NO la valida a escondidas: se valida con validar()', () => {
+    const d = datos();
+    const primera = S.ubicacionCorreccionService_proponer('carla@x.com', 'Carla', W, d);               // creada sin permiso de validar
+    const otra = proponerDirecto(d);
+    expect(otra).toMatchObject({ ok: true, duplicada: true });
+    expect(otra.autoValidada).toBeUndefined();
+    expect(otra.correccion.estado).toBe('PROPUESTA');
+    expect(eventosDe(primera.correccion.correccionId)).toEqual(['PROPUESTA']);
+  });
+
+  test('el reenvio con otro contenido sigue siendo IDEMPOTENCY_CONFLICT (tambien en la creacion directa)', () => {
+    const d = datos();
+    proponerDirecto(d);
+    expect(proponerDirecto(Object.assign({}, d, { lat: norte(90).lat }))).toMatchObject({ ok: false, code: 'IDEMPOTENCY_CONFLICT' });
+    expect(eventos()).toHaveLength(2);
+  });
+
+  test('la idempotencia es por usuario: el mismo clientRequestId de OTRO validador es otra solicitud (la nueva supera a la anterior)', () => {
+    const d = datos();
+    const a = proponerDirecto(d, 'carla@x.com', 'Carla');
+    const b = proponerDirecto(d, 'valeria@x.com', 'Valeria');
+    expect(b.duplicada).toBe(false);
+    expect(b.supersedidas).toEqual([a.correccion.correccionId]);
+    expect(S.ubicacionCorreccionService_getPorPozo('x@x.com', W).vigente.correccionId).toBe(b.correccion.correccionId);
+  });
+
+  test('CARRERA: otra ejecucion escribe la MISMA creacion directa mientras se espera el lock -> duplicada:true y una sola VALIDADA', () => {
+    const d = datos();
+    let ajena = null;
+    instalarLock((n) => {
+      if (n !== 1) { return; }
+      const base = S.ubicacionCorreccionService_validarPropuesta(d).valores;
+      ajena = {
+        correccionId: '22222222-2222-4222-8222-222222222222', wellId: W, lat: base.lat, lon: base.lon, metodo: base.metodo, precisionGpsM: null, observacion: '',
+        emailPropone: 'carla@x.com', nombrePropone: 'Carla', timestamp: new Date(), irrLat: -32.9, irrLon: -68.8, irrEstado: 'unica', irrFuente: 'reportePozos',
+        padronPeriodo: '2026-09', distanciaM: 80, advertenciaDistancia: false, clientRequestId: d.clientRequestId
+      };
+      Repo.ubicacionCorreccionRepository_agregarCorreccionConEventos(ajena, [
+        { correccionId: ajena.correccionId, timestamp: new Date(), evento: 'PROPUESTA', email: 'carla@x.com', nombre: 'Carla', motivo: '' },
+        { correccionId: ajena.correccionId, timestamp: new Date(), evento: 'VALIDADA', email: 'carla@x.com', nombre: 'Carla', motivo: 'otra ejecucion' }
+      ]);
+    });
+    const r = proponerDirecto(d);
+    expect(ajena).not.toBeNull();
+    expect(r).toMatchObject({ ok: true, duplicada: true });
+    expect(r.correccion).toMatchObject({ correccionId: ajena.correccionId, estado: 'VALIDADA' });
+    expect(correcciones()).toHaveLength(1);
+    expect(eventosDe(ajena.correccionId)).toEqual(['PROPUESTA', 'VALIDADA']);
+  });
+
+  test('CARRERA: otra correccion del pozo se valida mientras se espera el lock -> al crear la directa, esa queda SUPERADA (una sola vigente)', () => {
+    const b = propuesta({}, 'beto@x.com');
+    instalarLock((n) => {
+      if (n === 1) {
+        Repo.ubicacionCorreccionRepository_agregarEventos([{ correccionId: b, timestamp: new Date(), evento: 'VALIDADA', email: 'otro@x.com', nombre: 'Otro', motivo: '' }]);
+      }
+    });
+    const r = proponerDirecto();
+    expect(r.supersedidas).toEqual([b]);
+    const estado = S.ubicacionCorreccionService_getPorPozo('x@x.com', W);
+    expect(estado.vigente.correccionId).toBe(r.correccion.correccionId);
+    expect(estado.historial.filter((c) => c.estado === 'VALIDADA')).toHaveLength(1);
+    expect(estado.historial.find((c) => c.correccionId === b).estado).toBe('SUPERADA');
+  });
+
+  test('ESCRITURA PARCIAL: si falla el log, la correccion queda INCONSISTENTE (sin eventos) y no hay una VALIDADA sin su PROPUESTA', () => {
+    fallarProximaEscrituraEn('UbicacionCorreccionesLog');
+    expect(() => proponerDirecto()).toThrow('Sheets rechazo');
+    expect(correcciones()).toHaveLength(1);
+    expect(eventos()).toHaveLength(0);
+    expect(S.ubicacionCorreccionService_getPendientes('x@x.com')).toMatchObject({ total: 0, inconsistentes: 1 });
+    expect(S.ubicacionCorreccionService_getPorPozo('x@x.com', W).vigente).toBeNull();
+  });
+
+  test('reintento tras la escritura parcial (mismo usuario, hoy con permiso de validar): completa PROPUESTA + VALIDADA, sin duplicar; otro reintento no suma nada', () => {
+    const d = datos();
+    fallarProximaEscrituraEn('UbicacionCorreccionesLog');
+    expect(() => proponerDirecto(d)).toThrow();
+    const id = correcciones()[0][0];
+    const r = proponerDirecto(d);
+    expect(r).toMatchObject({ ok: true, duplicada: true, curada: true, autoValidada: true, supersedidas: [] });
+    expect(r.correccion.estado).toBe('VALIDADA');
+    expect(eventosDe(id)).toEqual(['PROPUESTA', 'VALIDADA']);
+    expect(filasLog(id)[0][5]).toMatch(/completado por un reintento/);
+    expect(correcciones()).toHaveLength(1);
+    const otra = proponerDirecto(d);
+    expect(otra).toMatchObject({ ok: true, duplicada: true, curada: false });
+    expect(otra.autoValidada).toBeUndefined();
+    expect(eventosDe(id)).toEqual(['PROPUESTA', 'VALIDADA']);               // sin doble VALIDADA
+  });
+
+  test('reintento tras la escritura parcial SIN permiso de validar (hoy): solo se completa el PROPUESTA, como siempre', () => {
+    const d = datos();
+    fallarProximaEscrituraEn('UbicacionCorreccionesLog');
+    expect(() => proponerDirecto(d)).toThrow();
+    const id = correcciones()[0][0];
+    const r = S.ubicacionCorreccionService_proponer('carla@x.com', 'Carla', W, d);
+    expect(r).toMatchObject({ ok: true, duplicada: true, curada: true });
+    expect(r.autoValidada).toBeUndefined();
+    expect(r.correccion.estado).toBe('PROPUESTA');
+    expect(eventosDe(id)).toEqual(['PROPUESTA']);
+  });
+
+  test('CARRERA en el autocurado: otra ejecucion cura primero mientras se espera el lock -> no se duplica ni se agrega una segunda VALIDADA', () => {
+    const d = datos();
+    fallarProximaEscrituraEn('UbicacionCorreccionesLog');
+    expect(() => proponerDirecto(d)).toThrow();
+    const id = correcciones()[0][0];
+    instalarLock((n) => {
+      if (n === 1) {
+        Repo.ubicacionCorreccionRepository_agregarEventos([
+          { correccionId: id, timestamp: new Date(), evento: 'PROPUESTA', email: 'carla@x.com', nombre: 'Carla', motivo: 'otra ejecucion' },
+          { correccionId: id, timestamp: new Date(), evento: 'VALIDADA', email: 'carla@x.com', nombre: 'Carla', motivo: 'otra ejecucion' }
+        ]);
+      }
+    });
+    const r = proponerDirecto(d);
+    expect(r).toMatchObject({ ok: true, duplicada: true, curada: false });
+    expect(eventosDe(id)).toEqual(['PROPUESTA', 'VALIDADA']);
+  });
+
+  test('CARRERA: la MISMA solicitud aparece como PROPUESTA comun (creada sin el permiso) mientras se espera el lock -> NO se valida a escondidas', () => {
+    const d = datos();
+    let ajena = null;
+    instalarLock((n) => {
+      if (n !== 1) { return; }
+      const base = S.ubicacionCorreccionService_validarPropuesta(d).valores;
+      ajena = {
+        correccionId: '33333333-3333-4333-8333-333333333333', wellId: W, lat: base.lat, lon: base.lon, metodo: base.metodo, precisionGpsM: null, observacion: '',
+        emailPropone: 'carla@x.com', nombrePropone: 'Carla', timestamp: new Date(), irrLat: -32.9, irrLon: -68.8, irrEstado: 'unica', irrFuente: 'reportePozos',
+        padronPeriodo: '2026-09', distanciaM: 80, advertenciaDistancia: false, clientRequestId: d.clientRequestId
+      };
+      Repo.ubicacionCorreccionRepository_agregarCorreccionConEvento(ajena, { correccionId: ajena.correccionId, timestamp: new Date(), evento: 'PROPUESTA', email: 'carla@x.com', nombre: 'Carla', motivo: '' });
+    });
+    const r = proponerDirecto(d);
+    expect(r).toMatchObject({ ok: true, duplicada: true, curada: false });
+    expect(r.autoValidada).toBeUndefined();
+    expect(r.correccion.estado).toBe('PROPUESTA');
+    expect(eventosDe(ajena.correccionId)).toEqual(['PROPUESTA']);
+  });
+
+  test('quien creo directo puede revertir su propia correccion (VALIDADA -> REVERTIDA) con motivo', () => {
+    const r = proponerDirecto();
+    const id = r.correccion.correccionId;
+    expect(S.ubicacionCorreccionService_revertir('carla@x.com', 'Carla', id, 'Me equivoque de pozo').ok).toBe(true);
+    expect(eventosDe(id)).toEqual(['PROPUESTA', 'VALIDADA', 'REVERTIDA']);
+    expect(S.ubicacionCorreccionService_getPorPozo('x@x.com', W).vigente).toBeNull();
+  });
+
+  test('quien creo directo NO puede rechazarla (ya esta VALIDADA: INVALID_TRANSITION)', () => {
+    const id = proponerDirecto().correccion.correccionId;
+    expect(S.ubicacionCorreccionService_rechazar('carla@x.com', 'Carla', id, 'x')).toMatchObject({ ok: false, code: 'INVALID_TRANSITION' });
   });
 });

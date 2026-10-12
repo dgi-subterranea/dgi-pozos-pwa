@@ -16,7 +16,12 @@
 // reduce la ventana (ambas hojas se verifican ANTES de escribir la primera) y se cubre el resto con el reintento: ver proponer().
 //
 // email/nombre llegan SIEMPRE de la sesion (Api.js) - este servicio nunca los toma de datos del cliente. Los permisos se chequean
-// en Api.js; aca solo las reglas que dependen del contenido (p. ej. quien propone no puede validar su propia propuesta).
+// en Api.js; aca solo las reglas que dependen del contenido (p. ej. quien propone no puede RECHAZAR su propia propuesta).
+//
+// Quien propone y ademas tiene ubicacion_validar corrige DIRECTAMENTE (no necesita la validacion de otra persona): Api.js se lo indica con
+// opciones.autoValidar y proponer() deja la correccion vigente en la MISMA operacion bajo lock, con los mismos eventos de siempre
+// (PROPUESTA -> [SUPERADA de la anterior] -> VALIDADA, todos a nombre de ese usuario, en UNA escritura contigua del log). Quien tiene
+// ubicacion_validar tambien puede validar una propuesta propia ya existente.
 // Las respuestas hacia el cliente NUNCA incluyen emails: solo nombres y un booleano "propia".
 //
 // Todo lo sensible se recalcula aca (distancia, snapshot, banderas, estado); lo que mande el cliente fuera de la lista
@@ -32,6 +37,7 @@ var UBICACION_CORR_TRANSICIONES = {
 };
 var UBICACION_CORR_ESTADO_INCONSISTENTE = 'INCONSISTENTE';
 var UBICACION_CORR_MOTIVO_AUTOCURADO = 'Evento inicial completado por un reintento (la correccion se habia escrito sin su evento)';
+var UBICACION_CORR_MOTIVO_AUTOVALIDACION = 'Validada automaticamente al crearla: quien la creo tiene permiso para validar ubicaciones';
 var UBICACION_CORR_GPS_PRECISION_MAX_M = 50;
 var UBICACION_CORR_OBSERVACION_DESDE_M = 250;     // MAS de esta distancia a la ubicacion de Irrigacion: observacion obligatoria
 var UBICACION_CORR_ADVERTENCIA_DESDE_M = 1000;    // MAS de esta distancia: bandera de advertencia fuerte (no bloquea)
@@ -296,6 +302,24 @@ function ubicacionCorreccionService_getPendientes(email) {
 
 // --- Escrituras ---
 
+// Eventos que dejan VIGENTE a una correccion: SUPERADA para la VALIDADA anterior del mismo pozo (si hay) y despues VALIDADA para esta. Es la misma
+// secuencia para validar() y para la creacion auto-validada. derivadas = estado actual (leido DENTRO del lock).
+function ubicacionCorreccionService_eventosDeValidacion(derivadas, correccionId, wellId, ahora, emailN, nombre, motivo) {
+  var eventos = [];
+  var supersedidas = [];
+  derivadas.forEach(function (c) {
+    if (c.wellId === wellId && c.estado === 'VALIDADA' && c.correccionId !== correccionId) {
+      supersedidas.push(c.correccionId);
+      eventos.push({
+        correccionId: c.correccionId, timestamp: ahora, evento: 'SUPERADA', email: emailN, nombre: nombre || '',
+        motivo: 'Superada por la correccion ' + correccionId
+      });
+    }
+  });
+  eventos.push({ correccionId: correccionId, timestamp: ahora, evento: 'VALIDADA', email: emailN, nombre: nombre || '', motivo: motivo || '' });
+  return { eventos: eventos, supersedidas: supersedidas };
+}
+
 function ubicacionCorreccionService_mismaSolicitud(existente, v, wellId) {
   return existente.wellId === wellId && existente.metodo === v.metodo &&
     Math.abs(existente.lat - v.lat) < 1e-9 && Math.abs(existente.lon - v.lon) < 1e-9;
@@ -317,24 +341,40 @@ function ubicacionCorreccionService_buscarPorClientRequestId(derivadas, emailNor
 //  - sin ningun evento (corte entre las dos escrituras) -> AUTOCURADO: se agrega el PROPUESTA faltante, sin duplicar la correccion.
 //    Solo se llama con el lock tomado cuando hay que escribir. El evento lleva la fecha ORIGINAL de la propuesta y un motivo que
 //    deja constancia de que lo completo un reintento;
-//  - estado consistente -> reenvio idempotente (duplicada:true).
-function ubicacionCorreccionService_atenderExistente(existente, v, wellId, email, emailN, nombre) {
+//  - estado consistente -> reenvio idempotente (duplicada:true). NUNCA agrega eventos: un reintento no puede producir una segunda VALIDADA, ni
+//    validar una PROPUESTA que ya estaba escrita (esa la valida quien corresponda con validar()).
+//  - autocurado + auto (quien reintenta tiene hoy ubicacion_validar): ademas del PROPUESTA faltante se escribe, en la MISMA escritura, la
+//    validacion (SUPERADA/VALIDADA): es completar la creacion directa que se habia cortado.
+function ubicacionCorreccionService_atenderExistente(existente, v, wellId, email, emailN, nombre, auto) {
   if (!ubicacionCorreccionService_mismaSolicitud(existente, v, wellId)) {
     return ubicacionCorreccionService_error('IDEMPOTENCY_CONFLICT', 'clientRequestId ya usado con otro contenido', { wellId: wellId });
   }
   var curada = false;
+  var supersedidas = null;
   if (existente.estado === UBICACION_CORR_ESTADO_INCONSISTENTE) {
     if (existente.eventos.length > 0) {
       return ubicacionCorreccionService_error('INCONSISTENT_STATE', 'el historial de la correccion es inconsistente: requiere revision manual', { wellId: existente.wellId });
     }
     var cuando = existente.timestamp ? new Date(existente.timestamp) : new Date();
-    ubicacionCorreccionRepository_agregarEventos([{
+    var aEscribir = [{
       correccionId: existente.correccionId, timestamp: cuando, evento: 'PROPUESTA', email: emailN, nombre: nombre || '', motivo: UBICACION_CORR_MOTIVO_AUTOCURADO
-    }]);
+    }];
+    if (auto === true) {
+      var val = ubicacionCorreccionService_eventosDeValidacion(
+        ubicacionCorreccionService_leerDerivadas(), existente.correccionId, existente.wellId, new Date(), emailN, nombre, UBICACION_CORR_MOTIVO_AUTOVALIDACION);
+      aEscribir = aEscribir.concat(val.eventos);
+      supersedidas = val.supersedidas;
+    }
+    ubicacionCorreccionRepository_agregarEventos(aEscribir);
     existente = ubicacionCorreccionService_buscarPorClientRequestId(ubicacionCorreccionService_leerDerivadas(), emailN, v.clientRequestId);
     curada = true;
   }
-  return { ok: true, correccion: ubicacionCorreccionService_vista(existente, email), duplicada: true, curada: curada };
+  var r = { ok: true, correccion: ubicacionCorreccionService_vista(existente, email), duplicada: true, curada: curada };
+  if (supersedidas !== null) {
+    r.autoValidada = true;
+    r.supersedidas = supersedidas;
+  }
+  return r;
 }
 
 // Propone una correccion. Devuelve {ok:true, correccion, duplicada, curada} o {ok:false, code, message}.
@@ -347,7 +387,13 @@ function ubicacionCorreccionService_atenderExistente(existente, v, wellId, email
 // una columna no se escribe nada). Si aun asi se corta entre las dos escrituras, la correccion queda sin eventos = INCONSISTENTE
 // (fail-closed, no es una propuesta valida) hasta que el MISMO usuario reintente con el MISMO clientRequestId: ese reintento
 // agrega el PROPUESTA faltante (curada:true) sin duplicar la correccion.
-function ubicacionCorreccionService_proponer(email, nombre, wellId, datos) {
+//
+// opciones.autoValidar === true (lo decide Api.js: el usuario tiene ubicacion_corregir Y ubicacion_validar): la correccion nace VIGENTE. Dentro del
+// mismo lock se escriben PROPUESTA, SUPERADA de la anterior (si hay) y VALIDADA, todos a nombre del mismo usuario, en una sola escritura contigua del
+// log. Idempotencia: el reenvio de esa misma solicitud devuelve lo ya creado (duplicada:true) y NO agrega ningun evento (jamas una segunda VALIDADA).
+// La respuesta suma autoValidada:true y supersedidas solo cuando ESTA llamada dejo vigente la correccion.
+function ubicacionCorreccionService_proponer(email, nombre, wellId, datos, opciones) {
+  var auto = !!opciones && opciones.autoValidar === true;
   var validacion = ubicacionCorreccionService_validarPropuesta(datos);
   if (!validacion.ok) {
     return validacion;
@@ -382,9 +428,10 @@ function ubicacionCorreccionService_proponer(email, nombre, wellId, datos) {
 
   return ubicacionCorreccionRepository_conLock(function () {
     // Dentro del lock se vuelve a leer: otra ejecucion pudo escribir mientras se esperaba.
-    var existente = ubicacionCorreccionService_buscarPorClientRequestId(ubicacionCorreccionService_leerDerivadas(), emailN, v.clientRequestId);
+    var derivadasEnLock = ubicacionCorreccionService_leerDerivadas();
+    var existente = ubicacionCorreccionService_buscarPorClientRequestId(derivadasEnLock, emailN, v.clientRequestId);
     if (existente) {
-      return ubicacionCorreccionService_atenderExistente(existente, v, wellId, email, emailN, nombre);
+      return ubicacionCorreccionService_atenderExistente(existente, v, wellId, email, emailN, nombre, auto);
     }
     if (s === null) {
       // la correccion que se iba a curar desaparecio entre lecturas (no deberia pasar en una hoja append-only): no se inventa nada
@@ -413,14 +460,26 @@ function ubicacionCorreccionService_proponer(email, nombre, wellId, datos) {
       clientRequestId: v.clientRequestId
     };
     var evento = { correccionId: correccion.correccionId, timestamp: ahora, evento: 'PROPUESTA', email: emailN, nombre: nombre || '', motivo: '' };
-    ubicacionCorreccionRepository_agregarCorreccionConEvento(correccion, evento);
+    var aEscribir = [evento];
+    var supersedidas = [];
+    if (auto) {
+      var val = ubicacionCorreccionService_eventosDeValidacion(derivadasEnLock, correccion.correccionId, wellId, ahora, emailN, nombre, UBICACION_CORR_MOTIVO_AUTOVALIDACION);
+      aEscribir = aEscribir.concat(val.eventos);
+      supersedidas = val.supersedidas;
+    }
+    ubicacionCorreccionRepository_agregarCorreccionConEventos(correccion, aEscribir);
 
     var iso = ahora.toISOString();
     var derivada = ubicacionCorreccionService_derivar(
       [Object.assign({}, correccion, { timestamp: iso })],
-      [Object.assign({}, evento, { timestamp: iso })]
+      aEscribir.filter(function (e) { return e.correccionId === correccion.correccionId; }).map(function (e) { return Object.assign({}, e, { timestamp: iso }); })
     )[0];
-    return { ok: true, correccion: ubicacionCorreccionService_vista(derivada, email), duplicada: false, curada: false };
+    var resp = { ok: true, correccion: ubicacionCorreccionService_vista(derivada, email), duplicada: false, curada: false };
+    if (auto) {
+      resp.autoValidada = true;
+      resp.supersedidas = supersedidas;
+    }
+    return resp;
   });
 }
 
@@ -431,9 +490,9 @@ var UBICACION_CORR_ACCIONES = {
 };
 
 // validar / rechazar / revertir: UNA sola rutina para que las transiciones y el lock sean identicos. Los errores incluyen el
-// wellId de la correccion (cuando se la encontro) para la auditoria. Quien propone no puede VALIDAR su propia propuesta (y
-// tampoco puede RECHAZARLA: rechazar es de quien valida). Validar escribe, en UNA sola escritura contigua, SUPERADA para la validada anterior del mismo
-// pozo (si hay) y despues VALIDADA para la nueva.
+// wellId de la correccion (cuando se la encontro) para la auditoria. Quien tiene ubicacion_validar PUEDE validar una propuesta propia ya
+// existente (no hay restriccion de autoria al validar); lo que sigue vedado es RECHAZAR la propia (rechazar es una decision sobre lo de otro).
+// Validar escribe, en UNA sola escritura contigua, SUPERADA para la validada anterior del mismo pozo (si hay) y despues VALIDADA para la nueva.
 function ubicacionCorreccionService_resolver(accion, email, nombre, correccionId, motivo) {
   var regla = UBICACION_CORR_ACCIONES[accion];
   if (!regla) {
@@ -465,9 +524,6 @@ function ubicacionCorreccionService_resolver(accion, email, nombre, correccionId
         'no se puede pasar de ' + objetivo.estado + ' a ' + regla.hasta, extra);
     }
     var esPropia = ubicacionCorreccionService_normalizarEmail(objetivo.emailPropone) === emailN;
-    if (accion === 'validar' && esPropia) {
-      return ubicacionCorreccionService_error('SELF_VALIDATION', 'quien propone una correccion no puede validarla', extra);
-    }
     if (accion === 'rechazar' && esPropia) {
       // RECHAZADA es una decision de quien valida: el autor no retira su propia propuesta por esta via (un retiro por el autor, si
       // se quisiera, seria un evento aparte).
@@ -475,20 +531,15 @@ function ubicacionCorreccionService_resolver(accion, email, nombre, correccionId
     }
 
     var ahora = new Date();
-    var eventos = [];
+    var eventos;
     var supersedidas = [];
     if (accion === 'validar') {
-      derivadas.forEach(function (c) {
-        if (c.wellId === objetivo.wellId && c.estado === 'VALIDADA' && c.correccionId !== objetivo.correccionId) {
-          supersedidas.push(c.correccionId);
-          eventos.push({
-            correccionId: c.correccionId, timestamp: ahora, evento: 'SUPERADA', email: emailN, nombre: nombre || '',
-            motivo: 'Superada por la correccion ' + objetivo.correccionId
-          });
-        }
-      });
+      var val = ubicacionCorreccionService_eventosDeValidacion(derivadas, objetivo.correccionId, objetivo.wellId, ahora, emailN, nombre, m.motivo);
+      eventos = val.eventos;
+      supersedidas = val.supersedidas;
+    } else {
+      eventos = [{ correccionId: objetivo.correccionId, timestamp: ahora, evento: regla.hasta, email: emailN, nombre: nombre || '', motivo: m.motivo }];
     }
-    eventos.push({ correccionId: objetivo.correccionId, timestamp: ahora, evento: regla.hasta, email: emailN, nombre: nombre || '', motivo: m.motivo });
     ubicacionCorreccionRepository_agregarEventos(eventos);
 
     var iso = ahora.toISOString();
