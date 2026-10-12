@@ -10,7 +10,15 @@
     "gas:diff:main": "node scripts/gas/gas.js diff main",
     "gas:diff:storage": "node scripts/gas/gas.js diff storage",
     "gas:adopt:main": "node scripts/gas/gas.js adopt main",
-    "gas:adopt:storage": "node scripts/gas/gas.js adopt storage"
+    "gas:adopt:storage": "node scripts/gas/gas.js adopt storage",
+    "gas:push:main": "node scripts/gas/gas.js push main",
+    "gas:push:storage": "node scripts/gas/gas.js push storage",
+    "gas:version:main": "node scripts/gas/gas.js version main",
+    "gas:version:storage": "node scripts/gas/gas.js version storage",
+    "gas:deploy:main": "node scripts/gas/gas.js deploy main",
+    "gas:deploy:storage": "node scripts/gas/gas.js deploy storage",
+    "gas:deployments:main": "node scripts/gas/gas.js deployments main",
+    "gas:deployments:storage": "node scripts/gas/gas.js deployments storage"
   },
   "devDependencies": {
     "@google/clasp": "3.4.1",

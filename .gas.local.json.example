@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "main": {
+    "pushHabilitado": false,
+    "deploymentId": ""
+  },
+  "storage": {
+    "pushHabilitado": false,
+    "deploymentId": ""
+  }
+}

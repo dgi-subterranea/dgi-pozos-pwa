@@ -192,7 +192,7 @@ describe('validarClaspJson', () => {
   });
 });
 
-describe('allowlist de comandos de clasp: esta fase es SOLO LECTURA', () => {
+describe('allowlist de comandos de clasp: lectura siempre; escritura solo con permiso explicito', () => {
   test.each([['pull', '--user', 'main'], ['show-file-status', '--json', '--user', 'main'], ['show-authorized-user', '--user', 'storage']])('permite %s', (...args) => {
     expect(L.verificarComandoClasp(args)).toBe(true);
   });
@@ -210,8 +210,10 @@ describe('allowlist de comandos de clasp: esta fase es SOLO LECTURA', () => {
     expect(() => L.verificarComandoClasp([])).toThrow();
   });
 
-  test('los unicos subcomandos habilitados son los de lectura', () => {
-    expect(L.SUBCOMANDOS_PERMITIDOS.slice().sort()).toEqual(['pull', 'show-authorized-user', 'show-file-status']);
+  test('subcomandos de lectura y de escritura (y solo esos)', () => {
+    expect(L.SUBCOMANDOS_LECTURA.slice().sort()).toEqual(['list-deployments', 'list-versions', 'pull', 'show-authorized-user', 'show-file-status']);
+    expect(L.SUBCOMANDOS_ESCRITURA.slice().sort()).toEqual(['create-version', 'push', 'update-deployment']);
+    expect(L.SUBCOMANDOS_PERMITIDOS).toEqual(L.SUBCOMANDOS_LECTURA);
   });
 });
 
@@ -239,9 +241,10 @@ describe('utilidades', () => {
 
   test('parsearArgs: comando, proyecto y opciones (valor, =, booleano)', () => {
     expect(L.parsearArgs(['adopt', 'main', '--confirmar-huella', 'abc', '--descartar=A.js,B.js', '--sin-pull'])).toEqual({
-      comando: 'adopt', proyecto: 'main', opciones: { 'confirmar-huella': 'abc', descartar: 'A.js,B.js', 'sin-pull': true }
+      comando: 'adopt', proyecto: 'main', opciones: { 'confirmar-huella': 'abc', descartar: 'A.js,B.js', 'sin-pull': true }, extras: []
     });
-    expect(L.parsearArgs([])).toEqual({ comando: null, proyecto: null, opciones: {} });
+    expect(L.parsearArgs([])).toEqual({ comando: null, proyecto: null, opciones: {}, extras: [] });
+    expect(L.parsearArgs(['push', 'main', '-f', 'otro']).extras).toEqual(['-f', 'otro']);
   });
 
   test('dos proyectos con usuarios de clasp distintos', () => {
@@ -312,5 +315,267 @@ describe('evaluar y condicionesAdopcion', () => {
   test('advierte si el remoto no declara runtime V8 (el codigo usa Object.assign)', () => {
     const rhino = L.evaluar(base({ local: { codigo: mapa({ 'Api.js': h('a'), 'Config.js': h('c') }), manifiesto: '{}' }, remoto: { codigo: mapa({ 'Api.js': h('a'), 'Config.js': h('c') }), manifiesto: '{}' } }));
     expect(rhino.advertencias.join(' ')).toMatch(/NO declara runtimeVersion V8/);
+  });
+});
+
+describe('verificarComandoClasp con escritura: formas EXACTAS', () => {
+  const W = { escritura: true };
+  const ID = 'AKfycbMainProdDeployment000002';
+
+  test('sin el permiso de escritura, push / create-version / update-deployment se rechazan siempre', () => {
+    expect(() => L.verificarComandoClasp(['push', '--user', 'main'])).toThrow(/solo lectura/);
+    expect(() => L.verificarComandoClasp(['create-version', 'desc', '--user', 'main'])).toThrow(/solo lectura/);
+    expect(() => L.verificarComandoClasp(['update-deployment', ID, '-V', '4', '--user', 'main'])).toThrow(/solo lectura/);
+  });
+
+  test('push: solo "push --user <u>" (nada de flags ni argumentos)', () => {
+    expect(L.verificarComandoClasp(['push', '--user', 'main'], W)).toBe(true);
+    expect(() => L.verificarComandoClasp(['push', '--force', '--user', 'main'], W)).toThrow(/prohibido/);
+    expect(() => L.verificarComandoClasp(['push', '-f', '--user', 'main'], W)).toThrow(/prohibido/);
+    expect(() => L.verificarComandoClasp(['push', '--watch', '--user', 'main'], W)).toThrow(/prohibido/);
+    expect(() => L.verificarComandoClasp(['push', 'extra', '--user', 'main'], W)).toThrow(/forma de comando/);
+    expect(() => L.verificarComandoClasp(['push'], W)).toThrow(/--user/);
+    expect(() => L.verificarComandoClasp(['push', '--user'], W)).toThrow();
+    expect(() => L.verificarComandoClasp(['push', '--user', 'main', 'extra'], W)).toThrow();
+  });
+
+  test('create-version: exige una descripcion (1 a 200 caracteres, sin empezar con "-")', () => {
+    expect(L.verificarComandoClasp(['create-version', 'Correcciones de ubicacion', '--user', 'main'], W)).toBe(true);
+    ['', '   ', '-algo', 'x'.repeat(201)].forEach((d) => expect(() => L.verificarComandoClasp(['create-version', d, '--user', 'main'], W)).toThrow(/descripcion/));
+    expect(() => L.verificarComandoClasp(['create-version', '--user', 'main'], W)).toThrow(/forma de comando/);
+    expect(() => L.verificarComandoClasp(['create-version', 'a', 'b', '--user', 'main'], W)).toThrow(/forma de comando/);
+  });
+
+  test('update-deployment: <deploymentId> -V <n> [-d "desc"]; nunca @HEAD ni sin version', () => {
+    expect(L.verificarComandoClasp(['update-deployment', ID, '-V', '4', '--user', 'main'], W)).toBe(true);
+    expect(L.verificarComandoClasp(['update-deployment', ID, '-V', '4', '-d', 'Version 4', '--user', 'main'], W)).toBe(true);
+    expect(() => L.verificarComandoClasp(['update-deployment', '@HEAD', '-V', '4', '--user', 'main'], W)).toThrow(/<deploymentId>/);
+    expect(() => L.verificarComandoClasp(['update-deployment', ID, '--user', 'main'], W)).toThrow(/forma de comando/);
+    ['0', 'abc', '-1', '1.5', '1234567'].forEach((v) => expect(() => L.verificarComandoClasp(['update-deployment', ID, '-V', v, '--user', 'main'], W)).toThrow(/forma de comando/));
+    expect(() => L.verificarComandoClasp(['update-deployment', ID, '-V', '4', '-d', '', '--user', 'main'], W)).toThrow(/forma de comando/);
+    expect(() => L.verificarComandoClasp(['update-deployment', ID, '-V', '4', '--extra', 'x', '--user', 'main'], W)).toThrow(/forma de comando/);
+    expect(() => L.verificarComandoClasp(['update-deployment', 'corto', '-V', '4', '--user', 'main'], W)).toThrow(/forma de comando/);
+  });
+
+  test.each(['create-deployment', 'delete-deployment', 'delete-script', 'deploy', 'redeploy', 'version', 'run-function', 'create-script', 'clone-script', 'login', 'logout', 'enable-api'])(
+    '%s esta prohibido aunque se pida escritura', (cmd) => {
+      expect(() => L.verificarComandoClasp([cmd, '--user', 'main'], W)).toThrow(/NO permitido/);
+    });
+
+  test('pull admite solo --versionNumber <n>; show-file-status solo --json; list-* sin argumentos', () => {
+    expect(L.verificarComandoClasp(['pull', '--versionNumber', '35', '--user', 'main'])).toBe(true);
+    expect(() => L.verificarComandoClasp(['pull', '--versionNumber', 'x', '--user', 'main'])).toThrow();
+    expect(() => L.verificarComandoClasp(['pull', '--rootDir', 'src', '--user', 'main'])).toThrow(/forma de comando/);
+    expect(L.verificarComandoClasp(['show-file-status', '--json', '--user', 'main'])).toBe(true);
+    expect(() => L.verificarComandoClasp(['show-file-status', '--otro', '--user', 'main'])).toThrow();
+    expect(L.verificarComandoClasp(['list-deployments', '--user', 'storage'])).toBe(true);
+    expect(L.verificarComandoClasp(['list-versions', '--user', 'storage'])).toBe(true);
+    expect(() => L.verificarComandoClasp(['list-deployments', 'x', '--user', 'storage'])).toThrow();
+  });
+
+  test('--user debe ser el ultimo argumento y un nombre en minusculas', () => {
+    expect(() => L.verificarComandoClasp(['list-deployments', '--user', 'Main'])).toThrow(/--user/);
+    expect(() => L.verificarComandoClasp(['--user', 'main', 'list-deployments'])).toThrow();
+  });
+});
+
+describe('validarConfigLocal (.gas.local.json)', () => {
+  const ok = () => ({ version: 1, main: { pushHabilitado: false, deploymentId: '' }, storage: { pushHabilitado: false, deploymentId: '' } });
+
+  test('la estructura inicial es valida (todo deshabilitado y sin deployment)', () => {
+    expect(L.validarConfigLocal(ok())).toEqual({ ok: true, errores: [] });
+  });
+
+  test('acepta deployments numerados reales', () => {
+    const c = ok();
+    c.main = { pushHabilitado: true, deploymentId: 'AKfycbMainProdDeployment000002' };
+    c.storage.deploymentId = 'AKfycbStorageProdDeployment0002';
+    expect(L.validarConfigLocal(c).ok).toBe(true);
+  });
+
+  test.each([
+    ['sin seccion main', (c) => { delete c.main; }],
+    ['pushHabilitado como texto', (c) => { c.main.pushHabilitado = 'true'; }],
+    ['pushHabilitado ausente', (c) => { delete c.storage.pushHabilitado; }],
+    ['deploymentId numerico', (c) => { c.main.deploymentId = 123; }],
+    ['deploymentId @HEAD', (c) => { c.main.deploymentId = '@HEAD'; }],
+    ['deploymentId @head en minusculas', (c) => { c.main.deploymentId = '@head'; }],
+    ['deploymentId demasiado corto', (c) => { c.main.deploymentId = 'abc'; }],
+    ['deploymentId con marcador de posicion', (c) => { c.storage.deploymentId = 'PEGAR_AQUI_EL_DEPLOYMENT_ID_REAL'; }],
+    ['mismo deploymentId en main y storage', (c) => { c.main.deploymentId = c.storage.deploymentId = 'AKfycbMismoDeployment0000001'; }]
+  ])('invalida: %s', (n, mutar) => {
+    const c = ok();
+    mutar(c);
+    expect(L.validarConfigLocal(c).ok).toBe(false);
+  });
+
+  test('no es un objeto', () => {
+    expect(L.validarConfigLocal(null).ok).toBe(false);
+    expect(L.validarConfigLocal([]).ok).toBe(false);
+  });
+});
+
+describe('parsers de la salida de clasp', () => {
+  test('list-deployments: HEAD y numerados, ignora el encabezado', () => {
+    const r = L.parsearDeployments('Found 2 deployments.\n- AKfycbMainHeadDeployment000001 @HEAD \n- AKfycbMainProdDeployment000002 @35 \n');
+    expect(r).toEqual([
+      { id: 'AKfycbMainHeadDeployment000001', head: true, version: null, descripcion: '' },
+      { id: 'AKfycbMainProdDeployment000002', head: false, version: 35, descripcion: '' }
+    ]);
+    expect(L.parsearDeployments('Found 0 deployments.')).toEqual([]);
+    expect(L.parsearDeployments('- corto @3')).toEqual([]);
+  });
+
+  test('list-deployments con descripcion', () => {
+    expect(L.parsearDeployments('- AKfycbMainProdDeployment000002 @35 - Produccion')[0]).toMatchObject({ version: 35, descripcion: 'Produccion' });
+  });
+
+  test('list-versions y maximaVersion', () => {
+    const v = L.parsearVersiones('Found 3 versions.\n1 - No description\n2 - Algo - con guion\n35 - Ultima');
+    expect(v).toEqual([{ numero: 1, descripcion: 'No description' }, { numero: 2, descripcion: 'Algo - con guion' }, { numero: 35, descripcion: 'Ultima' }]);
+    expect(L.maximaVersion(v)).toBe(35);
+    expect(L.maximaVersion([])).toBe(0);
+  });
+
+  test('create-version: numero informado', () => {
+    expect(L.parsearVersionCreada('Created version 36.')).toBe(36);
+    expect(L.parsearVersionCreada('created version 7')).toBe(7);
+    expect(L.parsearVersionCreada('otra cosa')).toBeNull();
+  });
+
+  test('confirmacion de deploy = vN@ultimos6; no se puede adivinar sin ver el plan', () => {
+    expect(L.confirmacionDeploy(36, 'AKfycbMainProdDeployment000002')).toBe('v36@000002');
+  });
+});
+
+describe('evaluarPush (guardas puras)', () => {
+  const man = JSON.stringify({ runtimeVersion: 'V8' });
+  const evalBase = (extra) => L.evaluar(Object.assign({
+    proyecto: 'main', scriptIds: {}, nombresAjenos: new Set(['StorageApi.js']), extras: [], estadoAdoptado: null,
+    local: { codigo: mapa({ 'Api.js': h('a'), 'Config.js': h('c') }), manifiesto: man },
+    remoto: { codigo: mapa({ 'Api.js': h('a'), 'Config.js': h('c') }), manifiesto: man }
+  }, extra || {}));
+  const adoptado = (extra) => Object.assign({ remoto: { archivos: { 'Api.js': h('a'), 'Config.js': h('c') }, manifiestoSha: L.hashManifiesto(man) }, descartados: [] }, extra || {});
+  const clasp = { reconocido: true, coincide: true, faltan: [], sobran: [] };
+  const push = (ev, extra) => L.evaluarPush(Object.assign({ ev: ev, estado: adoptado(), extras: [], cantidadLocal: ev.cmp.identicos.length + ev.cmp.modificados.length + ev.cmp.soloLocal.length, permitirManifest: false, clasp: clasp }, extra || {}));
+
+  test('todo en orden: sin bloqueantes y con el resumen', () => {
+    const ev = evalBase({ estadoAdoptado: adoptado(), local: { codigo: mapa({ 'Api.js': h('NUEVO'), 'Config.js': h('c'), 'Nuevo.js': h('n') }), manifiesto: man } });
+    const r = push(ev);
+    expect(r.bloqueantes).toEqual([]);
+    expect(r.agregados).toEqual(['Nuevo.js']);
+    expect(r.modificados).toEqual(['Api.js']);
+    expect(r.eliminados).toEqual([]);
+    expect(r.identicos).toEqual(['Config.js']);
+  });
+
+  test('sin adopcion: bloquea', () => {
+    expect(push(evalBase(), { estado: null }).bloqueantes.join(' ')).toMatch(/NO esta adoptado/);
+  });
+
+  test('deriva remota (cambiado o nuevo) bloquea', () => {
+    const cambiado = evalBase({ estadoAdoptado: adoptado(), remoto: { codigo: mapa({ 'Api.js': h('a'), 'Config.js': h('EDITADO') }), manifiesto: man } });
+    expect(push(cambiado).bloqueantes.join(' ')).toMatch(/deriva.*Config\.js/);
+    const nuevo = evalBase({ estadoAdoptado: adoptado(), remoto: { codigo: mapa({ 'Api.js': h('a'), 'Config.js': h('c'), 'Intruso.js': h('i') }), manifiesto: man } });
+    const r = push(nuevo);
+    expect(r.bloqueantes.join(' ')).toMatch(/deriva.*Intruso\.js/);
+    expect(r.bloqueantes.join(' ')).toMatch(/NO reconocido.*Intruso\.js/);
+  });
+
+  test('solo-remoto: se permite SOLO si esta aprobado en el estado adoptado', () => {
+    const remoto = { codigo: mapa({ 'Api.js': h('a'), 'Config.js': h('c'), 'Vieja.js': h('v') }), manifiesto: man };
+    const estadoOk = adoptado({ remoto: { archivos: { 'Api.js': h('a'), 'Config.js': h('c'), 'Vieja.js': h('v') }, manifiestoSha: L.hashManifiesto(man) }, descartados: ['Vieja.js'] });
+    const ok = push(evalBase({ estadoAdoptado: estadoOk, remoto: remoto }), { estado: estadoOk });
+    expect(ok.bloqueantes).toEqual([]);
+    expect(ok.eliminados).toEqual(['Vieja.js']);
+    const estadoSin = adoptado({ remoto: estadoOk.remoto, descartados: [] });
+    expect(push(evalBase({ estadoAdoptado: estadoSin, remoto: remoto }), { estado: estadoSin }).bloqueantes.join(' ')).toMatch(/NO reconocido.*Vieja\.js/);
+    const otro = adoptado({ remoto: estadoOk.remoto, descartados: ['Otra.js'] });
+    expect(push(evalBase({ estadoAdoptado: otro, remoto: remoto }), { estado: otro }).bloqueantes.join(' ')).toMatch(/NO reconocido.*Vieja\.js/);
+  });
+
+  test('manifiesto distinto bloquea salvo --permitir-manifest; sin manifiesto local bloquea siempre', () => {
+    const distinto = evalBase({ estadoAdoptado: adoptado(), local: { codigo: mapa({ 'Api.js': h('a'), 'Config.js': h('c') }), manifiesto: JSON.stringify({ runtimeVersion: 'STABLE' }) } });
+    expect(push(distinto).bloqueantes.join(' ')).toMatch(/--permitir-manifest/);
+    expect(push(distinto, { permitirManifest: true }).bloqueantes).toEqual([]);
+    const sinLocal = evalBase({ estadoAdoptado: adoptado(), local: { codigo: mapa({ 'Api.js': h('a'), 'Config.js': h('c') }), manifiesto: null } });
+    expect(push(sinLocal, { permitirManifest: true }).bloqueantes.join(' ')).toMatch(/falta appsscript\.json local/);
+  });
+
+  test('cruce, extras y local vacio bloquean', () => {
+    const cruzado = evalBase({ estadoAdoptado: adoptado(), remoto: { codigo: mapa({ 'StorageApi.js': h('s') }), manifiesto: man } });
+    expect(push(cruzado).bloqueantes.join(' ')).toMatch(/PROYECTOS CRUZADOS/);
+    expect(push(evalBase({ estadoAdoptado: adoptado() }), { extras: ['Api.test.js'] }).bloqueantes.join(' ')).toMatch(/NO permitidos.*Api\.test\.js/);
+    expect(push(evalBase({ estadoAdoptado: adoptado() }), { cantidadLocal: 0 }).bloqueantes.join(' ')).toMatch(/no hay archivos de codigo locales/);
+  });
+
+  test('contraste con clasp: no reconocido bloquea; archivos locales sin subir o inesperados bloquean', () => {
+    const ev = evalBase({ estadoAdoptado: adoptado() });
+    expect(push(ev, { clasp: { reconocido: false, motivo: 'x' } }).bloqueantes.join(' ')).toMatch(/no se pudo verificar/);
+    expect(push(ev, { clasp: null }).bloqueantes.join(' ')).toMatch(/no se pudo verificar/);
+    const r = push(ev, { clasp: { reconocido: true, coincide: false, faltan: ['Config.js'], sobran: ['Intruso.js'] } });
+    expect(r.bloqueantes.join(' ')).toMatch(/NO se subirian: Config\.js.*SI se subirian: Intruso\.js/);
+  });
+});
+
+describe('verificarPostPush', () => {
+  const man = JSON.stringify({ runtimeVersion: 'V8' });
+  const ev = (local, remoto, ml, mr) => L.evaluar({ proyecto: 'main', scriptIds: {}, nombresAjenos: new Set(), extras: [], estadoAdoptado: null,
+    local: { codigo: mapa(local), manifiesto: ml === undefined ? man : ml }, remoto: { codigo: mapa(remoto), manifiesto: mr === undefined ? man : mr } });
+
+  test('remoto == local: ok', () => {
+    expect(L.verificarPostPush(ev({ 'A.js': h('a') }, { 'A.js': h('a') }))).toEqual({ ok: true, problemas: [] });
+  });
+
+  test.each([
+    ['archivo sin subir', { 'A.js': h('a'), 'B.js': h('b') }, { 'A.js': h('a') }, /sin subir: B\.js/],
+    ['archivo remoto de mas', { 'A.js': h('a') }, { 'A.js': h('a'), 'C.js': h('c') }, /no estan en el repo: C\.js/],
+    ['contenido distinto', { 'A.js': h('a') }, { 'A.js': h('otro') }, /no coincide con el local: A\.js/]
+  ])('detecta: %s', (n, local, remoto, patron) => {
+    const r = L.verificarPostPush(ev(local, remoto));
+    expect(r.ok).toBe(false);
+    expect(r.problemas.join(' ')).toMatch(patron);
+  });
+
+  test('manifiesto distinto o remoto vacio', () => {
+    expect(L.verificarPostPush(ev({ 'A.js': h('a') }, { 'A.js': h('a') }, man, '{}')).problemas.join(' ')).toMatch(/appsscript\.json no coincide/);
+    expect(L.verificarPostPush(ev({ 'A.js': h('a') }, {})).ok).toBe(false);
+  });
+});
+
+describe('evaluarDeploy (guardas puras)', () => {
+  const dep = (id, version) => ({ id: id, head: version === null, version: version, descripcion: '' });
+  const MAIN = 'AKfycbMainProdDeployment000002';
+  const HEAD = 'AKfycbMainHeadDeployment000001';
+  const base = (extra) => Object.assign({
+    despliegues: [dep(HEAD, null), dep(MAIN, 35)], versiones: [{ numero: 34 }, { numero: 35 }, { numero: 36 }], deploymentId: MAIN, otroDeploymentId: '', version: 36, permitirRetroceso: false
+  }, extra || {});
+
+  test('deploy valido: version actual y destino', () => {
+    expect(L.evaluarDeploy(base())).toEqual({ errores: [], actual: 35, destino: 36, head: false, encontrado: true });
+  });
+
+  test('deploymentId que no figura en el proyecto (pertenece a otro): bloquea', () => {
+    expect(L.evaluarDeploy(base({ deploymentId: 'AKfycbStorageProdDeployment0002' })).errores.join(' ')).toMatch(/NO figura entre los deployments de este proyecto/);
+  });
+
+  test('@HEAD no es destino productivo', () => {
+    const r = L.evaluarDeploy(base({ deploymentId: HEAD }));
+    expect(r.head).toBe(true);
+    expect(r.errores.join(' ')).toMatch(/@HEAD.*no es un destino productivo/);
+  });
+
+  test('version inexistente', () => {
+    expect(L.evaluarDeploy(base({ version: 99 })).errores.join(' ')).toMatch(/version 99 NO existe/);
+  });
+
+  test('misma version: nada que hacer; retroceso exige --permitir-retroceso', () => {
+    expect(L.evaluarDeploy(base({ version: 35 })).errores.join(' ')).toMatch(/ya esta en la version 35/);
+    expect(L.evaluarDeploy(base({ version: 34 })).errores.join(' ')).toMatch(/RETROCESO/);
+    expect(L.evaluarDeploy(base({ version: 34, permitirRetroceso: true })).errores).toEqual([]);
+  });
+
+  test('el mismo deploymentId configurado en los dos proyectos', () => {
+    expect(L.evaluarDeploy(base({ otroDeploymentId: MAIN })).errores.join(' ')).toMatch(/main y en storage/);
   });
 });

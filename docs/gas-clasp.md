@@ -1,4 +1,4 @@
-# Sincronizar Apps Script con clasp (fase de solo lectura)
+# Sincronizar Apps Script con clasp
 
 Dos proyectos Apps Script independientes (cuentas de Google distintas):
 
@@ -11,9 +11,10 @@ Dos proyectos Apps Script independientes (cuentas de Google distintas):
 (archivos sin versionar o versionados que faltan) lo informa y lo explica. Nunca entran tests, `js/`, `scripts/`, `docs/`, Python ni `Cuencas/`:
 cualquier archivo que no sea `Nombre.js` o `appsscript.json` dentro de `src` es un **extra prohibido** que bloquea.
 
-> **Esta fase NO modifica Apps Script.** No existen `push`, `version` ni `deploy`. El wrapper solo puede ejecutar los subcomandos de clasp
-> `pull`, `show-file-status` y `show-authorized-user` (allowlist; cualquier otro, o `--force`/`--deleteUnusedFiles`, se corta antes de ejecutarse).
-> `clasp push` **reemplaza el proyecto remoto completo**: por eso antes de habilitarlo se compara el inventario remoto contra el local.
+> **Lectura y escritura están separadas.** `pull`, `status`, `diff`, `adopt` y `deployments` solo leen. `push`, `version` y `deploy` escriben, cada uno
+> detrás de todas sus guardas. Todo comando de clasp pasa por una allowlist con la **forma exacta** permitida (`clasp push --user <u>` sin flags,
+> `create-version "<desc>"`, `update-deployment <id> -V <n>`); `--force`, `create-deployment`, `delete-*`, `deploy`, etc. están prohibidos siempre.
+> `clasp push` **reemplaza el proyecto remoto completo**: por eso el wrapper compara el inventario remoto contra el local y contra lo adoptado antes de subir.
 
 ## Qué se versiona y qué no
 | Archivo | Git |
@@ -22,7 +23,8 @@ cualquier archivo que no sea `Nombre.js` o `appsscript.json` dentro de `src` es 
 | `backend/src/appsscript.json`, `storage/src/appsscript.json` (se traen del remoto y se **revisan** antes de agregarlos) | sí |
 | `backend/.clasp.json`, `storage/.clasp.json` (scriptId real) | **no** (`.gitignore`) |
 | `.clasprc.json` (token OAuth) | **no** (`.gitignore`; clasp lo guarda en tu carpeta de usuario, no en el repo) |
-| `.gas-remote/` (copia remota temporal), `.gas-state/` (estado adoptado), `.gas.local.json` | **no** |
+| `.gas-remote/` (copia remota temporal), `.gas-state/` (estado adoptado), `.gas.local.json` (deploymentId y `pushHabilitado`) | **no** |
+| `.gas.local.json.example` (estructura vacía) | sí |
 
 El wrapper se niega a trabajar si detecta un `.clasp.json` / `.clasprc.json` versionado o sin ignorar.
 
@@ -59,6 +61,52 @@ estado del `appsscript.json` (con runtime, acceso de la Web App y alcances), der
 cruces, sin solo-remotos sin reconocer), y solo entonces escribe `.gas-state/<proyecto>.json` con los hashes remotos. A partir de ahí, cualquier
 edición hecha fuera de este flujo (por ejemplo directamente en el editor web) aparece como **deriva** y bloquea el diff.
 
+## Configuración local: `.gas.local.json` (ignorado por git)
+Copiar `.gas.local.json.example` a `.gas.local.json` y completarlo. Nada de esto se versiona; el `deploymentId` del storage forma parte de su URL secreta.
+```json
+{
+  "version": 1,
+  "main":    { "pushHabilitado": false, "deploymentId": "" },
+  "storage": { "pushHabilitado": false, "deploymentId": "" }
+}
+```
+- `pushHabilitado`: **`false` al inicio**. Mientras sea `false`, `gas:push` se niega (salvo `--simular`).
+- `deploymentId`: ID **completo** del deployment **numerado** de producción de ese proyecto (no `@HEAD`). Se obtiene de
+  `npx clasp list-deployments --user main|storage` (sin enmascarar). Los dos IDs deben ser distintos.
+
+## Escritura (solo después de revisar `gas:diff` y de completar `.gas.local.json`)
+```
+npm run gas:push:main     -- --confirmar-huella <sha256 completo> [--simular] [--permitir-sucio] [--permitir-manifest]
+npm run gas:version:main  -- --descripcion "<texto>"             [--permitir-sucio]
+npm run gas:deploy:main   -- --version <n> [--descripcion "<texto>"] [--confirmar-despliegue vN@xxxxxx] [--permitir-retroceso] [--permitir-distinta]
+npm run gas:deployments:main  [-- --mostrar-ids]                  (solo lectura)
+```
+(lo mismo con `:storage`). Flujo normal: `gas:diff` → revisar → `gas:push -- --confirmar-huella <hex>` → `gas:version -- --descripcion "..."` → `gas:deploy -- --version N`
+(primero imprime el plan; se repite con `--confirmar-despliegue vN@xxxxxx`). **Push, version y deploy son comandos separados**: un push no cambia lo desplegado.
+
+**`gas:push` — guardas, en este orden** (cualquier falla aborta antes de escribir; exit 1 = uso/config, 2 = bloqueado, 3 = estado incierto/no coincide):
+1. `--confirmar-huella` obligatoria, **sha256 completo (64 hex)**; no existe `--force` (ni `-f`) y las opciones desconocidas se rechazan.
+2. `pushHabilitado = true` para el proyecto en `.gas.local.json` (con `--simular` no se exige: ensaya todas las demás guardas sin subir nada).
+3. Árbol git **limpio**: sin cambios en archivos versionados y sin archivos nuevos dentro de la carpeta del proyecto (carpetas ajenas sin versionar, como `Cuencas/`,
+   no cuentan). Escape explícito: `--permitir-sucio`.
+4. **Pull remoto nuevo** antes de cualquier escritura; la huella debe coincidir con la de ese pull (si el repo o el remoto cambiaron desde el diff, aborta).
+5. Proyectos **no cruzados** (mismo scriptId, remoto con archivos del otro proyecto, o sin ningún archivo propio).
+6. Proyecto **adoptado** y **sin deriva**: el remoto no cambió desde `adopt` (ni archivos editados a mano en el editor web, ni nuevos, ni borrados, ni manifiesto).
+7. Archivos **solo-remotos**: solo se permiten (y se eliminan) los aprobados en `.gas-state/<proyecto>.json` → `descartados`; cualquier otro archivo remoto no reconocido bloquea.
+8. `appsscript.json` local igual al remoto; si difiere, solo con `--permitir-manifest`; si falta localmente, nunca.
+9. Nada no permitido dentro de `src` y **contraste con `clasp show-file-status`**: ningún archivo local queda sin subir y ningún archivo inesperado se sube (si la salida de clasp
+   no se reconoce, se aborta: correr `gas:status` y revisarla).
+10. `clasp push --user <u>` (sin `--force`) → **pull de nuevo → verifica remoto == repo** (archivos, contenido y manifiesto). Si no coincide: exit 3 y el estado adoptado **no** se actualiza.
+11. Informa **agregados / modificados / eliminados** y actualiza `.gas-state` (nuevo estado base, `descartados` vacío, `ultimoPush`).
+
+**`gas:version`:** solo `create-version "<descripción>"` (obligatoria, ≤ 200 caracteres); exige proyecto adoptado, árbol limpio y **remoto == repo** (no versiona un HEAD roto o sin subir);
+verifica con `list-versions` y **informa el número creado**. Nunca despliega.
+
+**`gas:deploy`:** solo `update-deployment <deploymentId> -V <n>` sobre el `deploymentId` de `.gas.local.json` (nunca crea un deployment). Antes: el ID debe figurar en los deployments **de este proyecto**
+(y distinto del del otro proyecto), **no puede ser `@HEAD`**, la versión debe existir, no puede ser la que ya tiene ni un retroceso (salvo `--permitir-retroceso`), y la versión debe ser
+**idéntica al repo local** (salvo `--permitir-distinta`). Muestra la versión actual → destino y exige `--confirmar-despliegue vN@<últimos 6 del deploymentId>`. Después verifica con `list-deployments`.
+Los IDs se imprimen siempre enmascarados.
+
 ## Seguridad
 - Ningún scriptId ni token se versiona; los mensajes de error enmascaran el scriptId.
 - `pull` solo escribe en `.gas-remote/<proyecto>/`; el wrapper verifica byte a byte que `src` no cambió durante el pull y corta si cambió.
@@ -67,6 +115,9 @@ edición hecha fuera de este flujo (por ejemplo directamente en el editor web) a
 - Qué hacer ante un bloqueo `solo remoto`: decidir archivo por archivo si se agrega al repo o se acepta perderlo (`--descartar`).
 - Aviso de runtime: `UbicacionCorreccionService.js` usa `Object.assign`; el diff advierte si el remoto no declara `runtimeVersion: "V8"`.
 
-## Próximas fases (no implementadas)
-`push` (exigirá siempre `--confirmar-huella`, árbol git limpio salvo `--permitir-sucio`, y repetirá el diff), `version` y `deploy` (por separado y solo
-sobre un deployment existente, para no cambiar la URL de la Web App).
+## Antes del primer push real (checklist)
+1. `npm run gas:status:main|storage` → debe decir que clasp subiría exactamente los archivos esperados.
+2. `npm run gas:diff:main|storage` → revisar; resolver o adoptar (`gas:adopt`) con `--descartar` para los solo-remotos aprobados.
+3. `npm run gas:deployments:main|storage` → ver qué deployment es el de producción (versionado, no `@HEAD`) y completar `deploymentId` en `.gas.local.json`.
+4. Ensayo: `npm run gas:push:main -- --confirmar-huella <hex> --simular` (no sube nada).
+5. Recién entonces `pushHabilitado: true` y el push real.

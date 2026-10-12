@@ -14,11 +14,24 @@ const MANIFIESTO = JSON.stringify({ runtimeVersion: 'V8', timeZone: 'America/Arg
 let raiz;
 let llamadasClasp;
 let salida;
-let remotos;          // scriptId -> {nombre: contenido}
+let remotos;               // scriptId -> {nombre: contenido}   (HEAD remoto)
+let versiones;             // scriptId -> [snapshot de remotos]  (version N = indice N-1)
+let despliegues;           // scriptId -> [{id, version|null}]   (null = @HEAD)
 let rutasNoIgnoradas;
-let versionados;      // null = todo lo del filesystem; array = lista exacta de nombres versionados en src
-let gitSucio;
+let versionados;           // null = todo lo del filesystem; array = lista exacta de nombres versionados en src
+let gitTracked;            // lineas de "git status --porcelain --untracked-files=no"
+let gitUntrackedProyecto;  // lineas "?? ..." dentro de la carpeta del proyecto
 let hookPull;
+let hookPush;
+let fallaPush;
+let fallaUpdate;
+let updateNoCambia;
+let statusOverride;
+
+const DEP_MAIN_HEAD = 'AKfycbMainHeadDeployment000001';
+const DEP_MAIN = 'AKfycbMainProdDeployment000002';
+const DEP_ST_HEAD = 'AKfycbStorageHeadDeployment001';
+const DEP_ST = 'AKfycbStorageProdDeployment0002';
 
 const hashArchivos = (dir) => crypto.createHash('sha256').update(JSON.stringify(fs.readdirSync(dir).sort().map((n) => [n, fs.readFileSync(path.join(dir, n), 'utf8')]))).digest('hex');
 const escribir = (rel, contenido) => { fs.mkdirSync(path.dirname(path.join(raiz, rel)), { recursive: true }); fs.writeFileSync(path.join(raiz, rel), contenido); };
@@ -33,33 +46,76 @@ function repoBase() {
   escribir('storage/.clasp.json', JSON.stringify({ scriptId: ID_STORAGE, rootDir: 'src' }));
 }
 
-// remoto == local por defecto (mismo contenido, manifiesto presente)
+// remoto == local por defecto (mismo contenido, manifiesto presente) y deployments/versiones de partida
 function remotosIguales() {
   remotos = {
     [ID_MAIN]: { 'Api.js': 'function doPost(e) { return 1; }\n', 'Config.js': 'function getX() { return 2; }\n', 'Servicio.js': 'function s() { return 3; }\n', 'appsscript.json': MANIFIESTO },
     [ID_STORAGE]: { 'StorageApi.js': 'function doPost(e) { return 4; }\n', 'StorageAuth.js': 'function a() { return 5; }\n', 'appsscript.json': MANIFIESTO }
   };
+  versiones = {
+    [ID_MAIN]: [1, 2, 3].map(() => Object.assign({}, remotos[ID_MAIN])),
+    [ID_STORAGE]: [1, 2].map(() => Object.assign({}, remotos[ID_STORAGE]))
+  };
+  despliegues = {
+    [ID_MAIN]: [{ id: DEP_MAIN_HEAD, version: null }, { id: DEP_MAIN, version: 3 }],
+    [ID_STORAGE]: [{ id: DEP_ST_HEAD, version: null }, { id: DEP_ST, version: 2 }]
+  };
 }
+
+const scriptIdDe = (cwd) => JSON.parse(fs.readFileSync(path.join(cwd, '.clasp.json'), 'utf8')).scriptId;
 
 function ejecutarClasp(args, o) {
   llamadasClasp.push({ args: args.slice(), cwd: o.cwd });
-  if (args[0] === 'pull') {
-    const cfg = JSON.parse(fs.readFileSync(path.join(o.cwd, '.clasp.json'), 'utf8'));
-    const archivos = remotos[cfg.scriptId];
-    if (!archivos) { return { codigo: 1, stdout: '', stderr: 'Could not find script ' + cfg.scriptId + ' (login required)' }; }
+  const cmd = args[0];
+  const ok = (stdout) => ({ codigo: 0, stdout: stdout || '', stderr: '' });
+  if (cmd === 'pull') {
+    const id = scriptIdDe(o.cwd);
+    const iv = args.indexOf('--versionNumber');
+    const archivos = iv === -1 ? remotos[id] : (versiones[id] || [])[parseInt(args[iv + 1], 10) - 1];
+    if (!archivos) { return { codigo: 1, stdout: '', stderr: 'Could not find script ' + id + ' (login required)' }; }
     Object.keys(archivos).forEach((n) => {
       fs.mkdirSync(path.dirname(path.join(o.cwd, n)), { recursive: true });
       fs.writeFileSync(path.join(o.cwd, n), archivos[n]);
     });
-    if (hookPull) { hookPull(o); }
-    return { codigo: 0, stdout: 'Cloned ' + Object.keys(archivos).length + ' files.', stderr: '' };
+    if (hookPull && iv === -1) { hookPull(o); }
+    return ok('Cloned ' + Object.keys(archivos).length + ' files.');
   }
-  if (args[0] === 'show-file-status') {
-    const proy = path.basename(o.cwd);
+  if (cmd === 'show-file-status') {
+    if (statusOverride) { return statusOverride; }
     const src = path.join(o.cwd, 'src');
-    return { codigo: 0, stdout: JSON.stringify(fs.readdirSync(src).map((n) => 'src/' + n)), stderr: proy };
+    return ok(JSON.stringify(fs.readdirSync(src).map((n) => 'src/' + n)));
   }
-  return { codigo: 0, stdout: '', stderr: '' };
+  if (cmd === 'list-deployments') {
+    const lista = despliegues[scriptIdDe(o.cwd)];
+    return ok('Found ' + lista.length + ' deployments.\n' + lista.map((d) => '- ' + d.id + ' ' + (d.version === null ? '@HEAD' : '@' + d.version) + ' ').join('\n'));
+  }
+  if (cmd === 'list-versions') {
+    const lista = versiones[scriptIdDe(o.cwd)];
+    return ok('Found ' + lista.length + ' versions.\n' + lista.map((v, k) => (k + 1) + ' - No description').join('\n'));
+  }
+  if (cmd === 'push') {
+    if (fallaPush) { return { codigo: 1, stdout: '', stderr: 'Push failed: ' + scriptIdDe(o.cwd) }; }
+    const id = scriptIdDe(o.cwd);
+    const src = path.join(o.cwd, 'src');
+    const nuevos = {};
+    fs.readdirSync(src).forEach((n) => { nuevos[n] = fs.readFileSync(path.join(src, n), 'utf8'); });
+    remotos[id] = nuevos;                       // el push REEMPLAZA todo el contenido remoto (lo que no esta en src se pierde)
+    if (hookPush) { hookPush(id); }
+    return ok('Pushed ' + Object.keys(nuevos).length + ' files.');
+  }
+  if (cmd === 'create-version') {
+    const id = scriptIdDe(o.cwd);
+    versiones[id].push(Object.assign({}, remotos[id]));
+    return ok('Created version ' + versiones[id].length + '.');
+  }
+  if (cmd === 'update-deployment') {
+    if (fallaUpdate) { return { codigo: 1, stdout: '', stderr: 'update failed' }; }
+    const d = despliegues[scriptIdDe(o.cwd)].find((x) => x.id === args[1]);
+    if (!d) { return { codigo: 1, stdout: '', stderr: 'Deployment not found' }; }
+    if (!updateNoCambia) { d.version = parseInt(args[3], 10); }
+    return ok('Updated deployment.');
+  }
+  return ok('');
 }
 
 function ejecutarGit(args) {
@@ -72,7 +128,11 @@ function ejecutarGit(args) {
   }
   if (args[0] === 'ls-files') { return ok(''); }                                   // sensibles: nada versionado
   if (args[0] === 'check-ignore') { return { codigo: rutasNoIgnoradas.indexOf(args[2]) === -1 ? 0 : 1, stdout: '', stderr: '' }; }
-  if (args[0] === 'status') { return ok(gitSucio ? ' M backend/src/Api.js' : ''); }
+  if (args[0] === 'status') {
+    if (args.indexOf('--untracked-files=no') !== -1) { return ok(gitTracked.join('\n')); }
+    const dir = args[args.length - 1];
+    return ok(gitTracked.concat(gitUntrackedProyecto).filter((l) => l.indexOf(dir) !== -1).join('\n'));
+  }
   if (args[0] === 'rev-parse') { return ok('abc1234'); }
   return ok('');
 }
@@ -83,16 +143,42 @@ function cli() {
 const correr = (...argv) => { salida = []; const c = cli().ejecutar(argv); return { codigo: c, texto: salida.join('\n') }; };
 const huellaDe = (texto) => /Huella del diff: ([0-9a-f]{64})/.exec(texto)[1];
 
+function configurar(c) {
+  const base = { version: 1, main: { pushHabilitado: false, deploymentId: '' }, storage: { pushHabilitado: false, deploymentId: '' } };
+  escribir('.gas.local.json', JSON.stringify(Object.assign(base, c), null, 2));
+}
+const estadoDe = (nombre) => JSON.parse(fs.readFileSync(path.join(raiz, '.gas-state', nombre + '.json'), 'utf8'));
+const textoEstado = (nombre) => fs.readFileSync(path.join(raiz, '.gas-state', nombre + '.json'), 'utf8');
+const huellaProyecto = (nombre) => huellaDe(correr('diff', nombre).texto);
+
+function adoptar(nombre, descartar) {
+  escribir((nombre === 'main' ? 'backend' : 'storage') + '/src/appsscript.json', MANIFIESTO);
+  const h = huellaProyecto(nombre);
+  const args = ['adopt', nombre, '--confirmar-huella', h];
+  if (descartar) { args.push('--descartar', descartar); }
+  const r = correr.apply(null, args);
+  expect(r.codigo).toBe(0);
+  llamadasClasp = [];
+}
+const subcomandos = () => llamadasClasp.map((c) => c.args[0]);
+
 beforeEach(() => {
   raiz = fs.mkdtempSync(path.join(os.tmpdir(), 'gas-test-'));
   llamadasClasp = [];
   salida = [];
   rutasNoIgnoradas = [];
   versionados = null;
-  gitSucio = false;
+  gitTracked = [];
+  gitUntrackedProyecto = [];
   hookPull = null;
+  hookPush = null;
+  fallaPush = false;
+  fallaUpdate = false;
+  updateNoCambia = false;
+  statusOverride = null;
   repoBase();
   remotosIguales();
+  configurar({});
 });
 
 afterEach(() => { fs.rmSync(raiz, { recursive: true, force: true }); });
@@ -181,11 +267,18 @@ describe('seguridad de git y credenciales', () => {
   });
 });
 
-describe('solo lectura: nada que modifique Apps Script', () => {
-  test.each(['push', 'version', 'deploy', 'create-version', 'update-deployment', 'redeploy'])('el comando "%s" no existe en esta fase y no invoca clasp', (cmd) => {
+describe('comandos de clasp que el wrapper nunca expone', () => {
+  test.each(['create-version', 'update-deployment', 'create-deployment', 'delete-deployment', 'redeploy', 'deploy-all', 'login'])('el comando "%s" no existe y no invoca clasp', (cmd) => {
     const r = correr(cmd, 'main');
     expect(r.codigo).toBe(1);
-    expect(r.texto).toMatch(/no habilitado en esta fase/);
+    expect(r.texto).toMatch(/Comando desconocido/);
+    expect(llamadasClasp).toHaveLength(0);
+  });
+
+  test.each([['push'], ['version'], ['deploy']])('"%s" sin sus argumentos obligatorios falla ANTES de tocar clasp', (cmd) => {
+    const r = correr(cmd, 'main');
+    expect(r.codigo).toBe(1);
+    expect(r.texto).toMatch(/exige/);
     expect(llamadasClasp).toHaveLength(0);
   });
 
@@ -340,7 +433,7 @@ describe('diff', () => {
 
   test('advierte si el repo tiene cambios sin commitear en src y si el conteo difiere de git', () => {
     escribir('backend/src/appsscript.json', MANIFIESTO);
-    gitSucio = true;
+    gitTracked = [' M backend/src/Api.js'];
     versionados = ['Api.js'];
     const r = correr('diff', 'main');
     expect(r.texto).toMatch(/ADVERTENCIA: hay \d+ archivo\(s\) en backend\/src que git NO versiona/);
@@ -478,6 +571,614 @@ describe('adopt (registro local; jamas escribe en Apps Script)', () => {
     const h = huellaDe(correr('diff', 'storage').texto);
     expect(correr('adopt', 'storage', '--confirmar-huella', h).codigo).toBe(0);
     expect(fs.readdirSync(path.join(raiz, '.gas-state'))).toEqual(['storage.json']);
+  });
+});
+
+describe('status: configuracion local', () => {
+  test('informa pushHabilitado y si hay deploymentId (enmascarado); sin .gas.local.json lo avisa', () => {
+    configurar({ main: { pushHabilitado: true, deploymentId: DEP_MAIN } });
+    expect(correr('status', 'main').texto).toMatch(/Config local \(\.gas\.local\.json\): pushHabilitado=true \| deploymentId configurado \(…000002\)/);
+    expect(correr('status', 'main').texto).not.toContain(DEP_MAIN);
+    fs.rmSync(path.join(raiz, '.gas.local.json'));
+    expect(correr('status', 'main').texto).toMatch(/Falta \.gas\.local\.json/);
+  });
+});
+
+describe('opciones: validacion estricta', () => {
+  test('--force y -f no existen; opciones desconocidas, argumentos sobrantes y flags con valor se rechazan antes de tocar clasp', () => {
+    const h = 'a'.repeat(64);
+    expect(correr('push', 'main', '--confirmar-huella', h, '--force').texto).toMatch(/nunca fuerza/);
+    expect(correr('push', 'main', '--confirmar-huella', h, '-f').texto).toMatch(/argumento inesperado: -f/);
+    expect(correr('push', 'main', '--confirmar-huella', h, '--otra').texto).toMatch(/opcion desconocida/);
+    expect(correr('push', 'main', '--confirmar-huella', h, '--simular', 'si').texto).toMatch(/flag sin valor/);
+    expect(correr('diff', 'main', '--permitir-sucio').texto).toMatch(/opcion desconocida/);
+    expect(correr('deploy', 'main', '--version', '4', '--force').texto).toMatch(/nunca fuerza/);
+    expect(llamadasClasp).toHaveLength(0);
+  });
+});
+
+describe('push', () => {
+  beforeEach(() => {
+    configurar({ main: { pushHabilitado: true, deploymentId: '' } });
+    adoptar('main');
+  });
+  const modificarLocal = () => { escribir('backend/src/Config.js', 'function getX() { return 22; }\n'); escribir('backend/src/Nuevo.js', 'function n() {}\n'); };
+  const push = (h, ...extra) => correr.apply(null, ['push', 'main', '--confirmar-huella', h].concat(extra));
+
+  test('push correcto: pull -> contraste -> push (sin --force) -> pull; remoto == local; informa agregados/modificados/eliminados y actualiza el estado', () => {
+    modificarLocal();
+    const h = huellaProyecto('main');
+    llamadasClasp = [];
+    const r = push(h);
+    expect(r.codigo).toBe(0);
+    expect(subcomandos()).toEqual(['pull', 'show-file-status', 'push', 'pull']);
+    const llamadaPush = llamadasClasp.find((c) => c.args[0] === 'push');
+    expect(llamadaPush.args).toEqual(['push', '--user', 'main']);
+    expect(llamadaPush.cwd).toBe(path.join(raiz, 'backend'));
+    llamadasClasp.forEach((c) => expect(L.verificarComandoClasp(c.args, { escritura: true })).toBe(true));
+    expect(remotos[ID_MAIN]['Config.js']).toBe('function getX() { return 22; }\n');
+    expect(remotos[ID_MAIN]['Nuevo.js']).toBe('function n() {}\n');
+    expect(r.texto).toMatch(/Se agregarian \(1\), se modificarian \(1\), se ELIMINARIAN del remoto \(0\)/);
+    expect(r.texto).toMatch(/PUSH VERIFICADO/);
+    expect(r.texto).toMatch(/Agregados \(1\): Nuevo\.js/);
+    expect(r.texto).toMatch(/Modificados \(1\): Config\.js/);
+    expect(r.texto).toMatch(/Eliminados \(0\): -/);
+    const e = estadoDe('main');
+    expect(e.ultimoPush).toMatchObject({ agregados: ['Nuevo.js'], modificados: ['Config.js'], eliminados: [], gitHead: 'abc1234' });
+    expect(e.descartados).toEqual([]);
+    expect(Object.keys(e.remoto.archivos)).toContain('Nuevo.js');
+    // y ahora el diff no ve deriva ni diferencias
+    const d = correr('diff', 'main');
+    expect(d.codigo).toBe(0);
+    expect(d.texto).toMatch(/Modificados: 0 \| Solo local \(se agregarian\): 0 \| Solo remoto \(un push los BORRARIA\): 0/);
+  });
+
+  test('un segundo push con la huella nueva funciona sin volver a adoptar (el estado se actualizo)', () => {
+    modificarLocal();
+    expect(push(huellaProyecto('main')).codigo).toBe(0);
+    escribir('backend/src/Servicio.js', 'function s() { return 33; }\n');
+    expect(push(huellaProyecto('main')).codigo).toBe(0);
+    expect(remotos[ID_MAIN]['Servicio.js']).toBe('function s() { return 33; }\n');
+  });
+
+  describe('huella', () => {
+    test('falta, formato invalido o corta: error ANTES de tocar clasp', () => {
+      expect(correr('push', 'main').codigo).toBe(1);
+      expect(correr('push', 'main', '--confirmar-huella', 'a'.repeat(16)).texto).toMatch(/sha256 completo/);
+      expect(correr('push', 'main', '--confirmar-huella', 'z'.repeat(64)).codigo).toBe(1);
+      expect(llamadasClasp).toHaveLength(0);
+    });
+
+    test('huella incorrecta: se trae el remoto (lectura) pero NO se sube nada', () => {
+      modificarLocal();
+      const r = push('0'.repeat(64));
+      expect(r.codigo).toBe(2);
+      expect(r.texto).toMatch(/la huella NO coincide/);
+      expect(subcomandos()).toEqual(['pull']);
+      expect(remotos[ID_MAIN]['Nuevo.js']).toBeUndefined();
+    });
+
+    test('una huella vieja (el repo cambio despues del diff) tambien se rechaza', () => {
+      modificarLocal();
+      const vieja = huellaProyecto('main');
+      escribir('backend/src/Nuevo.js', 'function n() { return "otro"; }\n');
+      llamadasClasp = [];
+      expect(push(vieja).codigo).toBe(2);
+      expect(subcomandos()).not.toContain('push');
+    });
+  });
+
+  describe('pushHabilitado', () => {
+    test('false (el valor inicial): se niega antes de leer nada del remoto', () => {
+      configurar({ main: { pushHabilitado: false, deploymentId: '' } });
+      modificarLocal();
+      const h = huellaProyecto('main');
+      llamadasClasp = [];
+      const r = push(h);
+      expect(r.codigo).toBe(1);
+      expect(r.texto).toMatch(/DESHABILITADO.*main\.pushHabilitado = false/);
+      expect(llamadasClasp).toHaveLength(0);
+    });
+
+    test('--simular ensaya TODAS las guardas sin subir nada y sin exigir pushHabilitado', () => {
+      configurar({ main: { pushHabilitado: false, deploymentId: '' } });
+      modificarLocal();
+      const h = huellaProyecto('main');
+      llamadasClasp = [];
+      const r = push(h, '--simular');
+      expect(r.codigo).toBe(0);
+      expect(r.texto).toMatch(/SIMULACION completa.*No se subio nada/);
+      expect(subcomandos()).toEqual(['pull', 'show-file-status']);
+      expect(remotos[ID_MAIN]['Nuevo.js']).toBeUndefined();
+    });
+
+    test('--simular tambien respeta las guardas: con deriva remota aborta', () => {
+      remotos[ID_MAIN]['Config.js'] = 'function getX() { return "editado"; }\n';
+      const r = push(huellaProyecto('main'), '--simular');
+      expect(r.codigo).toBe(2);
+      expect(r.texto).toMatch(/BLOQUEANTE: el remoto CAMBIO desde la adopcion/);
+    });
+
+    test('sin .gas.local.json se niega', () => {
+      fs.rmSync(path.join(raiz, '.gas.local.json'));
+      llamadasClasp = [];
+      expect(push('a'.repeat(64)).texto).toMatch(/Falta \.gas\.local\.json/);
+      expect(llamadasClasp).toHaveLength(0);
+    });
+
+    test('un .gas.local.json invalido (pushHabilitado como texto) se rechaza', () => {
+      escribir('.gas.local.json', JSON.stringify({ version: 1, main: { pushHabilitado: 'true', deploymentId: '' }, storage: { pushHabilitado: false, deploymentId: '' } }));
+      expect(push('a'.repeat(64)).texto).toMatch(/pushHabilitado debe ser true o false/);
+    });
+  });
+
+  describe('arbol git', () => {
+    test('cambios en archivos versionados: aborta antes de tocar clasp', () => {
+      modificarLocal();
+      const h = huellaProyecto('main');
+      gitTracked = [' M backend/src/Config.js'];
+      llamadasClasp = [];
+      const r = push(h);
+      expect(r.codigo).toBe(2);
+      expect(r.texto).toMatch(/el arbol git NO esta limpio.*Escape explicito: --permitir-sucio/s);
+      expect(llamadasClasp).toHaveLength(0);
+    });
+
+    test('archivos nuevos DENTRO de la carpeta del proyecto tambien cuentan; las carpetas ajenas sin versionar (Cuencas/) no', () => {
+      modificarLocal();
+      const h = huellaProyecto('main');
+      gitUntrackedProyecto = ['?? backend/src/Nuevo.js'];
+      expect(push(h).codigo).toBe(2);
+      gitUntrackedProyecto = ['?? Cuencas/'];
+      expect(push(h).codigo).toBe(0);
+    });
+
+    test('--permitir-sucio es un escape explicito: sigue, con advertencia', () => {
+      modificarLocal();
+      const h = huellaProyecto('main');
+      gitTracked = [' M backend/src/Config.js'];
+      const r = push(h, '--permitir-sucio');
+      expect(r.codigo).toBe(0);
+      expect(r.texto).toMatch(/ADVERTENCIA: --permitir-sucio/);
+      expect(subcomandos()).toContain('push');
+    });
+  });
+
+  describe('estado remoto', () => {
+    test('el remoto cambio desde adopt (editado a mano): aborta y no sube', () => {
+      remotos[ID_MAIN]['Config.js'] = 'function getX() { return "editado en el editor web"; }\n';
+      const r = push(huellaProyecto('main'));
+      expect(r.codigo).toBe(2);
+      expect(r.texto).toMatch(/BLOQUEANTE: el remoto CAMBIO desde la adopcion.*Config\.js/);
+      expect(subcomandos()).not.toContain('push');
+    });
+
+    test('aparece un archivo remoto NUEVO no reconocido: aborta (un push lo borraria)', () => {
+      remotos[ID_MAIN]['Intruso.js'] = 'function i() {}\n';
+      const r = push(huellaProyecto('main'));
+      expect(r.codigo).toBe(2);
+      expect(r.texto).toMatch(/NO reconocido.*Intruso\.js/);
+      expect(subcomandos()).not.toContain('push');
+      expect(remotos[ID_MAIN]['Intruso.js']).toBeDefined();
+    });
+
+    test('proyecto sin adoptar: aborta', () => {
+      fs.rmSync(path.join(raiz, '.gas-state/main.json'));
+      const r = push(huellaProyecto('main'));
+      expect(r.codigo).toBe(2);
+      expect(r.texto).toMatch(/NO esta adoptado/);
+      expect(subcomandos()).not.toContain('push');
+    });
+
+    test('proyecto CRUZADO (el scriptId de main apunta al proyecto de storage): aborta', () => {
+      remotos[ID_MAIN] = Object.assign({}, remotos[ID_STORAGE]);
+      const r = push(huellaProyecto('main'));
+      expect(r.codigo).toBe(2);
+      expect(r.texto).toMatch(/PROYECTOS CRUZADOS/);
+      expect(subcomandos()).not.toContain('push');
+      expect(fs.existsSync(path.join(raiz, '.gas-remote/main/.CRUZADO'))).toBe(true);
+    });
+
+    test('mismo scriptId en las dos carpetas: aborta', () => {
+      escribir('storage/.clasp.json', JSON.stringify({ scriptId: ID_MAIN, rootDir: 'src' }));
+      const r = push('a'.repeat(64));
+      expect(r.codigo).toBe(2);
+      expect(r.texto).toMatch(/PROYECTOS CRUZADOS.*MISMO scriptId/s);
+      expect(subcomandos()).not.toContain('push');
+    });
+  });
+
+  describe('manifiesto', () => {
+    const cambiarManifiesto = () => escribir('backend/src/appsscript.json', JSON.stringify({ runtimeVersion: 'V8', timeZone: 'America/Argentina/Mendoza' }));
+
+    test('cambiado: aborta salvo --permitir-manifest', () => {
+      cambiarManifiesto();
+      const h = huellaProyecto('main');
+      llamadasClasp = [];
+      const r = push(h);
+      expect(r.codigo).toBe(2);
+      expect(r.texto).toMatch(/difiere del remoto.*--permitir-manifest/);
+      expect(subcomandos()).not.toContain('push');
+    });
+
+    test('con --permitir-manifest se sube (con advertencia) y queda igual al local', () => {
+      cambiarManifiesto();
+      const h = huellaProyecto('main');
+      const r = push(h, '--permitir-manifest');
+      expect(r.codigo).toBe(0);
+      expect(r.texto).toMatch(/ADVERTENCIA: --permitir-manifest/);
+      expect(JSON.parse(remotos[ID_MAIN]['appsscript.json'])).toEqual({ runtimeVersion: 'V8', timeZone: 'America/Argentina/Mendoza' });
+    });
+
+    test('sin appsscript.json local no se sube NUNCA (ni con --permitir-manifest)', () => {
+      fs.rmSync(path.join(raiz, 'backend/src/appsscript.json'));
+      const h = huellaProyecto('main');
+      const r = push(h, '--permitir-manifest');
+      expect(r.codigo).toBe(2);
+      expect(r.texto).toMatch(/falta appsscript\.json local/);
+    });
+  });
+
+  describe('archivos solo-remotos aprobados para descarte', () => {
+    beforeEach(() => {
+      remotos[ID_MAIN]['Vieja.js'] = 'function vieja() {}\n';
+      adoptar('main', 'Vieja.js');
+    });
+
+    test('un archivo aprobado en .gas-state SI se elimina del remoto; el push lo informa y limpia la lista de descartados', () => {
+      const r = push(huellaProyecto('main'));
+      expect(r.codigo).toBe(0);
+      expect(r.texto).toMatch(/se ELIMINARIAN del remoto \(1\)/);
+      expect(r.texto).toMatch(/Eliminados \(1\): Vieja\.js/);
+      expect(remotos[ID_MAIN]['Vieja.js']).toBeUndefined();
+      expect(estadoDe('main').descartados).toEqual([]);
+      expect(estadoDe('main').ultimoPush.eliminados).toEqual(['Vieja.js']);
+    });
+
+    test('si el archivo ya no figura como aprobado (estado editado), el push se niega', () => {
+      const e = estadoDe('main');
+      e.descartados = [];
+      fs.writeFileSync(path.join(raiz, '.gas-state/main.json'), JSON.stringify(e, null, 2));
+      const r = push(huellaProyecto('main'));
+      expect(r.codigo).toBe(2);
+      expect(r.texto).toMatch(/NO reconocido.*Vieja\.js/);
+      expect(remotos[ID_MAIN]['Vieja.js']).toBeDefined();
+    });
+
+    test('aprobar un archivo NO autoriza a borrar otros: uno aprobado y otro nuevo -> aborta', () => {
+      remotos[ID_MAIN]['Otro.js'] = 'function otro() {}\n';
+      const r = push(huellaProyecto('main'));
+      expect(r.codigo).toBe(2);
+      expect(r.texto).toMatch(/Otro\.js/);
+      expect(remotos[ID_MAIN]['Vieja.js']).toBeDefined();
+    });
+  });
+
+  describe('verificacion contra lo que clasp subiria', () => {
+    test('un archivo local que clasp NO subiria bloquea el push', () => {
+      statusOverride = { codigo: 0, stdout: JSON.stringify(['src/Api.js', 'src/Config.js', 'src/appsscript.json']), stderr: '' };   // falta Servicio.js
+      const r = push(huellaProyecto('main'));
+      expect(r.codigo).toBe(2);
+      expect(r.texto).toMatch(/NO se subirian: Servicio\.js/);
+      expect(subcomandos()).not.toContain('push');
+    });
+
+    test('un archivo inesperado que clasp SI subiria bloquea el push', () => {
+      statusOverride = { codigo: 0, stdout: JSON.stringify(['src/Api.js', 'src/Config.js', 'src/Servicio.js', 'src/appsscript.json', 'src/Sobra.js']), stderr: '' };
+      const r = push(huellaProyecto('main'));
+      expect(r.codigo).toBe(2);
+      expect(r.texto).toMatch(/SI se subirian: Sobra\.js/);
+    });
+
+    test('salida de clasp que no se reconoce: fail-closed', () => {
+      statusOverride = { codigo: 0, stdout: 'nada util', stderr: '' };
+      const r = push(huellaProyecto('main'));
+      expect(r.codigo).toBe(2);
+      expect(r.texto).toMatch(/no se pudo verificar/);
+      expect(subcomandos()).not.toContain('push');
+    });
+
+    test('un archivo no permitido dentro de src (p. ej. un test) bloquea', () => {
+      escribir('backend/src/Api.test.js', 'x\n');
+      const r = push(huellaProyecto('main'));
+      expect(r.codigo).toBe(2);
+      expect(r.texto).toMatch(/NO permitidos.*Api\.test\.js/);
+    });
+  });
+
+  describe('despues del push', () => {
+    test('si el remoto NO coincide con el repo, exit 3, lo informa y NO actualiza el estado adoptado', () => {
+      modificarLocal();
+      const h = huellaProyecto('main');
+      const antes = textoEstado('main');
+      hookPush = (id) => { delete remotos[id]['Servicio.js']; };
+      const r = push(h);
+      expect(r.codigo).toBe(3);
+      expect(r.texto).toMatch(/DESPUES del push el remoto NO coincide con el repo/);
+      expect(r.texto).toMatch(/quedaron sin subir: Servicio\.js/);
+      expect(textoEstado('main')).toBe(antes);
+    });
+
+    test('si clasp push falla: exit 3, estado remoto incierto y estado adoptado intacto', () => {
+      modificarLocal();
+      const h = huellaProyecto('main');
+      const antes = textoEstado('main');
+      fallaPush = true;
+      const r = push(h);
+      expect(r.codigo).toBe(3);
+      expect(r.texto).toMatch(/clasp push fallo.*INCIERTO/s);
+      expect(r.texto).not.toContain(ID_MAIN);
+      expect(textoEstado('main')).toBe(antes);
+    });
+  });
+
+  test('storage se sube aparte, con su propia cuenta y su propio estado', () => {
+    configurar({ main: { pushHabilitado: true, deploymentId: '' }, storage: { pushHabilitado: true, deploymentId: '' } });
+    adoptar('storage');
+    const estadoMain = textoEstado('main');
+    escribir('storage/src/StorageAuth.js', 'function a() { return 55; }\n');
+    const h = huellaProyecto('storage');
+    llamadasClasp = [];
+    const r = correr('push', 'storage', '--confirmar-huella', h);
+    expect(r.codigo).toBe(0);
+    llamadasClasp.forEach((c) => expect(c.args[c.args.length - 1]).toBe('storage'));
+    expect(llamadasClasp.find((c) => c.args[0] === 'push').cwd).toBe(path.join(raiz, 'storage'));
+    expect(remotos[ID_STORAGE]['StorageAuth.js']).toBe('function a() { return 55; }\n');
+    expect(textoEstado('main')).toBe(estadoMain);
+  });
+});
+
+describe('version', () => {
+  beforeEach(() => {
+    configurar({ main: { pushHabilitado: true, deploymentId: DEP_MAIN } });
+    adoptar('main');
+  });
+  const version = (...extra) => correr.apply(null, ['version', 'main'].concat(extra));
+
+  test('sin descripcion (o vacia / que empieza con "-"): error ANTES de tocar clasp', () => {
+    expect(version().texto).toMatch(/exige --descripcion/);
+    expect(version('--descripcion', '   ').codigo).toBe(1);
+    expect(version('--descripcion', '-x').codigo).toBe(1);
+    expect(version('--descripcion', 'x'.repeat(201)).codigo).toBe(1);
+    expect(llamadasClasp).toHaveLength(0);
+  });
+
+  test('crea la version (solo create-version, nunca despliega) y devuelve el numero', () => {
+    const r = version('--descripcion', 'Correcciones de ubicacion');
+    expect(r.codigo).toBe(0);
+    expect(r.texto).toMatch(/VERSION CREADA: 4 \("Correcciones de ubicacion"\)\. No se desplego nada/);
+    expect(subcomandos()).toEqual(['pull', 'list-versions', 'create-version', 'list-versions']);
+    expect(llamadasClasp.find((c) => c.args[0] === 'create-version').args).toEqual(['create-version', 'Correcciones de ubicacion', '--user', 'main']);
+    expect(versiones[ID_MAIN]).toHaveLength(4);
+    expect(despliegues[ID_MAIN].find((d) => d.id === DEP_MAIN).version).toBe(3);        // el deployment NO se movio
+    expect(estadoDe('main').ultimaVersion).toMatchObject({ numero: 4, descripcion: 'Correcciones de ubicacion', gitHead: 'abc1234' });
+    expect(subcomandos()).not.toContain('update-deployment');
+    expect(subcomandos()).not.toContain('push');
+  });
+
+  test('si clasp no informa el numero, se toma la mayor version listada (y se verifica que subio)', () => {
+    const ejecutarOriginal = ejecutarClasp;
+    const c = crearCli({
+      raiz: raiz, salida: (t) => salida.push(String(t)), ejecutarGit: ejecutarGit, generarDiff: () => '', ahora: () => new Date('2026-10-09T12:00:00Z'),
+      ejecutarClasp: (args, o) => { const r = ejecutarOriginal(args, o); return args[0] === 'create-version' ? { codigo: 0, stdout: 'ok', stderr: '' } : r; }
+    });
+    salida = [];
+    expect(c.ejecutar(['version', 'main', '--descripcion', 'sin numero informado'])).toBe(0);
+    expect(salida.join('\n')).toMatch(/VERSION CREADA: 4/);
+  });
+
+  test('si el remoto NO coincide con el repo (HEAD roto o sin subir), no crea la version', () => {
+    escribir('backend/src/Config.js', 'function getX() { return 22; }\n');
+    llamadasClasp = [];
+    const r = version('--descripcion', 'x');
+    expect(r.codigo).toBe(2);
+    expect(r.texto).toMatch(/una version congela el HEAD remoto y este NO coincide con el repo/);
+    expect(r.texto).toMatch(/Config\.js/);
+    expect(subcomandos()).not.toContain('create-version');
+  });
+
+  test('un remoto con un archivo de mas (p. ej. un duplicado) tampoco', () => {
+    remotos[ID_MAIN]['Codigo.js'] = 'function dup() {}\n';
+    const r = version('--descripcion', 'x');
+    expect(r.codigo).toBe(2);
+    expect(r.texto).toMatch(/Codigo\.js/);
+    expect(subcomandos()).not.toContain('create-version');
+  });
+
+  test('arbol sucio: aborta; sin adoptar: error', () => {
+    gitTracked = [' M backend/src/Api.js'];
+    expect(version('--descripcion', 'x').codigo).toBe(2);
+    gitTracked = [];
+    fs.rmSync(path.join(raiz, '.gas-state/main.json'));
+    expect(version('--descripcion', 'x').texto).toMatch(/no esta adoptado/);
+    expect(subcomandos()).not.toContain('create-version');
+  });
+
+  test('si create-version falla: exit 3', () => {
+    const ejecutarOriginal = ejecutarClasp;
+    const c = crearCli({
+      raiz: raiz, salida: (t) => salida.push(String(t)), ejecutarGit: ejecutarGit, generarDiff: () => '',
+      ejecutarClasp: (args, o) => (args[0] === 'create-version' ? { codigo: 1, stdout: '', stderr: 'boom' } : ejecutarOriginal(args, o))
+    });
+    salida = [];
+    expect(c.ejecutar(['version', 'main', '--descripcion', 'x'])).toBe(3);
+  });
+});
+
+describe('deploy', () => {
+  beforeEach(() => {
+    configurar({ main: { pushHabilitado: true, deploymentId: DEP_MAIN }, storage: { pushHabilitado: true, deploymentId: DEP_ST } });
+    adoptar('main');
+    versiones[ID_MAIN].push(Object.assign({}, remotos[ID_MAIN]));          // version 4 == repo
+  });
+  const deploy = (...extra) => correr.apply(null, ['deploy', 'main'].concat(extra));
+  const TOKEN = 'v4@' + DEP_MAIN.slice(-6);
+  const escrituras = () => llamadasClasp.filter((c) => ['push', 'create-version', 'update-deployment', 'create-deployment'].indexOf(c.args[0]) !== -1);
+
+  test('sin --version o con una version invalida: error antes de tocar clasp', () => {
+    expect(deploy().texto).toMatch(/exige --version/);
+    expect(deploy('--version', 'abc').codigo).toBe(1);
+    expect(deploy('--version', '0').codigo).toBe(1);
+    expect(llamadasClasp).toHaveLength(0);
+  });
+
+  test('deploymentId ausente en .gas.local.json: error con instrucciones', () => {
+    configurar({ main: { pushHabilitado: true, deploymentId: '' } });
+    const r = deploy('--version', '4');
+    expect(r.codigo).toBe(1);
+    expect(r.texto).toMatch(/falta main\.deploymentId en \.gas\.local\.json/);
+    expect(llamadasClasp).toHaveLength(0);
+  });
+
+  test('plan sin confirmar: muestra version actual -> destino, pide el token y NO modifica nada; el ID completo no se imprime', () => {
+    const r = deploy('--version', '4');
+    expect(r.codigo).toBe(2);
+    expect(r.texto).toMatch(/Deployment …000002: version actual 3 {2}->/);
+    expect(r.texto).toMatch(/pasaria a la version 4/);
+    expect(r.texto).toMatch(/La version 4 coincide exactamente con el repo local/);
+    expect(r.texto).toContain('--confirmar-despliegue ' + TOKEN);
+    expect(r.texto).not.toContain(DEP_MAIN);
+    expect(escrituras()).toHaveLength(0);
+    expect(despliegues[ID_MAIN].find((d) => d.id === DEP_MAIN).version).toBe(3);
+  });
+
+  test('confirmacion incorrecta: no hace nada', () => {
+    const r = deploy('--version', '4', '--confirmar-despliegue', 'v4@000001');
+    expect(r.codigo).toBe(2);
+    expect(escrituras()).toHaveLength(0);
+  });
+
+  test('con la confirmacion correcta: solo update-deployment sobre el deployment configurado; se verifica y se informa', () => {
+    const r = deploy('--version', '4', '--confirmar-despliegue', TOKEN);
+    expect(r.codigo).toBe(0);
+    expect(escrituras().map((c) => c.args)).toEqual([['update-deployment', DEP_MAIN, '-V', '4', '-d', 'Version 4 (gas:deploy)', '--user', 'main']]);
+    expect(llamadasClasp.map((c) => c.args[0])).not.toContain('create-deployment');
+    expect(despliegues[ID_MAIN].find((d) => d.id === DEP_MAIN).version).toBe(4);
+    expect(despliegues[ID_MAIN].find((d) => d.id === DEP_MAIN_HEAD).version).toBeNull();          // @HEAD intacto
+    expect(despliegues[ID_MAIN]).toHaveLength(2);                                                 // no se creo ningun deployment
+    expect(r.texto).toMatch(/DEPLOY VERIFICADO: el deployment …000002 paso de la version 3 a la 4/);
+    expect(r.texto).not.toContain(DEP_MAIN);
+    expect(estadoDe('main').ultimoDeploy).toMatchObject({ version: 4, anterior: 3, deployment: '…000002' });
+  });
+
+  test('con --descripcion la manda a clasp', () => {
+    deploy('--version', '4', '--confirmar-despliegue', TOKEN, '--descripcion', 'Correcciones de ubicacion');
+    expect(escrituras()[0].args).toEqual(['update-deployment', DEP_MAIN, '-V', '4', '-d', 'Correcciones de ubicacion', '--user', 'main']);
+  });
+
+  test('deployment INCORRECTO (de otro proyecto o inexistente): no figura en este proyecto -> no se toca nada', () => {
+    configurar({ main: { pushHabilitado: true, deploymentId: DEP_ST }, storage: { pushHabilitado: true, deploymentId: '' } });
+    const r = deploy('--version', '4', '--confirmar-despliegue', 'v4@' + DEP_ST.slice(-6));
+    expect(r.codigo).toBe(2);
+    expect(r.texto).toMatch(/NO figura entre los deployments de este proyecto/);
+    expect(escrituras()).toHaveLength(0);
+  });
+
+  test('el mismo deploymentId en main y storage: configuracion invalida', () => {
+    configurar({ main: { pushHabilitado: true, deploymentId: DEP_MAIN }, storage: { pushHabilitado: true, deploymentId: DEP_MAIN } });
+    const r = deploy('--version', '4');
+    expect(r.codigo).toBe(1);
+    expect(r.texto).toMatch(/MISMO deploymentId/);
+    expect(llamadasClasp).toHaveLength(0);
+  });
+
+  test('destino @HEAD: NUNCA (aunque se confirme)', () => {
+    configurar({ main: { pushHabilitado: true, deploymentId: DEP_MAIN_HEAD }, storage: { pushHabilitado: true, deploymentId: '' } });
+    const r = deploy('--version', '4', '--confirmar-despliegue', 'v4@' + DEP_MAIN_HEAD.slice(-6));
+    expect(r.codigo).toBe(2);
+    expect(r.texto).toMatch(/@HEAD.*no es un destino productivo/);
+    expect(escrituras()).toHaveLength(0);
+  });
+
+  test('version inexistente: no se toca nada', () => {
+    const r = deploy('--version', '99', '--confirmar-despliegue', 'v99@000002');
+    expect(r.codigo).toBe(2);
+    expect(r.texto).toMatch(/version 99 NO existe/);
+    expect(escrituras()).toHaveLength(0);
+  });
+
+  test('misma version que ya tiene: nada que hacer; retroceso solo con --permitir-retroceso', () => {
+    expect(deploy('--version', '3', '--confirmar-despliegue', 'v3@000002').texto).toMatch(/ya esta en la version 3/);
+    const r = deploy('--version', '2', '--confirmar-despliegue', 'v2@000002');
+    expect(r.codigo).toBe(2);
+    expect(r.texto).toMatch(/RETROCESO/);
+    expect(escrituras()).toHaveLength(0);
+    const ok = deploy('--version', '2', '--confirmar-despliegue', 'v2@000002', '--permitir-retroceso');
+    expect(ok.codigo).toBe(0);
+    expect(despliegues[ID_MAIN].find((d) => d.id === DEP_MAIN).version).toBe(2);
+  });
+
+  test('una version que NO coincide con el repo local se rechaza (salvo --permitir-distinta)', () => {
+    escribir('backend/src/Config.js', 'function getX() { return 99; }\n');             // el repo avanzo despues de crear la version 4
+    const r = deploy('--version', '4', '--confirmar-despliegue', TOKEN);
+    expect(r.codigo).toBe(2);
+    expect(r.texto).toMatch(/La version 4 NO coincide con el repo local: Config\.js/);
+    expect(escrituras()).toHaveLength(0);
+    const ok = deploy('--version', '4', '--confirmar-despliegue', TOKEN, '--permitir-distinta');
+    expect(ok.codigo).toBe(0);
+    expect(ok.texto).toMatch(/ADVERTENCIA: --permitir-distinta/);
+  });
+
+  test('si update-deployment falla: exit 3 (sin imprimir IDs)', () => {
+    fallaUpdate = true;
+    const r = deploy('--version', '4', '--confirmar-despliegue', TOKEN);
+    expect(r.codigo).toBe(3);
+    expect(r.texto).not.toContain(DEP_MAIN);
+    expect(despliegues[ID_MAIN].find((d) => d.id === DEP_MAIN).version).toBe(3);
+  });
+
+  test('si despues del update el deployment no quedo en la version pedida: exit 3', () => {
+    updateNoCambia = true;
+    const r = deploy('--version', '4', '--confirmar-despliegue', TOKEN);
+    expect(r.codigo).toBe(3);
+    expect(r.texto).toMatch(/no se pudo confirmar que el deployment quedo en la version 4/);
+  });
+
+  test('storage: usa su propio deployment y su propia cuenta', () => {
+    configurar({ main: { pushHabilitado: true, deploymentId: DEP_MAIN }, storage: { pushHabilitado: true, deploymentId: DEP_ST } });
+    adoptar('storage');
+    versiones[ID_STORAGE].push(Object.assign({}, remotos[ID_STORAGE]));    // version 3 == repo
+    const r = correr('deploy', 'storage', '--version', '3', '--confirmar-despliegue', 'v3@' + DEP_ST.slice(-6));
+    expect(r.codigo).toBe(0);
+    expect(escrituras()[0].args).toEqual(['update-deployment', DEP_ST, '-V', '3', '-d', 'Version 3 (gas:deploy)', '--user', 'storage']);
+    expect(despliegues[ID_STORAGE].find((d) => d.id === DEP_ST).version).toBe(3);
+    expect(despliegues[ID_MAIN].find((d) => d.id === DEP_MAIN).version).toBe(3);        // main intacto
+    expect(r.texto).not.toContain(DEP_ST);
+  });
+});
+
+describe('deployments (solo lectura)', () => {
+  test('lista los deployments con IDs enmascarados, marca @HEAD como no productivo y el configurado', () => {
+    configurar({ main: { pushHabilitado: false, deploymentId: DEP_MAIN } });
+    const r = correr('deployments', 'main');
+    expect(r.codigo).toBe(0);
+    expect(r.texto).toMatch(/Versiones: 3 \(la ultima: 3\)/);
+    expect(r.texto).toMatch(/…000001 \| @HEAD = deployment de PRUEBAS \(\/dev\): NO es un destino productivo/);
+    expect(r.texto).toMatch(/…000002 \| version numerada 3 \| configurado en \.gas\.local\.json/);
+    expect(r.texto).not.toContain(DEP_MAIN);
+    expect(subcomandos()).toEqual(['list-deployments', 'list-versions']);
+  });
+
+  test('--mostrar-ids imprime los IDs completos (solo si se pide)', () => {
+    expect(correr('deployments', 'main', '--mostrar-ids').texto).toContain(DEP_MAIN);
+  });
+
+  test('main: marca el deployment que coincide con la URL /exec de js/api.js', () => {
+    escribir('js/api.js', "var APPS_SCRIPT_URL = 'https://script.google.com/macros/s/" + DEP_MAIN + "/exec';\n");
+    expect(correr('deployments', 'main').texto).toMatch(/…000002 \| version numerada 3 \| coincide con la URL \/exec de js\/api\.js \(PRODUCCION\)/);
+  });
+
+  test('avisa si el deploymentId esta vacio o no figura en el proyecto; el storage recuerda que es secreto', () => {
+    expect(correr('deployments', 'main').texto).toMatch(/main\.deploymentId esta VACIO/);
+    configurar({ main: { pushHabilitado: false, deploymentId: DEP_ST } });
+    expect(correr('deployments', 'main').texto).toMatch(/NO figura entre los deployments de este proyecto/);
+    expect(correr('deployments', 'storage').texto).toMatch(/URL secreta/);
+  });
+
+  test('no modifica nada: solo list-deployments y list-versions', () => {
+    correr('deployments', 'main');
+    correr('deployments', 'storage');
+    expect(llamadasClasp.every((c) => ['list-deployments', 'list-versions'].indexOf(c.args[0]) !== -1)).toBe(true);
   });
 });
 

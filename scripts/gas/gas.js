@@ -1,12 +1,17 @@
 #!/usr/bin/env node
 'use strict';
-// Wrapper de clasp para los DOS proyectos de Apps Script (main = backend/, storage = storage/). FASE DE SOLO LECTURA:
-//   pull    trae el proyecto remoto a .gas-remote/<proyecto>/ (JAMAS sobre src)
-//   status  inventario local derivado del filesystem + chequeos de seguridad (no consulta el remoto)
-//   diff    pull + comparacion local/remoto: solo remotos, solo locales, modificados, manifiesto, huella
-//   adopt   registra LOCALMENTE (.gas-state/) que se reviso el estado remoto; no escribe nada en Apps Script
-// No existen push / version / deploy: el unico subcomando de clasp que este programa puede ejecutar es de lectura (ver
-// gasLogic.verificarComandoClasp). Ningun scriptId ni token se versiona: .clasp.json y .clasprc.json estan en .gitignore.
+// Wrapper de clasp para los DOS proyectos de Apps Script (main = backend/, storage = storage/).
+// LECTURA (no modifican el remoto):
+//   pull         trae el proyecto remoto a .gas-remote/<proyecto>/ (JAMAS sobre src)
+//   status       inventario local derivado del filesystem + chequeos de seguridad
+//   diff         pull + comparacion local/remoto: solo remotos, solo locales, modificados, manifiesto, huella
+//   adopt        registra LOCALMENTE (.gas-state/) que se reviso el estado remoto; no escribe nada en Apps Script
+//   deployments  lista los deployments y versiones (IDs enmascarados)
+// ESCRITURA (cada una detras de TODAS sus guardas; ver gasLogic.verificarComandoClasp: forma exacta, sin --force):
+//   push         clasp push (reemplaza el remoto por el repo) con --confirmar-huella, arbol limpio, deriva, cruces, manifiesto...
+//   version      clasp create-version (nunca despliega)
+//   deploy       clasp update-deployment sobre un deployment EXISTENTE de .gas.local.json (nunca crea uno, nunca @HEAD)
+// Ningun scriptId, deploymentId ni token se versiona: .clasp.json, .clasprc.json y .gas.local.json estan en .gitignore.
 const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
@@ -17,7 +22,11 @@ const USO = [
   '  pull     trae el remoto a .gas-remote/<proyecto>/ (nunca toca src)',
   '  status   inventario local y chequeos de seguridad',
   '  diff     pull + comparacion local/remoto + huella      [--lineas N] [--max-archivos N] [--sin-pull]',
-  '  adopt    registra el estado remoto revisado en .gas-state/   --confirmar-huella <hex> [--descartar a.js,b.js]'
+  '  adopt    registra el estado remoto revisado en .gas-state/   --confirmar-huella <hex> [--descartar a.js,b.js]',
+  '  deployments   lista deployments y versiones (IDs enmascarados)   [--mostrar-ids]',
+  '  push     sube src al proyecto remoto   --confirmar-huella <sha256 completo> [--simular] [--permitir-sucio] [--permitir-manifest]',
+  '  version  crea una version (no despliega)   --descripcion "<texto>" [--permitir-sucio]',
+  '  deploy   actualiza un deployment EXISTENTE   --version <n> [--descripcion "<texto>"] [--confirmar-despliegue vN@xxxxxx] [--permitir-retroceso] [--permitir-distinta]'
 ].join('\n');
 
 function claspPorDefecto(raiz) {
@@ -53,6 +62,8 @@ function crearCli(opts) {
   const ahora = opts.ahora || (() => new Date());
   // TODA invocacion a clasp pasa por la allowlist de solo lectura.
   const clasp = (args, o) => { L.verificarComandoClasp(args); return clasp0(args, o); };
+  // Unico camino hacia un comando de clasp que ESCRIBE en Apps Script: push / create-version / update-deployment, solo con su forma exacta.
+  const claspW = (args, o) => { L.verificarComandoClasp(args, { escritura: true }); return clasp0(args, o); };
   const rel = (p) => path.relative(raiz, p).split(path.sep).join('/');
   const dirRemoto = (nombre) => path.join(raiz, '.gas-remote', nombre);
   const archivoEstado = (nombre) => path.join(raiz, '.gas-state', nombre + '.json');
@@ -283,28 +294,36 @@ function crearCli(opts) {
     const comunes = Array.from(local.codigo.keys()).filter((n) => nombresAjenos(nombre).has(n));
     if (comunes.length) { out('AVISO: hay nombres de archivo que existen en AMBOS proyectos: ' + comunes.join(', ')); }
     const est = leerEstado(p);
-    out('Estado adoptado: ' + (est ? 'si (' + est.adoptadoEn + ', git ' + est.gitHead + ')' : 'ninguno todavia'));
+    out('Estado adoptado: ' + (est ? 'si (' + est.adoptadoEn + ', git ' + est.gitHead + (est.ultimoPush ? ', ultimo push ' + est.ultimoPush.en : '') + ')' : 'ninguno todavia'));
+    out(describirConfigLocal(nombre));
     out(codigoSalida === 0 ? 'OK (sin bloqueantes locales).' : 'Hay bloqueantes.');
     return codigoSalida;
   }
 
   function def0(p) { return p.def.carpeta; }
 
-  // Contrasta lo que clasp subiria (show-file-status, solo local) con nuestro inventario: valida la semantica de ignorado de clasp.
-  function tryClaspStatus(p, local) {
+  // Contrasta lo que clasp subiria (show-file-status, solo local) con nuestro inventario: valida la semantica de ignorado de clasp y detecta
+  // archivos locales que NO se subirian o archivos inesperados que SI.
+  function consultarClaspStatus(p, local) {
     try {
       const r = clasp(['show-file-status', '--json', '--user', p.def.usuario], { cwd: path.join(raiz, p.def.carpeta) });
-      if (r.codigo !== 0) { return 'clasp show-file-status no se pudo consultar (' + L.enmascarar((r.stderr || r.stdout).trim().split(/\r?\n/)[0], [p.scriptId]).slice(0, 160) + '): se omite el contraste'; }
+      if (r.codigo !== 0) { return { reconocido: false, motivo: 'no se pudo consultar (' + L.enmascarar((r.stderr || r.stdout).trim().split(/\r?\n/)[0], [p.scriptId]).slice(0, 160) + ')' }; }
       const deClasp = L.extraerArchivosDeStatus(r.stdout);
-      if (!deClasp.length) { return 'clasp show-file-status: formato no reconocido, se omite el contraste'; }
+      if (!deClasp.length) { return { reconocido: false, motivo: 'formato no reconocido' }; }
       const propios = Array.from(local.codigo.keys()).concat(local.manifiesto === null ? [] : [L.MANIFIESTO]).sort();
       const faltan = propios.filter((n) => deClasp.indexOf(n) === -1);
       const sobran = deClasp.filter((n) => propios.indexOf(n) === -1);
-      if (!faltan.length && !sobran.length) { return 'clasp subiria exactamente estos ' + deClasp.length + ' archivo(s): coincide con el inventario local.'; }
-      return 'ATENCION: lo que clasp subiria NO coincide con el inventario local. Solo en clasp: ' + (sobran.join(', ') || '-') + ' | solo en el inventario: ' + (faltan.join(', ') || '-');
+      return { reconocido: true, coincide: !faltan.length && !sobran.length, faltan: faltan, sobran: sobran, total: deClasp.length };
     } catch (e) {
-      return 'no se pudo contrastar con clasp: ' + e.message;
+      return { reconocido: false, motivo: e.message };
     }
+  }
+
+  function tryClaspStatus(p, local) {
+    const c = consultarClaspStatus(p, local);
+    if (!c.reconocido) { return 'clasp show-file-status: ' + c.motivo + '; se omite el contraste'; }
+    if (c.coincide) { return 'clasp subiria exactamente estos ' + c.total + ' archivo(s): coincide con el inventario local.'; }
+    return 'ATENCION: lo que clasp subiria NO coincide con el inventario local. Solo en clasp: ' + (c.sobran.join(', ') || '-') + ' | solo en el inventario: ' + (c.faltan.join(', ') || '-');
   }
 
   function cmdDiff(nombre, o) {
@@ -385,15 +404,344 @@ function crearCli(opts) {
     return 0;
   }
 
+  // ---------------------------------------------------------------- configuracion local (.gas.local.json, ignorada por git)
+  const archivoConfigLocal = path.join(raiz, '.gas.local.json');
+
+  function leerConfigLocal() {
+    if (!fs.existsSync(archivoConfigLocal)) {
+      throw new L.ErrorGas('Falta .gas.local.json. Copiá .gas.local.json.example a .gas.local.json (queda solo en tu PC: esta en .gitignore) y completalo.');
+    }
+    let obj;
+    try { obj = JSON.parse(fs.readFileSync(archivoConfigLocal, 'utf8')); } catch (e) { throw new L.ErrorGas('.gas.local.json no es JSON valido'); }
+    const v = L.validarConfigLocal(obj);
+    if (!v.ok) { throw new L.ErrorGas('.gas.local.json: ' + v.errores.join('; ')); }
+    return obj;
+  }
+
+  function describirConfigLocal(nombre) {
+    try {
+      const c = leerConfigLocal()[nombre];
+      return 'Config local (.gas.local.json): pushHabilitado=' + c.pushHabilitado + ' | deploymentId ' + (c.deploymentId.trim() ? 'configurado (' + L.ultimos(c.deploymentId.trim()) + ')' : 'VACIO (hace falta para gas:deploy)');
+    } catch (e) {
+      return 'Config local (.gas.local.json): ' + e.message.replace(/^ERROR: /, '');
+    }
+  }
+
+  function escribirEstado(p, estado) {
+    fs.mkdirSync(path.join(raiz, '.gas-state'), { recursive: true });
+    const destino = archivoEstado(p.nombre);
+    fs.writeFileSync(destino + '.tmp', JSON.stringify(estado, null, 2) + '\n', 'utf8');
+    fs.renameSync(destino + '.tmp', destino);
+  }
+
+  // "Arbol limpio": sin cambios en archivos versionados (en cualquier parte) y sin archivos nuevos dentro de la carpeta del proyecto.
+  // Carpetas ajenas sin versionar (por ejemplo Cuencas/) no cuentan: no forman parte de lo que se sube.
+  function cambiosSinCommitear(p) {
+    const versionados = git(['status', '--porcelain', '--untracked-files=no']).stdout.split(/\r?\n/).filter(Boolean);
+    const delProyecto = git(['status', '--porcelain', '--', p.def.carpeta]).stdout.split(/\r?\n/).filter(Boolean);
+    return Array.from(new Set(versionados.concat(delProyecto)));
+  }
+
+  function exigirArbolLimpio(p, o, accion) {
+    const sucios = cambiosSinCommitear(p);
+    if (!sucios.length) { return true; }
+    if (o['permitir-sucio'] === true) {
+      out('ADVERTENCIA: --permitir-sucio: se sigue con cambios sin commitear (' + sucios.length + '); lo que se sube NO queda registrado en un commit.');
+      return true;
+    }
+    out('ABORTADO: el arbol git NO esta limpio (' + sucios.length + ' cambio(s) sin commitear: ' + sucios.slice(0, 5).map((l) => l.trim()).join('; ') + (sucios.length > 5 ? '; …' : '') + ').');
+    out('Hacé commit antes de ' + accion + ' (lo que se sube tiene que ser lo versionado). Escape explicito: --permitir-sucio.');
+    return false;
+  }
+
+  function prepararDestino(nombre, sufijo) {
+    const base = path.resolve(raiz, '.gas-remote');
+    const destino = path.resolve(base, nombre + sufijo);
+    if (!L.PROYECTOS[nombre] || !/^-v[1-9][0-9]{0,5}$/.test(sufijo) || !destino.startsWith(base + path.sep)) { throw new L.ErrorGas('ruta de destino invalida'); }
+    fs.rmSync(destino, { recursive: true, force: true });
+    fs.mkdirSync(destino, { recursive: true });
+    return destino;
+  }
+
+  function listarDeployments(p) {
+    const r = clasp(['list-deployments', '--user', p.def.usuario], { cwd: path.join(raiz, p.def.carpeta) });
+    if (r.codigo !== 0) { throw new L.ErrorGas('clasp list-deployments fallo: ' + L.enmascarar((r.stderr || r.stdout).trim(), [p.scriptId]).slice(0, 300) + pistaDeError(r.stderr + r.stdout)); }
+    return L.parsearDeployments(r.stdout);
+  }
+
+  function listarVersiones(p) {
+    const r = clasp(['list-versions', '--user', p.def.usuario], { cwd: path.join(raiz, p.def.carpeta) });
+    if (r.codigo !== 0) { throw new L.ErrorGas('clasp list-versions fallo: ' + L.enmascarar((r.stderr || r.stdout).trim(), [p.scriptId]).slice(0, 300) + pistaDeError(r.stderr + r.stdout)); }
+    return L.parsearVersiones(r.stdout);
+  }
+
+  function listaNombres(titulo, nombres) {
+    lista(titulo, nombres);
+  }
+
+  // ---------------------------------------------------------------- push
+  function cmdPush(nombre, o) {
+    const huella = o['confirmar-huella'];
+    if (typeof huella !== 'string' || !/^[0-9a-fA-F]{64}$/.test(huella)) {
+      throw new L.ErrorGas('push exige --confirmar-huella <sha256 completo, 64 hex>: copiala de la salida de gas:diff:' + nombre);
+    }
+    const simular = o.simular === true;
+    const p = cargarProyecto(nombre, false);
+    abortarSiInseguro(p);
+    const cfg = leerConfigLocal()[nombre];
+    if (!simular && cfg.pushHabilitado !== true) {
+      throw new L.ErrorGas('el push de "' + nombre + '" esta DESHABILITADO (.gas.local.json: ' + nombre + '.pushHabilitado = false). Revisá gas:diff:' + nombre + ' y gas:status:' + nombre + '; recién entonces ponelo en true. Para ensayar todo sin subir nada: agregar --simular.');
+    }
+    if (!exigirArbolLimpio(p, o, 'subir')) { return 2; }
+
+    out('Trayendo "' + p.def.titulo + '" (' + L.ultimos(p.scriptId) + ') antes de cualquier escritura (SOLO LECTURA)…');
+    const remoto = pullProyecto(p);
+    const r = evaluarProyecto(p, remoto);
+    marcarCruce(p, r.ev);
+    if (r.ev.cruce.length) {
+      r.ev.cruce.forEach((m) => out('ABORTADO — PROYECTOS CRUZADOS: ' + m));
+      out('No se escribio nada en Apps Script.');
+      return 2;
+    }
+    if (r.ev.huella.toLowerCase() !== huella.toLowerCase()) {
+      out('ABORTADO: la huella NO coincide con el estado actual (cambio el repo o el remoto desde el diff). Volvé a correr gas:diff:' + nombre + ', revisalo y usá la huella nueva.');
+      return 2;
+    }
+    const estado = leerEstado(p);
+    const pe = L.evaluarPush({
+      ev: r.ev, estado: estado, extras: r.local.extras, cantidadLocal: r.local.codigo.size,
+      permitirManifest: o['permitir-manifest'] === true, clasp: consultarClaspStatus(p, r.local)
+    });
+    out('');
+    out('=== gas:push ' + nombre + ' (' + p.def.titulo + ')' + (simular ? ' — SIMULACION' : '') + ' ===');
+    out('Se agregarian (' + pe.agregados.length + '), se modificarian (' + pe.modificados.length + '), se ELIMINARIAN del remoto (' + pe.eliminados.length + '); sin cambios: ' + pe.identicos.length + '.');
+    listaNombres('Agregados', pe.agregados);
+    listaNombres('Modificados', pe.modificados);
+    listaNombres('Eliminados (aprobados para descarte)', pe.eliminados);
+    if (o['permitir-manifest'] === true && r.ev.manifiesto === 'distinto') { out('ADVERTENCIA: --permitir-manifest: se reemplaza ' + L.MANIFIESTO + ' remoto.'); }
+    if (pe.bloqueantes.length) {
+      pe.bloqueantes.forEach((b) => out('BLOQUEANTE: ' + b));
+      out('ABORTADO: no se escribio nada en Apps Script.');
+      return 2;
+    }
+    if (simular) {
+      out('SIMULACION completa: todas las guardas pasaron. No se subio nada. Para subir de verdad: pushHabilitado=true en .gas.local.json y repetir sin --simular.');
+      return 0;
+    }
+
+    out('Subiendo con clasp push (reemplaza el contenido remoto por el del repo; sin --force)…');
+    const rp = claspW(['push', '--user', p.def.usuario], { cwd: path.join(raiz, p.def.carpeta) });
+    if (rp.codigo !== 0) {
+      out('ERROR: clasp push fallo (codigo ' + rp.codigo + '): ' + L.enmascarar((rp.stderr || rp.stdout).trim(), [p.scriptId]).slice(0, 400) + pistaDeError(rp.stderr + rp.stdout));
+      out('El estado remoto es INCIERTO: verificalo con npm run gas:diff:' + nombre + '. El estado adoptado no se actualizo.');
+      return 3;
+    }
+
+    out('Verificando: trayendo el remoto de nuevo (SOLO LECTURA)…');
+    const remoto2 = pullProyecto(p);
+    const r2 = evaluarProyecto(p, remoto2);
+    const v = L.verificarPostPush(r2.ev);
+    if (!v.ok) {
+      out('ATENCION: DESPUES del push el remoto NO coincide con el repo:');
+      v.problemas.forEach((m) => out('  - ' + m));
+      out('El estado adoptado NO se actualizo. Revisá con npm run gas:diff:' + nombre + '.');
+      return 3;
+    }
+    const archivos = {};
+    Array.from(r2.remoto.codigo.keys()).sort().forEach((n) => { archivos[n] = r2.remoto.codigo.get(n); });
+    escribirEstado(p, {
+      version: 1, proyecto: nombre, adoptadoEn: (estado && estado.adoptadoEn) || ahora().toISOString(), sincronizadoEn: ahora().toISOString(), huella: r2.ev.huella,
+      gitHead: r2.git.head, descartados: [], remoto: { archivos: archivos, manifiestoSha: L.hashManifiesto(r2.remoto.manifiesto) },
+      ultimaVersion: estado && estado.ultimaVersion ? estado.ultimaVersion : undefined,
+      ultimoPush: { en: ahora().toISOString(), huellaPrevia: huella.toLowerCase(), gitHead: r2.git.head, agregados: pe.agregados, modificados: pe.modificados, eliminados: pe.eliminados }
+    });
+    out('PUSH VERIFICADO: el remoto quedo identico al repo (' + r2.remoto.codigo.size + ' archivo(s) + manifiesto).');
+    out('  Agregados (' + pe.agregados.length + '): ' + (pe.agregados.join(', ') || '-'));
+    out('  Modificados (' + pe.modificados.length + '): ' + (pe.modificados.join(', ') || '-'));
+    out('  Eliminados (' + pe.eliminados.length + '): ' + (pe.eliminados.join(', ') || '-'));
+    out('Estado adoptado actualizado en ' + rel(archivoEstado(nombre)) + '. Esto NO cambia lo desplegado. Siguiente: npm run gas:version:' + nombre + ' -- --descripcion "..."');
+    return 0;
+  }
+
+  // ---------------------------------------------------------------- version
+  function cmdVersion(nombre, o) {
+    const desc = typeof o.descripcion === 'string' ? o.descripcion.trim() : '';
+    if (!desc) { throw new L.ErrorGas('version exige --descripcion "<texto>" (queda registrada en la version)'); }
+    if (desc.length > L.DESCRIPCION_MAX || desc.startsWith('-')) { throw new L.ErrorGas('la descripcion debe tener entre 1 y ' + L.DESCRIPCION_MAX + ' caracteres y no empezar con "-"'); }
+    const p = cargarProyecto(nombre, false);
+    abortarSiInseguro(p);
+    const estado = leerEstado(p);
+    if (!estado) { throw new L.ErrorGas('el proyecto no esta adoptado (gas:diff + gas:adopt): no se crean versiones sobre un estado no revisado'); }
+    if (!exigirArbolLimpio(p, o, 'crear una version')) { return 2; }
+
+    out('Trayendo "' + p.def.titulo + '" para verificar que el remoto coincide con el repo (SOLO LECTURA)…');
+    const r = evaluarProyecto(p, pullProyecto(p));
+    marcarCruce(p, r.ev);
+    const v = L.verificarPostPush(r.ev);
+    const problemas = v.problemas.concat(r.ev.cruce.map((m) => 'PROYECTOS CRUZADOS: ' + m), r.local.extras.length ? ['archivos no permitidos en src: ' + r.local.extras.join(', ')] : []);
+    if (problemas.length) {
+      out('ABORTADO: no se crea la version: una version congela el HEAD remoto y este NO coincide con el repo:');
+      problemas.forEach((m) => out('  - ' + m));
+      out('Corré gas:push primero (y revisá gas:diff:' + nombre + ').');
+      return 2;
+    }
+    const antes = L.maximaVersion(listarVersiones(p));
+    out('Creando version (sin desplegar nada)…');
+    const rc = claspW(['create-version', desc, '--user', p.def.usuario], { cwd: path.join(raiz, p.def.carpeta) });
+    if (rc.codigo !== 0) {
+      out('ERROR: clasp create-version fallo (codigo ' + rc.codigo + '): ' + L.enmascarar((rc.stderr || rc.stdout).trim(), [p.scriptId]).slice(0, 300) + pistaDeError(rc.stderr + rc.stdout));
+      return 3;
+    }
+    const despues = L.maximaVersion(listarVersiones(p));
+    const informada = L.parsearVersionCreada(rc.stdout);
+    const creada = informada !== null ? informada : despues;
+    if (!(despues > antes) || creada !== despues) {
+      out('ATENCION: no se pudo confirmar el numero de la version creada (antes ' + antes + ', despues ' + despues + ', informada ' + informada + '). Revisá con npm run gas:deployments:' + nombre + '.');
+      return 3;
+    }
+    escribirEstado(p, Object.assign({}, estado, { ultimaVersion: { numero: creada, descripcion: desc, en: ahora().toISOString(), gitHead: r.git.head } }));
+    out('VERSION CREADA: ' + creada + ' ("' + desc + '"). No se desplego nada: los deployments siguen en la version que tenian.');
+    out('Siguiente: npm run gas:deploy:' + nombre + ' -- --version ' + creada);
+    return 0;
+  }
+
+  // ---------------------------------------------------------------- deploy
+  function pullVersion(p, numero) {
+    const destino = prepararDestino(p.nombre, '-v' + numero);
+    fs.writeFileSync(path.join(destino, '.clasp.json'), JSON.stringify({ scriptId: p.scriptId }, null, 2) + '\n', 'utf8');
+    const r = clasp(['pull', '--versionNumber', String(numero), '--user', p.def.usuario], { cwd: destino });
+    if (r.codigo !== 0) { throw new L.ErrorGas('no se pudo traer la version ' + numero + ' para compararla (clasp pull fallo): ' + L.enmascarar((r.stderr || r.stdout).trim(), [p.scriptId]).slice(0, 300)); }
+    return leerRemoto(destino);
+  }
+
+  function cmdDeploy(nombre, o) {
+    if (!/^[1-9][0-9]{0,5}$/.test(String(o.version))) { throw new L.ErrorGas('deploy exige --version <numero de version> (creala antes con gas:version:' + nombre + ')'); }
+    const version = parseInt(o.version, 10);
+    let descripcion = 'Version ' + version + ' (gas:deploy)';
+    if (o.descripcion !== undefined) {
+      if (typeof o.descripcion !== 'string' || !o.descripcion.trim() || o.descripcion.trim().length > L.DESCRIPCION_MAX || o.descripcion.trim().startsWith('-')) { throw new L.ErrorGas('--descripcion invalida (1 a ' + L.DESCRIPCION_MAX + ' caracteres, sin empezar con "-")'); }
+      descripcion = o.descripcion.trim();
+    }
+    const p = cargarProyecto(nombre, false);
+    abortarSiInseguro(p);
+    const config = leerConfigLocal();
+    const deploymentId = config[nombre].deploymentId.trim();
+    if (!deploymentId) { throw new L.ErrorGas('falta ' + nombre + '.deploymentId en .gas.local.json: elegi el deployment NUMERADO de produccion con npm run gas:deployments:' + nombre + ' y copiá su ID completo (npx clasp list-deployments --user ' + p.def.usuario + ' lo muestra sin enmascarar).'); }
+    const otroId = config[otroProyecto(nombre)].deploymentId.trim();
+
+    const despliegues = listarDeployments(p);
+    const versiones = listarVersiones(p);
+    const ev = L.evaluarDeploy({ despliegues: despliegues, versiones: versiones, deploymentId: deploymentId, otroDeploymentId: otroId, version: version, permitirRetroceso: o['permitir-retroceso'] === true });
+    out('=== gas:deploy ' + nombre + ' (' + p.def.titulo + ') ===');
+    out('Deployment ' + L.ultimos(deploymentId) + ': ' + (ev.encontrado ? (ev.head ? '@HEAD (pruebas)' : 'version actual ' + ev.actual) : 'NO figura en este proyecto') + '  ->  pasaria a la version ' + version + '.');
+    if (ev.errores.length) {
+      ev.errores.forEach((e) => out('BLOQUEANTE: ' + e));
+      out('ABORTADO: no se modifico ningun deployment.');
+      return 2;
+    }
+    // La version que se publica tiene que ser lo que esta en el repo (evita desplegar una version vieja o equivocada).
+    const local = leerLocal(p.src);
+    const rv = pullVersion(p, version);
+    const cmp = L.compararInventarios(local.codigo, rv.codigo);
+    const manif = L.compararManifiestos(local.manifiesto, rv.manifiesto);
+    const igualAlRepo = !cmp.soloLocal.length && !cmp.soloRemoto.length && !cmp.modificados.length && manif === 'igual';
+    if (!igualAlRepo) {
+      const dif = [].concat(cmp.modificados, cmp.soloLocal.map((n) => n + ' (falta en la version)'), cmp.soloRemoto.map((n) => n + ' (sobra en la version)'), manif === 'igual' ? [] : [L.MANIFIESTO]);
+      out('La version ' + version + ' NO coincide con el repo local: ' + dif.slice(0, 8).join(', ') + (dif.length > 8 ? ', …' : ''));
+      if (o['permitir-distinta'] !== true) {
+        out('ABORTADO: no se modifico ningun deployment. (Si es una reversion deliberada a una version vieja: --permitir-distinta.)');
+        return 2;
+      }
+      out('ADVERTENCIA: --permitir-distinta: se despliega una version que difiere del repo.');
+    } else {
+      out('La version ' + version + ' coincide exactamente con el repo local.');
+    }
+    const token = L.confirmacionDeploy(version, deploymentId);
+    if (o['confirmar-despliegue'] !== token) {
+      out('Para confirmar este cambio en PRODUCCION, repetir el comando agregando:  --confirmar-despliegue ' + token);
+      out('(No se modifico nada.)');
+      return 2;
+    }
+    out('Actualizando el deployment (update-deployment; no se crea ninguno nuevo)…');
+    const rd = claspW(['update-deployment', deploymentId, '-V', String(version), '-d', descripcion, '--user', p.def.usuario], { cwd: path.join(raiz, p.def.carpeta) });
+    if (rd.codigo !== 0) {
+      out('ERROR: clasp update-deployment fallo (codigo ' + rd.codigo + '): ' + L.enmascarar((rd.stderr || rd.stdout).trim(), [p.scriptId, deploymentId]).slice(0, 300) + pistaDeError(rd.stderr + rd.stdout));
+      out('Verificá el estado con npm run gas:deployments:' + nombre + '.');
+      return 3;
+    }
+    const despues = listarDeployments(p).find((d) => d.id === deploymentId);
+    if (!despues || despues.head || despues.version !== version) {
+      out('ATENCION: no se pudo confirmar que el deployment quedo en la version ' + version + ' (ahora: ' + (despues ? (despues.head ? '@HEAD' : despues.version) : 'no figura') + ').');
+      return 3;
+    }
+    const estado = leerEstado(p);
+    if (estado) { escribirEstado(p, Object.assign({}, estado, { ultimoDeploy: { version: version, anterior: ev.actual, en: ahora().toISOString(), deployment: L.ultimos(deploymentId) } })); }
+    out('DEPLOY VERIFICADO: el deployment ' + L.ultimos(deploymentId) + ' paso de la version ' + ev.actual + ' a la ' + version + '. La URL /exec no cambia.');
+    return 0;
+  }
+
+  // ---------------------------------------------------------------- deployments (solo lectura)
+  function cmdDeployments(nombre, o) {
+    const p = cargarProyecto(nombre, false);
+    abortarSiInseguro(p);
+    const despliegues = listarDeployments(p);
+    const versiones = listarVersiones(p);
+    let configurado = '';
+    let aviso = '';
+    try { configurado = leerConfigLocal()[nombre].deploymentId.trim(); } catch (e) { aviso = e.message; }
+    let enApi = '';
+    if (nombre === 'main') {
+      try { const m = /macros\/s\/([A-Za-z0-9_-]+)\/exec/.exec(fs.readFileSync(path.join(raiz, 'js', 'api.js'), 'utf8')); enApi = m ? m[1] : ''; } catch (e) { enApi = ''; }
+    }
+    const mostrar = o['mostrar-ids'] === true;
+    out('=== gas:deployments ' + nombre + ' (' + p.def.titulo + ') — SOLO LECTURA ===');
+    out('Versiones: ' + versiones.length + ' (la ultima: ' + L.maximaVersion(versiones) + ')');
+    despliegues.forEach((d) => {
+      const marcas = [];
+      if (d.head) { marcas.push('@HEAD = deployment de PRUEBAS (/dev): NO es un destino productivo'); } else { marcas.push('version numerada ' + d.version); }
+      if (configurado && configurado === d.id) { marcas.push('configurado en .gas.local.json'); }
+      if (enApi && enApi === d.id) { marcas.push('coincide con la URL /exec de js/api.js (PRODUCCION)'); }
+      out('  - ' + (mostrar ? d.id : L.ultimos(d.id)) + ' | ' + marcas.join(' | '));
+    });
+    if (aviso) { out('Config local: ' + aviso); } else if (!configurado) { out('Config local: ' + nombre + '.deploymentId esta VACIO: completalo con el ID del deployment numerado de produccion.'); } else if (!despliegues.some((d) => d.id === configurado)) { out('ATENCION: el deploymentId configurado NO figura entre los deployments de este proyecto.'); }
+    if (nombre === 'storage') { out('Nota: el deploymentId del storage forma parte de su URL secreta: no lo pegues en chats ni en git.'); }
+    return 0;
+  }
+
+  // ---------------------------------------------------------------- opciones
+  const OPCIONES = {
+    pull: [], status: [], diff: ['lineas', 'max-archivos', 'sin-pull'], adopt: ['confirmar-huella', 'descartar'], deployments: ['mostrar-ids'],
+    push: ['confirmar-huella', 'simular', 'permitir-sucio', 'permitir-manifest'], version: ['descripcion', 'permitir-sucio'],
+    deploy: ['version', 'descripcion', 'confirmar-despliegue', 'permitir-retroceso', 'permitir-distinta']
+  };
+  const OPCIONES_BOOLEANAS = ['sin-pull', 'mostrar-ids', 'simular', 'permitir-sucio', 'permitir-manifest', 'permitir-retroceso', 'permitir-distinta'];
+
+  function validarOpciones(a) {
+    if (a.opciones.force !== undefined || a.opciones.f !== undefined) { throw new L.ErrorGas('no existe --force: este wrapper nunca fuerza una escritura en Apps Script'); }
+    if (a.extras.length) { throw new L.ErrorGas('argumento inesperado: ' + a.extras[0]); }
+    Object.keys(a.opciones).forEach((k) => {
+      if (OPCIONES[a.comando].indexOf(k) === -1) { throw new L.ErrorGas('opcion desconocida para "' + a.comando + '": --' + k); }
+      if (OPCIONES_BOOLEANAS.indexOf(k) !== -1 && a.opciones[k] !== true) { throw new L.ErrorGas('--' + k + ' es un flag sin valor (se uso con "' + a.opciones[k] + '")'); }
+    });
+  }
+
   function ejecutar(argv) {
     const a = L.parsearArgs(argv);
     try {
       if (!a.comando || !a.proyecto) { out(USO); return 1; }
+      if (!OPCIONES[a.comando]) {
+        out('Comando desconocido: ' + a.comando + '\n' + USO);
+        return 1;
+      }
+      validarOpciones(a);
       if (a.comando === 'pull') { return cmdPull(a.proyecto); }
       if (a.comando === 'status') { return cmdStatus(a.proyecto); }
       if (a.comando === 'diff') { return cmdDiff(a.proyecto, a.opciones); }
       if (a.comando === 'adopt') { return cmdAdopt(a.proyecto, a.opciones); }
-      out('Comando desconocido o no habilitado en esta fase (solo lectura): ' + a.comando + '\n' + USO);
+      if (a.comando === 'deployments') { return cmdDeployments(a.proyecto, a.opciones); }
+      if (a.comando === 'push') { return cmdPush(a.proyecto, a.opciones); }
+      if (a.comando === 'version') { return cmdVersion(a.proyecto, a.opciones); }
+      if (a.comando === 'deploy') { return cmdDeploy(a.proyecto, a.opciones); }
       return 1;
     } catch (e) {
       if (e instanceof L.ErrorGas) { out('ERROR: ' + e.message); return 1; }
