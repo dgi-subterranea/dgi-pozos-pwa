@@ -219,3 +219,30 @@ function apiSubirFotoPozo(sessionToken, datos) {
     tamanoOriginalBytes: d.tamanoOriginalBytes
   });
 }
+
+// --- Correcciones de ubicacion de pozos (ficha individual) ---
+// La coordenada de Irrigacion NUNCA se modifica: una correccion es otro dato (hojas append-only del backend).
+// Leer = permiso "ubicacion". Proponer = "ubicacion" + "ubicacion_corregir"; con ademas "ubicacion_validar" el BACKEND deja la
+// correccion vigente en la misma operacion. El frontend no decide eso ni lo puede pedir: lee el estado de data.correccion.estado.
+// Devuelve {vigente, pendientes[], historial[]}: sin emails (solo nombres).
+function apiGetCorreccionesUbicacionPozo(sessionToken, wellId) {
+  return callBackend('getCorreccionesUbicacionPozo', { sessionToken: sessionToken, wellId: wellId });
+}
+
+// LISTA BLANCA de campos: wellId, lat, lon, metodo, precisionGpsM, observacion, clientRequestId. La identidad (email/nombre) sale de la
+// sesion del lado del backend; la distancia, el snapshot de Irrigacion y el estado los calcula el backend. Nada mas viaja, aunque
+// "datos" traiga mas campos. Sin keepalive: el usuario espera la confirmacion para refrescar la ficha.
+function apiProponerCorreccionUbicacion(sessionToken, datos) {
+  var d = datos || {};
+  return callBackend('proponerCorreccionUbicacion', {
+    sessionToken: sessionToken,
+    wellId: d.wellId,
+    lat: d.lat,
+    lon: d.lon,
+    metodo: d.metodo,
+    precisionGpsM: d.precisionGpsM,
+    observacion: d.observacion,
+    clientRequestId: d.clientRequestId
+  });
+}
+

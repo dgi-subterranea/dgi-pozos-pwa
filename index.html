@@ -1247,6 +1247,76 @@
     </div>
   </div>
 
+  <!-- Correcciones de ubicacion (ficha del pozo): modal "Corregir ubicacion". La coordenada de Irrigacion NO se modifica: se muestra
+       siempre y la correccion se guarda aparte. Opciones: GPS actual (precision <= 50 m) o punto elegido en el mapa. Ver
+       js/ubicacionCorreccion.js (DOM) y js/ubicacionCorreccionLogic.js (reglas, con tests). -->
+  <div id="ucorr-overlay" class="ucorr-overlay" role="dialog" aria-modal="true" aria-labelledby="ucorr-titulo" hidden>
+    <div class="ucorr-panel">
+      <div class="ucorr-cabecera">
+        <h2 id="ucorr-titulo" class="ucorr-titulo">Corregir ubicación</h2>
+        <button type="button" id="btn-ucorr-cerrar" class="ucorr-cerrar" aria-label="Cerrar">&times;</button>
+      </div>
+      <p id="ucorr-irrigacion" class="ucorr-irrigacion"></p>
+      <p class="ucorr-nota-oficial">La ubicación de Irrigación no se modifica: tu corrección queda registrada aparte, con tu nombre y la fecha.</p>
+
+      <div id="ucorr-vista-opciones" class="ucorr-vista">
+        <button type="button" id="btn-ucorr-gps" class="button ucorr-opcion">Usar mi ubicación actual</button>
+        <button type="button" id="btn-ucorr-mapa" class="button button-secondary ucorr-opcion">Elegir punto en el mapa</button>
+      </div>
+
+      <div id="ucorr-vista-gps" class="ucorr-vista" hidden>
+        <div id="ucorr-gps-cargando" class="cargando cargando-md" data-cargando hidden>Obteniendo tu ubicación…</div>
+        <div id="ucorr-gps-resultado" hidden>
+          <p class="field-label">Tu ubicación</p>
+          <p id="ucorr-gps-coord" class="ucorr-coord-grande mono"></p>
+          <p class="field-label">Precisión del GPS</p>
+          <p id="ucorr-gps-precision" class="ucorr-precision"></p>
+        </div>
+        <p id="ucorr-gps-mensaje" class="ucorr-mensaje" role="alert" hidden></p>
+        <button type="button" id="btn-ucorr-gps-continuar" class="button ucorr-opcion" hidden>Continuar</button>
+        <button type="button" id="btn-ucorr-gps-reintentar" class="button button-secondary ucorr-opcion" hidden>Intentar nuevamente</button>
+        <button type="button" class="button button-secondary ucorr-opcion btn-ucorr-volver-opciones">Volver</button>
+      </div>
+
+      <div id="ucorr-vista-mapa" class="ucorr-vista" hidden>
+        <p class="ucorr-instruccion">Tocá el mapa para elegir el nuevo punto. Después podés arrastrar el marcador.</p>
+        <div class="ucorr-capas">
+          <button type="button" class="mapa-capa-chip ucorr-capa-chip active" data-capa="calle" aria-pressed="true">Mapa</button>
+          <button type="button" class="mapa-capa-chip ucorr-capa-chip" data-capa="satelite" aria-pressed="false">Satélite</button>
+        </div>
+        <div id="ucorr-mapa-cargando" class="cargando cargando-md" data-cargando hidden>Cargando mapa…</div>
+        <div id="ucorr-mapa-error" hidden>
+          <p class="error-message">No se pudo cargar el mapa. Revisá tu conexión e intentá de nuevo.</p>
+          <button type="button" id="btn-ucorr-mapa-reintentar" class="button button-secondary ucorr-opcion">Reintentar</button>
+        </div>
+        <div id="ucorr-mapa" class="ucorr-mapa" hidden></div>
+        <ul class="ucorr-leyenda">
+          <li><span class="ucorr-leyenda-punto ucorr-leyenda-irr"></span>Irrigación (fija)</li>
+          <li><span class="ucorr-leyenda-punto ucorr-leyenda-vig"></span>Corrección vigente (fija)</li>
+          <li><span class="ucorr-leyenda-punto ucorr-leyenda-nueva"></span>Nuevo punto</li>
+        </ul>
+        <p id="ucorr-mapa-coord" class="ucorr-coord-grande mono"></p>
+        <p id="ucorr-mapa-distancia" class="ucorr-distancia"></p>
+        <button type="button" id="btn-ucorr-mapa-usar" class="button ucorr-opcion" disabled>Usar este punto</button>
+        <button type="button" class="button button-secondary ucorr-opcion btn-ucorr-volver-opciones">Volver</button>
+      </div>
+
+      <div id="ucorr-vista-confirmar" class="ucorr-vista" hidden>
+        <p class="field-label">Nueva ubicación</p>
+        <p id="ucorr-resumen" class="ucorr-resumen mono"></p>
+        <p id="ucorr-distancia" class="ucorr-distancia" hidden></p>
+        <p id="ucorr-advertencia-1km" class="ucorr-advertencia" role="alert" hidden></p>
+        <label id="ucorr-obs-label" for="ucorr-observacion" class="field-label">Observación (opcional)</label>
+        <textarea id="ucorr-observacion" class="ucorr-observacion" rows="3" maxlength="300" placeholder="Ej.: la boca del pozo está corrida unos 20 m al norte"></textarea>
+        <p id="ucorr-err-observacion" class="ucorr-err" hidden></p>
+        <p id="ucorr-error" class="error-message" role="alert" hidden></p>
+        <div id="ucorr-guardando" class="cargando cargando-sm cargando-fila" data-cargando hidden>Guardando…</div>
+        <button type="button" id="btn-ucorr-guardar" class="button ucorr-opcion" disabled>Guardar corrección</button>
+        <button type="button" id="btn-ucorr-confirmar-volver" class="button button-secondary ucorr-opcion">Volver</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Bandeja de seleccion (item D/I): persistente, fuera de cualquier
        .screen a proposito - sobrevive la navegacion SPA completa. Solo
        visible con seleccion.length > 0 (ver seleccionController en
@@ -1316,6 +1386,8 @@
   <script src="js/fotosPozosResumen.js"></script>
   <script src="js/fotosPozos.js"></script>
   <script src="js/reemplazo.js"></script>
+  <script src="js/ubicacionCorreccionLogic.js"></script>
+  <script src="js/ubicacionCorreccion.js"></script>
   <script src="js/app.js"></script>
   <!-- Va DESPUES de app.js en el documento a proposito, para que
        onGsiLoaded/onGsiLoadError ya existan antes de que puedan

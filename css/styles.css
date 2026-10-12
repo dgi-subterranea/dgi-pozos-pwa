@@ -4040,3 +4040,420 @@ body.con-bandeja {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
+
+/* ==========================================================================
+   Correcciones de ubicacion de pozos (ficha individual) - js/ubicacion
+   Correccion*.js. La ubicacion de Irrigacion (oficial) es inmutable y va
+   siempre rotulada y separada; la correccion es otro dato. Mobile-first.
+   ========================================================================== */
+.ubic-oficial-titulo {
+  margin-top: 4px;
+}
+.ubic-correcciones {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--color-border-soft);
+}
+.ucorr-nota {
+  margin: -2px 0 12px;
+  font-size: 0.78rem;
+  color: var(--color-text-soft);
+  line-height: 1.45;
+}
+.ucorr-aviso {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+  padding: 11px 13px;
+  border-radius: 12px;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+.ucorr-aviso-ok {
+  background: #e3f3ea;
+  color: #17633d;
+}
+.ucorr-aviso-info {
+  background: var(--color-warn-tint);
+  color: var(--color-warn);
+}
+.ucorr-recargar {
+  min-height: 40px;
+  padding: 6px 14px;
+}
+.ucorr-subtitulo {
+  margin: 16px 0 8px;
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: var(--color-warn);
+}
+.ucorr-vacio {
+  margin: 0 0 12px;
+  font-size: 0.85rem;
+  color: var(--color-text-soft);
+  line-height: 1.5;
+}
+.ucorr-card {
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  margin: 0 0 10px;
+  background: var(--color-surface);
+}
+.ucorr-card-vigente {
+  border-color: #9fd3b4;
+  background: #f4fbf7;
+}
+.ucorr-card-pendiente {
+  border-color: #ecd49c;
+  background: var(--color-warn-tint);
+}
+.ucorr-card-historial {
+  background: var(--color-bg);
+}
+.ucorr-card-top {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  margin-bottom: 6px;
+}
+.ucorr-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+.ucorr-badge-validada { background: #d5eedf; color: #17633d; }
+.ucorr-badge-pendiente { background: #fbe6b3; color: var(--color-warn); }
+.ucorr-badge-rechazada { background: #fbe7e5; color: var(--color-error); }
+.ucorr-badge-superada,
+.ucorr-badge-revertida { background: var(--color-border-soft); color: var(--color-text-soft); }
+.ucorr-badge-inconsistente { background: #fbe7e5; color: var(--color-error); }
+.ucorr-tag-adv {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--color-warn);
+}
+.ucorr-coord {
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--color-text);
+  margin-bottom: 6px;
+  overflow-wrap: anywhere;
+}
+.ucorr-datos {
+  margin: 0;
+  display: grid;
+  gap: 3px;
+}
+.ucorr-dato {
+  display: flex;
+  gap: 8px;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+.ucorr-dato dt {
+  flex: none;
+  width: 118px;
+  color: var(--color-text-faint);
+}
+.ucorr-dato dd {
+  margin: 0;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+.ucorr-resolucion,
+.ucorr-motivo {
+  margin: 6px 0 0;
+  font-size: 0.78rem;
+  color: var(--color-text-soft);
+  overflow-wrap: anywhere;
+}
+.ucorr-maps {
+  margin-top: 10px;
+}
+.ucorr-abrir {
+  width: 100%;
+  margin-top: 6px;
+}
+.ucorr-historial {
+  margin-top: 14px;
+  border-top: 1px solid var(--color-border-soft);
+  padding-top: 10px;
+}
+.ucorr-historial summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  font-size: 0.85rem;
+  font-weight: 800;
+  color: var(--color-primary);
+}
+.ucorr-historial[open] summary {
+  margin-bottom: 8px;
+}
+
+/* --- Modal "Corregir ubicacion": hoja inferior en celular, centrado en pantallas grandes --- */
+body.ucorr-abierto {
+  overflow: hidden;
+}
+.ucorr-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(22, 33, 42, 0.55);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.ucorr-panel {
+  background: var(--color-surface);
+  width: 100%;
+  max-width: 560px;
+  max-height: 94vh;
+  max-height: 94dvh;
+  overflow-y: auto;
+  border-radius: 20px 20px 0 0;
+  padding: 16px 18px 22px;
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.25);
+}
+.ucorr-cabecera {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.ucorr-titulo {
+  margin: 0;
+  font-size: 1.1rem;
+}
+.ucorr-cerrar {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  border-radius: 12px;
+  font-size: 1.6rem;
+  line-height: 1;
+  background: transparent;
+  color: var(--color-text-soft);
+  box-shadow: none;
+}
+.ucorr-cerrar:hover {
+  background: var(--color-border-soft);
+  color: var(--color-text);
+}
+.ucorr-irrigacion {
+  margin: 4px 0 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--color-primary-tint);
+  color: var(--color-primary-dark);
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.ucorr-nota-oficial {
+  margin: 0 0 14px;
+  font-size: 0.76rem;
+  color: var(--color-text-soft);
+  line-height: 1.45;
+}
+.ucorr-vista {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ucorr-vista[hidden] {
+  display: none;
+}
+.ucorr-opcion {
+  width: 100%;
+}
+/* Deshabilitado = claramente apagado (el .button global no distingue el estado disabled) */
+.ucorr-panel .button:disabled,
+.ucorr-panel .button:disabled:hover {
+  background: var(--color-primary);
+  opacity: 0.4;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.ucorr-panel .button-secondary:disabled,
+.ucorr-panel .button-secondary:disabled:hover {
+  background: transparent;
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.ucorr-instruccion {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--color-text-soft);
+}
+.ucorr-coord-grande {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+.ucorr-precision {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 800;
+}
+.ucorr-mensaje {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--color-warn-tint);
+  color: var(--color-warn);
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1.45;
+}
+.ucorr-capas {
+  display: flex;
+  gap: 6px;
+}
+.ucorr-mapa {
+  width: 100%;
+  height: 52vh;
+  max-height: 420px;
+  min-height: 260px;
+  border-radius: 12px;
+  border: 1.5px solid var(--color-border-soft);
+}
+.ucorr-leyenda {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 0.74rem;
+  color: var(--color-text-soft);
+}
+.ucorr-leyenda li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.ucorr-leyenda-punto {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1.5px var(--color-border);
+}
+.ucorr-leyenda-irr { background: var(--color-mapa-confirmada); }
+.ucorr-leyenda-vig { background: var(--color-reemplazo-apto); }
+.ucorr-leyenda-nueva { background: var(--color-seleccion); }
+.ucorr-distancia {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--color-text-soft);
+}
+.ucorr-resumen {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+.ucorr-advertencia {
+  margin: 0;
+  padding: 11px 13px;
+  border-radius: 12px;
+  background: #fbe7e5;
+  color: var(--color-error);
+  border: 1.5px solid var(--color-error);
+  font-size: 0.88rem;
+  font-weight: 800;
+  line-height: 1.45;
+}
+.ucorr-observacion {
+  width: 100%;
+  font: inherit;
+  font-size: 1rem;
+  padding: 10px 12px;
+  border: 1.5px solid var(--color-border);
+  border-radius: 12px;
+  resize: vertical;
+  min-height: 84px;
+}
+.ucorr-observacion:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+.ucorr-err {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--color-warn);
+}
+
+/* Marcadores del mapa del modal (Leaflet no lee variables CSS: los colores repiten --color-mapa-confirmada y --color-reemplazo-apto) */
+.ucorr-marker-wrap {
+  background: transparent;
+  border: none;
+}
+.ucorr-marker {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 64px;
+}
+.ucorr-marker-punto {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 3px solid #fff;
+  box-shadow: 0 0 0 1.5px rgba(22, 33, 42, 0.5), 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+.ucorr-marker-arriba {
+  flex-direction: column-reverse;
+}
+.ucorr-marker-irr .ucorr-marker-punto { background: #0b5a7a; }
+.ucorr-marker-vig .ucorr-marker-punto { background: #1f9d55; }
+.ucorr-marker-arriba .ucorr-marker-texto {
+  margin-top: 0;
+  margin-bottom: 2px;
+}
+.ucorr-marker-texto {
+  margin-top: 2px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 0.62rem;
+  font-weight: 800;
+  color: var(--color-text);
+  white-space: nowrap;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+@media (min-width: 640px) {
+  .ucorr-overlay {
+    align-items: center;
+  }
+  .ucorr-panel {
+    border-radius: 18px;
+    max-height: 90vh;
+    max-height: 90dvh;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ucorr-panel {
+    animation: ucorr-subir 0.18s ease-out;
+  }
+  @keyframes ucorr-subir {
+    from { transform: translateY(24px); opacity: 0.4; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+}

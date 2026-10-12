@@ -163,6 +163,57 @@ Hoja `Historial` (como el resto): `proponer/validar/rechazar/revertirCorreccionU
 reenvíos idempotentes. **Sin Telegram.** Además
 `UbicacionCorreccionesLog` es el registro de dominio (quién, cuándo, motivo).
 
+## Frontend — etapa 1: ficha individual del pozo
+Solo la ficha del pozo (módulo **Ubicación**): ver y crear correcciones. **Sin tocar** el mapa provincial, Cerca Mío, la selección geográfica, el mapa NE,
+Reemplazos ni (todavía) un overlay global de correcciones validadas.
+
+**Qué se ve** (`js/app.js` → `renderUbicacion` + `js/ubicacionCorreccion.js`):
+- **Ubicación de Irrigación** (siempre primero, rotulada, nunca reemplazada): lo de siempre (confirmada/disponible, fuentes, enlace a Google Maps). Sin coordenada
+  oficial, el módulo se ofrece solo a quien puede corregir y dice «Sin ubicación de Irrigación».
+- **Ubicación corregida** (se lee con `getCorreccionesUbicacionPozo` al abrir el módulo, con el componente de carga):
+  - con `vigente`: badge *Validada en campo*, coordenadas, quién (nombre, nunca email), fecha, método (*Elegida en mapa* / *GPS (± n m)*), distancia a
+    Irrigación, observación y enlace a Google Maps; siempre con la nota «no reemplaza ni modifica la ubicación de Irrigación»;
+  - sin vigente y con pendientes: *Corrección pendiente de validación* con todas las pendientes (ninguna se oculta); con vigente **y** pendientes se ven ambas;
+  - sin nada: estado vacío.
+  - **Visibilidad del módulo** (`ubicacionCorreccionLogic_ofrecerModulo`): con coordenada oficial, como siempre. **Sin** coordenada oficial la tarjeta *Ubicación* se ofrece si el
+    usuario puede corregir (para cargar la primera) **o** si ya existe una corrección registrada (vigente, pendiente o en el historial) que su permiso `ubicacion` le deja leer. El
+    permiso `ubicacion_corregir` controla solo el botón, no la información: un lector (`ubicacion=SI`, `ubicacion_corregir=NO`) abre el módulo de un pozo sin coordenada si hay una
+    corrección. Para decidirlo, al buscar un pozo sin coordenada oficial y sin permiso de corregir se hace **una** llamada a `getCorreccionesUbicacionPozo` (solo en ese caso; si falla,
+    el módulo no se ofrece).
+  - **Historial de correcciones** (colapsable, orden cronológico): estado legible (Pendiente · Validada en campo · Rechazada · Reemplazada por una corrección
+    posterior · Revertida · Inconsistente), coordenadas, autor, fecha, método, distancia, observación y resolución/motivo.
+
+**Botón «Corregir ubicación»**: solo con `ubicacion === true` **y** `ubicacion_corregir === true` (valores exactos; cualquier otra cosa = no existe, ni
+deshabilitado). El backend valida igual. Abre un panel (hoja inferior en celular) que repite la coordenada de Irrigación y ofrece:
+- **A. Mi ubicación actual** (`GPS_ACTUAL`): `getCurrentPosition` con alta precisión, sin caché. Muestra lat/lon y precisión; con precisión inválida (0, ausente) o
+  **> 50 m** no se puede guardar: «La precisión actual es de 73 m. Necesitamos 50 m o menos para guardar.» + *Intentar nuevamente*. Envía `precisionGpsM`.
+- **B. Elegir punto en el mapa** (`PUNTO_EN_MAPA`): Leaflet con la carga diferida y las capas Mapa/Satélite de `mapaShared.js`. Centro: corrección vigente →
+  Irrigación → ubicación del dispositivo → vista general de Mendoza. **Irrigación y la vigente son marcadores fijos** (no interactivos); solo el punto nuevo se
+  elige tocando el mapa y se puede arrastrar. Muestra lat/lon y la distancia aproximada.
+- **Confirmar**: distancia a Irrigación (solo orientativa; el backend recalcula), **observación opcional hasta 250 m y obligatoria a más de 250 m**, y a más de
+  **1 km** la advertencia fuerte «La ubicación propuesta está a más de 1 km de la ubicación de Irrigación. Verificá cuidadosamente antes de guardar.» (permite
+  guardar). Sin ubicación de Irrigación: se puede proponer, sin distancia y con observación opcional.
+
+**Guardado** (`apiProponerCorreccionUbicacion`, lista blanca): `wellId, lat, lon, metodo, precisionGpsM, observacion, clientRequestId`. Nunca viajan email, nombre,
+`autoValidar`, distancia, estado ni datos de Irrigación. `clientRequestId` es estable por intento (se reutiliza al reintentar el mismo contenido tras un corte o un
+error; si el usuario cambia algo es otro contenido y se genera uno nuevo; tras guardar bien, el siguiente es otro intento). Doble toque: un solo envío.
+El resultado lo dice el backend, **solo por `data.correccion.estado`**: `VALIDADA` → «Ubicación corregida y validada.»; `PROPUESTA` → «Corrección enviada para validación.». El flag
+`autoValidada` (que hoy el backend suma cuando quien guarda tiene `ubicacion_validar`) **no es una dependencia**: con o sin él la pantalla muestra el resultado correcto.
+Después del POST **siempre** se relee `getCorreccionesUbicacionPozo` y se pinta desde esa lectura (si la relectura falla se avisa y se ofrece *Actualizar*).
+Los errores se muestran en el panel con un texto en español (nunca el mensaje técnico del backend); una sesión vencida cierra sesión.
+
+**Contrato frontend ↔ backend**: `backend/test/UbicacionCorreccionContratoFrontend.test.js` ejecuta el `js/api.js` real contra `Api.doPost` → servicio → repositorio (hojas en memoria) y pasa
+las respuestas reales por la lógica del frontend. Fija los campos de `proponerCorreccionUbicacion` (`{correccion, duplicada, curada}` + `autoValidada, supersedidas` solo con
+validación directa) y de `getCorreccionesUbicacionPozo` (`{wellId, vigente, pendientes, historial}`), los de la vista de corrección (15 campos, sin emails) y de `resolucion`, las
+acciones, los permisos, los umbrales (50 m / 250 m / 1 km / 300) y los códigos de error: si el backend o el frontend cambian uno solo, falla.
+
+**Service Worker / offline** (`sw.js`): el precache del shell es **todo** lo que `index.html` carga (CSS, manifest, icono y cada `<script src>` local, incluidos
+`ubicacionCorreccionLogic.js` y `ubicacionCorreccion.js`) y cada archivo se precachea con `cache: 'reload'` (sin la caché HTTP) para que sea de la misma versión que el `sw.js`. `sw.test.js` obliga a
+que todo script/link local de `index.html` esté en `SHELL_FILES`. Lo que se carga bajo demanda (Leaflet, JSZip: `vendor/*`) no es del shell.
+
+**Código**: `js/ubicacionCorreccionLogic.js` (lógica pura con tests: permisos, GPS, distancia, observación, payload, flujo de guardado, HTML de la sección),
+`js/ubicacionCorreccion.js` (controlador DOM: sección, modal, GPS, mapa), `js/api.js` (2 funciones), `index.html` (modal), `css/styles.css` (`.ucorr-*`).
+
 ## Tests
 `backend/test/UbicacionCorreccion{Repository,Service,E2E}.test.js` y `ApiUbicacionCorreccion.test.js`; el E2E lee un padrón de un Drive en memoria
 de **solo lectura** que falla ante cualquier escritura.

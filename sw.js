@@ -15,15 +15,47 @@
 // todas formas viajan por POST, que esta explicitamente excluido).
 
 var CACHE_NAME = 'dgi-pozos-shell';
+// SHELL_FILES = TODO lo que index.html carga al arrancar (hoja de estilos, manifest, icono y CADA <script src> local), mas el propio index.html.
+// Se precachea completo en el install para que ningun deploy deje un index.html apuntando a un JS que no este disponible sin conexion: antes solo
+// se guardaban "al pasar" por la red, asi que alguien que instalaba la PWA y se quedaba sin conexion antes de una segunda carga online podia abrir
+// la app con scripts faltantes. sw.test.js verifica que todo <script src>/<link href> local de index.html figure aca (al agregar un JS nuevo al HTML,
+// el test obliga a sumarlo a esta lista). Lo que se carga bajo demanda (Leaflet, JSZip: vendor/*) NO es del shell y no se precachea.
 var SHELL_FILES = [
   './',
   './index.html',
   './css/styles.css',
-  './js/app.js',
-  './js/api.js',
   './js/wellIdValidator.js',
   './js/errorMessages.js',
   './js/cargando.js',
+  './js/api.js',
+  './js/hubIdentificacion.js',
+  './js/mapaLogic.js',
+  './js/reemplazoResumenLogic.js',
+  './js/reemplazoEstados.js',
+  './js/mapaDataset.js',
+  './js/mapaNEDataset.js',
+  './js/busquedaProvinciaDataset.js',
+  './js/cercaMioLogic.js',
+  './js/buscarReemplazoLogic.js',
+  './js/seleccionLogic.js',
+  './js/mapaShared.js',
+  './js/fotosPopup.js',
+  './js/mapa.js',
+  './js/mapaNE.js',
+  './js/cercaMio.js',
+  './js/buscarReemplazo.js',
+  './js/seleccion.js',
+  './js/reemplazoLogic.js',
+  './js/reemplazoFotosLogic.js',
+  './js/fotosImagen.js',
+  './js/reemplazoFotos.js',
+  './js/fotosPozosLogic.js',
+  './js/fotosPozosResumen.js',
+  './js/fotosPozos.js',
+  './js/reemplazo.js',
+  './js/ubicacionCorreccionLogic.js',
+  './js/ubicacionCorreccion.js',
+  './js/app.js',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png'
@@ -78,7 +110,9 @@ if (typeof self !== 'undefined') {
         // archivo se cachea por separado, tolerando fallos individuales.
         return Promise.all(
           SHELL_FILES.map(function (url) {
-            return cache.add(url).catch(function (err) {
+            // cache:'reload' = ignora la cache HTTP del navegador: lo precacheado es de la MISMA version que este sw.js (con la cache HTTP,
+            // GitHub Pages puede servir un JS de hace unos minutos junto a un index.html nuevo).
+            return cache.add(new Request(url, { cache: 'reload' })).catch(function (err) {
               console.error('No se pudo precachear ' + url, err);
             });
           })

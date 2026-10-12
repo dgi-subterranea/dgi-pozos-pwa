@@ -164,7 +164,7 @@
   // permiso. Se usan solo para decidir que fetch conviene ni siquiera
   // disparar - el backend vuelve a validar cada uno igual, esto es una
   // optimizacion de red, no el limite de seguridad real.
-  var permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false };
+  var permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false, ubicacion_corregir: false, ubicacion_validar: false };
 
   var ICON_PERFIL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5.5-5.5L11 15l-3-3-4.5 4.5"/></svg>';
   var ICON_DATOS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>';
@@ -203,8 +203,7 @@
   // coordenadas, coordenadasProvincia, ubicacionResuelta}) - independiente
   // de si hay Ficha del Pozo (datos) o no, y del propio permiso "datos".
   function ubicacionModuloDisponible(location) {
-    var resuelta = location && location.ubicacionResuelta;
-    return !!resuelta && resuelta.estado !== 'sinCoordenadas';
+    return ubicacionCorreccionLogic_oficialDisponible(location);
   }
 
   function renderHubResultado(pozo) {
@@ -253,7 +252,10 @@
     if (pozo.registro.found) {
       modulos.push({ id: 'datos', titulo: 'Datos', desc: 'Ficha técnica y registral', icono: ICON_DATOS });
     }
-    if (pozo.ubicacion.found && ubicacionModuloDisponible(pozo.ubicacion.data)) {
+    // Con coordenada oficial el modulo se ofrece como siempre. SIN ella tambien se ofrece si el usuario puede corregir (para cargar la primera
+    // ubicacion) o si ya hay una correccion registrada que su permiso "ubicacion" le deja leer: el permiso de corregir controla el boton, no la
+    // visibilidad de lo que puede ver (ver ubicacionCorreccionLogic_ofrecerModulo y renderUbicacion).
+    if (ubicacionCorreccionLogic_ofrecerModulo({ ubicacionFound: pozo.ubicacion.found, location: pozo.ubicacion.data, permisos: permisosActuales, correcciones: pozo.correccionesUbicacion })) {
       modulos.push({ id: 'ubicacion', titulo: 'Ubicación', desc: 'Mapa y coordenadas', icono: ICON_UBICACION });
     }
     if (pozo.ne.found) {
@@ -965,6 +967,9 @@
     var html = '<div class="modulo-id-line"><span class="modulo-id mono">' + escapeHtml(location.wellId) + '</span></div>';
     html += '<p class="modulo-subline">Ubicación</p>';
 
+    // La ubicacion de Irrigacion (la oficial) va SIEMPRE primero, rotulada y separada de las correcciones, que se agregan abajo
+    // (js/ubicacionCorreccion.js) y nunca la reemplazan ni la alteran.
+    html += '<p class="field-label ubic-oficial-titulo">Ubicación de Irrigación</p>';
     html += '<div class="ubic-row">';
     if (resuelta.estado === 'corroborada' || resuelta.estado === 'unica') {
       html += '<span class="pin pin-ok">' + ICON_UBICACION + '</span>';
@@ -976,6 +981,12 @@
       }
       html += '<div class="coord-mono">' + resuelta.lat + ', ' + resuelta.lon + '<br>' + formatXY(resuelta) + '</div>';
       html += '<a class="maps-btn" href="https://www.google.com/maps?q=' + resuelta.lat + ',' + resuelta.lon + '" target="_blank" rel="noopener">' + ICON_MAPS + 'Abrir en Google Maps</a>';
+      html += '</div>';
+    } else if (resuelta.estado === 'sinCoordenadas') {
+      // Solo se llega aca con ubicacion_corregir=SI (ver el hub): el pozo no tiene coordenada oficial.
+      html += '<span class="pin pin-warn">' + ICON_UBICACION_WARN + '</span>';
+      html += '<div class="ubic-text"><strong>Sin ubicación de Irrigación</strong>';
+      html += 'Este pozo no tiene una coordenada oficial cargada.';
       html += '</div>';
     } else {
       html += '<span class="pin pin-warn">' + ICON_UBICACION_WARN + '</span>';
@@ -994,7 +1005,11 @@
       html += '</div>';
     }
 
+    // Contenedor de la seccion "Ubicacion corregida" (la rellena ubicacionCorreccionController_abrir con la lectura del backend)
+    html += '<div id="ubic-correcciones" class="ubic-correcciones"></div>';
+
     ubicacionContent.innerHTML = html;
+    ubicacionCorreccionController_abrir({ wellId: location.wellId, location: location });
   }
 
   // --- Modulo Niveles Estaticos --------------------------------------------
@@ -1268,7 +1283,9 @@
     localStorage.removeItem('sessionToken');
     sessionToken = null;
     currentEmail = null;
-    permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false };
+    permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false, ubicacion_corregir: false, ubicacion_validar: false };
+    // un modal de correccion abierto no sobrevive a la sesion
+    ubicacionCorreccionController_cerrar();
     // el resumen de aptitud no sobrevive a la sesion
     reemplazoEstadosController_reset();
     // ni el resumen de fotos, la galeria abierta o la cola de subida
@@ -1358,7 +1375,8 @@
       itf: { found: false },
       registro: { found: false },
       ubicacion: { found: false },
-      ne: { found: false }
+      ne: { found: false },
+      correccionesUbicacion: null      // lectura de correcciones, solo si hizo falta para decidir el modulo Ubicacion (pozo sin coordenada oficial)
     };
     renderHubSearching(wellId);
 
@@ -1397,12 +1415,33 @@
       var ubicacion = ubicacionResult.status === 'ok' ? { found: true, data: ubicacionResult.data } : { found: false, code: ubicacionResult.code };
       var ne = neResult.status === 'ok' ? { found: true, data: neResult.data } : { found: false, code: neResult.code };
 
-      if (pozoActual && pozoActual.wellId === wellId) {
-        pozoActual.itf = itf;
-        pozoActual.registro = registro;
-        pozoActual.ubicacion = ubicacion;
-        pozoActual.ne = ne;
-        renderHubResultado(pozoActual);
+      function mostrarHub(correcciones) {
+        if (pozoActual && pozoActual.wellId === wellId) {
+          pozoActual.itf = itf;
+          pozoActual.registro = registro;
+          pozoActual.ubicacion = ubicacion;
+          pozoActual.ne = ne;
+          pozoActual.correccionesUbicacion = correcciones;
+          renderHubResultado(pozoActual);
+        }
+      }
+
+      // Pozo SIN coordenada oficial y usuario que solo puede leer (ubicacion=SI sin ubicacion_corregir): el modulo Ubicacion solo tiene sentido si ya
+      // existe una correccion registrada, asi que se la consulta (UNA llamada, solo en este caso). Si falla, el modulo simplemente no se ofrece.
+      if (ubicacionCorreccionLogic_necesitaConsultarCorrecciones({ ubicacionFound: ubicacion.found, location: ubicacion.data, permisos: permisosActuales })) {
+        fetchSinRechazo(apiGetCorreccionesUbicacionPozo(sessionToken, wellId)).then(function (corrResult) {
+          if (corrResult.code === 'USER_DISABLED') {
+            showScreen('disabled');
+            return;
+          }
+          if (corrResult.code === 'UNAUTHORIZED') {
+            logout();
+            return;
+          }
+          mostrarHub(corrResult.status === 'ok' ? corrResult.data : null);
+        });
+      } else {
+        mostrarHub(null);
       }
 
       // Registro en la hoja Busquedas + aviso de Telegram: efectos del
@@ -1853,6 +1892,17 @@
   reemplazoController_inicializar(function () {
     return {
       sessionToken: sessionToken,
+      onSessionExpired: function () {
+        logout();
+      }
+    };
+  });
+
+  // Correcciones de ubicacion (ficha del pozo): sessionToken/permisos siempre frescos; si la sesion vence, se cierra sesion.
+  ubicacionCorreccionController_inicializar(function () {
+    return {
+      sessionToken: sessionToken,
+      permisos: permisosActuales,
       onSessionExpired: function () {
         logout();
       }
