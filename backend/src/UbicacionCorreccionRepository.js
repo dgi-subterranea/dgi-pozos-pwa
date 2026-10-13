@@ -6,12 +6,23 @@
 //
 // UbicacionCorrecciones (una fila por propuesta, inmutable):
 //   correccionId | wellId | lat | lon | metodo | precisionGpsM | observacion | emailPropone | nombrePropone | timestamp |
-//   irrLat | irrLon | irrEstado | irrFuente | padronPeriodo | distanciaM | advertenciaDistancia | clientRequestId
+//   irrLat | irrLon | irrEstado | irrFuente | padronPeriodo | distanciaM | advertenciaDistancia | clientRequestId |
+//   coordenadaOriginalTexto | crsOriginal
+//   (las dos ULTIMAS - esquema V2, 20 columnas - guardan el valor ingresado a mano en los metodos COORDENADAS_*; van vacias en GPS_ACTUAL y PUNTO_EN_MAPA)
 // UbicacionCorreccionesLog (una fila por evento, inmutable):
 //   correccionId | timestamp | evento | email | nombre | motivo
 //
 // Las columnas se buscan por el TEXTO del encabezado (trim/lowercase insensible): reordenarlas a mano no rompe nada. Si falta
-// alguna se lanza error (fail-closed: nunca se escribe en una hoja con un esquema que no se reconoce). Las columnas de texto se
+// alguna de las 18 columnas BASE se lanza error (fail-closed: nunca se escribe en una hoja con un esquema que no se reconoce).
+//
+// ESQUEMA V1 (18 columnas) vs V2 (20): las dos columnas nuevas son OPCIONALES para trabajar (compatibilidad con la hoja de produccion hasta que se corra
+// migrarUbicacionCorreccionesV2, que solo AGREGA esos dos encabezados al final):
+//   - LECTURA: una hoja V1 se lee igual; coordenadaOriginalTexto y crsOriginal salen vacios (como las filas historicas de una hoja ya migrada).
+//   - ESCRITURA de GPS_ACTUAL / PUNTO_EN_MAPA: sigue funcionando en una hoja V1 (esos dos campos van vacios, asi que no se pierde nada). Se eligio asi
+//     para que desplegar el codigo ANTES de migrar la hoja no rompa las correcciones que hoy funcionan.
+//   - ESCRITURA de un metodo COORDENADAS_*: exige V2. El Service lo comprueba antes de escribir (ESQUEMA_DESACTUALIZADO) y este repositorio lo
+//     vuelve a verificar: NUNCA descarta en silencio un valor de auditoria no vacio por falta de columna.
+// Las columnas de texto se
 // escriben como TEXTO PLANO ('@'): una observacion que empiece con "=" o "+" nunca se evalua como formula. Las numericas
 // (coordenadas, precision, distancia) se escriben como numeros con formato fijo, sin depender de la configuracion regional.
 //
@@ -20,10 +31,14 @@
 // confiable, por eso el lock vive en un solo lugar.
 var UBICACION_CORRECCIONES_HOJA = 'UbicacionCorrecciones';
 var UBICACION_CORRECCIONES_LOG_HOJA = 'UbicacionCorreccionesLog';
-var UBICACION_CORRECCIONES_COLUMNAS = [
+// Las 18 columnas del esquema original (V1): imprescindibles para leer y escribir.
+var UBICACION_CORRECCIONES_COLUMNAS_V1 = [
   'correccionId', 'wellId', 'lat', 'lon', 'metodo', 'precisionGpsM', 'observacion', 'emailPropone', 'nombrePropone', 'timestamp',
   'irrLat', 'irrLon', 'irrEstado', 'irrFuente', 'padronPeriodo', 'distanciaM', 'advertenciaDistancia', 'clientRequestId'
 ];
+// Las que agrega el esquema V2, SIEMPRE al final y en este orden (la migracion no reordena nada).
+var UBICACION_CORRECCIONES_COLUMNAS_V2_NUEVAS = ['coordenadaOriginalTexto', 'crsOriginal'];
+var UBICACION_CORRECCIONES_COLUMNAS = UBICACION_CORRECCIONES_COLUMNAS_V1.concat(UBICACION_CORRECCIONES_COLUMNAS_V2_NUEVAS);
 var UBICACION_CORRECCIONES_LOG_COLUMNAS = ['correccionId', 'timestamp', 'evento', 'email', 'nombre', 'motivo'];
 // columna -> formato de numero con que se escribe (el resto va como texto, salvo timestamp)
 var UBICACION_CORRECCIONES_FORMATOS_NUMERICOS = {
@@ -68,11 +83,17 @@ function ubicacionCorreccionRepository_filaDesdeObjeto(objeto, indices, anchoHea
 }
 
 function ubicacionCorreccionRepository_texto(row, indices, nombre) {
+  if (indices[nombre] === undefined || indices[nombre] < 0) {
+    return '';        // columna que la hoja todavia no tiene (esquema V1): igual que una fila historica vacia
+  }
   var v = row[indices[nombre]];
   return (v === null || v === undefined) ? '' : String(v).trim();
 }
 
 function ubicacionCorreccionRepository_numero(row, indices, nombre) {
+  if (indices[nombre] === undefined || indices[nombre] < 0) {
+    return null;
+  }
   var v = row[indices[nombre]];
   if (ubicacionCorreccionRepository_esVacio(v)) {
     return null;
@@ -110,7 +131,9 @@ function ubicacionCorreccionRepository_correccionDesdeFila(row, indices) {
     padronPeriodo: t('padronPeriodo'),
     distanciaM: num('distanciaM'),
     advertenciaDistancia: t('advertenciaDistancia').toUpperCase() === 'SI',
-    clientRequestId: t('clientRequestId')
+    clientRequestId: t('clientRequestId'),
+    coordenadaOriginalTexto: t('coordenadaOriginalTexto'),
+    crsOriginal: t('crsOriginal')
   };
 }
 
@@ -143,7 +166,10 @@ function ubicacionCorreccionRepository_formatosDeFila(indices, ancho, columnas) 
 
 // --- Acceso a Sheets ---
 
-function ubicacionCorreccionRepository_abrirHoja(nombreHoja, columnas, nombreSetup) {
+// columnas = esquema COMPLETO de la hoja; opcionales = las que pueden faltar (hoja anterior a una migracion). Devuelve en "columnas" solo las que la hoja
+// tiene (con ellas se arman las filas a escribir), en "todas" el esquema completo (para detectar un valor que se perderia por falta de columna) y en
+// "completa" si no falta ninguna.
+function ubicacionCorreccionRepository_abrirHoja(nombreHoja, columnas, nombreSetup, opcionales) {
   var spreadsheet = SpreadsheetApp.openById(getSpreadsheetId());
   var sheet = spreadsheet.getSheetByName(nombreHoja);
   if (!sheet) {
@@ -156,18 +182,26 @@ function ubicacionCorreccionRepository_abrirHoja(nombreHoja, columnas, nombreSet
   var header = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
   var indices = ubicacionCorreccionRepository_indiceColumnas(header, columnas);
   var faltantes = ubicacionCorreccionRepository_columnasFaltantes(indices, columnas);
-  if (faltantes.length > 0) {
-    throw new Error('La hoja "' + nombreHoja + '" no tiene las columnas: ' + faltantes.join(', '));
+  var obligatorias = faltantes.filter(function (nombre) { return (opcionales || []).indexOf(nombre) === -1; });
+  if (obligatorias.length > 0) {
+    throw new Error('La hoja "' + nombreHoja + '" no tiene las columnas: ' + obligatorias.join(', '));
   }
-  return { sheet: sheet, indices: indices, ancho: header.length, columnas: columnas };
+  var presentes = columnas.filter(function (nombre) { return indices[nombre] >= 0; });
+  return { sheet: sheet, indices: indices, ancho: header.length, columnas: presentes, todas: columnas, completa: faltantes.length === 0 };
 }
 
 function ubicacionCorreccionRepository_hojaCorrecciones() {
-  return ubicacionCorreccionRepository_abrirHoja(UBICACION_CORRECCIONES_HOJA, UBICACION_CORRECCIONES_COLUMNAS, 'setupUbicacionCorreccionesSheets');
+  return ubicacionCorreccionRepository_abrirHoja(UBICACION_CORRECCIONES_HOJA, UBICACION_CORRECCIONES_COLUMNAS, 'setupUbicacionCorreccionesSheets', UBICACION_CORRECCIONES_COLUMNAS_V2_NUEVAS);
+}
+
+// true si la hoja de correcciones ya tiene las dos columnas del esquema V2 (se puede escribir un metodo COORDENADAS_*). Lanza si la hoja no existe o si
+// su esquema BASE no se reconoce.
+function ubicacionCorreccionRepository_esquemaCorreccionesV2() {
+  return ubicacionCorreccionRepository_hojaCorrecciones().completa === true;
 }
 
 function ubicacionCorreccionRepository_hojaLog() {
-  return ubicacionCorreccionRepository_abrirHoja(UBICACION_CORRECCIONES_LOG_HOJA, UBICACION_CORRECCIONES_LOG_COLUMNAS, 'setupUbicacionCorreccionesSheets');
+  return ubicacionCorreccionRepository_abrirHoja(UBICACION_CORRECCIONES_LOG_HOJA, UBICACION_CORRECCIONES_LOG_COLUMNAS, 'setupUbicacionCorreccionesSheets', []);
 }
 
 // Todas las correcciones, en el orden de la hoja. Lee la hoja completa: a la escala esperada (cientos o miles de filas)
@@ -204,6 +238,15 @@ function ubicacionCorreccionRepository_agregarFilas(hoja, objetos) {
   if (!objetos.length) {
     return;
   }
+  // Fail-closed: si un objeto trae un valor NO vacio para una columna que la hoja no tiene (esquema V1 sin migrar), no se escribe nada.
+  var ausentes = (hoja.todas || []).filter(function (nombre) { return hoja.columnas.indexOf(nombre) === -1; });
+  objetos.forEach(function (o) {
+    ausentes.forEach(function (nombre) {
+      if (!ubicacionCorreccionRepository_esVacio(o[nombre])) {
+        throw new Error('La hoja no tiene la columna "' + nombre + '" y el valor no se puede guardar (correr migrarUbicacionCorreccionesV2)');
+      }
+    });
+  });
   var filas = objetos.map(function (o) {
     return ubicacionCorreccionRepository_filaDesdeObjeto(o, hoja.indices, hoja.ancho, hoja.columnas);
   });
@@ -254,14 +297,94 @@ function ubicacionCorreccionRepository_conLock(fn) {
   }
 }
 
+// --- Migracion V1 (18 columnas) -> V2 (20 columnas) ---
+
+// Logica PURA de la migracion a partir del encabezado actual de la hoja. Devuelve
+//   {ok:false, motivo}                                   la hoja no se puede migrar con seguridad (no se toca nada), o
+//   {ok:true, faltantes:[...], columnaInicial:N}         encabezados a AGREGAR y la columna (1-based) donde empiezan; faltantes vacio = ya esta en V2.
+// Reglas: las 18 columnas base tienen que estar (si no, el esquema no se reconoce: fail-closed); los encabezados nuevos se agregan DESPUES del ultimo
+// encabezado no vacio; si la hoja tiene contenido mas a la derecha que ese encabezado (lastCol > ultimo), se rechaza: se escribiria sobre datos ajenos.
+function ubicacionCorreccionRepository_planMigracionV2(headerRow, ultimaColumnaConContenido) {
+  var header = headerRow || [];
+  var indices = ubicacionCorreccionRepository_indiceColumnas(header, UBICACION_CORRECCIONES_COLUMNAS);
+  var baseFaltante = ubicacionCorreccionRepository_columnasFaltantes(indices, UBICACION_CORRECCIONES_COLUMNAS_V1);
+  if (baseFaltante.length > 0) {
+    return { ok: false, motivo: 'La hoja "' + UBICACION_CORRECCIONES_HOJA + '" no tiene las columnas base: ' + baseFaltante.join(', ') + '. No se migra.' };
+  }
+  var faltantes = ubicacionCorreccionRepository_columnasFaltantes(indices, UBICACION_CORRECCIONES_COLUMNAS_V2_NUEVAS);
+  var ultimo = 0;
+  header.forEach(function (h, i) {
+    if (String(h === null || h === undefined ? '' : h).trim() !== '') {
+      ultimo = i + 1;
+    }
+  });
+  if (faltantes.length > 0 && ultimaColumnaConContenido > ultimo) {
+    return { ok: false, motivo: 'La hoja "' + UBICACION_CORRECCIONES_HOJA + '" tiene contenido a la derecha del ultimo encabezado (columna ' + ultimaColumnaConContenido + '). No se migra para no escribir sobre datos ajenos.' };
+  }
+  return { ok: true, faltantes: faltantes, columnaInicial: ultimo + 1 };
+}
+
+// Correr UNA VEZ manualmente desde el editor de Apps Script (Ejecutar > migrarUbicacionCorreccionesV2) en la hoja de PRODUCCION (que tiene 18 columnas) ANTES
+// de que alguien proponga una correccion por coordenadas. Tambien es seguro correrla de nuevo.
+//  - IDEMPOTENTE: solo agrega los encabezados que FALTAN ("coordenadaOriginalTexto", "crsOriginal"), al final de la fila 1. Si ya estan, no escribe nada.
+//  - Distingue tres cosas: la GRILLA FISICA (getMaxColumns: cuantas columnas tiene la hoja), los ENCABEZADOS existentes y el CONTENIDO inesperado. Si la grilla
+//    es mas chica que lo que hace falta (p. ej. una hoja con exactamente 18 columnas fisicas), agrega SOLO las columnas necesarias al final (insertColumnsAfter)
+//    ANTES de escribir los encabezados; si ya hay lugar (p. ej. 26 columnas fisicas y 18 encabezados), no toca la grilla.
+//  - NO modifica ningun dato existente, NO reordena columnas, NO borra nada, NO toca el Log ni la hoja Usuarios. Las filas viejas quedan con esas dos celdas vacias.
+//  - fail-closed: si la hoja no existe, no tiene las 18 columnas base o tiene contenido a la derecha del encabezado, lanza error y no escribe.
+//  - corre bajo el MISMO lock que las escrituras de correcciones (una propuesta concurrente no ve la hoja a medio migrar).
+// Devuelve {migrada, agregadas, columnaInicial, columnasInsertadas} y deja el detalle en el log.
+function migrarUbicacionCorreccionesV2() {
+  return ubicacionCorreccionRepository_conLock(function () {
+    var spreadsheet = SpreadsheetApp.openById(getSpreadsheetId());
+    var sheet = spreadsheet.getSheetByName(UBICACION_CORRECCIONES_HOJA);
+    if (!sheet) {
+      throw new Error('No existe la hoja "' + UBICACION_CORRECCIONES_HOJA + '" (correr setupUbicacionCorreccionesSheets, que ya la crea con el esquema nuevo)');
+    }
+    var lastCol = sheet.getLastColumn();
+    if (lastCol === 0) {
+      throw new Error('La hoja "' + UBICACION_CORRECCIONES_HOJA + '" no tiene encabezado');
+    }
+    var header = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+    var plan = ubicacionCorreccionRepository_planMigracionV2(header, lastCol);
+    if (!plan.ok) {
+      throw new Error(plan.motivo);
+    }
+    if (plan.faltantes.length === 0) {
+      Logger.log('La hoja ' + UBICACION_CORRECCIONES_HOJA + ' ya tiene el esquema V2 (20 columnas). No se modifico nada.');
+      return { migrada: false, agregadas: [], columnaInicial: null, columnasInsertadas: 0 };
+    }
+    // Capacidad fisica de la grilla: solo se agregan las columnas que faltan para que entren los encabezados (siempre al final, sin tocar las existentes).
+    var ultimaNecesaria = plan.columnaInicial + plan.faltantes.length - 1;
+    var fisicas = sheet.getMaxColumns();
+    var columnasInsertadas = Math.max(0, ultimaNecesaria - fisicas);
+    if (columnasInsertadas > 0) {
+      sheet.insertColumnsAfter(fisicas, columnasInsertadas);
+    }
+    sheet.getRange(1, plan.columnaInicial, 1, plan.faltantes.length).setValues([plan.faltantes]);
+    SpreadsheetApp.flush();
+    Logger.log('Hoja ' + UBICACION_CORRECCIONES_HOJA + ' migrada a V2: se agregaron los encabezados ' + plan.faltantes.join(', ') + ' desde la columna ' + plan.columnaInicial +
+      (columnasInsertadas > 0 ? ' (la hoja tenia ' + fisicas + ' columnas fisicas: se agregaron ' + columnasInsertadas + ' al final)' : '') + '. Ningun dato existente fue modificado.');
+    return { migrada: true, agregadas: plan.faltantes, columnaInicial: plan.columnaInicial, columnasInsertadas: columnasInsertadas };
+  });
+}
+
 // Correr UNA VEZ manualmente desde el editor de Apps Script (Ejecutar > setupUbicacionCorreccionesSheets) para crear las dos
-// hojas con su encabezado exacto. No toca una hoja que ya existe y NO modifica la hoja Usuarios (las columnas de permisos
+// hojas con su encabezado exacto (la de correcciones ya con el esquema V2, 20 columnas). No toca una hoja que ya existe (si la de correcciones
+// existente es V1, avisa en el log que falta correr migrarUbicacionCorreccionesV2) y NO modifica la hoja Usuarios (las columnas de permisos
 // ubicacion_corregir y ubicacion_validar se agregan a mano ahi).
 function setupUbicacionCorreccionesSheets() {
   var spreadsheet = SpreadsheetApp.openById(getSpreadsheetId());
   [[UBICACION_CORRECCIONES_HOJA, UBICACION_CORRECCIONES_COLUMNAS], [UBICACION_CORRECCIONES_LOG_HOJA, UBICACION_CORRECCIONES_LOG_COLUMNAS]].forEach(function (par) {
-    if (spreadsheet.getSheetByName(par[0])) {
+    var existente = spreadsheet.getSheetByName(par[0]);
+    if (existente) {
       Logger.log('La hoja ' + par[0] + ' ya existe, no se modifico.');
+      if (par[0] === UBICACION_CORRECCIONES_HOJA && existente.getLastColumn() > 0) {
+        var plan = ubicacionCorreccionRepository_planMigracionV2(existente.getRange(1, 1, 1, existente.getLastColumn()).getValues()[0], existente.getLastColumn());
+        if (plan.ok && plan.faltantes.length > 0) {
+          Logger.log('AVISO: ' + par[0] + ' tiene el esquema anterior (18 columnas). Correr migrarUbicacionCorreccionesV2 para poder guardar coordenadas ingresadas.');
+        }
+      }
       return;
     }
     var sheet = spreadsheet.insertSheet(par[0]);
@@ -276,8 +399,12 @@ if (typeof module !== 'undefined' && module.exports) {
     UBICACION_CORRECCIONES_HOJA,
     UBICACION_CORRECCIONES_LOG_HOJA,
     UBICACION_CORRECCIONES_COLUMNAS,
+    UBICACION_CORRECCIONES_COLUMNAS_V1,
+    UBICACION_CORRECCIONES_COLUMNAS_V2_NUEVAS,
     UBICACION_CORRECCIONES_LOG_COLUMNAS,
     ubicacionCorreccionRepository_indiceColumnas,
+    ubicacionCorreccionRepository_planMigracionV2,
+    ubicacionCorreccionRepository_esquemaCorreccionesV2,
     ubicacionCorreccionRepository_columnasFaltantes,
     ubicacionCorreccionRepository_filaDesdeObjeto,
     ubicacionCorreccionRepository_correccionDesdeFila,
@@ -289,6 +416,7 @@ if (typeof module !== 'undefined' && module.exports) {
     ubicacionCorreccionRepository_agregarCorreccionConEvento,
     ubicacionCorreccionRepository_agregarCorreccionConEventos,
     ubicacionCorreccionRepository_conLock,
+    migrarUbicacionCorreccionesV2,
     setupUbicacionCorreccionesSheets
   };
 }

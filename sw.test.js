@@ -52,6 +52,13 @@ describe('sw.js: el precache cubre todo lo que index.html carga localmente', () 
     expect(html).toContain('src="js/ubicacionCorreccion.js"');
   });
 
+  test('el modulo de conversion de coordenadas (Ingresar coordenadas) forma parte del shell: disponible SIN conexion', () => {
+    expect(SHELL_FILES).toContain('./js/coordenadasConversion.js');
+    expect(html).toContain('src="js/coordenadasConversion.js"');
+    // y se carga antes que la logica que lo usa, tambien en el precache (mismo orden que en index.html)
+    expect(SHELL_FILES.indexOf('./js/coordenadasConversion.js')).toBeLessThan(SHELL_FILES.indexOf('./js/ubicacionCorreccionLogic.js'));
+  });
+
   test('el propio index.html y la raiz estan precacheados', () => {
     expect(SHELL_FILES).toContain('./');
     expect(SHELL_FILES).toContain('./index.html');
@@ -92,6 +99,18 @@ describe('sw.js: install', () => {
     expect(r.cache.pedidos.map((p) => p.url)).toEqual(SHELL_FILES);
     expect(r.cache.pedidos.map((p) => p.url)).toContain('./js/ubicacionCorreccionLogic.js');
     expect(r.cache.pedidos.map((p) => p.url)).toContain('./js/ubicacionCorreccion.js');
+  });
+
+  test('el install precachea js/coordenadasConversion.js (con cache: "reload"): la conversion funciona offline', async () => {
+    const r = await instalar();
+    const pedido = r.cache.pedidos.find((p) => p.url === './js/coordenadasConversion.js');
+    expect(pedido).toBeDefined();
+    expect(pedido.cache).toBe('reload');
+  });
+
+  test('si falla el precache de coordenadasConversion.js los demas archivos igual se cachean (y el fallo no rompe el install)', async () => {
+    const r = await instalar({ falla: (req) => req.url === './js/coordenadasConversion.js' });
+    expect(r.cache.pedidos).toHaveLength(SHELL_FILES.length);
   });
 
   test('cada precache ignora la cache HTTP (cache: "reload"): el shell es de la misma version que el sw.js nuevo', async () => {

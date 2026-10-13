@@ -163,6 +163,32 @@ describe('identidad y lista blanca de campos (por doPost)', () => {
     }, { autoValidar: false });
   });
 
+  test('proponer por coordenadas: coordenadaOriginal llega al servicio tal cual; coordenadaOriginalTexto y crsOriginal que mande el cliente NO llegan (los genera el backend)', () => {
+    servicioOk();
+    sesion({ ubicacion: true, ubicacion_corregir: true });
+    const original = { lat: { g: 32, m: 53, s: 10.2, h: 'S' }, lon: { g: 68, m: 50, s: 25.4, h: 'O' } };
+    const r = post({
+      action: 'proponerCorreccionUbicacion', sessionToken: 'tok', wellId: W, metodo: 'COORDENADAS_GMS', coordenadaOriginal: original, clientRequestId: 'req-00000002',
+      lat: -32.886167, lon: -68.840389, observacion: '', coordenadaOriginalTexto: 'HACKEADO', crsOriginal: 'EPSG:9999'
+    });
+    expect(r.status).toBe('ok');
+    const datos = global.ubicacionCorreccionService_proponer.mock.calls[0][3];
+    expect(datos.coordenadaOriginal).toEqual(original);
+    expect(datos.metodo).toBe('COORDENADAS_GMS');
+    expect(Object.keys(datos).sort()).toEqual(['clientRequestId', 'coordenadaOriginal', 'lat', 'lon', 'metodo', 'observacion', 'precisionGpsM']);
+    expect(JSON.stringify(datos)).not.toMatch(/HACKEADO|EPSG:9999/);
+  });
+
+  test('proponer: los errores de una coordenada ingresada llevan code, message y, si existen, detalle y campo (sin datos del usuario)', () => {
+    sesion({ ubicacion: true, ubicacion_corregir: true });
+    global.ubicacionCorreccionService_proponer.mockReturnValue({ ok: false, code: 'COORDENADA_INVALIDA', message: 'Latitud: los minutos deben estar entre 0 y 59.', detalle: 'MINUTOS_FUERA_DE_RANGO', campo: 'lat.m', cualquierCosa: 'no se reenvia' });
+    const r = llamadas.proponer();
+    expect(r).toEqual({ status: 'error', code: 'COORDENADA_INVALIDA', message: 'Latitud: los minutos deben estar entre 0 y 59.', detalle: 'MINUTOS_FUERA_DE_RANGO', campo: 'lat.m' });
+    expect(global.logHistoryEvent).toHaveBeenCalledWith('sesion@example.com', 'proponerCorreccionUbicacion', W, 'COORDENADA_INVALIDA');
+    global.ubicacionCorreccionService_proponer.mockReturnValue({ ok: false, code: 'COORDENADA_INCONSISTENTE', message: 'm' });
+    expect(llamadas.proponer()).toEqual({ status: 'error', code: 'COORDENADA_INCONSISTENTE', message: 'm' });
+  });
+
   test.each(['validar', 'rechazar', 'revertir'])('%s: usa la identidad de la sesion; solo correccionId y motivo del cliente', (n) => {
     servicioOk();
     sesion({ ubicacion: true, ubicacion_validar: true });

@@ -61,6 +61,9 @@ function installAppsScriptFakes() {
     getScriptCache: () => fakeCache
   };
 
+  // Modulo de conversion de coordenadas del backend (CoordenadasConversion.js): en Apps Script es un archivo mas del proyecto, o sea globales.
+  Object.assign(global, require('../src/CoordenadasConversion'));
+
   global.GOOGLE_CLIENT_ID = 'test-client-id.apps.googleusercontent.com';
   global.getSessionSecret = () => 'test-session-secret';
   global.getTelegramBotToken = () => 'test-telegram-token-nunca-debe-aparecer-en-un-error';

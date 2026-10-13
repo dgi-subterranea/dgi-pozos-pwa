@@ -1252,7 +1252,7 @@
   </div>
 
   <!-- Correcciones de ubicacion (ficha del pozo): modal "Corregir ubicacion". La coordenada de Irrigacion NO se modifica: se muestra
-       siempre y la correccion se guarda aparte. Opciones: GPS actual (precision <= 50 m) o punto elegido en el mapa. Ver
+       siempre y la correccion se guarda aparte. Opciones: GPS actual (precision <= 50 m), punto elegido en el mapa o coordenadas ingresadas (GMS / WGS84 o POSGAR 94 / Argentina 2). Ver
        js/ubicacionCorreccion.js (DOM) y js/ubicacionCorreccionLogic.js (reglas, con tests). -->
   <div id="ucorr-overlay" class="ucorr-overlay" role="dialog" aria-modal="true" aria-labelledby="ucorr-titulo" hidden>
     <div class="ucorr-panel">
@@ -1266,6 +1266,7 @@
       <div id="ucorr-vista-opciones" class="ucorr-vista">
         <button type="button" id="btn-ucorr-gps" class="button ucorr-opcion">Usar mi ubicación actual</button>
         <button type="button" id="btn-ucorr-mapa" class="button button-secondary ucorr-opcion">Elegir punto en el mapa</button>
+        <button type="button" id="btn-ucorr-coordenadas" class="button button-secondary ucorr-opcion">Ingresar coordenadas</button>
       </div>
 
       <div id="ucorr-vista-gps" class="ucorr-vista" hidden>
@@ -1283,14 +1284,77 @@
       </div>
 
       <div id="ucorr-vista-mapa" class="ucorr-vista" hidden>
-        <p class="ucorr-instruccion">Tocá el mapa para elegir el nuevo punto. Después podés arrastrar el marcador.</p>
+        <div id="ucorr-coord-panel" class="ucorr-coord-panel" hidden>
+          <div class="ucorr-sistemas" role="group" aria-labelledby="ucorr-sistemas-titulo">
+            <p id="ucorr-sistemas-titulo" class="ucorr-sistemas-titulo">Sistema de coordenadas</p>
+            <div class="ucorr-sistemas-chips">
+              <button type="button" id="btn-ucorr-sistema-gms" class="ucorr-sistema-chip active" data-sistema="GMS" aria-pressed="true">GMS / WGS84</button>
+              <button type="button" id="btn-ucorr-sistema-posgar" class="ucorr-sistema-chip" data-sistema="POSGAR" aria-pressed="false">POSGAR 94 / Argentina 2</button>
+            </div>
+          </div>
+          <div id="ucorr-coord-gms" class="ucorr-coord-gms">
+          <fieldset class="ucorr-eje" id="ucorr-eje-lat">
+            <legend>Latitud</legend>
+            <div class="ucorr-eje-campos">
+              <div class="ucorr-campo"><label for="ucorr-lat-g">Grados</label><input id="ucorr-lat-g" class="ucorr-input" type="text" inputmode="numeric" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="3" aria-describedby="ucorr-err-lat"></div>
+              <div class="ucorr-campo"><label for="ucorr-lat-m">Minutos</label><input id="ucorr-lat-m" class="ucorr-input" type="text" inputmode="numeric" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="3" aria-describedby="ucorr-err-lat"></div>
+              <div class="ucorr-campo ucorr-campo-seg"><label for="ucorr-lat-s">Segundos</label><input id="ucorr-lat-s" class="ucorr-input" type="text" inputmode="decimal" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="12" aria-describedby="ucorr-err-lat"></div>
+              <div class="ucorr-campo ucorr-campo-hem"><label for="ucorr-lat-h">Hemisferio</label><select id="ucorr-lat-h" class="ucorr-input" aria-describedby="ucorr-err-lat"><option value="N">N</option><option value="S" selected>S</option></select></div>
+            </div>
+            <p id="ucorr-err-lat" class="ucorr-err" role="alert" hidden></p>
+          </fieldset>
+          <fieldset class="ucorr-eje" id="ucorr-eje-lon">
+            <legend>Longitud</legend>
+            <div class="ucorr-eje-campos">
+              <div class="ucorr-campo"><label for="ucorr-lon-g">Grados</label><input id="ucorr-lon-g" class="ucorr-input" type="text" inputmode="numeric" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="3" aria-describedby="ucorr-err-lon"></div>
+              <div class="ucorr-campo"><label for="ucorr-lon-m">Minutos</label><input id="ucorr-lon-m" class="ucorr-input" type="text" inputmode="numeric" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="3" aria-describedby="ucorr-err-lon"></div>
+              <div class="ucorr-campo ucorr-campo-seg"><label for="ucorr-lon-s">Segundos</label><input id="ucorr-lon-s" class="ucorr-input" type="text" inputmode="decimal" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="12" aria-describedby="ucorr-err-lon"></div>
+              <div class="ucorr-campo ucorr-campo-hem"><label for="ucorr-lon-h">Hemisferio</label><select id="ucorr-lon-h" class="ucorr-input" aria-describedby="ucorr-err-lon"><option value="E">E</option><option value="O" selected>O</option></select></div>
+            </div>
+            <p id="ucorr-err-lon" class="ucorr-err" role="alert" hidden></p>
+          </fieldset>
+            <p id="ucorr-coord-ayuda" class="ucorr-instruccion">Ejemplo: 33° 20' 51,54" S, 69° 8' 43,62" O. Los segundos pueden llevar coma o punto decimal. En Mendoza la latitud es S y la longitud es O.</p>
+            <p id="ucorr-err-general" class="ucorr-mensaje" role="alert" hidden></p>
+          </div>
+          <div id="ucorr-coord-posgar" class="ucorr-coord-posgar" hidden>
+            <p class="ucorr-posgar-titulo"><strong>POSGAR 94 / Argentina 2</strong> · EPSG:22182</p>
+            <p id="ucorr-posgar-ayuda" class="ucorr-ayuda-xy">En esta aplicación se ingresa X = Este e Y = Norte.</p>
+            <fieldset class="ucorr-eje" id="ucorr-eje-posgar">
+              <legend>Coordenadas planas (metros)</legend>
+              <div class="ucorr-eje-xy">
+            <div class="ucorr-campo ucorr-campo-xy">
+              <label for="ucorr-posgar-x">X / Este</label>
+              <input id="ucorr-posgar-x" class="ucorr-input" type="text" inputmode="decimal" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="18" placeholder="2.500.000" aria-describedby="ucorr-err-x">
+            </div>
+            <div class="ucorr-campo ucorr-campo-xy">
+              <label for="ucorr-posgar-y">Y / Norte</label>
+              <input id="ucorr-posgar-y" class="ucorr-input" type="text" inputmode="decimal" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="18" placeholder="6.350.000" aria-describedby="ucorr-err-y">
+            </div>
+              </div>
+              <p id="ucorr-err-x" class="ucorr-err" role="alert" hidden></p>
+              <p id="ucorr-err-y" class="ucorr-err" role="alert" hidden></p>
+            </fieldset>
+            <div id="ucorr-posgar-invertido" class="ucorr-movido" role="alert" hidden>
+              <p id="ucorr-posgar-invertido-texto" class="ucorr-movido-texto">Parece que X e Y están intercambiados.</p>
+              <button type="button" id="btn-ucorr-posgar-intercambiar" class="button button-secondary ucorr-opcion">Intercambiar X e Y</button>
+            </div>
+            <p id="ucorr-err-posgar-general" class="ucorr-mensaje" role="alert" hidden></p>
+            <p id="ucorr-posgar-ejemplo" class="ucorr-instruccion">Ejemplo: X = 2.500.000,50 e Y = 6.350.000. Se aceptan coma o punto decimal y puntos de miles.</p>
+          </div>
+          <p id="ucorr-coord-equivale" class="ucorr-equivale" hidden>Equivale a (WGS84): <span id="ucorr-coord-equivale-valor" class="mono"></span></p>
+          <div id="ucorr-coord-movido" class="ucorr-movido" role="status" hidden>
+            <p id="ucorr-coord-movido-texto" class="ucorr-movido-texto">Moviste el punto manualmente. Se guardará como punto elegido en el mapa.</p>
+            <button type="button" id="btn-ucorr-coord-restaurar" class="button button-secondary ucorr-opcion">Restaurar coordenada ingresada</button>
+          </div>
+        </div>
+        <p id="ucorr-mapa-instruccion" class="ucorr-instruccion">Tocá el mapa para elegir el nuevo punto. Después podés arrastrar el marcador.</p>
         <div class="ucorr-capas">
           <button type="button" class="mapa-capa-chip ucorr-capa-chip active" data-capa="calle" aria-pressed="true">Mapa</button>
           <button type="button" class="mapa-capa-chip ucorr-capa-chip" data-capa="satelite" aria-pressed="false">Satélite</button>
         </div>
         <div id="ucorr-mapa-cargando" class="cargando cargando-md" data-cargando hidden>Cargando mapa…</div>
         <div id="ucorr-mapa-error" hidden>
-          <p class="error-message">No se pudo cargar el mapa. Revisá tu conexión e intentá de nuevo.</p>
+          <p id="ucorr-mapa-error-texto" class="error-message">No se pudo cargar el mapa. Revisá tu conexión e intentá de nuevo.</p>
           <button type="button" id="btn-ucorr-mapa-reintentar" class="button button-secondary ucorr-opcion">Reintentar</button>
         </div>
         <div id="ucorr-mapa" class="ucorr-mapa" hidden></div>
@@ -1308,6 +1372,7 @@
       <div id="ucorr-vista-confirmar" class="ucorr-vista" hidden>
         <p class="field-label">Nueva ubicación</p>
         <p id="ucorr-resumen" class="ucorr-resumen mono"></p>
+        <p id="ucorr-resumen-original" class="ucorr-resumen-original" hidden></p>
         <p id="ucorr-distancia" class="ucorr-distancia" hidden></p>
         <p id="ucorr-advertencia-1km" class="ucorr-advertencia" role="alert" hidden></p>
         <label id="ucorr-obs-label" for="ucorr-observacion" class="field-label">Observación (opcional)</label>
@@ -1390,6 +1455,7 @@
   <script src="js/fotosPozosResumen.js"></script>
   <script src="js/fotosPozos.js"></script>
   <script src="js/reemplazo.js"></script>
+  <script src="js/coordenadasConversion.js"></script>
   <script src="js/ubicacionCorreccionLogic.js"></script>
   <script src="js/ubicacionCorreccion.js"></script>
   <script src="js/ubicacionPendientes.js"></script>

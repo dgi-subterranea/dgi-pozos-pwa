@@ -235,7 +235,8 @@ function apiGetCorreccionesUbicacionPendientes(sessionToken) {
   return callBackend('getCorreccionesUbicacionPendientes', { sessionToken: sessionToken });
 }
 
-// LISTA BLANCA de campos: wellId, lat, lon, metodo, precisionGpsM, observacion, clientRequestId. La identidad (email/nombre) sale de la
+// LISTA BLANCA de campos: wellId, lat, lon, metodo, precisionGpsM, observacion, clientRequestId y, solo en los metodos por coordenadas ingresadas,
+// coordenadaOriginal ({lat:{g,m,s,h}, lon:{g,m,s,h}} en COORDENADAS_GMS; {x, y} con x = Este e y = Norte en COORDENADAS_POSGAR94_AR2). coordenadaOriginalTexto y crsOriginal NO viajan: los genera el backend. La identidad (email/nombre) sale de la
 // sesion del lado del backend; la distancia, el snapshot de Irrigacion y el estado los calcula el backend. Nada mas viaja, aunque
 // "datos" traiga mas campos. Sin keepalive: el usuario espera la confirmacion para refrescar la ficha.
 function apiProponerCorreccionUbicacion(sessionToken, datos) {
@@ -248,7 +249,8 @@ function apiProponerCorreccionUbicacion(sessionToken, datos) {
     metodo: d.metodo,
     precisionGpsM: d.precisionGpsM,
     observacion: d.observacion,
-    clientRequestId: d.clientRequestId
+    clientRequestId: d.clientRequestId,
+    coordenadaOriginal: d.coordenadaOriginal
   });
 }
 

@@ -248,3 +248,260 @@ describe('estilos', () => {
     expect(css).toMatch(/@media \(prefers-reduced-motion: no-preference\) \{\s*\.ucorr-panel \{\s*animation: ucorr-subir/);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------
+// Ingresar coordenadas (GMS / WGS84): cableado en index.html, api.js, estilos y service worker
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------
+describe('Ingresar coordenadas: index.html', () => {
+  test('el modal ofrece la tercera opcion "Ingresar coordenadas"', () => {
+    expect(html).toMatch(/id="btn-ucorr-coordenadas"[^>]*>Ingresar coordenadas</);
+    expect(html).toMatch(/id="btn-ucorr-gps"[^>]*>Usar mi ubicación actual</);
+    expect(html).toMatch(/id="btn-ucorr-mapa"[^>]*>Elegir punto en el mapa</);
+  });
+
+  test('el panel GMS / WGS84: latitud y longitud con grados, minutos, segundos y hemisferio, cada campo con su etiqueta', () => {
+    expect(html).toMatch(/id="ucorr-coord-panel"[^>]*hidden/);
+    expect(html).toContain('GMS / WGS84');
+    ['lat', 'lon'].forEach((eje) => {
+      ['g', 'm', 's'].forEach((k) => {
+        expect(html).toMatch(new RegExp('<label for="ucorr-' + eje + '-' + k + '">'));
+        expect(html).toMatch(new RegExp('<input id="ucorr-' + eje + '-' + k + '"[^>]*type="text"'));
+      });
+      expect(html).toMatch(new RegExp('<label for="ucorr-' + eje + '-h">Hemisferio</label><select id="ucorr-' + eje + '-h"'));
+      expect(html).toMatch(new RegExp('id="ucorr-err-' + eje + '"[^>]*role="alert"[^>]*hidden'));
+    });
+    ['Latitud', 'Longitud', 'Grados', 'Minutos', 'Segundos'].forEach((t) => expect(html).toContain('>' + t + '<'));
+  });
+
+  test('defaults para Mendoza: latitud S y longitud O seleccionados; opciones N/S y E/O', () => {
+    expect(html).toMatch(/id="ucorr-lat-h"[^>]*><option value="N">N<\/option><option value="S" selected>S<\/option><\/select>/);
+    expect(html).toMatch(/id="ucorr-lon-h"[^>]*><option value="E">E<\/option><option value="O" selected>O<\/option><\/select>/);
+  });
+
+  test('los campos aceptan coma o punto (texto, no number) y no autocompletan ni autocapitalizan', () => {
+    expect(html).toMatch(/id="ucorr-lat-s"[^>]*type="text" inputmode="decimal"/);
+    expect(html).toMatch(/id="ucorr-lat-g"[^>]*type="text" inputmode="numeric"/);
+    expect(html).not.toMatch(/id="ucorr-(lat|lon)-[gms]"[^>]*type="number"/);
+    expect(html).toMatch(/id="ucorr-lat-g"[^>]*autocomplete="off"[^>]*autocapitalize="off"/);
+  });
+
+  test('aviso de punto movido y restaurar, equivalencia WGS84, error general y resumen del original (todo oculto al inicio)', () => {
+    expect(html).toContain('Moviste el punto manualmente. Se guardará como punto elegido en el mapa.');
+    expect(html).toMatch(/id="btn-ucorr-coord-restaurar"[^>]*>Restaurar coordenada ingresada</);
+    expect(html).toMatch(/id="ucorr-coord-movido"[^>]*role="status"[^>]*hidden/);
+    expect(html).toMatch(/id="ucorr-coord-equivale"[^>]*hidden/);
+    expect(html).toMatch(/id="ucorr-err-general"[^>]*role="alert"[^>]*hidden/);
+    expect(html).toMatch(/id="ucorr-resumen-original"[^>]*hidden/);
+  });
+
+  test('el texto del aviso del HTML es el MISMO que el de la logica (una sola fuente)', () => {
+    expect(logica).toContain("var UCORR_TEXTO_PUNTO_MOVIDO = 'Moviste el punto manualmente. Se guardará como punto elegido en el mapa.';");
+    expect(logica).toContain("var UCORR_TEXTO_RESTAURAR = 'Restaurar coordenada ingresada';");
+    expect(controlador).toContain('coordEls.movidoTexto.textContent = UCORR_TEXTO_PUNTO_MOVIDO;');
+  });
+
+  test('usa el mapa existente del modal: no hay un segundo contenedor de mapa', () => {
+    expect((html.match(/id="ucorr-mapa"/g) || []).length).toBe(1);
+    expect((html.match(/id="ucorr-vista-mapa"/g) || []).length).toBe(1);
+    expect((controlador.match(/L\.map\(/g) || []).length).toBe(1);
+  });
+
+  test('coordenadasConversion.js se carga ANTES de la logica y del controlador, y es local (sin CDN ni librerias externas)', () => {
+    const pos = (archivo) => html.indexOf('src="js/' + archivo + '"');
+    expect(pos('coordenadasConversion.js')).toBeGreaterThan(-1);
+    expect(pos('coordenadasConversion.js')).toBeLessThan(pos('ubicacionCorreccionLogic.js'));
+    expect(pos('ubicacionCorreccionLogic.js')).toBeLessThan(pos('ubicacionCorreccion.js'));
+    expect(html).not.toMatch(/<script[^>]*src="https?:[^"]*(proj4|pyproj|geodesy|coordinates)/i);
+    expect((html.match(/coordenadasConversion\.js/g) || []).length).toBe(1);
+  });
+});
+
+describe('Ingresar coordenadas: js/api.js ejecutado', () => {
+  function cargarApi() {
+    const llamadas = [];
+    const ctx = vm.createContext({ fetch: jest.fn((url, opciones) => { llamadas.push(opciones); return Promise.resolve({ json: () => Promise.resolve({ status: 'ok' }) }); }), JSON, Object });
+    vm.runInContext(api, ctx);
+    return { ctx, cuerpo: (i) => JSON.parse(llamadas[i].body) };
+  }
+  const ORIGINAL = { lat: { g: 33, m: 20, s: 51.54, h: 'S' }, lon: { g: 69, m: 8, s: 43.62, h: 'O' } };
+
+  test('COORDENADAS_GMS: viaja coordenadaOriginal ademas de los 7 campos, y NADA mas (ni coordenadaOriginalTexto / crsOriginal / identidad / estado)', () => {
+    const a = cargarApi();
+    a.ctx.apiProponerCorreccionUbicacion('tok', {
+      wellId: '14-0001', lat: -33.34765, lon: -69.14545, metodo: 'COORDENADAS_GMS', precisionGpsM: null, observacion: '', clientRequestId: 'ucorr-12345678', coordenadaOriginal: ORIGINAL,
+      coordenadaOriginalTexto: 'X', crsOriginal: 'Y', autoValidar: true, email: 'a@b.com', nombre: 'Falso', distanciaM: 1, estado: 'VALIDADA'
+    });
+    const body = a.cuerpo(0);
+    expect(Object.keys(body).sort()).toEqual(['action', 'clientRequestId', 'coordenadaOriginal', 'lat', 'lon', 'metodo', 'observacion', 'precisionGpsM', 'sessionToken', 'wellId']);
+    expect(body.coordenadaOriginal).toEqual(ORIGINAL);
+    expect(JSON.stringify(body)).not.toMatch(/coordenadaOriginalTexto|crsOriginal|autoValid|email|Falso|distancia|VALIDADA/);
+  });
+
+  test('GPS y mapa NO mandan coordenadaOriginal (la clave ni aparece en el JSON)', () => {
+    const a = cargarApi();
+    a.ctx.apiProponerCorreccionUbicacion('tok', { wellId: '14-0001', lat: 1, lon: 2, metodo: 'PUNTO_EN_MAPA', precisionGpsM: null, observacion: '', clientRequestId: 'ucorr-12345678' });
+    expect(Object.keys(a.cuerpo(0))).not.toContain('coordenadaOriginal');
+  });
+
+  test('el modulo de conversion no depende de librerias ni de la red', () => {
+    const conv = leer(__dirname, 'coordenadasConversion.js');
+    expect(conv.replace(/\/\/.*$/gm, '')).not.toMatch(/\b(fetch|XMLHttpRequest|import|require|document|window|localStorage)\b/);
+  });
+});
+
+describe('Ingresar coordenadas: controlador y estilos', () => {
+  test('el controlador nunca arma coordenadaOriginalTexto ni crsOriginal (son del backend) y no persiste nada', () => {
+    [controlador, logica].forEach((src) => {
+      const codigo = src.replace(/\/\/.*$/gm, '');
+      expect(codigo).not.toMatch(/coordenadaOriginalTexto\s*(:|=(?!=))/);
+      expect(codigo).not.toMatch(/crsOriginal\s*(:|=(?!=))/);
+    });
+  });
+
+  test('los textos de usuario salen escapados (innerHTML solo con ubicacionCorreccionLogic_escapar)', () => {
+    expect(logica).toMatch(/esc\(texto\)/);
+    expect(controlador).not.toMatch(/innerHTML\s*=\s*[^;]*coord/i);
+  });
+
+  test.each([
+    'ucorr-coord-panel', 'ucorr-eje', 'ucorr-eje-campos', 'ucorr-campo', 'ucorr-input', 'ucorr-equivale', 'ucorr-movido', 'ucorr-sistema', 'ucorr-dato-original', 'ucorr-crs', 'ucorr-mapa-corto'
+  ])('existe la clase .%s', (clase) => {
+    expect(css).toContain('.' + clase);
+  });
+
+  test('el campo con error se marca (aria-invalid) y los hemisferios caben en celular: grilla de 4 columnas', () => {
+    expect(css).toMatch(/\.ucorr-input\[aria-invalid="true"\]/);
+    expect(css).toMatch(/\.ucorr-eje-campos \{[^}]*grid-template-columns: 1fr 1fr 1\.5fr 1\.1fr/);
+  });
+
+  test('los elementos con [hidden] que tienen display propio vuelven a ocultarse', () => {
+    expect(css).toMatch(/\.ucorr-coord-panel\[hidden\] \{\s*display: none/);
+    expect(css).toMatch(/\.ucorr-movido\[hidden\] \{\s*display: none/);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------
+// Etapa 4: POSGAR 94 / Argentina 2 en el cableado (index.html, estilos, api.js, offline)
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------
+describe('POSGAR: index.html', () => {
+  test('selector de sistema accesible: grupo con titulo y dos botones (GMS / WGS84 y POSGAR 94 / Argentina 2) con aria-pressed', () => {
+    expect(html).toMatch(/role="group" aria-labelledby="ucorr-sistemas-titulo"/);
+    expect(html).toMatch(/id="ucorr-sistemas-titulo"[^>]*>Sistema de coordenadas</);
+    expect(html).toMatch(/id="btn-ucorr-sistema-gms"[^>]*type="button"|type="button" id="btn-ucorr-sistema-gms"/);
+    expect(html).toMatch(/id="btn-ucorr-sistema-gms"[^>]*aria-pressed="true">GMS \/ WGS84</);
+    expect(html).toMatch(/id="btn-ucorr-sistema-posgar"[^>]*aria-pressed="false">POSGAR 94 \/ Argentina 2</);
+    expect(html).toMatch(/data-sistema="GMS"/);
+    expect(html).toMatch(/data-sistema="POSGAR"/);
+  });
+
+  test('panel POSGAR oculto al inicio, con titulo "POSGAR 94 / Argentina 2 · EPSG:22182" y la ayuda de la convencion X = Este, Y = Norte', () => {
+    expect(html).toMatch(/id="ucorr-coord-posgar"[^>]*hidden/);
+    expect(html).toMatch(/<strong>POSGAR 94 \/ Argentina 2<\/strong> · EPSG:22182/);
+    expect(html).toContain('En esta aplicación se ingresa X = Este e Y = Norte.');
+    expect(logica).toContain("var UCORR_TEXTO_AYUDA_XY = 'En esta aplicación se ingresa X = Este e Y = Norte.';");
+  });
+
+  test('campos "X / Este" e "Y / Norte": etiquetas asociadas, teclado numerico/decimal, sin autocompletar ni capitalizar, tipo texto (acepta coma y puntos)', () => {
+    ['x', 'y'].forEach((k) => {
+      expect(html).toMatch(new RegExp('<label for="ucorr-posgar-' + k + '">' + (k === 'x' ? 'X / Este' : 'Y / Norte') + '</label>'));
+      expect(html).toMatch(new RegExp('<input id="ucorr-posgar-' + k + '"[^>]*type="text" inputmode="decimal" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="18"'));
+      expect(html).toMatch(new RegExp('id="ucorr-err-' + k + '"[^>]*role="alert"[^>]*hidden'));
+      expect(html).toMatch(new RegExp('id="ucorr-posgar-' + k + '"[^>]*aria-describedby="ucorr-err-' + k + '"'));
+    });
+    expect(html).not.toMatch(/id="ucorr-posgar-[xy]"[^>]*type="number"/);
+  });
+
+  test('X/Y invertidos: bloque oculto con mensaje y el boton "Intercambiar X e Y"', () => {
+    expect(html).toMatch(/id="ucorr-posgar-invertido"[^>]*role="alert"[^>]*hidden/);
+    expect(html).toContain('Parece que X e Y están intercambiados.');
+    expect(html).toMatch(/id="btn-ucorr-posgar-intercambiar"[^>]*>Intercambiar X e Y</);
+    expect(html).toMatch(/id="ucorr-err-posgar-general"[^>]*role="alert"[^>]*hidden/);
+  });
+
+  test('el panel GMS sigue intacto (ids, hemisferios por defecto, ayuda) y el mapa sigue siendo uno solo', () => {
+    ['lat', 'lon'].forEach((eje) => ['g', 'm', 's', 'h'].forEach((k) => expect(html).toContain('id="ucorr-' + eje + '-' + k + '"')));
+    expect(html).toMatch(/id="ucorr-lat-h"[^>]*><option value="N">N<\/option><option value="S" selected>S<\/option><\/select>/);
+    expect(html).toMatch(/id="ucorr-lon-h"[^>]*><option value="E">E<\/option><option value="O" selected>O<\/option><\/select>/);
+    expect(html).toMatch(/id="ucorr-coord-gms"/);
+    expect((html.match(/id="ucorr-mapa"/g) || []).length).toBe(1);
+  });
+
+  test('todos los ids POSGAR que usa el controlador existen en el HTML', () => {
+    const ids = new Set();
+    controlador.replace(/\$\('([^']+)'\)/g, (_, id) => { ids.add(id); return ''; });
+    ['ucorr-posgar-x', 'ucorr-posgar-y', 'ucorr-err-x', 'ucorr-err-y', 'ucorr-coord-posgar', 'ucorr-posgar-invertido', 'btn-ucorr-posgar-intercambiar', 'btn-ucorr-sistema-gms', 'btn-ucorr-sistema-posgar'].forEach((id) => {
+      expect(ids.has(id)).toBe(true);
+      expect(html).toContain('id="' + id + '"');
+    });
+  });
+});
+
+describe('POSGAR: estilos (movil) y api.js', () => {
+  test.each(['ucorr-sistemas', 'ucorr-sistema-chip', 'ucorr-coord-posgar', 'ucorr-eje-xy', 'ucorr-ayuda-xy', 'ucorr-posgar-titulo'])('existe la clase .%s', (clase) => {
+    expect(css).toContain('.' + clase);
+  });
+
+  test('selector de dos columnas con botones de al menos 44 px de alto (tactil); X e Y en dos columnas', () => {
+    expect(css).toMatch(/\.ucorr-sistemas-chips \{[^}]*grid-template-columns: 1fr 1fr/);
+    expect(css).toMatch(/\.ucorr-sistema-chip \{[^}]*min-height: 44px/);
+    expect(css).toMatch(/\.ucorr-eje-xy \{[^}]*grid-template-columns: 1fr 1fr/);
+  });
+
+  test('los campos del modal ganan al estilo global de input[type=text] (si no, en celular se recortan los digitos)', () => {
+    expect(css).toMatch(/\.ucorr-panel \.ucorr-input \{[^}]*height: 46px/);
+    expect(css).toMatch(/\.ucorr-panel \.ucorr-input \{[^}]*padding: 0 4px/);
+  });
+
+  test('los paneles de sistema con display propio vuelven a ocultarse con [hidden]', () => {
+    expect(css).toMatch(/\.ucorr-coord-gms\[hidden\],\s*\.ucorr-coord-posgar\[hidden\] \{\s*display: none/);
+  });
+
+  test('api.js manda {x, y} en coordenadaOriginal de POSGAR y nada mas (ni coordenadaOriginalTexto / crsOriginal)', () => {
+    const llamadas = [];
+    const ctx = vm.createContext({ fetch: jest.fn((url, o) => { llamadas.push(o); return Promise.resolve({ json: () => Promise.resolve({ status: 'ok' }) }); }), JSON, Object });
+    vm.runInContext(api, ctx);
+    ctx.apiProponerCorreccionUbicacion('tok', {
+      wellId: '14-0001', lat: -32.992946, lon: -69, metodo: 'COORDENADAS_POSGAR94_AR2', precisionGpsM: null, observacion: '', clientRequestId: 'ucorr-12345678',
+      coordenadaOriginal: { x: 2500000, y: 6350000 }, coordenadaOriginalTexto: 'X', crsOriginal: 'EPSG:22182', email: 'a@b.com'
+    });
+    const body = JSON.parse(llamadas[0].body);
+    expect(body.coordenadaOriginal).toEqual({ x: 2500000, y: 6350000 });
+    expect(JSON.stringify(body)).not.toMatch(/coordenadaOriginalTexto|crsOriginal|EPSG|email/);
+  });
+});
+
+describe('POSGAR: el modulo de conversion funciona SIN conexion y SIN librerias', () => {
+  test('ejecutado solo (un contexto vacio, sin fetch / document / require), convierte POSGAR -> WGS84 y detecta X/Y invertidos', () => {
+    const conv = leer(__dirname, 'coordenadasConversion.js');
+    const ctx = vm.createContext({ Math, Number, String, isFinite, Object });       // nada de red ni de DOM: lo que tiene la PWA sin conexion
+    vm.runInContext(conv, ctx);
+    const ok = vm.runInContext("coordenadas_evaluarPosgar({ x: '2.500.000,00', y: '6.350.000' })", ctx);
+    expect(ok.ok).toBe(true);
+    expect([ok.lat, ok.lon]).toEqual([-32.992946, -69]);
+    expect(ok.crsOriginal).toBe('EPSG:22182');
+    const inv = vm.runInContext("coordenadas_evaluarPosgar({ x: 6350000, y: 2500000 })", ctx);
+    expect(inv).toMatchObject({ ok: false, invertido: true });
+  });
+
+  test('esta en el precache del service worker (SHELL_FILES) y se carga antes que la logica', () => {
+    const sw = require('../sw');
+    expect(sw.SHELL_FILES).toContain('./js/coordenadasConversion.js');
+    expect(html.indexOf('src="js/coordenadasConversion.js"')).toBeLessThan(html.indexOf('src="js/ubicacionCorreccionLogic.js"'));
+  });
+});
+
+describe('POSGAR: reglas de codigo del controlador', () => {
+  test('el intercambio de X/Y solo ocurre desde el boton (una unica llamada a ubicacionCorreccionLogic_intercambiarXY, dentro de intercambiarXY)', () => {
+    const codigo = controlador.replace(/\/\/.*$/gm, '');
+    expect((codigo.match(/ubicacionCorreccionLogic_intercambiarXY\(/g) || []).length).toBe(1);
+    expect(codigo).toMatch(/function intercambiarXY\(\) \{[\s\S]*?ubicacionCorreccionLogic_intercambiarXY\(/);
+    expect(codigo).toMatch(/coordEls\.intercambiar\.addEventListener\('click', intercambiarXY\)/);
+    expect((logica.replace(/\/\/.*$/gm, '').match(/intercambiarXY\(/g) || []).length).toBe(1);        // la logica solo DEFINE la funcion; nada la invoca
+  });
+
+  test('la convencion no se invierte: la logica jamas usa X como Norte (X = Este, Y = Norte en cada mensaje y etiqueta)', () => {
+    expect(html).toContain('X / Este');
+    expect(html).toContain('Y / Norte');
+    expect(html).not.toMatch(/X \/ Norte|Y \/ Este/);
+  });
+});

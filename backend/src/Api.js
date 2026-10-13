@@ -95,7 +95,8 @@ function doPost(e) {
         });
       } else if (body.action === 'proponerCorreccionUbicacion') {
         // Lista BLANCA de campos: la identidad sale de la sesion; irrLat/irrLon/irrEstado/distanciaM/estado... que mande el
-        // cliente se ignoran (el snapshot de Irrigacion, la distancia y las banderas las calcula el backend).
+        // cliente se ignoran (el snapshot de Irrigacion, la distancia y las banderas las calcula el backend). coordenadaOriginal es el valor tipeado de
+        // los metodos COORDENADAS_*; coordenadaOriginalTexto y crsOriginal NO se leen del cliente: los genera el backend al recalcular.
         response = handleProponerCorreccionUbicacion(body.sessionToken, {
           wellId: body.wellId,
           lat: body.lat,
@@ -103,7 +104,8 @@ function doPost(e) {
           metodo: body.metodo,
           precisionGpsM: body.precisionGpsM,
           observacion: body.observacion,
-          clientRequestId: body.clientRequestId
+          clientRequestId: body.clientRequestId,
+          coordenadaOriginal: body.coordenadaOriginal
         });
       } else if (body.action === 'getCorreccionesUbicacionPozo') {
         response = handleGetCorreccionesUbicacionPozo(body.sessionToken, body.wellId);
@@ -1052,6 +1054,13 @@ function respuestaErrorCorreccion(resultado) {
   if (resultado.distanciaM !== undefined && resultado.distanciaM !== null) {
     r.distanciaM = resultado.distanciaM;
   }
+  // errores de una coordenada ingresada: detalle = codigo fino (p. ej. MINUTOS_FUERA_DE_RANGO) y campo = donde (lat.m, x...), sin ningun dato del usuario
+  if (typeof resultado.detalle === 'string') {
+    r.detalle = resultado.detalle;
+  }
+  if (typeof resultado.campo === 'string') {
+    r.campo = resultado.campo;
+  }
   return r;
 }
 
@@ -1080,7 +1089,8 @@ function handleProponerCorreccionUbicacion(sessionToken, datos) {
       metodo: d.metodo,
       precisionGpsM: d.precisionGpsM,
       observacion: d.observacion,
-      clientRequestId: d.clientRequestId
+      clientRequestId: d.clientRequestId,
+      coordenadaOriginal: d.coordenadaOriginal
     }, { autoValidar: autoValidar });
   } catch (err) {
     logHistoryEvent(session.email, 'proponerCorreccionUbicacion', d.wellId, 'SERVICE_UNAVAILABLE');

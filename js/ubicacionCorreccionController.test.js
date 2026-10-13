@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
+const fuenteConversion = fs.readFileSync(path.join(__dirname, 'coordenadasConversion.js'), 'utf8');
 const fuenteLogica = fs.readFileSync(path.join(__dirname, 'ubicacionCorreccionLogic.js'), 'utf8');
 const fuenteControlador = fs.readFileSync(path.join(__dirname, 'ubicacionCorreccion.js'), 'utf8');
 const htmlIndex = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
@@ -86,11 +87,13 @@ function crearEntorno(opc) {
 
 // ---------------------------------------------------------------------------------------------------------------- Leaflet falso
 function crearLeafletFalso() {
-  const reg = { mapas: [], marcadores: [], vistas: [] };
+  const reg = { mapas: [], marcadores: [], vistas: [], encuadres: [] };
   const L = {
     map() {
       const m = {
-        handlers: {}, setView(c, z) { reg.vistas.push({ c: c, z: z }); return m; }, on(t, f) { m.handlers[t] = f; return m; }, removeLayer() {}, invalidateSize() {}, addLayer() {}
+        handlers: {}, removidas: [], setView(c, z) { reg.vistas.push({ c: c, z: z }); return m; }, on(t, f) { m.handlers[t] = f; return m; },
+        removeLayer(l) { m.removidas.push(l); }, invalidateSize() {}, addLayer() {},
+        fitBounds(puntos, opciones) { reg.encuadres.push({ puntos: puntos, opciones: opciones }); return m; }
       };
       reg.mapas.push(m);
       return m;
@@ -139,6 +142,7 @@ function cargar(opc) {
     orden.push('proponer');
     return o.proponer ? o.proponer(datos) : Promise.resolve({ status: 'ok', data: { correccion: VIGENTE, duplicada: false, curada: false, autoValidada: true } });
   });
+  vm.runInContext(fuenteConversion, ctx);               // igual que index.html: el modulo de conversion se carga antes que la logica
   vm.runInContext(fuenteLogica, ctx);
   vm.runInContext(fuenteControlador, ctx);
   const sesion = { sessionToken: 'tok-real', permisos: o.permisos || { ubicacion: true, ubicacion_corregir: true }, onSessionExpired: jest.fn() };
@@ -668,7 +672,8 @@ describe('guardado desde el modal', () => {
     await flush();
     expect(t.el('ucorr-overlay').hidden).toBe(false);
     expect(t.el('ucorr-error').hidden).toBe(false);
-    expect(t.el('ucorr-error').textContent).toBe('La ubicación queda fuera de Mendoza.');
+    expect(t.el('ucorr-error').textContent).toBe(t.ctx.UCORR_MENSAJES_ERROR.FUERA_DE_MENDOZA);
+    expect(t.el('ucorr-error').textContent).toMatch(/fuera de Mendoza/);
     expect(t.el('btn-ucorr-guardar').disabled).toBe(false);
     expect(t.el('btn-ucorr-guardar').textContent).toBe('Guardar corrección');
     expect(t.ctx.apiGetCorreccionesUbicacionPozo).toHaveBeenCalledTimes(1);           // solo la lectura inicial: no se relee tras un error
@@ -747,5 +752,1332 @@ describe('cierre de sesion', () => {
     expect(t.el('ucorr-overlay').hidden).toBe(false);
     t.ctx.ubicacionCorreccionController_cerrar();
     expect(t.el('ucorr-overlay').hidden).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------- C. Ingresar coordenadas (GMS / WGS84)
+const Conv = require('./coordenadasConversion');
+const GMS_LAT = { g: '33', m: '20', s: '51,54', h: 'S' };            // = Irrigacion del pozo 14-0001 (-33.34765, -69.14545)
+const GMS_LON = { g: '69', m: '8', s: '43,62', h: 'O' };
+const GMS_NUM = { lat: { g: 33, m: 20, s: 51.54, h: 'S' }, lon: { g: 69, m: 8, s: 43.62, h: 'O' } };
+const EXACTO_IRR = Conv.coordenadas_evaluarGms(GMS_NUM);
+
+function escribir(t, eje, valores) {
+  Object.keys(valores).forEach((k) => {
+    const el = t.el('ucorr-' + eje + '-' + k);
+    el.value = String(valores[k]);
+    el.emit(k === 'h' ? 'change' : 'input');
+  });
+}
+const escribirIrr = (t) => { escribir(t, 'lat', GMS_LAT); escribir(t, 'lon', GMS_LON); };
+async function abrirCoordenadas(t, location) {
+  await abrirFicha(t, location);
+  t.el('btn-ubic-corr-abrir').click();
+  t.el('btn-ucorr-coordenadas').click();
+  await flush();
+}
+// el marcador movible (el punto nuevo) que sigue en el mapa
+const marcadorNuevo = (t) => {
+  const mapa = t.reg.mapas[0];
+  const vivos = t.reg.marcadores.filter((m) => m.opciones.draggable === true && mapa.removidas.indexOf(m) === -1);
+  return vivos[vivos.length - 1] || null;
+};
+const arrastrar = (t, lat, lon) => { const mk = marcadorNuevo(t); mk.latlng = [lat, lon]; mk.handlers.dragend(); };
+const marcadoresFijos = (t) => t.reg.marcadores.filter((m) => m.opciones.interactive === false);
+
+describe('C. Ingresar coordenadas: abrir y validacion en vivo', () => {
+  test('el modal ofrece las TRES opciones y "Ingresar coordenadas" abre la vista con el panel GMS / WGS84, defaults S y O y Continuar apagado', async () => {
+    const t = cargar();
+    await abrirFicha(t);
+    t.el('btn-ubic-corr-abrir').click();
+    expect(t.el('btn-ucorr-gps').hidden).toBe(false);
+    expect(t.el('btn-ucorr-mapa').hidden).toBe(false);
+    expect(t.el('btn-ucorr-coordenadas').hidden).toBe(false);
+    t.el('btn-ucorr-coordenadas').click();
+    await flush();
+    expect(t.el('ucorr-vista-mapa').hidden).toBe(false);
+    expect(t.el('ucorr-vista-opciones').hidden).toBe(true);
+    expect(t.el('ucorr-coord-panel').hidden).toBe(false);
+    expect(t.el('btn-ucorr-sistema-gms').atributos['aria-pressed']).toBe('true');
+    expect(t.el('btn-ucorr-sistema-posgar').atributos['aria-pressed']).toBe('false');
+    expect(t.el('ucorr-coord-gms').hidden).toBe(false);
+    expect(t.el('ucorr-coord-posgar').hidden).toBe(true);
+    expect(t.el('ucorr-lat-h').value).toBe('S');
+    expect(t.el('ucorr-lon-h').value).toBe('O');
+    expect(t.el('btn-ucorr-mapa-usar').textContent).toBe('Continuar');
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(true);
+    expect(t.el('ucorr-mapa-coord').textContent).toBe('Ingresá la latitud y la longitud.');
+    expect(t.el('ucorr-coord-equivale').hidden).toBe(true);
+    ['ucorr-err-lat', 'ucorr-err-lon', 'ucorr-err-general', 'ucorr-coord-movido'].forEach((id) => expect(t.el(id).hidden).toBe(true));
+    expect(marcadorNuevo(t)).toBeNull();
+  });
+
+  test('"Elegir punto en el mapa" sigue igual: sin panel de coordenadas y con "Usar este punto"', async () => {
+    const t = cargar();
+    await abrirModalMapa(t);
+    expect(t.el('ucorr-coord-panel').hidden).toBe(true);
+    expect(t.el('btn-ucorr-mapa-usar').textContent).toBe('Usar este punto');
+    expect(t.el('ucorr-mapa-instruccion').textContent).toMatch(/Tocá el mapa/);
+  });
+
+  test('GMS valido: convierte AL INSTANTE, muestra lat/lon, pone el punto en el mapa (movible) y habilita Continuar', async () => {
+    const t = cargar();
+    await abrirCoordenadas(t);
+    escribirIrr(t);
+    expect(t.el('ucorr-coord-equivale').hidden).toBe(false);
+    expect(t.el('ucorr-coord-equivale-valor').textContent).toBe('-33.34765, -69.14545');
+    expect(t.el('ucorr-mapa-coord').textContent).toBe('-33.34765, -69.14545');
+    const mk = marcadorNuevo(t);
+    expect(mk).not.toBeNull();
+    expect(mk.latlng).toEqual([EXACTO_IRR.latExacta, EXACTO_IRR.lonExacta]);
+    expect(mk.opciones.draggable).toBe(true);
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(false);
+    ['ucorr-err-lat', 'ucorr-err-lon', 'ucorr-err-general'].forEach((id) => expect(t.el(id).hidden).toBe(true));
+    expect(t.el('ucorr-mapa-distancia').textContent).toMatch(/^A 0(,\d)? m de la ubicación de Irrigación\.$/);
+    expect(t.reg.encuadres.length + t.reg.vistas.length).toBeGreaterThan(0);          // el mapa se encuadra en el punto
+  });
+
+  test('coma o punto decimal en los segundos dan el MISMO punto', async () => {
+    const t1 = cargar();
+    await abrirCoordenadas(t1);
+    escribir(t1, 'lat', { g: '33', m: '20', s: '51,54' }); escribir(t1, 'lon', { g: '69', m: '8', s: '43,62' });
+    const t2 = cargar();
+    await abrirCoordenadas(t2);
+    escribir(t2, 'lat', { g: '33', m: '20', s: '51.54' }); escribir(t2, 'lon', { g: '69', m: '8', s: '43.62' });
+    expect(marcadorNuevo(t1).latlng).toEqual(marcadorNuevo(t2).latlng);
+    expect(t1.el('ucorr-coord-equivale-valor').textContent).toBe(t2.el('ucorr-coord-equivale-valor').textContent);
+  });
+
+  test('mientras se escribe a medias (un eje) no hay errores ni punto; al completar el otro eje aparece el punto', async () => {
+    const t = cargar();
+    await abrirCoordenadas(t);
+    escribir(t, 'lat', GMS_LAT);
+    ['ucorr-err-lat', 'ucorr-err-lon', 'ucorr-err-general'].forEach((id) => expect(t.el(id).hidden).toBe(true));
+    expect(marcadorNuevo(t)).toBeNull();
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(true);
+    escribir(t, 'lon', GMS_LON);
+    expect(marcadorNuevo(t)).not.toBeNull();
+  });
+
+  test.each([
+    ['minutos = 60', 'lat', { m: '60' }, 'err-lat', 'm', /minutos/],
+    ['segundos = 60', 'lat', { s: '60' }, 'err-lat', 's', /segundos/],
+    ['grados no numericos', 'lon', { g: 'abc' }, 'err-lon', 'g', /grados/],
+    ['segundos no numericos', 'lon', { s: '4x' }, 'err-lon', 's', /segundos/],
+    ['minutos negativos', 'lat', { m: '-5' }, 'err-lat', 'm', /negativos/],
+    ['latitud con grados > 90', 'lat', { g: '95' }, 'err-lat', 'g', /entre 0 y 90/]
+  ])('invalido: %s -> mensaje EN CONTEXTO, campo marcado, sin punto y Continuar apagado', async (_n, eje, cambio, errId, campo, texto) => {
+    const t = cargar();
+    await abrirCoordenadas(t);
+    escribirIrr(t);
+    expect(marcadorNuevo(t)).not.toBeNull();
+    escribir(t, eje, cambio);
+    expect(t.el('ucorr-' + errId).hidden).toBe(false);
+    expect(t.el('ucorr-' + errId).textContent).toMatch(texto);
+    expect(t.el('ucorr-' + eje + '-' + campo).atributos['aria-invalid']).toBe('true');
+    expect(marcadorNuevo(t)).toBeNull();                                            // el punto anterior desaparece: no queda una propuesta "vieja"
+    expect(t.el('ucorr-coord-equivale').hidden).toBe(true);
+    expect(t.el('ucorr-mapa-coord').textContent).toBe('Ingresá la latitud y la longitud.');
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(true);
+    t.el('btn-ucorr-mapa-usar').click();
+    expect(t.el('ucorr-vista-confirmar').hidden).toBe(true);                        // aunque se fuerce el click, no avanza
+  });
+
+  test('corregir el valor invalido restablece todo: errores fuera, punto de nuevo y Continuar', async () => {
+    const t = cargar();
+    await abrirCoordenadas(t);
+    escribirIrr(t);
+    escribir(t, 'lat', { m: '60' });
+    expect(t.el('ucorr-err-lat').hidden).toBe(false);
+    escribir(t, 'lat', { m: '20' });
+    expect(t.el('ucorr-err-lat').hidden).toBe(true);
+    expect(t.el('ucorr-lat-m').atributos['aria-invalid']).toBe('false');
+    expect(marcadorNuevo(t)).not.toBeNull();
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(false);
+  });
+
+  test('hemisferio equivocado (lat N): fuera de Mendoza con la pista del hemisferio; NO se corrige solo y Continuar queda apagado', async () => {
+    const t = cargar();
+    await abrirCoordenadas(t);
+    escribirIrr(t);
+    escribir(t, 'lat', { h: 'N' });
+    expect(t.el('ucorr-err-general').hidden).toBe(false);
+    expect(t.el('ucorr-err-general').textContent).toMatch(/fuera de Mendoza/);
+    expect(t.el('ucorr-err-general').textContent).toMatch(/hemisferio/i);
+    expect(t.el('ucorr-lat-h').value).toBe('N');                                     // lo elegido se respeta
+    expect(marcadorNuevo(t)).toBeNull();
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(true);
+    escribir(t, 'lat', { h: 'S' });
+    expect(t.el('ucorr-err-general').hidden).toBe(true);
+    expect(marcadorNuevo(t)).not.toBeNull();
+  });
+
+  test('el hemisferio Este para la longitud tambien deja el punto fuera de Mendoza (E / O)', async () => {
+    const t = cargar();
+    await abrirCoordenadas(t);
+    escribirIrr(t);
+    escribir(t, 'lon', { h: 'E' });
+    expect(t.el('ucorr-err-general').textContent).toMatch(/fuera de Mendoza/);
+    expect(marcadorNuevo(t)).toBeNull();
+  });
+
+  test('punto fuera de Mendoza (Buenos Aires): mensaje y sin propuesta', async () => {
+    const t = cargar();
+    await abrirCoordenadas(t);
+    escribir(t, 'lat', { g: '34', m: '36', s: '0', h: 'S' });
+    escribir(t, 'lon', { g: '58', m: '22', s: '0', h: 'O' });
+    expect(t.el('ucorr-err-general').textContent).toMatch(/fuera de Mendoza/);
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(true);
+    expect(marcadorNuevo(t)).toBeNull();
+  });
+
+  test('en modo coordenadas, tocar el mapa NO elige un punto (solo se arrastra el convertido)', async () => {
+    const t = cargar();
+    await abrirCoordenadas(t);
+    tocarMapa(t, PUNTO_REAL.lat, PUNTO_REAL.lon);
+    expect(marcadorNuevo(t)).toBeNull();
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(true);
+    escribirIrr(t);
+    const antes = marcadorNuevo(t).latlng;
+    tocarMapa(t, PUNTO_REAL.lat, PUNTO_REAL.lon);
+    expect(marcadorNuevo(t).latlng).toEqual(antes);
+  });
+});
+
+describe('C. Ingresar coordenadas: mapa con Irrigacion, vigente y punto nuevo', () => {
+  test('Irrigacion + vigente (fijos, no interactivos) + punto nuevo movible; el mapa se encuadra con los tres', async () => {
+    const t = cargar({ lectura: LECTURA_VIGENTE });
+    await abrirCoordenadas(t);
+    expect(marcadoresFijos(t)).toHaveLength(2);
+    marcadoresFijos(t).forEach((m) => { expect(m.opciones.interactive).toBe(false); expect(m.opciones.draggable).toBeUndefined(); });
+    escribirIrr(t);
+    expect(marcadorNuevo(t).opciones.draggable).toBe(true);
+    const ult = t.reg.encuadres[t.reg.encuadres.length - 1];
+    expect(ult.puntos).toHaveLength(3);
+    expect(ult.puntos[0]).toEqual([EXACTO_IRR.latExacta, EXACTO_IRR.lonExacta]);
+    expect(ult.puntos).toContainEqual([IRR.lat, IRR.lon]);
+    expect(ult.puntos).toContainEqual([PUNTO_REAL.lat, PUNTO_REAL.lon]);
+    expect(ult.opciones.maxZoom).toBe(17);
+  });
+
+  test('sin vigente: Irrigacion + punto nuevo; sin Irrigacion ni vigente: solo el punto, a zoom 17', async () => {
+    const t = cargar();
+    await abrirCoordenadas(t);
+    escribirIrr(t);
+    expect(t.reg.encuadres[t.reg.encuadres.length - 1].puntos).toHaveLength(2);
+    const sin = cargar();
+    await abrirCoordenadas(sin, LOCATION_SIN);
+    escribirIrr(sin);
+    expect(marcadoresFijos(sin)).toHaveLength(0);
+    expect(sin.reg.vistas[sin.reg.vistas.length - 1]).toEqual({ c: [EXACTO_IRR.latExacta, EXACTO_IRR.lonExacta], z: 17 });
+  });
+
+  test('si la coordenada se escribio mientras cargaba el mapa, el punto aparece al terminar la carga', async () => {
+    let listo;
+    const t = cargar({});
+    t.ctx.mapaShared_cargarLibrerias.mockImplementation(() => new Promise((r) => { listo = r; }));
+    await abrirFicha(t);
+    t.el('btn-ubic-corr-abrir').click();
+    t.el('btn-ucorr-coordenadas').click();
+    escribirIrr(t);
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(false);                      // el formulario funciona sin esperar al mapa
+    expect(marcadorNuevo(t)).toBeNull();
+    listo();
+    await flush();
+    expect(marcadorNuevo(t)).not.toBeNull();
+  });
+
+  test('si el mapa no carga, se puede continuar igual con la coordenada ingresada (no depende del mapa)', async () => {
+    const t = cargar({ libreriasFallan: true });
+    await abrirCoordenadas(t);
+    expect(t.el('ucorr-mapa-error').hidden).toBe(false);
+    expect(t.el('ucorr-mapa-error-texto').textContent).toMatch(/podés continuar/);
+    escribirIrr(t);
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(false);
+    t.el('btn-ucorr-mapa-usar').click();
+    expect(t.el('ucorr-vista-confirmar').hidden).toBe(false);
+  });
+});
+
+describe('C. Ingresar coordenadas: arrastrar el punto -> PUNTO_EN_MAPA, y restaurar', () => {
+  async function conPuntoConvertido(opc) {
+    const t = cargar(opc);
+    await abrirCoordenadas(t);
+    escribirIrr(t);
+    return t;
+  }
+
+  test('arrastrar: aviso exacto, boton "Restaurar coordenada ingresada" y el punto manual pasa a ser el punto', async () => {
+    const t = await conPuntoConvertido();
+    arrastrar(t, -33.3470000123, -69.1450000456);
+    expect(t.el('ucorr-coord-movido').hidden).toBe(false);
+    expect(t.el('ucorr-coord-movido-texto').textContent).toBe('Moviste el punto manualmente. Se guardará como punto elegido en el mapa.');
+    expect(t.el('btn-ucorr-coord-restaurar').textContent).toBe('Restaurar coordenada ingresada');
+    expect(t.el('ucorr-mapa-coord').textContent).toBe('-33.347, -69.145');
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(false);
+  });
+
+  test('arrastrado: se guarda como PUNTO_EN_MAPA y coordenadaOriginal DEJA de enviarse (payload de 7 campos, lat/lon redondeados)', async () => {
+    const t = await conPuntoConvertido();
+    arrastrar(t, -33.3470000123, -69.1450000456);
+    t.el('btn-ucorr-mapa-usar').click();
+    expect(t.el('ucorr-resumen').textContent).toBe('Elegida en mapa · -33.347, -69.145');
+    expect(t.el('ucorr-resumen-original').hidden).toBe(true);
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    const datos = t.ctx.apiProponerCorreccionUbicacion.mock.calls[0][1];
+    expect(Object.keys(datos).sort()).toEqual(['clientRequestId', 'lat', 'lon', 'metodo', 'observacion', 'precisionGpsM', 'wellId']);
+    expect(datos).toMatchObject({ metodo: 'PUNTO_EN_MAPA', lat: -33.347, lon: -69.145, precisionGpsM: null });
+    expect(JSON.stringify(datos)).not.toMatch(/coordenadaOriginal/);
+  });
+
+  test('Restaurar: vuelve a COORDENADAS_GMS, EXACTAMENTE a la coordenada derivada del GMS, y recupera coordenadaOriginal', async () => {
+    const t = await conPuntoConvertido();
+    arrastrar(t, -33.3470000123, -69.1450000456);
+    t.el('btn-ucorr-coord-restaurar').click();
+    expect(t.el('ucorr-coord-movido').hidden).toBe(true);
+    expect(marcadorNuevo(t).latlng).toEqual([EXACTO_IRR.latExacta, EXACTO_IRR.lonExacta]);
+    expect(t.el('ucorr-mapa-coord').textContent).toBe('-33.34765, -69.14545');
+    t.el('btn-ucorr-mapa-usar').click();
+    expect(t.el('ucorr-resumen').textContent).toBe('Coordenadas GMS / WGS84 · -33.34765, -69.14545');
+    expect(t.el('ucorr-resumen-original').hidden).toBe(false);
+    expect(t.el('ucorr-resumen-original').textContent).toBe('Coordenada ingresada: 33° 20\' 51.54" S, 69° 8\' 43.62" O (GMS / WGS84)');
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    const datos = t.ctx.apiProponerCorreccionUbicacion.mock.calls[0][1];
+    expect(datos.metodo).toBe('COORDENADAS_GMS');
+    expect(datos.coordenadaOriginal).toEqual(GMS_NUM);
+    expect(datos.lat).toBe(EXACTO_IRR.latExacta);
+    expect(datos.lon).toBe(EXACTO_IRR.lonExacta);
+  });
+
+  test('arrastrar varias veces y restaurar sigue dando la coordenada original (no queda estado viejo)', async () => {
+    const t = await conPuntoConvertido();
+    arrastrar(t, -33.3471, -69.1451);
+    arrastrar(t, -33.3472, -69.1452);
+    expect(t.el('ucorr-mapa-coord').textContent).toBe('-33.3472, -69.1452');
+    t.el('btn-ucorr-coord-restaurar').click();
+    expect(marcadorNuevo(t).latlng).toEqual([EXACTO_IRR.latExacta, EXACTO_IRR.lonExacta]);
+    expect(t.el('ucorr-coord-movido').hidden).toBe(true);
+  });
+
+  test('soltar el punto en el mismo lugar NO lo vuelve manual', async () => {
+    const t = await conPuntoConvertido();
+    arrastrar(t, EXACTO_IRR.latExacta, EXACTO_IRR.lonExacta);
+    expect(t.el('ucorr-coord-movido').hidden).toBe(true);
+    t.el('btn-ucorr-mapa-usar').click();
+    expect(t.el('ucorr-resumen').textContent).toMatch(/^Coordenadas GMS \/ WGS84 · /);
+  });
+
+  test('despues de arrastrar, escribir de nuevo en los campos RETOMA la coordenada ingresada (el aviso desaparece y el punto vuelve a la conversion)', async () => {
+    const t = await conPuntoConvertido();
+    arrastrar(t, -33.3471, -69.1451);
+    escribir(t, 'lat', { s: '50' });
+    expect(t.el('ucorr-coord-movido').hidden).toBe(true);
+    const nuevo = Conv.coordenadas_evaluarGms({ lat: { g: 33, m: 20, s: 50, h: 'S' }, lon: GMS_NUM.lon });
+    expect(marcadorNuevo(t).latlng).toEqual([nuevo.latExacta, nuevo.lonExacta]);
+    t.el('btn-ucorr-mapa-usar').click();
+    expect(t.el('ucorr-resumen').textContent).toMatch(/^Coordenadas GMS \/ WGS84 · /);
+  });
+
+  test('despues de arrastrar, dejar los campos invalidos quita el punto (no se guarda un punto "huerfano")', async () => {
+    const t = await conPuntoConvertido();
+    arrastrar(t, -33.3471, -69.1451);
+    escribir(t, 'lat', { m: '99' });
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(true);
+    expect(t.el('ucorr-coord-movido').hidden).toBe(true);
+    expect(marcadorNuevo(t)).toBeNull();
+  });
+});
+
+describe('C. Ingresar coordenadas: distancia, observacion y advertencia', () => {
+  async function confirmarCon(lat, lon, opc) {
+    const t = cargar(opc);
+    await abrirCoordenadas(t, opc && opc.location);
+    escribir(t, 'lat', lat);
+    escribir(t, 'lon', lon);
+    t.el('btn-ucorr-mapa-usar').click();
+    return t;
+  }
+
+  test('a ~0 m: observacion opcional, sin advertencias, se puede guardar', async () => {
+    const t = await confirmarCon(GMS_LAT, GMS_LON);
+    expect(t.el('ucorr-obs-label').textContent).toBe('Observación (opcional)');
+    expect(t.el('ucorr-advertencia-1km').hidden).toBe(true);
+    expect(t.el('btn-ucorr-guardar').disabled).toBe(false);
+    expect(t.el('ucorr-resumen').textContent).toBe('Coordenadas GMS / WGS84 · -33.34765, -69.14545');
+  });
+
+  test('a mas de 250 m (~326 m): observacion OBLIGATORIA; sin ella no se puede guardar; al escribirla si', async () => {
+    const t = await confirmarCon(Object.assign({}, GMS_LAT, { s: '41' }), GMS_LON);
+    expect(t.el('ucorr-distancia').textContent).toMatch(/^A 32\d(,\d)? m de la ubicación de Irrigación\./);
+    expect(t.el('ucorr-obs-label').textContent).toBe('Observación (obligatoria)');
+    expect(t.el('ucorr-err-observacion').hidden).toBe(false);
+    expect(t.el('btn-ucorr-guardar').disabled).toBe(true);
+    t.el('ucorr-observacion').value = 'El pozo esta del otro lado del canal';
+    t.el('ucorr-observacion').emit('input');
+    expect(t.el('btn-ucorr-guardar').disabled).toBe(false);
+    expect(t.el('ucorr-advertencia-1km').hidden).toBe(true);
+  });
+
+  test('a mas de 1 km (~1,2 km): advertencia fuerte con el texto exacto, y guarda igual si cumple lo demas', async () => {
+    const t = await confirmarCon(Object.assign({}, GMS_LAT, { s: '11' }), GMS_LON);
+    expect(t.el('ucorr-advertencia-1km').hidden).toBe(false);
+    expect(t.el('ucorr-advertencia-1km').textContent).toBe('La ubicación propuesta está a más de 1 km de la ubicación de Irrigación. Verificá cuidadosamente antes de guardar.');
+    t.el('ucorr-observacion').value = 'lejos';
+    t.el('ucorr-observacion').emit('input');
+    expect(t.el('btn-ucorr-guardar').disabled).toBe(false);
+  });
+
+  test('el punto convertido tambien muestra la distancia orientativa en la vista del mapa', async () => {
+    const t = cargar();
+    await abrirCoordenadas(t);
+    escribir(t, 'lat', Object.assign({}, GMS_LAT, { s: '41' }));
+    escribir(t, 'lon', GMS_LON);
+    expect(t.el('ucorr-mapa-distancia').textContent).toMatch(/^A 32\d(,\d)? m de la ubicación de Irrigación\./);
+  });
+
+  test('SIN ubicacion de Irrigacion: sin distancia, observacion opcional y se puede continuar y guardar', async () => {
+    const t = await confirmarCon(GMS_LAT, GMS_LON, { location: LOCATION_SIN });
+    expect(t.el('ucorr-distancia').hidden).toBe(true);
+    expect(t.el('ucorr-obs-label').textContent).toBe('Observación (opcional)');
+    expect(t.el('btn-ucorr-guardar').disabled).toBe(false);
+    expect(t.el('ucorr-mapa-distancia').textContent).toBe('');
+  });
+});
+
+describe('C. Ingresar coordenadas: guardado, payload exacto y errores del backend', () => {
+  async function listoParaGuardarGms(opc) {
+    const t = cargar(opc);
+    await abrirCoordenadas(t, opc && opc.location);
+    escribirIrr(t);
+    t.el('btn-ucorr-mapa-usar').click();
+    return t;
+  }
+
+  test('PAYLOAD EXACTO: 8 campos, metodo COORDENADAS_GMS, precisionGpsM null, lat/lon sin redondear y coordenadaOriginal estructurada con numeros', async () => {
+    const t = await listoParaGuardarGms();
+    t.el('ucorr-observacion').value = ' nota de campo ';
+    t.el('ucorr-observacion').emit('input');
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    const [token, datos] = t.ctx.apiProponerCorreccionUbicacion.mock.calls[0];
+    expect(token).toBe('tok-real');
+    expect(Object.keys(datos).sort()).toEqual(['clientRequestId', 'coordenadaOriginal', 'lat', 'lon', 'metodo', 'observacion', 'precisionGpsM', 'wellId']);
+    expect(datos).toMatchObject({ wellId: W, metodo: 'COORDENADAS_GMS', precisionGpsM: null, observacion: 'nota de campo' });
+    expect(datos.lat).toBe(EXACTO_IRR.latExacta);
+    expect(datos.lon).toBe(EXACTO_IRR.lonExacta);
+    expect(datos.coordenadaOriginal).toEqual(GMS_NUM);
+    expect(Object.keys(datos.coordenadaOriginal).sort()).toEqual(['lat', 'lon']);
+    expect(Object.keys(datos.coordenadaOriginal.lat).sort()).toEqual(['g', 'h', 'm', 's']);
+    expect(datos.clientRequestId).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
+  });
+
+  test('NUNCA viaja coordenadaOriginalTexto, crsOriginal, distancia, estado, email, nombre ni flags de validacion', async () => {
+    const t = await listoParaGuardarGms();
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    const datos = t.ctx.apiProponerCorreccionUbicacion.mock.calls[0][1];
+    expect(JSON.stringify(datos)).not.toMatch(/coordenadaOriginalTexto|crsOriginal|distancia|estado|email|nombre|autoValid|validar|validada|irr/i);
+  });
+
+  test('los segundos con coma viajan como NUMERO (51.54) y los vacios como 0', async () => {
+    const t = cargar();
+    await abrirCoordenadas(t);
+    escribir(t, 'lat', { g: '33', m: '', s: '', h: 'S' });
+    escribir(t, 'lon', { g: '69', m: '', s: '', h: 'O' });
+    t.el('btn-ucorr-mapa-usar').click();
+    t.el('ucorr-observacion').value = 'sin minutos';
+    t.el('ucorr-observacion').emit('input');
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    expect(t.ctx.apiProponerCorreccionUbicacion.mock.calls[0][1].coordenadaOriginal).toEqual({ lat: { g: 33, m: 0, s: 0, h: 'S' }, lon: { g: 69, m: 0, s: 0, h: 'O' } });
+  });
+
+  test('guardado OK: cierra el modal, el resultado lo dice el backend y SIEMPRE se relee (pintado desde la relectura, con el valor original)', async () => {
+    const GMS_CORR = Object.assign({}, VIGENTE, { metodo: 'COORDENADAS_GMS', lat: IRR.lat, lon: IRR.lon, coordenadaOriginalTexto: '33° 20\' 51.54" S, 69° 8\' 43.62" O', crsOriginal: 'GMS_WGS84' });
+    const t = await listoParaGuardarGms({
+      lectura: { vigente: GMS_CORR, pendientes: [], historial: [GMS_CORR, VIGENTE] },
+      proponer: () => Promise.resolve({ status: 'ok', data: { correccion: GMS_CORR, duplicada: false, curada: false, autoValidada: true } })
+    });
+    t.orden.length = 0;
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    expect(t.orden).toEqual(['proponer', 'leer']);
+    expect(t.el('ucorr-overlay').hidden).toBe(true);
+    const html = t.contenedor.innerHTML;
+    expect(html).toContain('Ubicación corregida y validada.');
+    expect(html).toContain('Coordenadas GMS / WGS84');
+    expect(html).toContain('Coordenada ingresada');
+    expect(html).toContain('GMS / WGS84');
+    expect(html).toContain('-33.34765, -69.14545');
+    expect(html.match(/Coordenada ingresada/g)).toHaveLength(2);        // vigente + su fila del historial; la fila de mapa (sin campos) no suma
+    expect(html).toContain('Elegida en mapa');
+  });
+
+  test('PENDIENTE: "Corrección enviada para validación." segun el backend', async () => {
+    const t = await listoParaGuardarGms({ proponer: () => Promise.resolve({ status: 'ok', data: { correccion: PENDIENTE, duplicada: false, curada: false } }), lectura: { vigente: null, pendientes: [PENDIENTE], historial: [PENDIENTE] } });
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    expect(t.contenedor.innerHTML).toContain('Corrección enviada para validación.');
+  });
+
+  test('DOBLE CLICK en Guardar: una sola llamada a la API', async () => {
+    let resolver;
+    const t = await listoParaGuardarGms({ proponer: () => new Promise((r) => { resolver = r; }) });
+    t.el('btn-ucorr-guardar').click();
+    t.el('btn-ucorr-guardar').click();
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    expect(t.ctx.apiProponerCorreccionUbicacion).toHaveBeenCalledTimes(1);
+    expect(t.el('btn-ucorr-guardar').disabled).toBe(true);
+    resolver({ status: 'ok', data: { correccion: VIGENTE, autoValidada: true } });
+    await flush();
+    expect(t.ctx.apiProponerCorreccionUbicacion).toHaveBeenCalledTimes(1);
+  });
+
+  test('REINTENTO: tras un corte de red se reenvia el MISMO contenido con el MISMO clientRequestId; cambiar un segundo da otro', async () => {
+    const t = await listoParaGuardarGms({ proponer: () => Promise.reject(new Error('timeout')) });
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    expect(t.el('ucorr-error').textContent).toBe('No se pudo guardar. Revisá tu conexión e intentá de nuevo.');
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    t.el('btn-ucorr-confirmar-volver').click();
+    escribir(t, 'lat', { s: '52' });
+    t.el('btn-ucorr-mapa-usar').click();
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    const ids = t.ctx.apiProponerCorreccionUbicacion.mock.calls.map((c) => c[1].clientRequestId);
+    expect(ids).toHaveLength(3);
+    expect(ids[0]).toBe(ids[1]);
+    expect(ids[2]).not.toBe(ids[0]);
+  });
+
+  test.each([
+    ['COORDENADA_INCONSISTENTE', /no coincide con el punto calculado/],
+    ['COORDENADA_INVALIDA', /coordenada ingresada no es válida/],
+    ['XY_INVERTIDOS', /X e Y están intercambiados/],
+    ['INVALID_COORDENADA_ORIGINAL', /No se pudo interpretar la coordenada/],
+    ['ESQUEMA_DESACTUALIZADO', /todavía no está disponible/],
+    ['FUERA_DE_MENDOZA', /fuera de Mendoza/]
+  ])('el backend responde %s: mensaje amigable EN el modal (sin codigo tecnico), no cierra y se puede reintentar', async (code, texto) => {
+    const t = await listoParaGuardarGms({ proponer: () => Promise.resolve({ status: 'error', code: code, message: 'texto tecnico', detalle: 'MINUTOS_FUERA_DE_RANGO', campo: 'lat.m' }) });
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    expect(t.el('ucorr-overlay').hidden).toBe(false);
+    expect(t.el('ucorr-error').hidden).toBe(false);
+    expect(t.el('ucorr-error').textContent).toMatch(texto);
+    expect(t.el('ucorr-error').textContent).not.toMatch(new RegExp(code + '|tecnico|MINUTOS|lat\\.m'));
+    expect(t.el('btn-ucorr-guardar').disabled).toBe(false);
+    expect(t.ctx.apiGetCorreccionesUbicacionPozo).toHaveBeenCalledTimes(1);               // no se relee tras un error
+  });
+
+  test('codigo desconocido: mensaje generico, nunca el codigo', async () => {
+    const t = await listoParaGuardarGms({ proponer: () => Promise.resolve({ status: 'error', code: 'ALGO_NUEVO', message: 'x' }) });
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    expect(t.el('ucorr-error').textContent).toBe('No se pudo guardar la corrección. Intentá nuevamente.');
+  });
+
+  test('Volver desde confirmar regresa a las coordenadas con los campos intactos y el punto en el mapa', async () => {
+    const t = await listoParaGuardarGms();
+    t.el('btn-ucorr-confirmar-volver').click();
+    expect(t.el('ucorr-vista-mapa').hidden).toBe(false);
+    expect(t.el('ucorr-coord-panel').hidden).toBe(false);
+    expect(t.el('ucorr-lat-s').value).toBe('51,54');
+    expect(marcadorNuevo(t)).not.toBeNull();
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(false);
+  });
+});
+
+describe('C. Ingresar coordenadas: convivencia con las otras opciones', () => {
+  test('Volver a las opciones y elegir "punto en el mapa": se oculta el panel, no queda el punto convertido y el boton vuelve a "Usar este punto"', async () => {
+    const t = cargar();
+    await abrirCoordenadas(t);
+    escribirIrr(t);
+    t.volverBtns[1].click();
+    expect(t.el('ucorr-vista-opciones').hidden).toBe(false);
+    t.el('btn-ucorr-mapa').click();
+    await flush();
+    expect(t.el('ucorr-coord-panel').hidden).toBe(true);
+    expect(t.el('btn-ucorr-mapa-usar').textContent).toBe('Usar este punto');
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(true);
+    expect(marcadorNuevo(t)).toBeNull();
+    tocarMapa(t, PUNTO_REAL.lat, PUNTO_REAL.lon);
+    t.el('btn-ucorr-mapa-usar').click();
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    const datos = t.ctx.apiProponerCorreccionUbicacion.mock.calls[0][1];
+    expect(datos.metodo).toBe('PUNTO_EN_MAPA');
+    expect(datos).not.toHaveProperty('coordenadaOriginal');
+  });
+
+  test('volver a abrir "Ingresar coordenadas" empieza limpio (campos vacios, S y O, sin errores ni punto)', async () => {
+    const t = cargar();
+    await abrirCoordenadas(t);
+    escribirIrr(t);
+    escribir(t, 'lat', { h: 'N' });
+    t.volverBtns[1].click();
+    t.el('btn-ucorr-coordenadas').click();
+    await flush();
+    ['g', 'm', 's'].forEach((k) => { expect(t.el('ucorr-lat-' + k).value).toBe(''); expect(t.el('ucorr-lon-' + k).value).toBe(''); });
+    expect(t.el('ucorr-lat-h').value).toBe('S');
+    expect(t.el('ucorr-lon-h').value).toBe('O');
+    expect(t.el('ucorr-err-general').hidden).toBe(true);
+    expect(marcadorNuevo(t)).toBeNull();
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(true);
+  });
+
+  test('GPS despues de coordenadas: manda GPS_ACTUAL sin coordenadaOriginal', async () => {
+    const t = cargar();
+    await abrirCoordenadas(t);
+    escribirIrr(t);
+    t.volverBtns[1].click();
+    t.el('btn-ucorr-gps').click();
+    t.geo.llamadas[t.geo.llamadas.length - 1].ok(posicion(PUNTO_REAL.lat, PUNTO_REAL.lon, 8));
+    t.el('btn-ucorr-gps-continuar').click();
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    const datos = t.ctx.apiProponerCorreccionUbicacion.mock.calls[0][1];
+    expect(datos.metodo).toBe('GPS_ACTUAL');
+    expect(Object.keys(datos).sort()).toEqual(['clientRequestId', 'lat', 'lon', 'metodo', 'observacion', 'precisionGpsM', 'wellId']);
+  });
+
+  test('despues de guardar, volver a abrir el modal empieza en las opciones y sin observacion previa', async () => {
+    const t = cargar({ lectura: LECTURA_VIGENTE });
+    await abrirCoordenadas(t);
+    escribirIrr(t);
+    t.el('btn-ucorr-mapa-usar').click();
+    t.el('ucorr-observacion').value = 'algo';
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    t.el('btn-ubic-corr-abrir').click();
+    expect(t.el('ucorr-vista-opciones').hidden).toBe(false);
+    expect(t.el('ucorr-observacion').value).toBe('');
+  });
+});
+
+describe('C. Ingresar coordenadas: permisos', () => {
+  test('quien NO puede corregir no ve el boton (ni por lo tanto la opcion de coordenadas)', async () => {
+    const t = cargar({ permisos: { ubicacion: true, ubicacion_corregir: false } });
+    await abrirFicha(t);
+    expect(t.contenedor.innerHTML).not.toContain('btn-ubic-corr-abrir');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------- D. Ingresar coordenadas: POSGAR 94 / Argentina 2
+// Punto de Irrigacion del pozo (-33.34765, -69.14545) expresado en POSGAR (X = Este, Y = Norte), a 2 decimales: queda a unos pocos cm de Irrigacion.
+const POS_IRR_NUM = (() => { const p = Conv.coordenadas_wgs84APosgar(IRR.lat, IRR.lon); return { x: Math.round(p.este * 100) / 100, y: Math.round(p.norte * 100) / 100 }; })();
+const aArgentino = (n) => String(n).replace('.', ',');
+const POS_IRR = { x: aArgentino(POS_IRR_NUM.x), y: aArgentino(POS_IRR_NUM.y) };
+const EXACTO_POS = Conv.coordenadas_evaluarPosgar(POS_IRR_NUM);
+
+function escribirXY(t, x, y) {
+  [['ucorr-posgar-x', x], ['ucorr-posgar-y', y]].forEach(([id, v]) => {
+    if (v === undefined) { return; }
+    const el = t.el(id);
+    el.value = String(v);
+    el.emit('input');
+  });
+}
+const elegirPosgar = (t) => t.el('btn-ucorr-sistema-posgar').click();
+const elegirGms = (t) => t.el('btn-ucorr-sistema-gms').click();
+async function abrirPosgar(t, location) {
+  await abrirCoordenadas(t, location);
+  elegirPosgar(t);
+}
+
+describe('D. POSGAR: selector de sistema', () => {
+  test('el panel ofrece GMS / WGS84 y POSGAR 94 / Argentina 2; GMS es el sistema inicial', async () => {
+    const t = cargar();
+    await abrirCoordenadas(t);
+    expect(t.el('btn-ucorr-sistema-gms').atributos['aria-pressed']).toBe('true');
+    expect(t.el('btn-ucorr-sistema-posgar').atributos['aria-pressed']).toBe('false');
+    expect(t.el('ucorr-coord-gms').hidden).toBe(false);
+    expect(t.el('ucorr-coord-posgar').hidden).toBe(true);
+  });
+
+  test('elegir POSGAR muestra su panel (con la ayuda X = Este e Y = Norte), oculta GMS y deja Continuar apagado', async () => {
+    const t = cargar();
+    await abrirPosgar(t);
+    expect(t.el('btn-ucorr-sistema-posgar').atributos['aria-pressed']).toBe('true');
+    expect(t.el('btn-ucorr-sistema-gms').atributos['aria-pressed']).toBe('false');
+    expect(t.el('ucorr-coord-posgar').hidden).toBe(false);
+    expect(t.el('ucorr-coord-gms').hidden).toBe(true);
+    expect(t.el('ucorr-posgar-ayuda').textContent).toBe('En esta aplicación se ingresa X = Este e Y = Norte.');
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(true);
+    expect(t.el('ucorr-mapa-coord').textContent).toBe('Ingresá X (Este) e Y (Norte).');
+    ['ucorr-err-x', 'ucorr-err-y', 'ucorr-err-posgar-general', 'ucorr-posgar-invertido', 'ucorr-coord-equivale', 'ucorr-coord-movido'].forEach((id) => expect(t.el(id).hidden).toBe(true));
+    expect(marcadorNuevo(t)).toBeNull();
+  });
+
+  test('GMS -> POSGAR LIMPIA todo: campos GMS vacios (y S / O), errores fuera, sin punto, sin conversion y Continuar apagado', async () => {
+    const t = cargar();
+    await abrirCoordenadas(t);
+    escribirIrr(t);
+    expect(marcadorNuevo(t)).not.toBeNull();
+    escribir(t, 'lat', { m: '99' });
+    expect(t.el('ucorr-err-lat').hidden).toBe(false);
+    escribirIrr(t);
+    elegirPosgar(t);
+    expect(marcadorNuevo(t)).toBeNull();
+    expect(t.el('ucorr-coord-equivale').hidden).toBe(true);
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(true);
+    expect(t.el('ucorr-err-lat').hidden).toBe(true);
+    ['g', 'm', 's'].forEach((k) => { expect(t.el('ucorr-lat-' + k).value).toBe(''); expect(t.el('ucorr-lon-' + k).value).toBe(''); });
+    expect(t.el('ucorr-lat-h').value).toBe('S');
+    expect(t.el('ucorr-lon-h').value).toBe('O');
+    expect(t.el('ucorr-posgar-x').value).toBe('');
+    expect(t.el('ucorr-posgar-y').value).toBe('');
+  });
+
+  test('POSGAR -> GMS LIMPIA todo: X/Y vacios, errores e invertido fuera, sin punto, y GMS arranca vacio (no reutiliza X/Y)', async () => {
+    const t = cargar();
+    await abrirPosgar(t);
+    escribirXY(t, '6350000', '2500000');
+    expect(t.el('ucorr-posgar-invertido').hidden).toBe(false);
+    elegirGms(t);
+    expect(t.el('ucorr-posgar-invertido').hidden).toBe(true);
+    expect(t.el('ucorr-posgar-x').value).toBe('');
+    expect(t.el('ucorr-posgar-y').value).toBe('');
+    expect(t.el('ucorr-coord-gms').hidden).toBe(false);
+    expect(t.el('ucorr-lat-g').value).toBe('');
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(true);
+    expect(t.el('ucorr-mapa-coord').textContent).toBe('Ingresá la latitud y la longitud.');
+    escribirXY(t, '2500000', '6350000');                     // un X/Y valido escrito mientras esta GMS NO activa nada (no son los campos activos)
+    expect(marcadorNuevo(t)).toBeNull();
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(true);
+  });
+
+  test('POSGAR valido -> GMS: el punto del sistema anterior desaparece y no se puede continuar con el', async () => {
+    const t = cargar();
+    await abrirPosgar(t);
+    escribirXY(t, POS_IRR.x, POS_IRR.y);
+    expect(marcadorNuevo(t)).not.toBeNull();
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(false);
+    elegirGms(t);
+    expect(marcadorNuevo(t)).toBeNull();
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(true);
+    t.el('btn-ucorr-mapa-usar').click();
+    expect(t.el('ucorr-vista-confirmar').hidden).toBe(true);
+  });
+
+  test('despues de cambiar de sistema NO viaja el coordenadaOriginal del anterior: GMS -> POSGAR guarda solo {x, y}; POSGAR -> GMS solo {lat, lon}', async () => {
+    const t1 = cargar();
+    await abrirCoordenadas(t1);
+    escribirIrr(t1);
+    elegirPosgar(t1);
+    escribirXY(t1, POS_IRR.x, POS_IRR.y);
+    t1.el('btn-ucorr-mapa-usar').click();
+    t1.el('btn-ucorr-guardar').click();
+    await flush();
+    const d1 = t1.ctx.apiProponerCorreccionUbicacion.mock.calls[0][1];
+    expect(d1.metodo).toBe('COORDENADAS_POSGAR94_AR2');
+    expect(Object.keys(d1.coordenadaOriginal).sort()).toEqual(['x', 'y']);
+
+    const t2 = cargar();
+    await abrirPosgar(t2);
+    escribirXY(t2, POS_IRR.x, POS_IRR.y);
+    elegirGms(t2);
+    escribirIrr(t2);
+    t2.el('btn-ucorr-mapa-usar').click();
+    t2.el('btn-ucorr-guardar').click();
+    await flush();
+    const d2 = t2.ctx.apiProponerCorreccionUbicacion.mock.calls[0][1];
+    expect(d2.metodo).toBe('COORDENADAS_GMS');
+    expect(Object.keys(d2.coordenadaOriginal).sort()).toEqual(['lat', 'lon']);
+  });
+
+  test('tocar el sistema que ya esta activo no borra lo escrito', async () => {
+    const t = cargar();
+    await abrirPosgar(t);
+    escribirXY(t, POS_IRR.x, POS_IRR.y);
+    elegirPosgar(t);
+    expect(t.el('ucorr-posgar-x').value).toBe(POS_IRR.x);
+    expect(marcadorNuevo(t)).not.toBeNull();
+  });
+
+  test('cambiar de sistema despues de arrastrar tambien limpia el aviso de "movido" y el punto manual', async () => {
+    const t = cargar();
+    await abrirPosgar(t);
+    escribirXY(t, POS_IRR.x, POS_IRR.y);
+    arrastrar(t, -33.3471, -69.1451);
+    expect(t.el('ucorr-coord-movido').hidden).toBe(false);
+    elegirGms(t);
+    expect(t.el('ucorr-coord-movido').hidden).toBe(true);
+    expect(marcadorNuevo(t)).toBeNull();
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(true);
+  });
+});
+
+describe('D. POSGAR: parseo, validacion en vivo y conversion', () => {
+  test('transformacion conocida: X=2.500.000 Y=6.350.000 -> -32.992946, -69 (pyproj); el punto va al mapa, movible', async () => {
+    const t = cargar();
+    await abrirPosgar(t);
+    escribirXY(t, '2.500.000', '6.350.000');
+    expect(t.el('ucorr-coord-equivale').hidden).toBe(false);
+    expect(t.el('ucorr-coord-equivale-valor').textContent).toBe('-32.992946, -69');
+    expect(t.el('ucorr-mapa-coord').textContent).toBe('-32.992946, -69');
+    const mk = marcadorNuevo(t);
+    const ex = Conv.coordenadas_evaluarPosgar({ x: 2500000, y: 6350000 });
+    expect(mk.latlng).toEqual([ex.latExacta, ex.lonExacta]);
+    expect(mk.opciones.draggable).toBe(true);
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(false);
+  });
+
+  test.each([
+    ['entero', '2500000', '6350000'],
+    ['punto decimal', '2500000.00', '6350000.0'],
+    ['coma decimal', '2500000,00', '6350000,0'],
+    ['separador de miles', '2.500.000', '6.350.000'],
+    ['formato argentino con decimales', '2.500.000,00', '6.350.000,00']
+  ])('formato %s: el mismo numero da EXACTAMENTE el mismo punto', async (_n, x, y) => {
+    const t = cargar();
+    await abrirPosgar(t);
+    escribirXY(t, x, y);
+    const ex = Conv.coordenadas_evaluarPosgar({ x: 2500000, y: 6350000 });
+    expect(marcadorNuevo(t).latlng).toEqual([ex.latExacta, ex.lonExacta]);
+    expect(t.el('ucorr-err-x').hidden).toBe(true);
+    expect(t.el('ucorr-err-y').hidden).toBe(true);
+  });
+
+  test('formato argentino 2.500.000,50 y 6.350.000,25: se interpreta como 2500000.5 y 6350000.25', async () => {
+    const t = cargar();
+    await abrirPosgar(t);
+    escribirXY(t, '2.500.000,50', '6.350.000,25');
+    const ex = Conv.coordenadas_evaluarPosgar({ x: 2500000.5, y: 6350000.25 });
+    expect(marcadorNuevo(t).latlng).toEqual([ex.latExacta, ex.lonExacta]);
+    t.el('btn-ucorr-mapa-usar').click();
+    expect(t.el('ucorr-resumen').textContent).toMatch(/^Coordenadas POSGAR 94 \/ Argentina 2 · /);
+    expect(t.el('ucorr-resumen-original').textContent).toBe('Coordenada ingresada: X(Este)=2500000.50, Y(Norte)=6350000.25 (POSGAR 94 / Argentina 2 · EPSG:22182)');
+  });
+
+  test.each([
+    ['X no numerico', 'abc', '6350000', 'ucorr-err-x', /X \/ Este.*número/, 'ucorr-posgar-x'],
+    ['Y no numerico', '2500000', '63x', 'ucorr-err-y', /Y \/ Norte.*número/, 'ucorr-posgar-y'],
+    ['X NaN', 'NaN', '6350000', 'ucorr-err-x', /X \/ Este/, 'ucorr-posgar-x'],
+    ['Y infinito', '2500000', 'Infinity', 'ucorr-err-y', /Y \/ Norte/, 'ucorr-posgar-y'],
+    ['X con notacion cientifica', '2.5e6', '6350000', 'ucorr-err-x', /X \/ Este/, 'ucorr-posgar-x'],
+    ['X con miles mal formados', '2.50.000', '6350000', 'ucorr-err-x', /X \/ Este/, 'ucorr-posgar-x'],
+    ['X fuera de rango (chico)', '100', '6350000', 'ucorr-err-x', /fuera de rango/, 'ucorr-posgar-x'],
+    ['X fuera de rango (grande)', '3500000', '6350000', 'ucorr-err-x', /fuera de rango/, 'ucorr-posgar-x'],
+    ['Y fuera de rango', '2500000', '5000000', 'ucorr-err-y', /fuera de rango/, 'ucorr-posgar-y'],
+    ['X ambiguo con un solo grupo de miles (2.500)', '2.500', '6350000', 'ucorr-err-x', /fuera de rango/, 'ucorr-posgar-x']
+  ])('invalido: %s -> error EN CONTEXTO, campo marcado, sin punto y Continuar apagado', async (_n, x, y, errId, texto, campoId) => {
+    const t = cargar();
+    await abrirPosgar(t);
+    escribirXY(t, POS_IRR.x, POS_IRR.y);
+    expect(marcadorNuevo(t)).not.toBeNull();
+    escribirXY(t, x, y);
+    expect(t.el(errId).hidden).toBe(false);
+    expect(t.el(errId).textContent).toMatch(texto);
+    expect(t.el(campoId).atributos['aria-invalid']).toBe('true');
+    expect(marcadorNuevo(t)).toBeNull();
+    expect(t.el('ucorr-coord-equivale').hidden).toBe(true);
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(true);
+    t.el('btn-ucorr-mapa-usar').click();
+    expect(t.el('ucorr-vista-confirmar').hidden).toBe(true);
+  });
+
+  test('un solo campo escrito y fuera de rango: el error aparece YA; si esta bien, no hay error ni punto hasta completar el otro', async () => {
+    const t = cargar();
+    await abrirPosgar(t);
+    escribirXY(t, '100');
+    expect(t.el('ucorr-err-x').hidden).toBe(false);
+    escribirXY(t, '2500000');
+    expect(t.el('ucorr-err-x').hidden).toBe(true);
+    expect(t.el('ucorr-err-y').hidden).toBe(true);
+    expect(marcadorNuevo(t)).toBeNull();
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(true);
+    escribirXY(t, undefined, '6350000');
+    expect(marcadorNuevo(t)).not.toBeNull();
+  });
+
+  test('dentro del rango pero fuera de Mendoza (esquina SO): mensaje general y sin propuesta', async () => {
+    const t = cargar();
+    await abrirPosgar(t);
+    escribirXY(t, '2300000', '5800000');
+    expect(t.el('ucorr-err-posgar-general').hidden).toBe(false);
+    expect(t.el('ucorr-err-posgar-general').textContent).toMatch(/fuera de Mendoza/);
+    expect(t.el('ucorr-posgar-invertido').hidden).toBe(true);
+    expect(marcadorNuevo(t)).toBeNull();
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(true);
+  });
+
+  test('corregir un valor invalido restablece todo (errores fuera, punto y Continuar)', async () => {
+    const t = cargar();
+    await abrirPosgar(t);
+    escribirXY(t, 'abc', '6350000');
+    expect(t.el('ucorr-err-x').hidden).toBe(false);
+    escribirXY(t, '2500000');
+    expect(t.el('ucorr-err-x').hidden).toBe(true);
+    expect(t.el('ucorr-posgar-x').atributos['aria-invalid']).toBe('false');
+    expect(marcadorNuevo(t)).not.toBeNull();
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(false);
+  });
+
+  test('tocar el mapa en modo POSGAR no elige puntos', async () => {
+    const t = cargar();
+    await abrirPosgar(t);
+    tocarMapa(t, PUNTO_REAL.lat, PUNTO_REAL.lon);
+    expect(marcadorNuevo(t)).toBeNull();
+  });
+});
+
+describe('D. POSGAR: X/Y invertidos y el boton "Intercambiar X e Y"', () => {
+  async function conInvertidos(opc) {
+    const t = cargar(opc);
+    await abrirPosgar(t);
+    escribirXY(t, '6.350.000,5', '2.500.000');
+    return t;
+  }
+
+  test('invertidos: mensaje claro + boton; NO se convierte, NO hay punto y NO se corrige nada solo', async () => {
+    const t = await conInvertidos();
+    expect(t.el('ucorr-posgar-invertido').hidden).toBe(false);
+    expect(t.el('ucorr-posgar-invertido-texto').textContent).toMatch(/Parece que X e Y están intercambiados/);
+    expect(t.el('btn-ucorr-posgar-intercambiar').hidden).toBe(false);
+    expect(t.el('ucorr-posgar-x').value).toBe('6.350.000,5');          // los valores siguen como los escribio la persona
+    expect(t.el('ucorr-posgar-y').value).toBe('2.500.000');
+    expect(marcadorNuevo(t)).toBeNull();
+    expect(t.el('ucorr-coord-equivale').hidden).toBe(true);
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(true);
+    expect(t.el('ucorr-err-posgar-general').hidden).toBe(true);        // un solo mensaje, no dos
+  });
+
+  test('NUNCA intercambia automaticamente: despues de mucho tiempo / re-evaluaciones los campos son los mismos', async () => {
+    const t = await conInvertidos();
+    escribirXY(t, '6.350.000,5');
+    escribirXY(t, undefined, '2.500.000');
+    await flush();
+    expect(t.el('ucorr-posgar-x').value).toBe('6.350.000,5');
+    expect(t.el('ucorr-posgar-y').value).toBe('2.500.000');
+    expect(marcadorNuevo(t)).toBeNull();
+  });
+
+  test('"Intercambiar X e Y": intercambia los valores TAL CUAL, vuelve a validar, recalcula y muestra el punto', async () => {
+    const t = await conInvertidos();
+    t.el('btn-ucorr-posgar-intercambiar').click();
+    expect(t.el('ucorr-posgar-x').value).toBe('2.500.000');
+    expect(t.el('ucorr-posgar-y').value).toBe('6.350.000,5');
+    expect(t.el('ucorr-posgar-invertido').hidden).toBe(true);
+    const ex = Conv.coordenadas_evaluarPosgar({ x: 2500000, y: 6350000.5 });
+    expect(marcadorNuevo(t).latlng).toEqual([ex.latExacta, ex.lonExacta]);
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(false);
+  });
+
+  test('el payload refleja los valores DESPUES del intercambio (X = Este, Y = Norte)', async () => {
+    const t = await conInvertidos();
+    t.el('btn-ucorr-posgar-intercambiar').click();
+    t.el('btn-ucorr-mapa-usar').click();
+    t.el('ucorr-observacion').value = 'distinto';
+    t.el('ucorr-observacion').emit('input');
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    const datos = t.ctx.apiProponerCorreccionUbicacion.mock.calls[0][1];
+    expect(datos.coordenadaOriginal).toEqual({ x: 2500000, y: 6350000.5 });
+  });
+
+  test('invertidos sin tocar el boton: no se puede continuar ni guardar (no sale ninguna llamada a la API)', async () => {
+    const t = await conInvertidos();
+    t.el('btn-ucorr-mapa-usar').click();
+    expect(t.el('ucorr-vista-confirmar').hidden).toBe(true);
+    expect(t.ctx.apiProponerCorreccionUbicacion).not.toHaveBeenCalled();
+  });
+
+  test('el boton no hace nada si no hay inversion (aunque se dispare el evento)', async () => {
+    const t = cargar();
+    await abrirPosgar(t);
+    escribirXY(t, '2500000', '6350000');
+    t.el('btn-ucorr-posgar-intercambiar').emit('click');
+    expect(t.el('ucorr-posgar-x').value).toBe('2500000');
+    expect(t.el('ucorr-posgar-y').value).toBe('6350000');
+    expect(t.el('ucorr-posgar-invertido').hidden).toBe(true);
+  });
+
+  test('arreglar los valores a mano tambien saca el aviso de invertidos', async () => {
+    const t = await conInvertidos();
+    escribirXY(t, '2500000', '6350000');
+    expect(t.el('ucorr-posgar-invertido').hidden).toBe(true);
+    expect(marcadorNuevo(t)).not.toBeNull();
+  });
+});
+
+describe('D. POSGAR: mapa, distancia y mapa que falla', () => {
+  test('Irrigacion + vigente (fijos) + punto propuesto movible; el mapa se encuadra con los tres (zoom maximo 17)', async () => {
+    const t = cargar({ lectura: LECTURA_VIGENTE });
+    await abrirPosgar(t);
+    expect(marcadoresFijos(t)).toHaveLength(2);
+    escribirXY(t, POS_IRR.x, POS_IRR.y);
+    expect(marcadorNuevo(t).opciones.draggable).toBe(true);
+    const ult = t.reg.encuadres[t.reg.encuadres.length - 1];
+    expect(ult.puntos).toHaveLength(3);
+    expect(ult.puntos[0]).toEqual([EXACTO_POS.latExacta, EXACTO_POS.lonExacta]);
+    expect(ult.puntos).toContainEqual([IRR.lat, IRR.lon]);
+    expect(ult.puntos).toContainEqual([PUNTO_REAL.lat, PUNTO_REAL.lon]);
+    expect(ult.opciones.maxZoom).toBe(17);
+  });
+
+  test('sin Irrigacion ni vigente: solo el punto, a zoom 17, sin distancia, y se puede continuar', async () => {
+    const t = cargar();
+    await abrirPosgar(t, LOCATION_SIN);
+    escribirXY(t, POS_IRR.x, POS_IRR.y);
+    expect(marcadoresFijos(t)).toHaveLength(0);
+    expect(t.reg.vistas[t.reg.vistas.length - 1]).toEqual({ c: [EXACTO_POS.latExacta, EXACTO_POS.lonExacta], z: 17 });
+    expect(t.el('ucorr-mapa-distancia').textContent).toBe('');
+    t.el('btn-ucorr-mapa-usar').click();
+    expect(t.el('ucorr-vista-confirmar').hidden).toBe(false);
+    expect(t.el('ucorr-distancia').hidden).toBe(true);
+    expect(t.el('btn-ucorr-guardar').disabled).toBe(false);
+  });
+
+  test('si el mapa no carga, el formulario POSGAR sigue siendo utilizable y se puede continuar', async () => {
+    const t = cargar({ libreriasFallan: true });
+    await abrirPosgar(t);
+    expect(t.el('ucorr-mapa-error').hidden).toBe(false);
+    escribirXY(t, POS_IRR.x, POS_IRR.y);
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(false);
+    expect(t.el('ucorr-coord-equivale-valor').textContent).toMatch(/^-33\./);
+    t.el('btn-ucorr-mapa-usar').click();
+    expect(t.el('ucorr-vista-confirmar').hidden).toBe(false);
+  });
+
+  const confirmarCon = async (x, y, opc) => {
+    const t = cargar(opc);
+    await abrirPosgar(t, opc && opc.location);
+    escribirXY(t, x, y);
+    t.el('btn-ucorr-mapa-usar').click();
+    return t;
+  };
+
+  test('a ~0 m: observacion opcional, sin advertencias, resumen con el sistema', async () => {
+    const t = await confirmarCon(POS_IRR.x, POS_IRR.y);
+    expect(t.el('ucorr-obs-label').textContent).toBe('Observación (opcional)');
+    expect(t.el('ucorr-advertencia-1km').hidden).toBe(true);
+    expect(t.el('btn-ucorr-guardar').disabled).toBe(false);
+    expect(t.el('ucorr-resumen').textContent).toMatch(/^Coordenadas POSGAR 94 \/ Argentina 2 · -33\.3476/);
+  });
+
+  test('a mas de 250 m (~300 m al norte): observacion OBLIGATORIA; sin ella no se guarda; al escribirla si', async () => {
+    const t = await confirmarCon(POS_IRR.x, aArgentino(POS_IRR_NUM.y + 300));
+    expect(t.el('ucorr-distancia').textContent).toMatch(/^A (29\d|30\d)(,\d)? m de la ubicación de Irrigación\./);
+    expect(t.el('ucorr-obs-label').textContent).toBe('Observación (obligatoria)');
+    expect(t.el('btn-ucorr-guardar').disabled).toBe(true);
+    expect(t.el('ucorr-advertencia-1km').hidden).toBe(true);
+    t.el('ucorr-observacion').value = 'motivo';
+    t.el('ucorr-observacion').emit('input');
+    expect(t.el('btn-ucorr-guardar').disabled).toBe(false);
+  });
+
+  test('a mas de 1 km (~1,5 km): advertencia fuerte con el texto exacto, y guarda igual si cumple lo demas', async () => {
+    const t = await confirmarCon(POS_IRR.x, aArgentino(POS_IRR_NUM.y + 1500));
+    expect(t.el('ucorr-advertencia-1km').hidden).toBe(false);
+    expect(t.el('ucorr-advertencia-1km').textContent).toBe('La ubicación propuesta está a más de 1 km de la ubicación de Irrigación. Verificá cuidadosamente antes de guardar.');
+    t.el('ucorr-observacion').value = 'lejos';
+    t.el('ucorr-observacion').emit('input');
+    expect(t.el('btn-ucorr-guardar').disabled).toBe(false);
+  });
+
+  test('la vista del mapa tambien muestra la distancia orientativa', async () => {
+    const t = cargar();
+    await abrirPosgar(t);
+    escribirXY(t, POS_IRR.x, aArgentino(POS_IRR_NUM.y + 300));
+    expect(t.el('ucorr-mapa-distancia').textContent).toMatch(/^A (29\d|30\d)(,\d)? m de la ubicación de Irrigación\./);
+  });
+});
+
+describe('D. POSGAR: arrastrar el punto -> PUNTO_EN_MAPA, y restaurar', () => {
+  async function conPunto(opc) {
+    const t = cargar(opc);
+    await abrirPosgar(t);
+    escribirXY(t, '2.500.000,50', '6.350.000,25');
+    return t;
+  }
+  const EX = Conv.coordenadas_evaluarPosgar({ x: 2500000.5, y: 6350000.25 });
+
+  test('arrastrar: aviso exacto y "Restaurar coordenada ingresada"; el punto manual pasa a ser el punto', async () => {
+    const t = await conPunto();
+    arrastrar(t, -32.9931000123, -69.0001000456);
+    expect(t.el('ucorr-coord-movido').hidden).toBe(false);
+    expect(t.el('ucorr-coord-movido-texto').textContent).toBe('Moviste el punto manualmente. Se guardará como punto elegido en el mapa.');
+    expect(t.el('btn-ucorr-coord-restaurar').textContent).toBe('Restaurar coordenada ingresada');
+    expect(t.el('ucorr-mapa-coord').textContent).toBe('-32.9931, -69.0001');
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(false);
+  });
+
+  test('arrastrado: se guarda como PUNTO_EN_MAPA y coordenadaOriginal DEJA de enviarse (7 campos, lat/lon redondeados)', async () => {
+    const t = await conPunto();
+    arrastrar(t, -32.9931000123, -69.0001000456);
+    t.el('btn-ucorr-mapa-usar').click();
+    expect(t.el('ucorr-resumen').textContent).toBe('Elegida en mapa · -32.9931, -69.0001');
+    expect(t.el('ucorr-resumen-original').hidden).toBe(true);
+    t.el('ucorr-observacion').value = 'nota';                                  // ~20 km de Irrigacion: la observacion es obligatoria
+    t.el('ucorr-observacion').emit('input');
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    const datos = t.ctx.apiProponerCorreccionUbicacion.mock.calls[0][1];
+    expect(Object.keys(datos).sort()).toEqual(['clientRequestId', 'lat', 'lon', 'metodo', 'observacion', 'precisionGpsM', 'wellId']);
+    expect(datos).toMatchObject({ metodo: 'PUNTO_EN_MAPA', lat: -32.9931, lon: -69.0001 });
+    expect(JSON.stringify(datos)).not.toMatch(/coordenadaOriginal|"x"|"y"/);
+  });
+
+  test('Restaurar: vuelve EXACTAMENTE al punto derivado de X/Y, al metodo POSGAR, conserva los X/Y escritos y recupera coordenadaOriginal', async () => {
+    const t = await conPunto();
+    arrastrar(t, -32.9931, -69.0001);
+    t.el('btn-ucorr-coord-restaurar').click();
+    expect(t.el('ucorr-coord-movido').hidden).toBe(true);
+    expect(marcadorNuevo(t).latlng).toEqual([EX.latExacta, EX.lonExacta]);
+    expect(t.el('ucorr-posgar-x').value).toBe('2.500.000,50');
+    expect(t.el('ucorr-posgar-y').value).toBe('6.350.000,25');
+    t.el('btn-ucorr-mapa-usar').click();
+    expect(t.el('ucorr-resumen').textContent).toMatch(/^Coordenadas POSGAR 94 \/ Argentina 2/);
+    t.el('ucorr-observacion').value = 'nota';                                  // ~20 km de Irrigacion: la observacion es obligatoria
+    t.el('ucorr-observacion').emit('input');
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    const datos = t.ctx.apiProponerCorreccionUbicacion.mock.calls[0][1];
+    expect(datos.metodo).toBe('COORDENADAS_POSGAR94_AR2');
+    expect(datos.coordenadaOriginal).toEqual({ x: 2500000.5, y: 6350000.25 });
+    expect(datos.lat).toBe(EX.latExacta);
+    expect(datos.lon).toBe(EX.lonExacta);
+  });
+
+  test('si se modifica X o Y despues de arrastrar, la entrada POSGAR vuelve a ser la fuente activa y se recalcula', async () => {
+    const t = await conPunto();
+    arrastrar(t, -32.9931, -69.0001);
+    escribirXY(t, '2.500.100,50');
+    expect(t.el('ucorr-coord-movido').hidden).toBe(true);
+    const nuevo = Conv.coordenadas_evaluarPosgar({ x: 2500100.5, y: 6350000.25 });
+    expect(marcadorNuevo(t).latlng).toEqual([nuevo.latExacta, nuevo.lonExacta]);
+    t.el('btn-ucorr-mapa-usar').click();
+    t.el('ucorr-observacion').value = 'nota';                                  // ~20 km de Irrigacion: la observacion es obligatoria
+    t.el('ucorr-observacion').emit('input');
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    const datos = t.ctx.apiProponerCorreccionUbicacion.mock.calls[0][1];
+    expect(datos.metodo).toBe('COORDENADAS_POSGAR94_AR2');
+    expect(datos.coordenadaOriginal).toEqual({ x: 2500100.5, y: 6350000.25 });
+  });
+
+  test('despues de arrastrar, dejar X o Y invalidos quita el punto (no se guarda un punto huerfano)', async () => {
+    const t = await conPunto();
+    arrastrar(t, -32.9931, -69.0001);
+    escribirXY(t, 'xx');
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(true);
+    expect(t.el('ucorr-coord-movido').hidden).toBe(true);
+    expect(marcadorNuevo(t)).toBeNull();
+  });
+
+  test('soltar el punto en el mismo lugar NO lo vuelve manual', async () => {
+    const t = await conPunto();
+    arrastrar(t, EX.latExacta, EX.lonExacta);
+    expect(t.el('ucorr-coord-movido').hidden).toBe(true);
+  });
+
+  test('arrastrar varias veces y restaurar sigue dando la coordenada original', async () => {
+    const t = await conPunto();
+    arrastrar(t, -32.9931, -69.0001);
+    arrastrar(t, -32.9932, -69.0002);
+    t.el('btn-ucorr-coord-restaurar').click();
+    expect(marcadorNuevo(t).latlng).toEqual([EX.latExacta, EX.lonExacta]);
+  });
+});
+
+describe('D. POSGAR: guardado, payload exacto, errores del backend e historial', () => {
+  async function listoParaGuardar(opc) {
+    const t = cargar(opc);
+    await abrirPosgar(t, opc && opc.location);
+    escribirXY(t, '2.500.000,50', '6.350.000,25');
+    t.el('btn-ucorr-mapa-usar').click();
+    t.el('ucorr-observacion').value = ' desde planilla ';
+    t.el('ucorr-observacion').emit('input');
+    return t;
+  }
+  const EX = Conv.coordenadas_evaluarPosgar({ x: 2500000.5, y: 6350000.25 });
+
+  test('PAYLOAD EXACTO: 8 campos, metodo POSGAR, precisionGpsM null, lat/lon de MAXIMA precision (sin redondear) y coordenadaOriginal {x, y} numerica', async () => {
+    const t = await listoParaGuardar();
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    const [token, datos] = t.ctx.apiProponerCorreccionUbicacion.mock.calls[0];
+    expect(token).toBe('tok-real');
+    expect(Object.keys(datos).sort()).toEqual(['clientRequestId', 'coordenadaOriginal', 'lat', 'lon', 'metodo', 'observacion', 'precisionGpsM', 'wellId']);
+    expect(datos).toMatchObject({ wellId: W, metodo: 'COORDENADAS_POSGAR94_AR2', precisionGpsM: null, observacion: 'desde planilla' });
+    expect(datos.lat).toBe(EX.latExacta);
+    expect(datos.lon).toBe(EX.lonExacta);
+    expect(datos.lat).not.toBe(EX.lat);                                      // no el redondeado de presentacion
+    expect(datos.coordenadaOriginal).toEqual({ x: 2500000.5, y: 6350000.25 });
+    expect(typeof datos.coordenadaOriginal.x).toBe('number');
+    expect(datos.clientRequestId).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
+  });
+
+  test('NUNCA viaja coordenadaOriginalTexto, crsOriginal, distancia, estado, email, nombre ni flags', async () => {
+    const t = await listoParaGuardar();
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    const datos = t.ctx.apiProponerCorreccionUbicacion.mock.calls[0][1];
+    expect(JSON.stringify(datos)).not.toMatch(/coordenadaOriginalTexto|crsOriginal|distancia|estado|email|nombre|autoValid|validar|validada|irr|EPSG/i);
+  });
+
+  test('guardado OK: cierra el modal, SIEMPRE relee y pinta desde la relectura, con la coordenada ingresada y el sistema', async () => {
+    const POS_CORR = Object.assign({}, VIGENTE, { metodo: 'COORDENADAS_POSGAR94_AR2', lat: IRR.lat, lon: IRR.lon, coordenadaOriginalTexto: 'X(Este)=2500000.50, Y(Norte)=6350000.25', crsOriginal: 'EPSG:22182' });
+    const t = await listoParaGuardar({
+      lectura: { vigente: POS_CORR, pendientes: [], historial: [POS_CORR, VIGENTE] },
+      proponer: () => Promise.resolve({ status: 'ok', data: { correccion: POS_CORR, duplicada: false, curada: false, autoValidada: true } })
+    });
+    t.orden.length = 0;
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    expect(t.orden).toEqual(['proponer', 'leer']);
+    expect(t.el('ucorr-overlay').hidden).toBe(true);
+    const html = t.contenedor.innerHTML;
+    expect(html).toContain('Ubicación corregida y validada.');
+    expect(html).toContain('Coordenadas POSGAR 94 / Argentina 2');
+    expect(html).toContain('Coordenada ingresada');
+    expect(html).toContain('X(Este)=2500000.50, Y(Norte)=6350000.25');
+    expect(html).toContain('POSGAR 94 / Argentina 2 · EPSG:22182');
+    expect(html.match(/Coordenada ingresada/g)).toHaveLength(2);           // vigente + su fila del historial; la fila de mapa (sin campos) no suma
+    expect(html).toContain('Elegida en mapa');
+  });
+
+  test('DOBLE CLICK en Guardar: una sola llamada', async () => {
+    let resolver;
+    const t = await listoParaGuardar({ proponer: () => new Promise((r) => { resolver = r; }) });
+    t.el('btn-ucorr-guardar').click();
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    expect(t.ctx.apiProponerCorreccionUbicacion).toHaveBeenCalledTimes(1);
+    resolver({ status: 'ok', data: { correccion: VIGENTE, autoValidada: true } });
+    await flush();
+    expect(t.ctx.apiProponerCorreccionUbicacion).toHaveBeenCalledTimes(1);
+  });
+
+  test('REINTENTO: el mismo contenido reutiliza el clientRequestId; cambiar X es otro', async () => {
+    const t = await listoParaGuardar({ proponer: () => Promise.reject(new Error('timeout')) });
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    t.el('btn-ucorr-confirmar-volver').click();
+    escribirXY(t, '2.500.001,50');
+    t.el('btn-ucorr-mapa-usar').click();
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    const ids = t.ctx.apiProponerCorreccionUbicacion.mock.calls.map((c) => c[1].clientRequestId);
+    expect(ids).toHaveLength(3);
+    expect(ids[0]).toBe(ids[1]);
+    expect(ids[2]).not.toBe(ids[0]);
+  });
+
+  test.each([
+    ['XY_INVERTIDOS', /X e Y están intercambiados/],
+    ['COORDENADA_INCONSISTENTE', /no coincide con el punto calculado/],
+    ['COORDENADA_INVALIDA', /coordenada ingresada no es válida/],
+    ['INVALID_COORDENADA_ORIGINAL', /No se pudo interpretar la coordenada/],
+    ['ESQUEMA_DESACTUALIZADO', /todavía no está disponible/],
+    ['FUERA_DE_MENDOZA', /fuera de Mendoza/]
+  ])('el backend responde %s: mensaje amigable EN el modal, sin codigo tecnico; no cierra y se puede reintentar', async (code, texto) => {
+    const t = await listoParaGuardar({ proponer: () => Promise.resolve({ status: 'error', code: code, message: 'texto tecnico', detalle: 'ESTE_FUERA_DE_RANGO', campo: 'x' }) });
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    expect(t.el('ucorr-overlay').hidden).toBe(false);
+    expect(t.el('ucorr-error').textContent).toMatch(texto);
+    expect(t.el('ucorr-error').textContent).not.toMatch(new RegExp(code + '|tecnico|ESTE_FUERA'));
+    expect(t.el('btn-ucorr-guardar').disabled).toBe(false);
+  });
+
+  test('Volver desde confirmar regresa a POSGAR con X/Y intactos y el punto en el mapa', async () => {
+    const t = await listoParaGuardar();
+    t.el('btn-ucorr-confirmar-volver').click();
+    expect(t.el('ucorr-vista-mapa').hidden).toBe(false);
+    expect(t.el('ucorr-coord-posgar').hidden).toBe(false);
+    expect(t.el('ucorr-posgar-x').value).toBe('2.500.000,50');
+    expect(marcadorNuevo(t)).not.toBeNull();
+  });
+});
+
+describe('D. REGRESION: sumar POSGAR no rompe GMS, GPS, mapa, permisos ni reglas', () => {
+  test('GMS sigue completo despues de haber visitado POSGAR (payload GMS de 8 campos con {lat, lon})', async () => {
+    const t = cargar();
+    await abrirPosgar(t);
+    escribirXY(t, POS_IRR.x, POS_IRR.y);
+    elegirGms(t);
+    escribirIrr(t);
+    t.el('btn-ucorr-mapa-usar').click();
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    const datos = t.ctx.apiProponerCorreccionUbicacion.mock.calls[0][1];
+    expect(datos.metodo).toBe('COORDENADAS_GMS');
+    expect(datos.coordenadaOriginal).toEqual(GMS_NUM);
+    expect(datos.lat).toBe(EXACTO_IRR.latExacta);
+    expect(Object.keys(datos).sort()).toEqual(['clientRequestId', 'coordenadaOriginal', 'lat', 'lon', 'metodo', 'observacion', 'precisionGpsM', 'wellId']);
+  });
+
+  test('"Elegir punto en el mapa" despues de coordenadas: sin panel y con "Usar este punto"; PUNTO_EN_MAPA de 7 campos', async () => {
+    const t = cargar();
+    await abrirPosgar(t);
+    escribirXY(t, POS_IRR.x, POS_IRR.y);
+    t.volverBtns[1].click();
+    t.el('btn-ucorr-mapa').click();
+    await flush();
+    expect(t.el('ucorr-coord-panel').hidden).toBe(true);
+    expect(t.el('btn-ucorr-mapa-usar').textContent).toBe('Usar este punto');
+    tocarMapa(t, PUNTO_REAL.lat, PUNTO_REAL.lon);
+    t.el('btn-ucorr-mapa-usar').click();
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    const datos = t.ctx.apiProponerCorreccionUbicacion.mock.calls[0][1];
+    expect(datos.metodo).toBe('PUNTO_EN_MAPA');
+    expect(Object.keys(datos).sort()).toEqual(['clientRequestId', 'lat', 'lon', 'metodo', 'observacion', 'precisionGpsM', 'wellId']);
+  });
+
+  test('GPS despues de POSGAR: GPS_ACTUAL de 7 campos con su precision', async () => {
+    const t = cargar();
+    await abrirPosgar(t);
+    escribirXY(t, POS_IRR.x, POS_IRR.y);
+    t.volverBtns[1].click();
+    t.el('btn-ucorr-gps').click();
+    t.geo.llamadas[t.geo.llamadas.length - 1].ok(posicion(PUNTO_REAL.lat, PUNTO_REAL.lon, 8));
+    t.el('btn-ucorr-gps-continuar').click();
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    const datos = t.ctx.apiProponerCorreccionUbicacion.mock.calls[0][1];
+    expect(datos).toMatchObject({ metodo: 'GPS_ACTUAL', precisionGpsM: 8 });
+    expect(Object.keys(datos).sort()).toEqual(['clientRequestId', 'lat', 'lon', 'metodo', 'observacion', 'precisionGpsM', 'wellId']);
+  });
+
+  test('volver a abrir "Ingresar coordenadas" empieza SIEMPRE en GMS y vacio, aunque se haya salido en POSGAR con datos', async () => {
+    const t = cargar();
+    await abrirPosgar(t);
+    escribirXY(t, POS_IRR.x, POS_IRR.y);
+    t.volverBtns[1].click();
+    t.el('btn-ucorr-coordenadas').click();
+    await flush();
+    expect(t.el('btn-ucorr-sistema-gms').atributos['aria-pressed']).toBe('true');
+    expect(t.el('ucorr-coord-gms').hidden).toBe(false);
+    expect(t.el('ucorr-coord-posgar').hidden).toBe(true);
+    expect(t.el('ucorr-posgar-x').value).toBe('');
+    expect(marcadorNuevo(t)).toBeNull();
+    expect(t.el('btn-ucorr-mapa-usar').disabled).toBe(true);
+  });
+
+  test('permisos: sin ubicacion_corregir no existe el boton, por lo tanto tampoco el modal ni POSGAR', async () => {
+    const t = cargar({ permisos: { ubicacion: true, ubicacion_corregir: false } });
+    await abrirFicha(t);
+    expect(t.contenedor.innerHTML).not.toContain('btn-ubic-corr-abrir');
+  });
+
+  test('el backend manda la respuesta (VALIDADA o PROPUESTA) y la UI no decide por su cuenta, tambien con POSGAR', async () => {
+    for (const [estadoBackend, mensaje] of [['VALIDADA', 'Ubicación corregida y validada.'], ['PROPUESTA', 'Corrección enviada para validación.']]) {
+      const corr = Object.assign({}, VIGENTE, { estado: estadoBackend, metodo: 'COORDENADAS_POSGAR94_AR2', coordenadaOriginalTexto: 'X(Este)=2500000.00, Y(Norte)=6350000.00', crsOriginal: 'EPSG:22182' });
+      const t = cargar({ proponer: () => Promise.resolve({ status: 'ok', data: { correccion: corr, duplicada: false, curada: false } }), lectura: { vigente: estadoBackend === 'VALIDADA' ? corr : null, pendientes: estadoBackend === 'PROPUESTA' ? [corr] : [], historial: [corr] } });
+      await abrirPosgar(t);
+      escribirXY(t, POS_IRR.x, POS_IRR.y);
+      t.el('btn-ucorr-mapa-usar').click();
+      t.el('btn-ucorr-guardar').click();
+      await flush();
+      expect(t.contenedor.innerHTML).toContain(mensaje);
+    }
   });
 });

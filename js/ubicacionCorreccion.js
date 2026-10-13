@@ -1,7 +1,8 @@
 // Controlador DOM de las correcciones de ubicacion (ficha individual del pozo): seccion "Ubicacion corregida" dentro del modulo Ubicacion,
-// y el modal "Corregir ubicacion" (GPS o punto en el mapa). Toca DOM, geolocation, Leaflet y red, asi que no se testea con Jest (igual que
-// js/reemplazo.js / js/cercaMio.js); toda la logica pura -reglas, payload, clientRequestId, flujo de guardado, HTML de la seccion- vive en
-// js/ubicacionCorreccionLogic.js (con tests).
+// y el modal "Corregir ubicacion" con sus tres formas de indicar el punto: GPS actual, punto elegido en el mapa e "Ingresar coordenadas"
+// (GMS / WGS84 o POSGAR 94 / Argentina 2 · EPSG:22182). Toca DOM, geolocation, Leaflet y red, asi que no se prueba directo con Jest: los tests lo
+// ejecutan con un DOM y un Leaflet simulados (js/ubicacionCorreccionController.test.js); toda la logica pura -reglas, validacion de las coordenadas
+// ingresadas, payload, clientRequestId, flujo de guardado, HTML de la seccion- vive en js/ubicacionCorreccionLogic.js (con tests).
 //
 // - La coordenada de Irrigacion es inmutable: este modulo solo la MUESTRA (en la ficha, en el modal y como marcador fijo en el mapa).
 // - Del cliente solo salen los campos de ubicacionCorreccionLogic_construirPayload (via apiProponerCorreccionUbicacion). El estado final
@@ -33,16 +34,40 @@
     mensaje: $('ucorr-gps-mensaje'), reintentar: $('btn-ucorr-gps-reintentar'), continuar: $('btn-ucorr-gps-continuar')
   };
   var mapaEls = {
-    cargando: $('ucorr-mapa-cargando'), error: $('ucorr-mapa-error'), contenedor: $('ucorr-mapa'), coord: $('ucorr-mapa-coord'),
-    distancia: $('ucorr-mapa-distancia'), usar: $('btn-ucorr-mapa-usar'), chips: Array.prototype.slice.call(document.querySelectorAll('.ucorr-capa-chip'))
+    cargando: $('ucorr-mapa-cargando'), error: $('ucorr-mapa-error'), errorTexto: $('ucorr-mapa-error-texto'), contenedor: $('ucorr-mapa'), coord: $('ucorr-mapa-coord'),
+    distancia: $('ucorr-mapa-distancia'), usar: $('btn-ucorr-mapa-usar'), instruccion: $('ucorr-mapa-instruccion'),
+    chips: Array.prototype.slice.call(document.querySelectorAll('.ucorr-capa-chip'))
   };
   var confEls = {
-    resumen: $('ucorr-resumen'), distancia: $('ucorr-distancia'), advertencia: $('ucorr-advertencia-1km'), obsLabel: $('ucorr-obs-label'),
-    obs: $('ucorr-observacion'), errObs: $('ucorr-err-observacion'), error: $('ucorr-error'), guardar: $('btn-ucorr-guardar'),
+    resumen: $('ucorr-resumen'), resumenOriginal: $('ucorr-resumen-original'), distancia: $('ucorr-distancia'), advertencia: $('ucorr-advertencia-1km'),
+    obsLabel: $('ucorr-obs-label'), obs: $('ucorr-observacion'), errObs: $('ucorr-err-observacion'), error: $('ucorr-error'), guardar: $('btn-ucorr-guardar'),
     volver: $('btn-ucorr-confirmar-volver'), guardando: $('ucorr-guardando')
   };
+  // Ingresar coordenadas. El selector de sistema (GMS / POSGAR) muestra un panel por sistema dentro de ucorr-coord-panel (la lista de sistemas esta en la logica:
+  // UCORR_SISTEMAS_COORDENADAS). GMS: ucorr-{lat|lon}-{g|m|s|h}; POSGAR: ucorr-posgar-{x|y} (X = Este, Y = Norte).
+  var coordEls = {
+    panel: $('ucorr-coord-panel'), equivale: $('ucorr-coord-equivale'), equivaleValor: $('ucorr-coord-equivale-valor'),
+    gms: $('ucorr-coord-gms'), posgar: $('ucorr-coord-posgar'),
+    general: $('ucorr-err-general'), posgarGeneral: $('ucorr-err-posgar-general'), invertido: $('ucorr-posgar-invertido'),
+    invertidoTexto: $('ucorr-posgar-invertido-texto'), intercambiar: $('btn-ucorr-posgar-intercambiar'), posgarAyuda: $('ucorr-posgar-ayuda'),
+    movido: $('ucorr-coord-movido'), movidoTexto: $('ucorr-coord-movido-texto'), restaurar: $('btn-ucorr-coord-restaurar'),
+    chips: { GMS: $('btn-ucorr-sistema-gms'), POSGAR: $('btn-ucorr-sistema-posgar') },
+    err: { lat: $('ucorr-err-lat'), lon: $('ucorr-err-lon'), x: $('ucorr-err-x'), y: $('ucorr-err-y') },
+    campos: {
+      lat: { g: $('ucorr-lat-g'), m: $('ucorr-lat-m'), s: $('ucorr-lat-s'), h: $('ucorr-lat-h') },
+      lon: { g: $('ucorr-lon-g'), m: $('ucorr-lon-m'), s: $('ucorr-lon-s'), h: $('ucorr-lon-h') },
+      x: $('ucorr-posgar-x'), y: $('ucorr-posgar-y')
+    }
+  };
+  var TEXTO_INSTRUCCION_MAPA = 'Tocá el mapa para elegir el nuevo punto. Después podés arrastrar el marcador.';
+  var TEXTO_INSTRUCCION_COORDENADAS = 'El punto aparece en el mapa cuando la coordenada es válida. Si lo arrastrás, se guarda como punto elegido en el mapa.';
+  // Los textos del aviso de punto movido, de restaurar y de la ayuda X/Y viven en la logica (una sola fuente); el HTML trae el mismo texto como respaldo.
+  coordEls.movidoTexto.textContent = UCORR_TEXTO_PUNTO_MOVIDO;
+  coordEls.restaurar.textContent = UCORR_TEXTO_RESTAURAR;
+  coordEls.posgarAyuda.textContent = UCORR_TEXTO_AYUDA_XY;
   var btnOpcionGps = $('btn-ucorr-gps');
   var btnOpcionMapa = $('btn-ucorr-mapa');
+  var btnOpcionCoord = $('btn-ucorr-coordenadas');
   var btnCerrar = $('btn-ucorr-cerrar');
   var abridorEl = null;       // boton que abrio el modal (para devolverle el foco)
 
@@ -142,7 +167,8 @@
   // --- Modal ---
 
   function nuevoModal() {
-    return { vista: 'opciones', vistaPrevia: 'opciones', metodo: null, punto: null, gps: null, gpsId: 0, mapaId: 0 };
+    // modo: que se hace en la vista del mapa ('mapa' = elegir tocando; 'coordenadas' = escribir la coordenada). coord: estado de "Ingresar coordenadas".
+    return { vista: 'opciones', vistaPrevia: 'opciones', metodo: null, modo: 'mapa', coord: null, punto: null, gps: null, gpsId: 0, mapaId: 0 };
   }
 
   function mostrarVista(nombre) {
@@ -200,6 +226,8 @@
   function iniciarGps() {
     var m = estado.modal;
     m.metodo = 'GPS_ACTUAL';
+    m.modo = 'gps';
+    m.coord = null;
     m.gps = null;
     m.punto = null;
     m.gpsId += 1;
@@ -263,19 +291,40 @@
   }
 
   function iniciarMapa() {
+    iniciarVistaMapa('mapa');
+  }
+
+  // La misma vista y el mismo mapa sirven para dos cosas: elegir un punto tocando ('mapa') o ver el punto que sale de la coordenada escrita ('coordenadas').
+  function iniciarVistaMapa(modo) {
     var m = estado.modal;
-    m.metodo = 'PUNTO_EN_MAPA';
+    var coordenadas = modo === 'coordenadas';
+    m.modo = modo;
+    m.metodo = coordenadas ? ubicacionCorreccionLogic_sistemaPorId('GMS').metodo : 'PUNTO_EN_MAPA';
     m.punto = null;
+    m.coord = coordenadas ? nuevaEntradaCoordenadas('GMS') : null;
     m.mapaId += 1;
     var id = m.mapaId;
     m.vistaPrevia = 'opciones';
     mostrarVista('mapa');
+    coordEls.panel.hidden = !coordenadas;
+    mapaEls.instruccion.textContent = coordenadas ? TEXTO_INSTRUCCION_COORDENADAS : TEXTO_INSTRUCCION_MAPA;
+    mapaEls.usar.textContent = coordenadas ? 'Continuar' : 'Usar este punto';
+    mapaEls.contenedor.classList.toggle('ucorr-mapa-corto', coordenadas);           // classList: Leaflet agrega sus propias clases al contenedor
+    mapaEls.errorTexto.textContent = coordenadas
+      ? 'No se pudo cargar el mapa, pero podés continuar con la coordenada ingresada.'
+      : 'No se pudo cargar el mapa. Revisá tu conexión e intentá de nuevo.';
     mapaEls.error.hidden = true;
     mapaEls.cargando.hidden = false;
     mapaEls.contenedor.hidden = true;
-    mapaEls.usar.disabled = true;
-    mapaEls.coord.textContent = 'Tocá el mapa para elegir el punto.';
-    mapaEls.distancia.textContent = '';
+    if (coordenadas) {
+      reiniciarCamposCoordenadas();
+      mostrarSistema('GMS');
+      aplicarCoordenadas();
+    } else {
+      mapaEls.usar.disabled = true;
+      mapaEls.coord.textContent = 'Tocá el mapa para elegir el punto.';
+      mapaEls.distancia.textContent = '';
+    }
     mapaShared_cargarLibrerias().then(function () {
       if (id !== m.mapaId) {
         return;
@@ -299,7 +348,7 @@
       mp.capasBase = mapaShared_crearCapasBase(mp.mapa);
       mp.capaBaseActual = MAPA_CAPA_BASE_DEFAULT;
       mp.capasFijas = L.layerGroup().addTo(mp.mapa);
-      mp.mapa.on('click', function (e) { elegirPunto(e.latlng.lat, e.latlng.lng, false); });
+      mp.mapa.on('click', function (e) { elegirPunto(e.latlng.lat, e.latlng.lng, false); });      // en "coordenadas" elegirPunto lo ignora: ahi solo se arrastra
     }
     // El punto propuesto de una apertura anterior no se arrastra a esta.
     if (mp.marcador) {
@@ -317,10 +366,18 @@
     }
     var centro = ubicacionCorreccionLogic_centroInicialMapa({ vigente: vig, irrigacion: estado.irrigacion, dispositivo: mp.dispositivo });
     mapaShared_alMostrarMapa(mp.mapa, function () {
-      if (id === estado.modal.mapaId) {
+      if (id !== estado.modal.mapaId) {
+        return;
+      }
+      if (estado.modal.modo === 'coordenadas' && estado.modal.punto) {
+        enmarcarPuntos(estado.modal.punto);
+      } else {
         mp.mapa.setView([centro.lat, centro.lon], centro.zoom);
       }
     });
+    if (estado.modal.modo === 'coordenadas') {
+      aplicarCoordenadas();                  // si ya habia una coordenada valida escrita mientras cargaba el mapa, su punto aparece ahora
+    }
     // Sin vigente ni Irrigacion: se intenta centrar en el dispositivo (sin bloquear; si no hay permiso queda la vista general).
     if (centro.origen === 'defecto' && navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(function (pos) {
@@ -332,26 +389,252 @@
     }
   }
 
-  function elegirPunto(lat, lon, desdeArrastre) {
+  // Un unico marcador movible (el punto nuevo) para los dos modos; lo que significa arrastrarlo depende del modo.
+  function asegurarMarcador(lat, lon, mover) {
     var mp = estado.mapa;
-    var m = estado.modal;
-    if (!m || m.vista !== 'mapa') {
+    if (!mp.mapa) {
       return;
     }
-    m.punto = { lat: lat, lon: lon };
     if (!mp.marcador) {
       mp.marcador = L.marker([lat, lon], { icon: mapaShared_iconoPuntoBusqueda(), draggable: true, keyboard: false, zIndexOffset: 1000 }).addTo(mp.mapa);
       mp.marcador.on('dragend', function () {
         var p = mp.marcador.getLatLng();
-        elegirPunto(p.lat, p.lng, true);
+        if (estado.modal && estado.modal.modo === 'coordenadas') {
+          moverPuntoManual(p.lat, p.lng);
+        } else {
+          elegirPunto(p.lat, p.lng, true);
+        }
       });
-    } else if (!desdeArrastre) {
+    } else if (mover) {
       mp.marcador.setLatLng([lat, lon]);
     }
+  }
+
+  function quitarMarcador() {
+    var mp = estado.mapa;
+    if (mp.marcador && mp.mapa) {
+      mp.mapa.removeLayer(mp.marcador);
+    }
+    mp.marcador = null;
+  }
+
+  function textoDistancia(ev) {
+    return ev.distanciaM !== null ? 'A ' + ubicacionCorreccionLogic_formatearDistancia(ev.distanciaM) + ' de la ubicación de Irrigación.' : '';
+  }
+
+  function elegirPunto(lat, lon, desdeArrastre) {
+    var m = estado.modal;
+    if (!m || m.vista !== 'mapa' || m.modo !== 'mapa') {
+      return;
+    }
+    m.punto = { lat: lat, lon: lon };
+    asegurarMarcador(lat, lon, !desdeArrastre);
     mapaEls.coord.textContent = ubicacionCorreccionLogic_formatearCoordenadas(lat, lon);
     var ev = ubicacionCorreccionLogic_evaluarPropuesta({ lat: lat, lon: lon, metodo: 'PUNTO_EN_MAPA', precisionGpsM: null, observacion: '', irrigacion: estado.irrigacion });
-    mapaEls.distancia.textContent = ev.distanciaM !== null ? 'A ' + ubicacionCorreccionLogic_formatearDistancia(ev.distanciaM) + ' de la ubicación de Irrigación.' : '';
+    mapaEls.distancia.textContent = textoDistancia(ev);
     mapaEls.usar.disabled = !m.punto;
+  }
+
+  // --- C. Ingresar coordenadas (GMS / WGS84 o POSGAR 94 / Argentina 2 · EPSG:22182) ---
+  //
+  // estado.modal.coord = {sistema, entrada, evaluacion, movido, manual}. Mientras los campos sean validos, el punto del modal ES la conversion exacta y el metodo es el del
+  // sistema (COORDENADAS_GMS / COORDENADAS_POSGAR94_AR2, con coordenadaOriginal). Si la persona ARRASTRA el punto, el metodo pasa a PUNTO_EN_MAPA, la coordenada ingresada
+  // deja de ser la fuente activa (no viaja) y se ofrece restaurarla. Escribir de nuevo en los campos retoma el control. Cambiar de sistema EMPIEZA DE CERO: nada de un
+  // sistema se reutiliza en el otro.
+
+  function nuevaEntradaCoordenadas(sistemaId) {
+    var entrada = ubicacionCorreccionLogic_entradaVacia(sistemaId);
+    return { sistema: sistemaId, entrada: entrada, evaluacion: ubicacionCorreccionLogic_evaluarEntrada(sistemaId, entrada), movido: false, manual: null };
+  }
+
+  function reiniciarCamposCoordenadas() {
+    var vacia = ubicacionCorreccionLogic_entradaGmsVacia();
+    ['lat', 'lon'].forEach(function (eje) {
+      ['g', 'm', 's', 'h'].forEach(function (k) { coordEls.campos[eje][k].value = vacia[eje][k]; });
+    });
+    coordEls.campos.x.value = '';
+    coordEls.campos.y.value = '';
+  }
+
+  // Muestra el panel del sistema activo y marca su boton del selector.
+  function mostrarSistema(sistemaId) {
+    coordEls.gms.hidden = sistemaId !== 'GMS';
+    coordEls.posgar.hidden = sistemaId !== 'POSGAR';
+    Object.keys(coordEls.chips).forEach(function (id) {
+      var activo = id === sistemaId;
+      coordEls.chips[id].classList.toggle('active', activo);
+      coordEls.chips[id].setAttribute('aria-pressed', activo ? 'true' : 'false');
+    });
+  }
+
+  function leerEntradaCoordenadas(sistemaId) {
+    if (sistemaId === 'POSGAR') {
+      return { x: coordEls.campos.x.value, y: coordEls.campos.y.value };
+    }
+    var e = { lat: {}, lon: {} };
+    ['lat', 'lon'].forEach(function (eje) {
+      ['g', 'm', 's', 'h'].forEach(function (k) { e[eje][k] = coordEls.campos[eje][k].value; });
+    });
+    return e;
+  }
+
+  function ponerError(elemento, texto) {
+    elemento.textContent = texto || '';
+    elemento.hidden = !texto;
+  }
+
+  // Encuadra el punto nuevo junto con Irrigacion y la vigente (si hay), sin pasar de zoom 17.
+  function enmarcarPuntos(punto) {
+    var mp = estado.mapa;
+    if (!mp.mapa) {
+      return;
+    }
+    var pts = [[punto.lat, punto.lon]];
+    if (estado.irrigacion) {
+      pts.push([estado.irrigacion.lat, estado.irrigacion.lon]);
+    }
+    var vig = estado.lectura && estado.lectura.vigente;
+    if (vig && ubicacionCorreccionLogic_esNumero(vig.lat) && ubicacionCorreccionLogic_esNumero(vig.lon)) {
+      pts.push([vig.lat, vig.lon]);
+    }
+    if (pts.length === 1) {
+      mp.mapa.setView(pts[0], 17);
+    } else {
+      // el pin sobresale ~38 px POR ENCIMA de su punta: mas margen arriba para que no quede cortado en el borde
+      mp.mapa.fitBounds(pts, { maxZoom: 17, paddingTopLeft: [36, 60], paddingBottomRight: [36, 40] });
+    }
+  }
+
+  // Errores en contexto del sistema activo (y limpieza total de los del otro): cada campo con error queda marcado (aria-invalid).
+  function pintarErroresCoordenadas(c) {
+    var ev = c.evaluacion;
+    var gms = c.sistema === 'GMS';
+    ['lat', 'lon'].forEach(function (eje) {
+      ponerError(coordEls.err[eje], gms ? ev.errores[eje] : '');
+      ['g', 'm', 's', 'h'].forEach(function (k) {
+        coordEls.campos[eje][k].setAttribute('aria-invalid', gms && ev.errores[eje] && ev.campos[eje] === k ? 'true' : 'false');
+      });
+    });
+    ['x', 'y'].forEach(function (k) {
+      ponerError(coordEls.err[k], gms ? '' : ev.errores[k]);
+      coordEls.campos[k].setAttribute('aria-invalid', !gms && ev.errores[k] ? 'true' : 'false');
+    });
+    ponerError(coordEls.general, gms ? ev.errores.general : '');
+    // X/Y invertidos: mensaje claro y un boton. NUNCA se intercambian solos (solo lo hace el boton).
+    var invertido = !gms && ev.invertido === true;
+    coordEls.invertido.hidden = !invertido;
+    coordEls.invertidoTexto.textContent = invertido ? (ev.errores.general || '') : '';
+    ponerError(coordEls.posgarGeneral, !gms && !invertido ? ev.errores.general : '');
+  }
+
+  // Pinta TODO lo que depende de la coordenada escrita: errores en contexto, equivalencia WGS84, punto en el mapa, distancia, aviso de "movido" y Continuar.
+  function aplicarCoordenadas() {
+    var m = estado.modal;
+    if (!m || m.modo !== 'coordenadas' || !m.coord) {
+      return;
+    }
+    var c = m.coord;
+    var ev = c.evaluacion;
+    var sistema = ubicacionCorreccionLogic_sistemaPorId(c.sistema);
+    pintarErroresCoordenadas(c);
+
+    if (ev.estado !== 'valido') {
+      // Sin propuesta valida: nada de punto, ni de conversion, ni de Guardar.
+      m.punto = null;
+      m.metodo = sistema.metodo;
+      c.movido = false;
+      c.manual = null;
+      quitarMarcador();
+      coordEls.equivale.hidden = true;
+      coordEls.movido.hidden = true;
+      mapaEls.coord.textContent = sistema.textoPendiente;
+      mapaEls.distancia.textContent = '';
+      mapaEls.usar.disabled = true;
+      return;
+    }
+
+    var d = ev.derivado;
+    coordEls.equivale.hidden = false;
+    coordEls.equivaleValor.textContent = ubicacionCorreccionLogic_formatearCoordenadas(d.lat, d.lon);
+    coordEls.movido.hidden = !c.movido;
+    if (c.movido) {
+      m.metodo = 'PUNTO_EN_MAPA';
+      m.punto = { lat: c.manual.lat, lon: c.manual.lon };
+    } else {
+      m.metodo = sistema.metodo;
+      m.punto = { lat: d.latExacta, lon: d.lonExacta };
+      asegurarMarcador(d.latExacta, d.lonExacta, true);
+      enmarcarPuntos(m.punto);
+    }
+    mapaEls.coord.textContent = ubicacionCorreccionLogic_formatearCoordenadas(m.punto.lat, m.punto.lon);
+    var ep = ubicacionCorreccionLogic_evaluarPropuesta(valoresActuales());
+    mapaEls.distancia.textContent = textoDistancia(ep);
+    // Continuar depende SOLO de que haya un punto valido: la observacion (obligatoria a mas de 250 m) se pide recien en la vista de confirmacion.
+    mapaEls.usar.disabled = !!(ep.errores.punto || ep.errores.gps);
+  }
+
+  function onEntradaCoordenadas() {
+    var m = estado.modal;
+    if (!m || m.modo !== 'coordenadas' || !m.coord) {
+      return;
+    }
+    m.coord.entrada = leerEntradaCoordenadas(m.coord.sistema);
+    m.coord.evaluacion = ubicacionCorreccionLogic_evaluarEntrada(m.coord.sistema, m.coord.entrada);
+    m.coord.movido = false;                       // escribir de nuevo retoma el control: la conversion vuelve a ser el punto
+    m.coord.manual = null;
+    aplicarCoordenadas();
+  }
+
+  // Cambiar de sistema empieza de cero: se vacian los campos, se quitan errores y punto, y Continuar queda apagado hasta que el nuevo sistema tenga datos validos.
+  function cambiarSistema(sistemaId) {
+    var m = estado.modal;
+    if (!m || m.modo !== 'coordenadas' || !m.coord || m.coord.sistema === sistemaId || !ubicacionCorreccionLogic_sistemaPorId(sistemaId)) {
+      return;
+    }
+    reiniciarCamposCoordenadas();
+    m.coord = nuevaEntradaCoordenadas(sistemaId);
+    mostrarSistema(sistemaId);
+    aplicarCoordenadas();
+  }
+
+  // "Intercambiar X e Y": SOLO al tocarlo (y solo si el modulo detecto la inversion) se intercambian los textos tal cual y se vuelve a validar y a convertir.
+  function intercambiarXY() {
+    var m = estado.modal;
+    var c = m && m.coord;
+    if (!c || c.sistema !== 'POSGAR' || c.evaluacion.invertido !== true) {
+      return;
+    }
+    var nueva = ubicacionCorreccionLogic_intercambiarXY(leerEntradaCoordenadas('POSGAR'));
+    coordEls.campos.x.value = nueva.x;
+    coordEls.campos.y.value = nueva.y;
+    onEntradaCoordenadas();
+  }
+
+  // El usuario arrastro el punto convertido: ya no es la conversion -> metodo PUNTO_EN_MAPA y la coordenada ingresada deja de ser fuente activa.
+  function moverPuntoManual(lat, lon) {
+    var m = estado.modal;
+    var c = m && m.coord;
+    if (!c || c.evaluacion.estado !== 'valido') {
+      return;
+    }
+    var d = c.evaluacion.derivado;
+    if (Math.abs(lat - d.latExacta) <= UCORR_COORD_COINCIDE_GRADOS && Math.abs(lon - d.lonExacta) <= UCORR_COORD_COINCIDE_GRADOS) {
+      return;                                     // lo solto en el mismo lugar: sigue siendo la conversion
+    }
+    c.movido = true;
+    c.manual = { lat: lat, lon: lon };
+    aplicarCoordenadas();
+  }
+
+  function restaurarCoordenadaIngresada() {
+    var m = estado.modal;
+    var c = m && m.coord;
+    if (!c || !c.movido || c.evaluacion.estado !== 'valido') {
+      return;
+    }
+    c.movido = false;
+    c.manual = null;
+    aplicarCoordenadas();                         // vuelve EXACTAMENTE a la conversion (setLatLng con latExacta / lonExacta), al metodo del sistema y con los campos intactos
   }
 
   // --- Confirmar y guardar ---
@@ -360,7 +643,7 @@
     var m = estado.modal;
     var ev = m.metodo === 'GPS_ACTUAL' ? ubicacionCorreccionLogic_evaluarGps(m.gps && m.gps.accuracy) : null;
     var p = m.metodo === 'GPS_ACTUAL' ? m.gps : m.punto;
-    return {
+    var valores = {
       lat: p ? p.lat : null,
       lon: p ? p.lon : null,
       metodo: m.metodo,
@@ -368,6 +651,11 @@
       observacion: confEls.obs.value,
       irrigacion: estado.irrigacion
     };
+    // Solo mientras el punto ES la conversion de lo ingresado viaja coordenadaOriginal; arrastrado = PUNTO_EN_MAPA y la coordenada ingresada se descarta.
+    if (ubicacionCorreccionLogic_sistemaPorMetodo(m.metodo) && m.coord && m.coord.evaluacion.estado === 'valido') {
+      valores.coordenadaOriginal = m.coord.evaluacion.original;
+    }
+    return valores;
   }
 
   function abrirConfirmar(desde) {
@@ -386,6 +674,10 @@
       texto += ' (± ' + String(v.precisionGpsM).replace('.', ',') + ' m)';
     }
     confEls.resumen.textContent = texto;
+    var sistema = ubicacionCorreccionLogic_sistemaPorMetodo(v.metodo);
+    var textoOriginal = sistema && estado.modal.coord ? estado.modal.coord.evaluacion.textoOriginal : '';
+    confEls.resumenOriginal.textContent = textoOriginal ? 'Coordenada ingresada: ' + textoOriginal + ' (' + sistema.etiquetaLarga + ')' : '';
+    confEls.resumenOriginal.hidden = !textoOriginal;
     confEls.distancia.textContent = ev.distanciaM !== null ? 'A ' + ubicacionCorreccionLogic_formatearDistancia(ev.distanciaM) + ' de la ubicación de Irrigación.' : '';
     confEls.distancia.hidden = ev.distanciaM === null;
     confEls.advertencia.textContent = UCORR_TEXTO_ADVERTENCIA_1KM;
@@ -469,6 +761,17 @@
 
   btnOpcionGps.addEventListener('click', iniciarGps);
   btnOpcionMapa.addEventListener('click', iniciarMapa);
+  btnOpcionCoord.addEventListener('click', function () { iniciarVistaMapa('coordenadas'); });
+  ['lat', 'lon'].forEach(function (eje) {
+    ['g', 'm', 's'].forEach(function (k) { coordEls.campos[eje][k].addEventListener('input', onEntradaCoordenadas); });
+    coordEls.campos[eje].h.addEventListener('change', onEntradaCoordenadas);
+  });
+  ['x', 'y'].forEach(function (k) { coordEls.campos[k].addEventListener('input', onEntradaCoordenadas); });
+  Object.keys(coordEls.chips).forEach(function (id) {
+    coordEls.chips[id].addEventListener('click', function () { cambiarSistema(id); });
+  });
+  coordEls.intercambiar.addEventListener('click', intercambiarXY);
+  coordEls.restaurar.addEventListener('click', restaurarCoordenadaIngresada);
   gpsEls.reintentar.addEventListener('click', iniciarGps);
   gpsEls.continuar.addEventListener('click', function () {
     var ev = ubicacionCorreccionLogic_evaluarGps(estado.modal.gps && estado.modal.gps.accuracy);
@@ -477,7 +780,7 @@
     }
   });
   mapaEls.usar.addEventListener('click', function () {
-    if (estado.modal.punto) {
+    if (estado.modal.punto && !mapaEls.usar.disabled) {
       abrirConfirmar('mapa');
     }
   });

@@ -17,18 +17,25 @@ const correccion = (extra) => Object.assign({
   correccionId: '11111111-1111-4111-8111-111111111111', wellId: '04-0263', lat: -32.9012, lon: -68.80015, metodo: 'GPS_ACTUAL', precisionGpsM: 8.4,
   observacion: '=SUM(1)', emailPropone: 'ana@x.com', nombrePropone: 'Ana', timestamp: new Date('2026-10-09T12:00:00Z'),
   irrLat: -32.9, irrLon: -68.8, irrEstado: 'unica', irrFuente: 'reportePozos', padronPeriodo: '2026-09', distanciaM: 134.2, advertenciaDistancia: true,
-  clientRequestId: 'req-00000001'
+  clientRequestId: 'req-00000001', coordenadaOriginalTexto: '', crsOriginal: ''
 }, extra || {});
 
 describe('esquema exacto de las hojas', () => {
-  test('UbicacionCorrecciones: 18 columnas = las 17 pedidas + advertenciaDistancia, en este orden', () => {
+  test('UbicacionCorrecciones V1: 18 columnas = las 17 pedidas + advertenciaDistancia, en este orden (no cambian: la migracion no reordena nada)', () => {
     expect(Repo.UBICACION_CORRECCIONES_HOJA).toBe('UbicacionCorrecciones');
-    expect(Repo.UBICACION_CORRECCIONES_COLUMNAS).toHaveLength(18);
-    expect(Repo.UBICACION_CORRECCIONES_COLUMNAS.filter((c) => c !== 'advertenciaDistancia')).toHaveLength(17);
-    expect(Repo.UBICACION_CORRECCIONES_COLUMNAS).toEqual([
+    expect(Repo.UBICACION_CORRECCIONES_COLUMNAS_V1).toHaveLength(18);
+    expect(Repo.UBICACION_CORRECCIONES_COLUMNAS_V1.filter((c) => c !== 'advertenciaDistancia')).toHaveLength(17);
+    expect(Repo.UBICACION_CORRECCIONES_COLUMNAS_V1).toEqual([
       'correccionId', 'wellId', 'lat', 'lon', 'metodo', 'precisionGpsM', 'observacion', 'emailPropone', 'nombrePropone', 'timestamp',
       'irrLat', 'irrLon', 'irrEstado', 'irrFuente', 'padronPeriodo', 'distanciaM', 'advertenciaDistancia', 'clientRequestId'
     ]);
+  });
+
+  test('UbicacionCorrecciones V2 (esquema actual): 20 columnas = las 18 de V1 en su orden + coordenadaOriginalTexto y crsOriginal AL FINAL', () => {
+    expect(Repo.UBICACION_CORRECCIONES_COLUMNAS).toHaveLength(20);
+    expect(Repo.UBICACION_CORRECCIONES_COLUMNAS_V2_NUEVAS).toEqual(['coordenadaOriginalTexto', 'crsOriginal']);
+    expect(Repo.UBICACION_CORRECCIONES_COLUMNAS.slice(0, 18)).toEqual(Repo.UBICACION_CORRECCIONES_COLUMNAS_V1);
+    expect(Repo.UBICACION_CORRECCIONES_COLUMNAS.slice(18)).toEqual(['coordenadaOriginalTexto', 'crsOriginal']);
   });
 
   test('UbicacionCorreccionesLog: 6 columnas', () => {

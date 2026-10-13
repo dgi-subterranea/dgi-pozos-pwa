@@ -4422,6 +4422,200 @@ body.ucorr-abierto {
   color: var(--color-warn);
 }
 
+/* Ingresar coordenadas (GMS / WGS84): dos ejes con grados / minutos / segundos / hemisferio, errores EN CONTEXTO, equivalencia WGS84 y aviso de punto movido */
+.ucorr-coord-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ucorr-coord-panel[hidden] {
+  display: none;
+}
+.ucorr-sistemas {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ucorr-sistemas-titulo {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: var(--color-text-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.ucorr-sistemas-chips {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+/* selector de sistema: dos botones grandes (44 px de alto, comodos con el pulgar); el activo va relleno */
+.ucorr-sistema-chip {
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 1.5px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  color: var(--color-text-soft);
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 700;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.ucorr-sistema-chip.active {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+}
+.ucorr-sistema-chip:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+.ucorr-coord-gms,
+.ucorr-coord-posgar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ucorr-coord-gms[hidden],
+.ucorr-coord-posgar[hidden] {
+  display: none;
+}
+.ucorr-posgar-titulo {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--color-text);
+}
+.ucorr-ayuda-xy {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--color-primary-tint, #e8f1f5);
+  color: var(--color-text);
+  font-size: 0.86rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.ucorr-eje-xy {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.ucorr-eje {
+  margin: 0;
+  padding: 8px 10px 10px;
+  border: 1.5px solid var(--color-border-soft);
+  border-radius: 12px;
+  min-width: 0;
+}
+.ucorr-eje legend {
+  padding: 0 6px;
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: var(--color-text-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.ucorr-eje-campos {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.5fr 1.1fr;
+  gap: 8px;
+}
+.ucorr-campo {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.ucorr-campo label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--color-text-soft);
+}
+/* .ucorr-panel .ucorr-input (0,2,0) le gana al estilo global de input[type="text"] (campo grande de numero de pozo: 56 px, padding 42 px, 19 px) */
+.ucorr-panel .ucorr-input {
+  width: 100%;
+  min-width: 0;
+  height: 46px;
+  padding: 0 4px;
+  font-family: inherit;
+  font-size: 1rem;
+  font-weight: 700;
+  text-align: center;
+  border: 1.5px solid var(--color-border);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--color-text);
+}
+.ucorr-panel select.ucorr-input {
+  padding: 0 2px;
+  text-align-last: center;
+}
+.ucorr-panel .ucorr-input:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+.ucorr-panel .ucorr-input[aria-invalid="true"] {
+  border-color: var(--color-error);
+  background: #fff7f6;
+}
+.ucorr-eje .ucorr-err {
+  margin-top: 6px;
+}
+.ucorr-equivale {
+  margin: 0;
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+.ucorr-movido {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--color-warn-tint);
+}
+.ucorr-movido[hidden] {
+  display: none;
+}
+.ucorr-movido-texto {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--color-warn);
+  line-height: 1.4;
+}
+.ucorr-mapa-corto {
+  height: 40vh;
+  min-height: 220px;
+}
+.ucorr-resumen-original {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--color-text-soft);
+  overflow-wrap: anywhere;
+}
+/* valor original tipeado en la ficha / historial: en segundo plano, la lat/lon normalizada sigue siendo el dato principal */
+.ucorr-dato-original dt,
+.ucorr-dato-original dd {
+  font-size: 0.8rem;
+}
+.ucorr-dato-original dd {
+  color: var(--color-text-soft);
+  overflow-wrap: anywhere;
+}
+.ucorr-crs {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--color-border-soft);
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--color-text-soft);
+}
+
 /* Marcadores del mapa del modal (Leaflet no lee variables CSS: los colores repiten --color-mapa-confirmada y --color-reemplazo-apto) */
 .ucorr-marker-wrap {
   background: transparent;

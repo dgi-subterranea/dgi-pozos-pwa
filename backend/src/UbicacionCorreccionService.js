@@ -26,7 +26,21 @@
 //
 // Todo lo sensible se recalcula aca (distancia, snapshot, banderas, estado); lo que mande el cliente fuera de la lista
 // blanca de campos se ignora (ver Api.js).
-var UBICACION_CORR_METODOS = ['GPS_ACTUAL', 'PUNTO_EN_MAPA'];          // catalogo extensible: agregar aca (y su regla en validarPropuesta)
+// Catalogo de metodos (extensible: agregar aca y su regla en validarPropuesta). GPS_ACTUAL y PUNTO_EN_MAPA traen lat/lon del cliente; los dos
+// COORDENADAS_* traen el valor ORIGINAL tipeado (coordenadaOriginal) y el backend DERIVA lat/lon de el: nunca confia en el WGS84 del cliente.
+var UBICACION_CORR_METODOS_COORDENADAS = ['COORDENADAS_GMS', 'COORDENADAS_POSGAR94_AR2'];
+var UBICACION_CORR_METODOS = ['GPS_ACTUAL', 'PUNTO_EN_MAPA'].concat(UBICACION_CORR_METODOS_COORDENADAS);
+// Forma EXACTA permitida de coordenadaOriginal (cualquier clave de mas se rechaza): GMS {lat:{g,m,s,h}, lon:{g,m,s,h}}; POSGAR {x, y} (x = Este, y = Norte).
+var UBICACION_CORR_COORD_ORIGINAL_FORMA = {
+  COORDENADAS_GMS: { claves: ['lat', 'lon'], subclaves: ['g', 'm', 's', 'h'] },
+  COORDENADAS_POSGAR94_AR2: { claves: ['x', 'y'], subclaves: null }
+};
+var UBICACION_CORR_COORD_VALOR_MAX_CARACTERES = 40;
+// Diferencia maxima (en metros) entre el lat/lon que PUEDE mandar el cliente (preview) y el que recalcula el backend desde el valor original. Es una
+// distancia METRICA (haversine) entre el valor que manda el cliente TAL CUAL y la conversion del backend SIN redondear: el redondeo a 6 decimales
+// (hasta ~5,5 cm de diferencia) es solo de persistencia / vista y NUNCA interviene en esta decision. Por eso un cliente honesto manda su conversion con
+// toda la precision (no el valor ya redondeado).
+var UBICACION_CORR_COORD_TOLERANCIA_M = 0.02;
 var UBICACION_CORR_EVENTOS = ['PROPUESTA', 'VALIDADA', 'RECHAZADA', 'SUPERADA', 'REVERTIDA'];
 var UBICACION_CORR_TRANSICIONES = {
   PROPUESTA: ['VALIDADA', 'RECHAZADA'],
@@ -73,15 +87,20 @@ function ubicacionCorreccionService_esNumero(v) {
   return typeof v === 'number' && isFinite(v);
 }
 
-// Distancia en metros entre dos puntos WGS84 (haversine), con 1 decimal.
-function ubicacionCorreccionService_distanciaMetros(lat1, lon1, lat2, lon2) {
+// Distancia en metros entre dos puntos WGS84 (haversine), SIN redondear (para comparar a escala de centimetros).
+function ubicacionCorreccionService_distanciaMetrosExacta(lat1, lon1, lat2, lon2) {
   var R = 6371008.8;
   var rad = Math.PI / 180;
   var dLat = (lat2 - lat1) * rad;
   var dLon = (lon2 - lon1) * rad;
   var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  return ubicacionCorreccionService_redondear(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)), 1);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// Distancia en metros entre dos puntos WGS84 (haversine), con 1 decimal.
+function ubicacionCorreccionService_distanciaMetros(lat1, lon1, lat2, lon2) {
+  return ubicacionCorreccionService_redondear(ubicacionCorreccionService_distanciaMetrosExacta(lat1, lon1, lat2, lon2), 1);
 }
 
 function ubicacionCorreccionService_dentroDeMendoza(lat, lon) {
@@ -100,16 +119,35 @@ function ubicacionCorreccionService_validarPropuesta(datos) {
   if (UBICACION_CORR_METODOS.indexOf(d.metodo) === -1) {
     return ubicacionCorreccionService_error('INVALID_METODO', 'metodo invalido (' + UBICACION_CORR_METODOS.join(' | ') + ')');
   }
-  if (!ubicacionCorreccionService_esNumero(d.lat) || !ubicacionCorreccionService_esNumero(d.lon)) {
-    return ubicacionCorreccionService_error('INVALID_COORDENADAS', 'lat y lon deben ser numeros');
-  }
-  if (d.lat < -90 || d.lat > 90 || d.lon < -180 || d.lon > 180 || (d.lat === 0 && d.lon === 0)) {
-    return ubicacionCorreccionService_error('INVALID_COORDENADAS', 'coordenadas fuera de rango');
-  }
-  var lat = ubicacionCorreccionService_redondear(d.lat, 6);
-  var lon = ubicacionCorreccionService_redondear(d.lon, 6);
-  if (!ubicacionCorreccionService_dentroDeMendoza(lat, lon)) {
-    return ubicacionCorreccionService_error('FUERA_DE_MENDOZA', 'La ubicacion queda fuera de Mendoza');
+  var lat;
+  var lon;
+  var coordenadaOriginalTexto = '';
+  var crsOriginal = '';
+  if (UBICACION_CORR_METODOS_COORDENADAS.indexOf(d.metodo) !== -1) {
+    // Metodos por coordenadas ingresadas: lat/lon salen SIEMPRE de recalcular el valor original (el del cliente, si vino, solo se compara).
+    var derivada = ubicacionCorreccionService_derivarDeCoordenadaOriginal(d);
+    if (!derivada.ok) {
+      return derivada;
+    }
+    lat = derivada.lat;
+    lon = derivada.lon;
+    coordenadaOriginalTexto = derivada.coordenadaOriginalTexto;
+    crsOriginal = derivada.crsOriginal;
+  } else {
+    if (d.coordenadaOriginal !== null && d.coordenadaOriginal !== undefined) {
+      return ubicacionCorreccionService_error('INVALID_COORDENADA_ORIGINAL', d.metodo + ' no lleva coordenadaOriginal');
+    }
+    if (!ubicacionCorreccionService_esNumero(d.lat) || !ubicacionCorreccionService_esNumero(d.lon)) {
+      return ubicacionCorreccionService_error('INVALID_COORDENADAS', 'lat y lon deben ser numeros');
+    }
+    if (d.lat < -90 || d.lat > 90 || d.lon < -180 || d.lon > 180 || (d.lat === 0 && d.lon === 0)) {
+      return ubicacionCorreccionService_error('INVALID_COORDENADAS', 'coordenadas fuera de rango');
+    }
+    lat = ubicacionCorreccionService_redondear(d.lat, 6);
+    lon = ubicacionCorreccionService_redondear(d.lon, 6);
+    if (!ubicacionCorreccionService_dentroDeMendoza(lat, lon)) {
+      return ubicacionCorreccionService_error('FUERA_DE_MENDOZA', 'La ubicacion queda fuera de Mendoza');
+    }
   }
 
   var precision = null;
@@ -124,7 +162,7 @@ function ubicacionCorreccionService_validarPropuesta(datos) {
     }
     precision = ubicacionCorreccionService_redondear(d.precisionGpsM, 1);
   } else if (d.precisionGpsM !== null && d.precisionGpsM !== undefined) {
-    return ubicacionCorreccionService_error('INVALID_PRECISION', 'PUNTO_EN_MAPA no lleva precision de GPS');
+    return ubicacionCorreccionService_error('INVALID_PRECISION', d.metodo + ' no lleva precision de GPS');
   }
 
   var observacion = '';
@@ -140,8 +178,127 @@ function ubicacionCorreccionService_validarPropuesta(datos) {
 
   return {
     ok: true,
-    valores: { clientRequestId: d.clientRequestId, metodo: d.metodo, lat: lat, lon: lon, precisionGpsM: precision, observacion: observacion }
+    valores: {
+      clientRequestId: d.clientRequestId, metodo: d.metodo, lat: lat, lon: lon, precisionGpsM: precision, observacion: observacion,
+      coordenadaOriginalTexto: coordenadaOriginalTexto, crsOriginal: crsOriginal
+    }
   };
+}
+
+// --- Metodos por coordenadas ingresadas (COORDENADAS_GMS / COORDENADAS_POSGAR94_AR2) ---
+
+function ubicacionCorreccionService_esObjetoPlano(v) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+// Un valor tipeado llega como numero o texto corto (o vacio, donde el modulo lo permite); cualquier otra cosa (objeto, arreglo, booleano, texto enorme) es de forma
+// invalida. soloTexto (el hemisferio): ni siquiera un numero.
+function ubicacionCorreccionService_valorOriginalValido(v, soloTexto) {
+  if (v === null || v === undefined || (typeof v === 'number' && soloTexto !== true)) {
+    return true;
+  }
+  return typeof v === 'string' && v.length <= UBICACION_CORR_COORD_VALOR_MAX_CARACTERES;
+}
+
+function ubicacionCorreccionService_clavesPermitidas(objeto, permitidas) {
+  return Object.keys(objeto).every(function (k) { return permitidas.indexOf(k) !== -1; });
+}
+
+// Forma de coordenadaOriginal segun el metodo. null = forma correcta; si no, el mensaje. Estricta: sin claves de mas ni de menos, para que el contrato con el cliente sea unico.
+function ubicacionCorreccionService_errorDeFormaOriginal(metodo, original) {
+  var forma = UBICACION_CORR_COORD_ORIGINAL_FORMA[metodo];
+  if (!ubicacionCorreccionService_esObjetoPlano(original)) {
+    return metodo + ' requiere coordenadaOriginal (objeto con ' + forma.claves.join(' y ') + ')';
+  }
+  if (!ubicacionCorreccionService_clavesPermitidas(original, forma.claves) || forma.claves.some(function (k) { return !(k in original); })) {
+    return 'coordenadaOriginal de ' + metodo + ' lleva exactamente: ' + forma.claves.join(', ');
+  }
+  for (var i = 0; i < forma.claves.length; i++) {
+    var parte = original[forma.claves[i]];
+    if (forma.subclaves === null) {
+      if (!ubicacionCorreccionService_valorOriginalValido(parte)) {
+        return 'coordenadaOriginal.' + forma.claves[i] + ' debe ser un numero o un texto';
+      }
+    } else {
+      if (!ubicacionCorreccionService_esObjetoPlano(parte) || !ubicacionCorreccionService_clavesPermitidas(parte, forma.subclaves)) {
+        return 'coordenadaOriginal.' + forma.claves[i] + ' lleva solo: ' + forma.subclaves.join(', ');
+      }
+      for (var j = 0; j < forma.subclaves.length; j++) {
+        if (!ubicacionCorreccionService_valorOriginalValido(parte[forma.subclaves[j]], forma.subclaves[j] === 'h')) {
+          return 'coordenadaOriginal.' + forma.claves[i] + '.' + forma.subclaves[j] + (forma.subclaves[j] === 'h' ? ' debe ser un texto' : ' debe ser un numero o un texto');
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// Errores del modulo de conversion -> respuesta del servicio. Los generales mantienen su codigo (XY_INVERTIDOS, FUERA_DE_MENDOZA: el mismo que ya existia
+// para los otros metodos); el resto sale como COORDENADA_INVALIDA con el codigo fino en "detalle" y el campo en "campo" (p. ej. lat.m, x).
+function ubicacionCorreccionService_errorDeConversion(metodo, evaluacion) {
+  var errores = evaluacion.errores || {};
+  if (errores.general) {
+    if (errores.general.codigo === 'XY_INVERTIDOS') {
+      return ubicacionCorreccionService_error('XY_INVERTIDOS', errores.general.mensaje);
+    }
+    if (errores.general.codigo === 'FUERA_DE_MENDOZA') {
+      return ubicacionCorreccionService_error('FUERA_DE_MENDOZA', errores.general.mensaje);
+    }
+    return ubicacionCorreccionService_error('COORDENADA_INVALIDA', errores.general.mensaje, { detalle: errores.general.codigo });
+  }
+  var campos = metodo === 'COORDENADAS_GMS' ? ['lat', 'lon'] : ['x', 'y'];
+  for (var i = 0; i < campos.length; i++) {
+    var e = errores[campos[i]];
+    if (e) {
+      var campo = metodo === 'COORDENADAS_GMS' ? campos[i] + '.' + e.campo : campos[i];
+      return ubicacionCorreccionService_error('COORDENADA_INVALIDA', e.mensaje, { detalle: e.codigo, campo: campo });
+    }
+  }
+  return ubicacionCorreccionService_error('COORDENADA_INVALIDA', 'La coordenada ingresada no es valida');
+}
+
+// lat/lon (opcionales) que mando el cliente como preview: si vienen deben ser numeros y estar a no mas de UBICACION_CORR_COORD_TOLERANCIA_M (2 cm) de lo que
+// recalculo el backend. latBackend/lonBackend son la conversion SIN redondear; el valor del cliente se usa sin redondear.
+function ubicacionCorreccionService_errorDePreviewCliente(d, latBackend, lonBackend) {
+  var sinLat = d.lat === null || d.lat === undefined;
+  var sinLon = d.lon === null || d.lon === undefined;
+  if (sinLat && sinLon) {
+    return null;
+  }
+  if (!ubicacionCorreccionService_esNumero(d.lat) || !ubicacionCorreccionService_esNumero(d.lon)) {
+    return ubicacionCorreccionService_error('INVALID_COORDENADAS', 'lat y lon deben ser numeros');
+  }
+  if (d.lat < -90 || d.lat > 90 || d.lon < -180 || d.lon > 180) {
+    return ubicacionCorreccionService_error('INVALID_COORDENADAS', 'coordenadas fuera de rango');
+  }
+  var difM = ubicacionCorreccionService_distanciaMetrosExacta(latBackend, lonBackend, d.lat, d.lon);
+  if (difM > UBICACION_CORR_COORD_TOLERANCIA_M) {
+    return ubicacionCorreccionService_error('COORDENADA_INCONSISTENTE',
+      'Las coordenadas enviadas no coinciden con el valor ingresado. Volvé a ingresar la coordenada.');
+  }
+  return null;
+}
+
+// COORDENADAS_*: valida la forma de coordenadaOriginal, la RECALCULA con el modulo de conversion del backend (CoordenadasConversion.js) y compara con el
+// preview del cliente. Devuelve {ok, lat, lon, coordenadaOriginalTexto, crsOriginal} (lat/lon a 6 decimales, dentro de la caja de Mendoza) o el error.
+// El texto canonico y el CRS los genera el backend: jamas se aceptan del cliente.
+function ubicacionCorreccionService_derivarDeCoordenadaOriginal(d) {
+  var errorForma = ubicacionCorreccionService_errorDeFormaOriginal(d.metodo, d.coordenadaOriginal);
+  if (errorForma !== null) {
+    return ubicacionCorreccionService_error('INVALID_COORDENADA_ORIGINAL', errorForma);
+  }
+  var ev = d.metodo === 'COORDENADAS_GMS' ? coordenadas_evaluarGms(d.coordenadaOriginal) : coordenadas_evaluarPosgar(d.coordenadaOriginal);
+  if (!ev.ok) {
+    return ubicacionCorreccionService_errorDeConversion(d.metodo, ev);
+  }
+  if (!ubicacionCorreccionService_esNumero(ev.lat) || !ubicacionCorreccionService_esNumero(ev.lon) || !ubicacionCorreccionService_dentroDeMendoza(ev.lat, ev.lon)) {
+    return ubicacionCorreccionService_error('FUERA_DE_MENDOZA', 'La ubicacion queda fuera de Mendoza');
+  }
+  var errorPreview = ubicacionCorreccionService_errorDePreviewCliente(d, ev.latExacta, ev.lonExacta);
+  if (errorPreview !== null) {
+    return errorPreview;
+  }
+  return { ok: true, lat: ev.lat, lon: ev.lon, coordenadaOriginalTexto: ev.textoOriginal, crsOriginal: ev.crsOriginal };
 }
 
 function ubicacionCorreccionService_validarMotivo(motivo, obligatorio) {
@@ -249,6 +406,8 @@ function ubicacionCorreccionService_vista(c, emailSolicitante) {
     lon: c.lon,
     metodo: c.metodo,
     precisionGpsM: c.precisionGpsM,
+    coordenadaOriginalTexto: c.coordenadaOriginalTexto || '',
+    crsOriginal: c.crsOriginal || '',
     observacion: c.observacion,
     nombrePropone: c.nombrePropone,
     timestamp: c.timestamp,
@@ -320,9 +479,13 @@ function ubicacionCorreccionService_eventosDeValidacion(derivadas, correccionId,
   return { eventos: eventos, supersedidas: supersedidas };
 }
 
+// Misma solicitud = mismo pozo, metodo y punto WGS84 Y el mismo valor ORIGINAL canonico: dos coordenadas distintas que dan el mismo punto (o el mismo
+// punto escrito en GMS y en POSGAR) NO son necesariamente la misma solicitud. En los metodos viejos ambos campos son '' (filas historicas incluidas).
 function ubicacionCorreccionService_mismaSolicitud(existente, v, wellId) {
   return existente.wellId === wellId && existente.metodo === v.metodo &&
-    Math.abs(existente.lat - v.lat) < 1e-9 && Math.abs(existente.lon - v.lon) < 1e-9;
+    Math.abs(existente.lat - v.lat) < 1e-9 && Math.abs(existente.lon - v.lon) < 1e-9 &&
+    (existente.coordenadaOriginalTexto || '') === (v.coordenadaOriginalTexto || '') &&
+    (existente.crsOriginal || '') === (v.crsOriginal || '');
 }
 
 function ubicacionCorreccionService_buscarPorClientRequestId(derivadas, emailNormalizado, clientRequestId) {
@@ -411,6 +574,12 @@ function ubicacionCorreccionService_proponer(email, nombre, wellId, datos, opcio
   var s = null;
   var distanciaM = null;
   if (!previa) {
+    // Un metodo COORDENADAS_* guarda el valor original: si la hoja todavia es V1 (sin migrar) se rechaza ANTES de tocar el padron o el lock; nunca se
+    // descarta ese valor en silencio. GPS_ACTUAL / PUNTO_EN_MAPA no lo necesitan y siguen funcionando en una hoja V1.
+    if (v.crsOriginal !== '' && !ubicacionCorreccionRepository_esquemaCorreccionesV2()) {
+      return ubicacionCorreccionService_error('ESQUEMA_DESACTUALIZADO',
+        'El servidor todavia no esta preparado para guardar coordenadas ingresadas (falta actualizar la hoja de correcciones). Avisá al administrador.');
+    }
     var snap = ubicacionCorreccionService_snapshotIrrigacion(wellId);
     if (!snap.ok) {
       return snap;
@@ -457,7 +626,9 @@ function ubicacionCorreccionService_proponer(email, nombre, wellId, datos, opcio
       padronPeriodo: s.padronPeriodo,
       distanciaM: distanciaM,
       advertenciaDistancia: distanciaM !== null && distanciaM > UBICACION_CORR_ADVERTENCIA_DESDE_M,
-      clientRequestId: v.clientRequestId
+      clientRequestId: v.clientRequestId,
+      coordenadaOriginalTexto: v.coordenadaOriginalTexto,
+      crsOriginal: v.crsOriginal
     };
     var evento = { correccionId: correccion.correccionId, timestamp: ahora, evento: 'PROPUESTA', email: emailN, nombre: nombre || '', motivo: '' };
     var aEscribir = [evento];
@@ -566,6 +737,8 @@ function ubicacionCorreccionService_revertir(email, nombre, correccionId, motivo
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     UBICACION_CORR_METODOS,
+    UBICACION_CORR_METODOS_COORDENADAS,
+    UBICACION_CORR_COORD_TOLERANCIA_M,
     UBICACION_CORR_EVENTOS,
     UBICACION_CORR_TRANSICIONES,
     UBICACION_CORR_ESTADO_INCONSISTENTE,
@@ -576,6 +749,7 @@ if (typeof module !== 'undefined' && module.exports) {
     UBICACION_CORR_MENDOZA_BBOX,
     UBICACION_CORR_PENDIENTES_MAX,
     ubicacionCorreccionService_distanciaMetros,
+    ubicacionCorreccionService_distanciaMetrosExacta,
     ubicacionCorreccionService_dentroDeMendoza,
     ubicacionCorreccionService_validarPropuesta,
     ubicacionCorreccionService_snapshotIrrigacion,

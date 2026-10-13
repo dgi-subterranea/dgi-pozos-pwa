@@ -10,8 +10,9 @@
 //  - Destinatarios = usuarios ACTIVOS con ubicacion=SI y ubicacion_validar=SI (los dos permisos que el backend exige para ver la cola y validar), sin
 //    repetidos y SIN el propio proponente. Se manda un email por destinatario: los validadores no ven las direcciones de los demas y un fallo individual
 //    no afecta al resto.
-//  - El cuerpo no lleva coordenadas, emails ni datos del padron: pozo, quien propuso (nombre), fecha, metodo, distancia a Irrigacion, observacion,
-//    advertencias de distancia y, si esta configurada, la URL publica de la PWA.
+//  - El cuerpo no lleva emails, datos del padron ni la ubicacion WGS84: pozo, quien propuso (nombre), fecha, metodo, distancia a Irrigacion,
+//    observacion, advertencias de distancia y, si esta configurada, la URL publica de la PWA. UNICA excepcion: en los metodos por coordenadas
+//    ingresadas va el valor ORIGINAL tipeado en su texto canonico (lo que el validador compara con el mapa).
 //  - Cuotas de MailApp (ver docs/ubicacion-correcciones.md): cada destinatario cuenta contra la cuota diaria de la cuenta que despliega
 //    (100 en Gmail personal, 1500 en Google Workspace); se consulta MailApp.getRemainingDailyQuota() antes de enviar y no se pasa de lo disponible.
 var UBICACION_CORR_MAIL_DEDUPE_SEGUNDOS = 21600;       // maximo de CacheService (6 h)
@@ -66,15 +67,48 @@ function ubicacionCorreccionNotificacion_destinatarios(emailProponente) {
   return lista;
 }
 
+function ubicacionCorreccionNotificacion_etiquetaMetodo(c) {
+  if (c.metodo === 'GPS_ACTUAL') {
+    return 'GPS' + (typeof c.precisionGpsM === 'number' ? ' (± ' + String(c.precisionGpsM).replace('.', ',') + ' m)' : '');
+  }
+  if (c.metodo === 'PUNTO_EN_MAPA') {
+    return 'Elegida en mapa';
+  }
+  if (c.metodo === 'COORDENADAS_GMS') {
+    return 'Coordenadas GMS / WGS84';
+  }
+  if (c.metodo === 'COORDENADAS_POSGAR94_AR2') {
+    return 'Coordenadas POSGAR 94 / Argentina 2';
+  }
+  return ubicacionCorreccionNotificacion_limpiar(c.metodo, 40);
+}
+
+// Sistema de la coordenada ingresada, con el mismo nombre que ve la persona en la ficha ("Sistema"). Solo para los dos metodos por coordenadas.
+function ubicacionCorreccionNotificacion_sistema(c) {
+  if (c.metodo === 'COORDENADAS_GMS') {
+    return 'GMS / WGS84';
+  }
+  if (c.metodo === 'COORDENADAS_POSGAR94_AR2') {
+    return 'POSGAR 94 / Argentina 2 · EPSG:22182';
+  }
+  return '';
+}
+
+// Texto canonico de la coordenada ingresada, solo para los dos metodos por coordenadas; '' en cualquier otro caso (filas viejas o metodos GPS / mapa).
+function ubicacionCorreccionNotificacion_valorOriginal(c) {
+  if (c.metodo !== 'COORDENADAS_GMS' && c.metodo !== 'COORDENADAS_POSGAR94_AR2') {
+    return '';
+  }
+  return ubicacionCorreccionNotificacion_limpiar(c.coordenadaOriginalTexto, 120);
+}
+
 // correccion: vista de UbicacionCorreccionService (sin emails). pwaUrl: URL https publica o ''.
 function ubicacionCorreccionNotificacion_armarMensaje(correccion, pwaUrl) {
   var c = correccion || {};
   var wellId = UBICACION_CORR_MAIL_REGEX_WELL_ID.test(String(c.wellId)) ? c.wellId : 'sin identificar';
   var asunto = 'DGI Pozos — Corrección de ubicación pendiente: ' + wellId;
 
-  var metodo = c.metodo === 'GPS_ACTUAL'
-    ? 'GPS' + (typeof c.precisionGpsM === 'number' ? ' (± ' + String(c.precisionGpsM).replace('.', ',') + ' m)' : '')
-    : (c.metodo === 'PUNTO_EN_MAPA' ? 'Elegida en mapa' : ubicacionCorreccionNotificacion_limpiar(c.metodo, 40));
+  var metodo = ubicacionCorreccionNotificacion_etiquetaMetodo(c);
 
   var lineas = ['Hay una corrección de ubicación pendiente de validación.', ''];
   lineas.push('Pozo: ' + wellId);
@@ -84,6 +118,16 @@ function ubicacionCorreccionNotificacion_armarMensaje(correccion, pwaUrl) {
     lineas.push('Fecha: ' + fecha);
   }
   lineas.push('Método: ' + metodo);
+  // Valor ORIGINAL tipeado (solo en los metodos por coordenadas): excepcion deliberada a "el cuerpo no lleva coordenadas" - es lo que el validador necesita
+  // comparar con lo que ve en el mapa. Es el texto canonico que genero el backend (nunca el payload crudo del cliente) y se limpia igual que el resto.
+  var original = ubicacionCorreccionNotificacion_valorOriginal(c);
+  if (original) {
+    lineas.push('Valor ingresado: ' + original);
+  }
+  var sistema = ubicacionCorreccionNotificacion_sistema(c);
+  if (sistema) {
+    lineas.push('Sistema: ' + sistema);
+  }
   var distancia = ubicacionCorreccionNotificacion_formatearDistancia(c.distanciaM);
   if (distancia) {
     lineas.push('Distancia a la ubicación de Irrigación: ' + distancia);

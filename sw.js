@@ -53,6 +53,7 @@ var SHELL_FILES = [
   './js/fotosPozosResumen.js',
   './js/fotosPozos.js',
   './js/reemplazo.js',
+  './js/coordenadasConversion.js',
   './js/ubicacionCorreccionLogic.js',
   './js/ubicacionCorreccion.js',
   './js/ubicacionPendientes.js',

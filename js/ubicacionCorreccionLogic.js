@@ -1,17 +1,19 @@
-// Correcciones de ubicacion de pozos (frontend, etapa 1: ficha individual): logica PURA, sin DOM, sin red, sin Leaflet - todo lo que se
-// puede testear con Jest. El controlador DOM (js/ubicacionCorreccion.js) solo cablea esto con el modal, el GPS, el mapa y js/api.js.
+// Correcciones de ubicacion de pozos (frontend, ficha individual del pozo): logica PURA, sin DOM, sin red, sin Leaflet - todo lo que se puede
+// testear con Jest. Cubre los cuatro metodos (GPS_ACTUAL, PUNTO_EN_MAPA y las coordenadas ingresadas COORDENADAS_GMS / COORDENADAS_POSGAR94_AR2, con
+// js/coordenadasConversion.js). El controlador DOM (js/ubicacionCorreccion.js) solo cablea esto con el modal, el GPS, el mapa y js/api.js.
 //
 // Principios:
 //  - El backend es la autoridad (permisos, distancia, observacion obligatoria, snapshot de Irrigacion, estado final). Lo que se calcula
 //    aca (distancia, "observacion obligatoria", advertencia de 1 km) es SOLO guia de UX y usa las mismas reglas que el backend.
 //  - La coordenada oficial de Irrigacion es inmutable: nada de este modulo la modifica ni la oculta; una correccion es otro dato.
-//  - Del cliente solo salen los campos de construirPayload(): jamas email, nombre, autoValidar, distancia, estado ni datos de Irrigacion.
+//  - Del cliente solo salen los campos de construirPayload() (los coordenadaOriginal de los metodos por coordenadas incluidos): jamas email, nombre,
+//    autoValidar, distancia, estado, coordenadaOriginalTexto, crsOriginal ni datos de Irrigacion.
 //  - La UI no decide el estado final: lo informa el backend (data.correccion.estado) y despues se relee la ficha.
 var UCORR_GPS_PRECISION_MAX_M = 50;
 var UCORR_OBSERVACION_DESDE_M = 250;      // MAS de esta distancia a Irrigacion: observacion obligatoria
 var UCORR_ADVERTENCIA_DESDE_M = 1000;     // MAS de esta distancia: advertencia fuerte (no bloquea)
 var UCORR_OBSERVACION_MAX = 300;
-var UCORR_METODOS = ['GPS_ACTUAL', 'PUNTO_EN_MAPA'];
+var UCORR_METODOS = ['GPS_ACTUAL', 'PUNTO_EN_MAPA', 'COORDENADAS_GMS', 'COORDENADAS_POSGAR94_AR2'];      // los mismos 4 que el backend (UBICACION_CORR_METODOS)
 var UCORR_ESTADOS_CON_COORDENADA = { corroborada: true, unica: true };      // igual que el backend: solo ahi hay "la" coordenada oficial
 var UCORR_TEXTO_ADVERTENCIA_1KM = 'La ubicación propuesta está a más de 1 km de la ubicación de Irrigación. Verificá cuidadosamente antes de guardar.';
 var UCORR_TEXTO_NO_REEMPLAZA = 'La corrección no reemplaza ni modifica la ubicación de Irrigación: son datos separados.';
@@ -26,7 +28,21 @@ var UCORR_ETIQUETAS_ESTADO = {
   REVERTIDA: 'Revertida',
   INCONSISTENTE: 'Inconsistente'
 };
-var UCORR_ETIQUETAS_METODO = { PUNTO_EN_MAPA: 'Elegida en mapa', GPS_ACTUAL: 'GPS' };
+var UCORR_ETIQUETAS_METODO = {
+  PUNTO_EN_MAPA: 'Elegida en mapa', GPS_ACTUAL: 'GPS', COORDENADAS_GMS: 'Coordenadas GMS / WGS84', COORDENADAS_POSGAR94_AR2: 'Coordenadas POSGAR 94 / Argentina 2'
+};
+// crsOriginal (lo genera el backend) -> como se lee en pantalla.
+var UCORR_ETIQUETAS_CRS = { GMS_WGS84: 'GMS / WGS84', 'EPSG:22182': 'POSGAR 94 / Argentina 2 · EPSG:22182' };
+// Sistemas de "Ingresar coordenadas": la pantalla, el payload y la validacion se arman desde esta lista. POSGAR: X = Este, Y = Norte (convencion del padron).
+var UCORR_SISTEMAS_COORDENADAS = [
+  { id: 'GMS', metodo: 'COORDENADAS_GMS', etiqueta: 'GMS / WGS84', etiquetaLarga: 'GMS / WGS84', textoPendiente: 'Ingresá la latitud y la longitud.' },
+  { id: 'POSGAR', metodo: 'COORDENADAS_POSGAR94_AR2', etiqueta: 'POSGAR 94 / Argentina 2', etiquetaLarga: 'POSGAR 94 / Argentina 2 · EPSG:22182', textoPendiente: 'Ingresá X (Este) e Y (Norte).' }
+];
+var UCORR_TEXTO_PUNTO_MOVIDO = 'Moviste el punto manualmente. Se guardará como punto elegido en el mapa.';
+var UCORR_TEXTO_RESTAURAR = 'Restaurar coordenada ingresada';
+// El punto que se guarda como COORDENADAS_GMS tiene que ser LA conversion de lo ingresado (si no, es otro metodo): tolerancia de comparacion en grados (~0,1 mm).
+var UCORR_COORD_COINCIDE_GRADOS = 1e-9;
+var UCORR_TEXTO_AYUDA_XY = 'En esta aplicación se ingresa X = Este e Y = Norte.';
 
 // --- Permisos ---
 
@@ -189,6 +205,14 @@ function ubicacionCorreccionLogic_evaluarPropuesta(o) {
       errores.gps = g.mensaje;
     }
   }
+  if (ubicacionCorreccionLogic_sistemaPorMetodo(d.metodo)) {
+    // Nunca se conserva un metodo COORDENADAS_* si el punto ya no es la conversion de lo ingresado (p. ej. se movio a mano): ahi el metodo es PUNTO_EN_MAPA.
+    if (!ubicacionCorreccionLogic_puntoCoincideConCoordenada(d.metodo, d.coordenadaOriginal, d.lat, d.lon)) {
+      errores.punto = 'La coordenada ingresada no es válida o ya no coincide con el punto elegido.';
+    }
+  } else if (d.coordenadaOriginal !== undefined && d.coordenadaOriginal !== null) {
+    errores.punto = 'Elegí cómo indicar la ubicación.';
+  }
 
   var obs = typeof d.observacion === 'string' ? d.observacion.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').trim() : '';
   res.observacion = obs;
@@ -213,22 +237,30 @@ function ubicacionCorreccionLogic_evaluarPropuesta(o) {
 // --- Payload: LISTA BLANCA de lo que el cliente manda ---
 
 // Exactamente: wellId, lat, lon, metodo, precisionGpsM, observacion, clientRequestId. Nada mas (ni aunque 'valores' traiga mas).
+// Los metodos COORDENADAS_* suman un octavo campo, coordenadaOriginal (GMS: {lat:{g,m,s,h}, lon:{g,m,s,h}}; POSGAR: {x, y} con x = Este e y = Norte), el valor que se tipeo; el
+// backend lo vuelve a convertir y genera el texto canonico y el CRS: coordenadaOriginalTexto / crsOriginal JAMAS salen de aca. En esos metodos lat/lon van SIN redondear: el backend los compara
+// con su propia conversion sin redondear con una tolerancia metrica de 2 cm, y el redondeo a 6 decimales (hasta ~5,5 cm) lo hace el backend al guardar.
 function ubicacionCorreccionLogic_construirPayload(wellId, valores, clientRequestId) {
   var v = valores || {};
-  return {
+  var esCoordenadas = ubicacionCorreccionLogic_sistemaPorMetodo(v.metodo) !== null;
+  var p = {
     wellId: wellId,
-    lat: ubicacionCorreccionLogic_redondear(v.lat, 6),
-    lon: ubicacionCorreccionLogic_redondear(v.lon, 6),
+    lat: esCoordenadas ? v.lat : ubicacionCorreccionLogic_redondear(v.lat, 6),
+    lon: esCoordenadas ? v.lon : ubicacionCorreccionLogic_redondear(v.lon, 6),
     metodo: v.metodo,
     precisionGpsM: v.metodo === 'GPS_ACTUAL' ? ubicacionCorreccionLogic_redondear(v.precisionGpsM, 1) : null,
     observacion: typeof v.observacion === 'string' ? v.observacion.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').trim() : '',
     clientRequestId: clientRequestId
   };
+  if (esCoordenadas) {
+    p.coordenadaOriginal = ubicacionCorreccionLogic_copiarOriginal(v.metodo, v.coordenadaOriginal);
+  }
+  return p;
 }
 
-// Mismo contenido <=> misma firma (todo salvo clientRequestId).
+// Mismo contenido <=> misma firma (todo salvo clientRequestId). Incluye la coordenada ingresada: cambiar un segundo es otro contenido (otro clientRequestId).
 function ubicacionCorreccionLogic_firmaPayload(p) {
-  return JSON.stringify([p.wellId, p.lat, p.lon, p.metodo, p.precisionGpsM, p.observacion]);
+  return JSON.stringify([p.wellId, p.lat, p.lon, p.metodo, p.precisionGpsM, p.observacion, p.coordenadaOriginal === undefined ? null : p.coordenadaOriginal]);
 }
 
 // 8 a 64 caracteres [A-Za-z0-9_-] (lo que exige el backend). aleatorio: funcion opcional para tests.
@@ -248,7 +280,12 @@ function ubicacionCorreccionLogic_nuevoClientRequestId(aleatorio) {
 
 var UCORR_MENSAJES_ERROR = {
   INVALID_COORDENADAS: 'Las coordenadas no son válidas.',
-  FUERA_DE_MENDOZA: 'La ubicación queda fuera de Mendoza.',
+  FUERA_DE_MENDOZA: 'La ubicación queda fuera de Mendoza. Revisá la coordenada (en Mendoza la latitud es Sur y la longitud es Oeste).',
+  COORDENADA_INVALIDA: 'La coordenada ingresada no es válida. Revisala e intentá de nuevo.',
+  XY_INVERTIDOS: 'Parece que X e Y están intercambiados: X es el Este (alrededor de 2.500.000) e Y es el Norte (alrededor de 6.300.000).',
+  COORDENADA_INCONSISTENTE: 'La coordenada ingresada no coincide con el punto calculado. Volvé a ingresarla.',
+  INVALID_COORDENADA_ORIGINAL: 'No se pudo interpretar la coordenada ingresada. Volvé a ingresarla.',
+  ESQUEMA_DESACTUALIZADO: 'Ingresar coordenadas todavía no está disponible en el servidor. Avisá al administrador.',
   INVALID_METODO: 'No se pudo identificar cómo se indicó la ubicación. Volvé a elegirla.',
   INVALID_PRECISION: 'La precisión del GPS no es válida. Intentá obtenerla nuevamente.',
   PRECISION_INSUFICIENTE: 'La precisión del GPS no alcanza (hace falta 50 m o menos). Probá a cielo abierto o elegí el punto en el mapa.',
@@ -492,6 +529,211 @@ function ubicacionCorreccionLogic_crearBadgePendientes(deps) {
   };
 }
 
+// --- Ingresar coordenadas (sistema GMS) ---
+//
+// Logica pura de la pantalla: interpreta lo que hay en los campos, devuelve errores EN CONTEXTO (por eje) y, si es valido, la conversion a WGS84. Usa
+// js/coordenadasConversion.js (el mismo algoritmo que el backend, que vuelve a convertir y es la autoridad). Nada se corrige en silencio: un valor invalido
+// se informa tal cual, no se "arregla".
+
+// El modulo de conversion es global en el navegador (index.html lo carga antes) y se importa en Node (tests).
+function ubicacionCorreccionLogic_conversion() {
+  if (typeof coordenadas_evaluarGms === 'function') {
+    return { evaluarGms: coordenadas_evaluarGms, evaluarPosgar: coordenadas_evaluarPosgar, parsearNumero: coordenadas_parsearNumero };
+  }
+  if (typeof require === 'function') {
+    var m = require('./coordenadasConversion');
+    return { evaluarGms: m.coordenadas_evaluarGms, evaluarPosgar: m.coordenadas_evaluarPosgar, parsearNumero: m.coordenadas_parsearNumero };
+  }
+  throw new Error('Falta js/coordenadasConversion.js');
+}
+
+function ubicacionCorreccionLogic_estaVacio(v) {
+  return v === null || v === undefined || (typeof v === 'string' && v.trim() === '');
+}
+
+// Defaults para Mendoza: latitud Sur, longitud Oeste (el hemisferio igual se puede cambiar y NUNCA se corrige solo).
+function ubicacionCorreccionLogic_entradaGmsVacia() {
+  return { lat: { g: '', m: '', s: '', h: 'S' }, lon: { g: '', m: '', s: '', h: 'O' } };
+}
+
+function ubicacionCorreccionLogic_ejeGmsVacio(eje) {
+  var e = eje || {};
+  return ubicacionCorreccionLogic_estaVacio(e.g) && ubicacionCorreccionLogic_estaVacio(e.m) && ubicacionCorreccionLogic_estaVacio(e.s);
+}
+
+// {g, m, s, h} con numeros (minutos y segundos vacios = 0), tal como lo recibe el backend. Solo para una entrada ya valida.
+function ubicacionCorreccionLogic_originalGms(entrada) {
+  var conv = ubicacionCorreccionLogic_conversion();
+  function eje(e) {
+    var x = e || {};
+    function num(v) {
+      return ubicacionCorreccionLogic_estaVacio(v) ? 0 : conv.parsearNumero(v).valor;
+    }
+    return { g: num(x.g), m: num(x.m), s: num(x.s), h: String(x.h === null || x.h === undefined ? '' : x.h).trim().toUpperCase() };
+  }
+  return { lat: eje(entrada && entrada.lat), lon: eje(entrada && entrada.lon) };
+}
+
+// Copia por LISTA BLANCA (g, m, s, h por eje): ninguna otra clave viaja al backend, que ademas rechaza las de mas.
+function ubicacionCorreccionLogic_copiarOriginalGms(original) {
+  var o = original || {};
+  function eje(e) {
+    var x = e || {};
+    return { g: x.g, m: x.m, s: x.s, h: x.h };
+  }
+  return { lat: eje(o.lat), lon: eje(o.lon) };
+}
+
+// entrada: {lat:{g,m,s,h}, lon:{g,m,s,h}} con el texto crudo de los campos.
+// Devuelve {estado, errores:{lat?, lon?, general?} (texto para la persona), campos:{lat?, lon?} (g|m|s|h con error), derivado, original, textoOriginal}:
+//   'vacio'      no escribio nada todavia (sin mensajes)
+//   'incompleto' un eje valido y el otro sin escribir (sin mensajes: todavia no termino)
+//   'invalido'   hay errores (por eje, o el punto cae fuera de Mendoza): no hay propuesta
+//   'valido'     derivado = {lat, lon (6 decimales), latExacta, lonExacta (sin redondear)} y original = {lat:{g,m,s,h}, lon:{g,m,s,h}} numericos
+function ubicacionCorreccionLogic_evaluarEntradaGms(entrada) {
+  var e = entrada || {};
+  var res = { estado: 'vacio', errores: {}, campos: {}, derivado: null, original: null, textoOriginal: '' };
+  var vacios = { lat: ubicacionCorreccionLogic_ejeGmsVacio(e.lat), lon: ubicacionCorreccionLogic_ejeGmsVacio(e.lon) };
+  if (vacios.lat && vacios.lon) {
+    return res;
+  }
+  var ev = ubicacionCorreccionLogic_conversion().evaluarGms(e);
+  if (ev.ok) {
+    res.estado = 'valido';
+    res.derivado = { lat: ev.lat, lon: ev.lon, latExacta: ev.latExacta, lonExacta: ev.lonExacta };
+    res.original = ubicacionCorreccionLogic_originalGms(e);
+    res.textoOriginal = ev.textoOriginal;
+    return res;
+  }
+  var er = ev.errores || {};
+  ['lat', 'lon'].forEach(function (eje) {
+    if (er[eje] && !vacios[eje]) {
+      res.errores[eje] = er[eje].mensaje;
+      res.campos[eje] = er[eje].campo;
+    }
+  });
+  if (er.general) {
+    res.errores.general = er.general.mensaje;
+  }
+  res.estado = Object.keys(res.errores).length > 0 ? 'invalido' : 'incompleto';
+  return res;
+}
+
+// --- POSGAR 94 / Argentina 2 · EPSG:22182: X = Este, Y = Norte ---
+
+// {x, y} con numeros (el backend los vuelve a leer). Solo para una entrada ya valida. Acepta "2.500.000,50", "2500000.5", etc.
+function ubicacionCorreccionLogic_originalPosgar(entrada) {
+  var conv = ubicacionCorreccionLogic_conversion();
+  var e = entrada || {};
+  return { x: conv.parsearNumero(e.x, { permitirMiles: true }).valor, y: conv.parsearNumero(e.y, { permitirMiles: true }).valor };
+}
+
+function ubicacionCorreccionLogic_copiarOriginalPosgar(original) {
+  var o = original || {};
+  return { x: o.x, y: o.y };
+}
+
+function ubicacionCorreccionLogic_entradaPosgarVacia() {
+  return { x: '', y: '' };
+}
+
+// entrada: {x, y} con el texto crudo de los campos. Mismo contrato que evaluarEntradaGms: {estado, errores:{x?, y?, general?}, campos, derivado, original, textoOriginal} y, para
+// POSGAR, {invertido, sugerencia:{x,y}|null}. Si el modulo detecta que X e Y estan intercambiados: estado 'invalido', invertido:true y NINGUN valor se cambia (la pantalla ofrece un
+// boton; solo al tocarlo se intercambian los campos). Los numeros ambiguos o ilegibles se informan como error: nunca se interpretan "como se pueda".
+function ubicacionCorreccionLogic_evaluarEntradaPosgar(entrada) {
+  var e = entrada || {};
+  var res = { estado: 'vacio', errores: {}, campos: {}, derivado: null, original: null, textoOriginal: '', invertido: false, sugerencia: null };
+  var vacioX = ubicacionCorreccionLogic_estaVacio(e.x);
+  var vacioY = ubicacionCorreccionLogic_estaVacio(e.y);
+  if (vacioX && vacioY) {
+    return res;
+  }
+  // Con un solo eje escrito se evalua contra un valor "comodin" valido del otro, solo para informar YA el error de lo escrito (p. ej. fuera de rango).
+  var ev = ubicacionCorreccionLogic_conversion().evaluarPosgar({ x: vacioX ? 2500000 : e.x, y: vacioY ? 6350000 : e.y });
+  var er = ev.errores || {};
+  if (vacioX || vacioY) {
+    if (!vacioX && er.x) { res.errores.x = er.x.mensaje; }
+    if (!vacioY && er.y) { res.errores.y = er.y.mensaje; }
+    res.estado = Object.keys(res.errores).length > 0 ? 'invalido' : 'incompleto';
+    return res;
+  }
+  if (ev.ok) {
+    res.estado = 'valido';
+    res.derivado = { lat: ev.lat, lon: ev.lon, latExacta: ev.latExacta, lonExacta: ev.lonExacta };
+    res.original = ubicacionCorreccionLogic_originalPosgar(e);
+    res.textoOriginal = ev.textoOriginal;
+    return res;
+  }
+  if (er.x) { res.errores.x = er.x.mensaje; }
+  if (er.y) { res.errores.y = er.y.mensaje; }
+  if (er.general) { res.errores.general = er.general.mensaje; }
+  res.invertido = ev.invertido === true;
+  res.sugerencia = res.invertido && ev.sugerencia ? { x: ev.sugerencia.x, y: ev.sugerencia.y } : null;
+  res.estado = 'invalido';
+  return res;
+}
+
+// Intercambia los textos de X e Y tal cual se escribieron (sin reformatearlos). Solo lo llama el boton "Intercambiar X e Y".
+function ubicacionCorreccionLogic_intercambiarXY(entrada) {
+  var e = entrada || {};
+  return { x: e.y === undefined ? '' : e.y, y: e.x === undefined ? '' : e.x };
+}
+
+// --- Sistemas de coordenadas (registro) ---
+
+function ubicacionCorreccionLogic_sistemaPorId(id) {
+  for (var i = 0; i < UCORR_SISTEMAS_COORDENADAS.length; i++) {
+    if (UCORR_SISTEMAS_COORDENADAS[i].id === id) {
+      return UCORR_SISTEMAS_COORDENADAS[i];
+    }
+  }
+  return null;
+}
+
+// null si el metodo no es de "Ingresar coordenadas" (GPS_ACTUAL, PUNTO_EN_MAPA, desconocido)
+function ubicacionCorreccionLogic_sistemaPorMetodo(metodo) {
+  for (var i = 0; i < UCORR_SISTEMAS_COORDENADAS.length; i++) {
+    if (UCORR_SISTEMAS_COORDENADAS[i].metodo === metodo) {
+      return UCORR_SISTEMAS_COORDENADAS[i];
+    }
+  }
+  return null;
+}
+
+function ubicacionCorreccionLogic_entradaVacia(sistemaId) {
+  return sistemaId === 'POSGAR' ? ubicacionCorreccionLogic_entradaPosgarVacia() : ubicacionCorreccionLogic_entradaGmsVacia();
+}
+
+function ubicacionCorreccionLogic_evaluarEntrada(sistemaId, entrada) {
+  return sistemaId === 'POSGAR' ? ubicacionCorreccionLogic_evaluarEntradaPosgar(entrada) : ubicacionCorreccionLogic_evaluarEntradaGms(entrada);
+}
+
+// Copia por LISTA BLANCA segun el metodo (GMS: g, m, s, h por eje; POSGAR: x, y). Cualquier otra clave se descarta.
+function ubicacionCorreccionLogic_copiarOriginal(metodo, original) {
+  return metodo === 'COORDENADAS_POSGAR94_AR2' ? ubicacionCorreccionLogic_copiarOriginalPosgar(original) : ubicacionCorreccionLogic_copiarOriginalGms(original);
+}
+
+// ¿El punto (lat, lon) es la conversion de esta coordenada ingresada (en el sistema del metodo)? Si no, no se puede guardar como ese metodo.
+function ubicacionCorreccionLogic_puntoCoincideConCoordenada(metodo, original, lat, lon) {
+  if (!original || !ubicacionCorreccionLogic_esNumero(lat) || !ubicacionCorreccionLogic_esNumero(lon)) {
+    return false;
+  }
+  var conv = ubicacionCorreccionLogic_conversion();
+  var ev;
+  if (metodo === 'COORDENADAS_POSGAR94_AR2') {
+    ev = conv.evaluarPosgar(original);
+  } else if (metodo === 'COORDENADAS_GMS') {
+    ev = conv.evaluarGms(original);
+  } else {
+    return false;
+  }
+  return ev.ok === true && Math.abs(ev.latExacta - lat) <= UCORR_COORD_COINCIDE_GRADOS && Math.abs(ev.lonExacta - lon) <= UCORR_COORD_COINCIDE_GRADOS;
+}
+
+function ubicacionCorreccionLogic_puntoCoincideConGms(original, lat, lon) {
+  return ubicacionCorreccionLogic_puntoCoincideConCoordenada('COORDENADAS_GMS', original, lat, lon);
+}
+
 // --- Centro inicial del mapa ---
 // 1) correccion vigente, 2) ubicacion de Irrigacion, 3) ubicacion del dispositivo, 4) vista general de Mendoza.
 function ubicacionCorreccionLogic_centroInicialMapa(o) {
@@ -522,6 +764,23 @@ var UCORR_VERBO_RESOLUCION = { VALIDADA: 'Validada', RECHAZADA: 'Rechazada', SUP
 
 function ubicacionCorreccionLogic_filaDato(titulo, valor) {
   return '<div class="ucorr-dato"><dt>' + ubicacionCorreccionLogic_escapar(titulo) + '</dt><dd>' + ubicacionCorreccionLogic_escapar(valor) + '</dd></div>';
+}
+
+// El valor ORIGINAL tipeado (texto canonico que genero el backend) se muestra aparte y en segundo plano: la lat/lon normalizada sigue siendo el dato principal.
+// Filas historicas (GPS, mapa) traen ambos campos vacios y no muestran nada.
+function ubicacionCorreccionLogic_filaOriginal(c) {
+  var texto = typeof c.coordenadaOriginalTexto === 'string' ? c.coordenadaOriginalTexto.trim() : '';
+  if (!texto) {
+    return '';
+  }
+  var esc = ubicacionCorreccionLogic_escapar;
+  var crs = ubicacionCorreccionLogic_etiquetaCrs(c.crsOriginal);
+  return '<div class="ucorr-dato ucorr-dato-original"><dt>Coordenada ingresada</dt><dd><span class="mono">' + esc(texto) + '</span></dd></div>' +
+    (crs ? '<div class="ucorr-dato ucorr-dato-original ucorr-dato-sistema"><dt>Sistema</dt><dd><span class="ucorr-crs">' + esc(crs) + '</span></dd></div>' : '');
+}
+
+function ubicacionCorreccionLogic_etiquetaCrs(crs) {
+  return UCORR_ETIQUETAS_CRS[crs] || '';
 }
 
 function ubicacionCorreccionLogic_textoMetodo(c) {
@@ -563,6 +822,7 @@ function ubicacionCorreccionLogic_htmlTarjeta(c, opc) {
     h += ubicacionCorreccionLogic_filaDato('Fecha', fecha);
   }
   h += ubicacionCorreccionLogic_filaDato('Método', ubicacionCorreccionLogic_textoMetodo(c));
+  h += ubicacionCorreccionLogic_filaOriginal(c);
   if (ubicacionCorreccionLogic_esNumero(c.distanciaM)) {
     h += ubicacionCorreccionLogic_filaDato('Distancia a Irrigación', ubicacionCorreccionLogic_formatearDistancia(c.distanciaM));
   }
@@ -665,6 +925,25 @@ if (typeof module !== 'undefined' && module.exports) {
     ubicacionCorreccionLogic_urlGoogleMaps,
     ubicacionCorreccionLogic_etiquetaEstado,
     ubicacionCorreccionLogic_etiquetaMetodo,
+    ubicacionCorreccionLogic_etiquetaCrs,
+    ubicacionCorreccionLogic_filaOriginal,
+    ubicacionCorreccionLogic_entradaGmsVacia,
+    ubicacionCorreccionLogic_evaluarEntradaGms,
+    ubicacionCorreccionLogic_originalGms,
+    ubicacionCorreccionLogic_copiarOriginalGms,
+    ubicacionCorreccionLogic_puntoCoincideConGms,
+    ubicacionCorreccionLogic_puntoCoincideConCoordenada,
+    ubicacionCorreccionLogic_evaluarEntradaPosgar,
+    ubicacionCorreccionLogic_evaluarEntrada,
+    ubicacionCorreccionLogic_entradaVacia,
+    ubicacionCorreccionLogic_entradaPosgarVacia,
+    ubicacionCorreccionLogic_originalPosgar,
+    ubicacionCorreccionLogic_copiarOriginal,
+    ubicacionCorreccionLogic_intercambiarXY,
+    ubicacionCorreccionLogic_sistemaPorId,
+    ubicacionCorreccionLogic_sistemaPorMetodo,
+    UCORR_TEXTO_AYUDA_XY,
+    UCORR_SISTEMAS_COORDENADAS, UCORR_ETIQUETAS_CRS, UCORR_TEXTO_PUNTO_MOVIDO, UCORR_TEXTO_RESTAURAR,
     ubicacionCorreccionLogic_irrigacionDeUbicacion,
     ubicacionCorreccionLogic_evaluarGps,
     ubicacionCorreccionLogic_evaluarPropuesta,

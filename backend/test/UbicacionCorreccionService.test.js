@@ -66,7 +66,9 @@ const eventosDe = (id) => eventos().filter((f) => f[0] === id).map((f) => f[2]);
 
 describe('catalogos y constantes', () => {
   test('metodos y eventos tal como se aprobaron', () => {
-    expect(S.UBICACION_CORR_METODOS).toEqual(['GPS_ACTUAL', 'PUNTO_EN_MAPA']);
+    expect(S.UBICACION_CORR_METODOS).toEqual(['GPS_ACTUAL', 'PUNTO_EN_MAPA', 'COORDENADAS_GMS', 'COORDENADAS_POSGAR94_AR2']);
+    expect(S.UBICACION_CORR_METODOS_COORDENADAS).toEqual(['COORDENADAS_GMS', 'COORDENADAS_POSGAR94_AR2']);
+    expect(S.UBICACION_CORR_COORD_TOLERANCIA_M).toBe(0.02);
     expect(S.UBICACION_CORR_EVENTOS).toEqual(['PROPUESTA', 'VALIDADA', 'RECHAZADA', 'SUPERADA', 'REVERTIDA']);
     expect(S.UBICACION_CORR_GPS_PRECISION_MAX_M).toBe(50);
     expect(S.UBICACION_CORR_OBSERVACION_DESDE_M).toBe(250);

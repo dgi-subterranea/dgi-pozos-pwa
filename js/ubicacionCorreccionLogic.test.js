@@ -274,7 +274,8 @@ describe('flujo de guardado', () => {
   test('ERROR del backend: mensaje en espanol (nunca el texto tecnico), sin refrescar, y el intento queda reintentable', async () => {
     const { flujo, llamadas } = crear({ enviar: () => Promise.resolve({ status: 'error', code: 'FUERA_DE_MENDOZA', message: 'texto tecnico interno' }) });
     const r = await flujo.guardar(W, VALORES());
-    expect(r).toMatchObject({ tipo: 'error', code: 'FUERA_DE_MENDOZA', mensaje: 'La ubicación queda fuera de Mendoza.', sesionVencida: false });
+    expect(r).toMatchObject({ tipo: 'error', code: 'FUERA_DE_MENDOZA', mensaje: L.UCORR_MENSAJES_ERROR.FUERA_DE_MENDOZA, sesionVencida: false });
+    expect(r.mensaje).toMatch(/fuera de Mendoza/);
     expect(r.mensaje).not.toMatch(/tecnico/);
     expect(llamadas.leer).toHaveLength(0);
   });
@@ -933,5 +934,631 @@ describe('indicador "Correcciones pendientes: N" del hub', () => {
       expect(b.total()).toBeNull();
       expect(await b.refrescar()).toEqual({ tipo: 'ok', total: 1 });
     });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------
+// Ingresar coordenadas (GMS / WGS84): interpretacion de los campos, validacion en vivo, payload exacto y mensajes. El modulo de conversion es el de la etapa 1.
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------
+describe('Ingresar coordenadas: evaluarEntradaGms (validacion en vivo, errores en contexto)', () => {
+  const gms = (lat, lon) => ({ lat: Object.assign({ g: '', m: '', s: '', h: 'S' }, lat), lon: Object.assign({ g: '', m: '', s: '', h: 'O' }, lon) });
+  const OK = gms({ g: '33', m: '20', s: '51,54' }, { g: '69', m: '8', s: '43.62' });
+
+  test('los campos vacios (con los hemisferios por defecto S y O) no muestran NINGUN error: todavia no escribio nada', () => {
+    const v = L.ubicacionCorreccionLogic_entradaGmsVacia();
+    expect(v).toEqual({ lat: { g: '', m: '', s: '', h: 'S' }, lon: { g: '', m: '', s: '', h: 'O' } });
+    const r = L.ubicacionCorreccionLogic_evaluarEntradaGms(v);
+    expect(r).toMatchObject({ estado: 'vacio', errores: {}, derivado: null, original: null });
+    expect(L.ubicacionCorreccionLogic_evaluarEntradaGms(null).estado).toBe('vacio');
+    expect(L.ubicacionCorreccionLogic_evaluarEntradaGms(gms({ g: '  ' }, {})).estado).toBe('vacio');
+  });
+
+  test('valido: convierte a WGS84 (6 decimales y valor exacto), con coma o punto decimal, y arma el original numerico', () => {
+    const r = L.ubicacionCorreccionLogic_evaluarEntradaGms(OK);
+    expect(r.estado).toBe('valido');
+    expect(r.errores).toEqual({});
+    expect(r.derivado).toMatchObject({ lat: -33.34765, lon: -69.14545 });
+    expect(r.derivado.latExacta).toBeCloseTo(-(33 + 20 / 60 + 51.54 / 3600), 12);
+    expect(r.derivado.lonExacta).toBeCloseTo(-(69 + 8 / 60 + 43.62 / 3600), 12);
+    expect(r.original).toEqual({ lat: { g: 33, m: 20, s: 51.54, h: 'S' }, lon: { g: 69, m: 8, s: 43.62, h: 'O' } });
+    expect(r.textoOriginal).toBe('33° 20\' 51.54" S, 69° 8\' 43.62" O');
+    const conPunto = L.ubicacionCorreccionLogic_evaluarEntradaGms(gms({ g: '33', m: '20', s: '51.54' }, { g: '69', m: '8', s: '43,62' }));
+    expect(conPunto.derivado).toEqual(r.derivado);
+  });
+
+  test('el ejemplo del pedido: 32° 53\' 10,2" S, 68° 50\' 25,4" O -> -32.886167, -68.840389', () => {
+    const r = L.ubicacionCorreccionLogic_evaluarEntradaGms(gms({ g: '32', m: '53', s: '10,2' }, { g: '68', m: '50', s: '25,4' }));
+    expect(r.estado).toBe('valido');
+    expect([r.derivado.lat, r.derivado.lon]).toEqual([-32.886167, -68.840389]);
+  });
+
+  test('minutos y segundos vacios valen 0 (solo los grados son obligatorios)', () => {
+    const r = L.ubicacionCorreccionLogic_evaluarEntradaGms(gms({ g: '33' }, { g: '69' }));
+    expect(r.estado).toBe('valido');
+    expect(r.original).toEqual({ lat: { g: 33, m: 0, s: 0, h: 'S' }, lon: { g: 69, m: 0, s: 0, h: 'O' } });
+  });
+
+  test('un eje valido y el otro sin escribir: "incompleto" (sin mensajes, sin propuesta)', () => {
+    const r = L.ubicacionCorreccionLogic_evaluarEntradaGms(gms({ g: '33', m: '20', s: '51' }, {}));
+    expect(r).toMatchObject({ estado: 'incompleto', errores: {}, derivado: null });
+  });
+
+  test.each([
+    ['minutos = 60', gms({ g: '33', m: '60' }, { g: '69' }), 'lat', 'm', /minutos.*0 y 59/],
+    ['minutos con decimales', gms({ g: '33', m: '20,5' }, { g: '69' }), 'lat', 'm', /minutos.*entero/],
+    ['segundos = 60', gms({ g: '33', s: '60' }, { g: '69' }), 'lat', 's', /segundos.*menores que 60/],
+    ['segundos no numericos', gms({ g: '33' }, { g: '69', s: 'abc' }), 'lon', 's', /segundos/],
+    ['grados con decimales', gms({ g: '33,5' }, { g: '69' }), 'lat', 'g', /grados.*entero/],
+    ['grados no numericos', gms({ g: 'treinta' }, { g: '69' }), 'lat', 'g', /grados/],
+    ['grados negativos (el signo lo da el hemisferio)', gms({ g: '-33' }, { g: '69' }), 'lat', 'g', /negativos/],
+    ['segundos negativos', gms({ g: '33', s: '-1' }, { g: '69' }), 'lat', 's', /negativos/],
+    ['latitud con grados > 90', gms({ g: '91' }, { g: '69' }), 'lat', 'g', /entre 0 y 90/],
+    ['longitud con grados > 180', gms({ g: '33' }, { g: '181' }), 'lon', 'g', /entre 0 y 180/],
+    ['latitud con hemisferio E', gms({ g: '33', h: 'E' }, { g: '69' }), 'lat', 'h', /N o S/],
+    ['longitud con hemisferio N', gms({ g: '33' }, { g: '69', h: 'N' }), 'lon', 'h', /E u O/],
+    ['hemisferio vacio', gms({ g: '33', h: '' }, { g: '69' }), 'lat', 'h', /hemisferio/]
+  ])('invalido: %s -> error en el eje y el campo correctos, sin propuesta', (_n, entrada, eje, campo, texto) => {
+    const r = L.ubicacionCorreccionLogic_evaluarEntradaGms(entrada);
+    expect(r.estado).toBe('invalido');
+    expect(r.errores[eje]).toMatch(texto);
+    expect(r.campos[eje]).toBe(campo);
+    expect(r.derivado).toBeNull();
+    expect(r.original).toBeNull();
+  });
+
+  test('un error en un eje no se muestra si ese eje esta vacio; el otro eje SI informa el suyo', () => {
+    const r = L.ubicacionCorreccionLogic_evaluarEntradaGms(gms({}, { g: '69', m: '75' }));
+    expect(r.errores.lat).toBeUndefined();
+    expect(r.errores.lon).toMatch(/minutos/);
+    expect(r.estado).toBe('invalido');
+  });
+
+  test('hemisferio equivocado (lat N): fuera de Mendoza con la PISTA del hemisferio; no se corrige solo', () => {
+    const entrada = gms({ g: '33', m: '20', s: '51.54', h: 'N' }, { g: '69', m: '8', s: '43.62' });
+    const r = L.ubicacionCorreccionLogic_evaluarEntradaGms(entrada);
+    expect(r.estado).toBe('invalido');
+    expect(r.errores.general).toMatch(/fuera de Mendoza/);
+    expect(r.errores.general).toMatch(/hemisferio/i);
+    expect(entrada.lat.h).toBe('N');                              // la entrada no se toca
+    expect(r.derivado).toBeNull();
+  });
+
+  test('fuera de Mendoza (Buenos Aires, Chile, el origen): general, sin propuesta', () => {
+    [gms({ g: '34', m: '36' }, { g: '58', m: '22' }), gms({ g: '33', m: '27' }, { g: '70', m: '45', h: 'O' }), gms({ g: '0', h: 'N' }, { g: '0', h: 'E' })].forEach((e) => {
+      const r = L.ubicacionCorreccionLogic_evaluarEntradaGms(e);
+      expect(r.estado).toBe('invalido');
+      expect(r.errores.general).toMatch(/fuera de Mendoza/);
+    });
+  });
+
+  test('NO corrige silenciosamente: la entrada que se pasa no se modifica ni se normaliza', () => {
+    const entrada = gms({ g: ' 33 ', m: '20', s: '99' }, { g: '69', h: 'o' });
+    const copia = JSON.parse(JSON.stringify(entrada));
+    L.ubicacionCorreccionLogic_evaluarEntradaGms(entrada);
+    expect(entrada).toEqual(copia);
+  });
+
+  test('el original que sale es solo {lat:{g,m,s,h}, lon:{g,m,s,h}} con numeros y hemisferio en mayuscula', () => {
+    const r = L.ubicacionCorreccionLogic_evaluarEntradaGms(gms({ g: '33', m: '20', s: '51,54', h: 's' }, { g: '69', m: '8', s: '43,62', h: 'o' }));
+    expect(r.estado).toBe('valido');
+    expect(Object.keys(r.original).sort()).toEqual(['lat', 'lon']);
+    expect(Object.keys(r.original.lat).sort()).toEqual(['g', 'h', 'm', 's']);
+    expect(typeof r.original.lat.g).toBe('number');
+    expect(r.original.lat.h).toBe('S');
+    expect(r.original.lon.h).toBe('O');
+  });
+});
+
+describe('Ingresar coordenadas: evaluarPropuesta y payload de COORDENADAS_GMS', () => {
+  const ORIGINAL = { lat: { g: 33, m: 20, s: 51.54, h: 'S' }, lon: { g: 69, m: 8, s: 43.62, h: 'O' } };
+  const EXACTO = L.ubicacionCorreccionLogic_evaluarEntradaGms({ lat: { g: '33', m: '20', s: '51.54', h: 'S' }, lon: { g: '69', m: '8', s: '43.62', h: 'O' } }).derivado;
+  const VALORES_GMS = (extra) => Object.assign({
+    lat: EXACTO.latExacta, lon: EXACTO.lonExacta, metodo: 'COORDENADAS_GMS', precisionGpsM: null, observacion: '', coordenadaOriginal: ORIGINAL, irrigacion: IRR
+  }, extra || {});
+
+  test('el catalogo del frontend incluye COORDENADAS_GMS con la etiqueta "Coordenadas GMS / WGS84"', () => {
+    expect(L.UCORR_METODOS).toContain('COORDENADAS_GMS');
+    expect(L.ubicacionCorreccionLogic_etiquetaMetodo('COORDENADAS_GMS')).toBe('Coordenadas GMS / WGS84');
+    expect(L.UCORR_SISTEMAS_COORDENADAS[0]).toMatchObject({ id: 'GMS', metodo: 'COORDENADAS_GMS', etiqueta: 'GMS / WGS84' });
+  });
+
+  test('propuesta valida: ok, con distancia orientativa calculada sobre el punto redondeado', () => {
+    const ev = L.ubicacionCorreccionLogic_evaluarPropuesta(VALORES_GMS());
+    expect(ev.ok).toBe(true);
+    expect(ev.distanciaM).toBeLessThan(0.5);
+  });
+
+  test('>250 m exige observacion y >1 km agrega la advertencia fuerte (mismas reglas que GPS y mapa)', () => {
+    const g300 = L.ubicacionCorreccionLogic_evaluarEntradaGms({ lat: { g: '33', m: '20', s: '41', h: 'S' }, lon: { g: '69', m: '8', s: '43.62', h: 'O' } });
+    const v300 = VALORES_GMS({ lat: g300.derivado.latExacta, lon: g300.derivado.lonExacta, coordenadaOriginal: g300.original });
+    const e300 = L.ubicacionCorreccionLogic_evaluarPropuesta(v300);
+    expect(e300.distanciaM).toBeGreaterThan(250);
+    expect(e300.observacionObligatoria).toBe(true);
+    expect(e300.advertenciaFuerte).toBe(false);
+    expect(e300.ok).toBe(false);
+    expect(L.ubicacionCorreccionLogic_evaluarPropuesta(Object.assign({}, v300, { observacion: 'motivo' })).ok).toBe(true);
+    const g1k = L.ubicacionCorreccionLogic_evaluarEntradaGms({ lat: { g: '33', m: '20', s: '11', h: 'S' }, lon: { g: '69', m: '8', s: '43.62', h: 'O' } });
+    const e1k = L.ubicacionCorreccionLogic_evaluarPropuesta(VALORES_GMS({ lat: g1k.derivado.latExacta, lon: g1k.derivado.lonExacta, coordenadaOriginal: g1k.original, observacion: 'lejos' }));
+    expect(e1k.advertenciaFuerte).toBe(true);
+    expect(e1k.ok).toBe(true);
+  });
+
+  test('sin ubicacion de Irrigacion: se puede continuar sin distancia', () => {
+    const ev = L.ubicacionCorreccionLogic_evaluarPropuesta(VALORES_GMS({ irrigacion: null }));
+    expect(ev).toMatchObject({ ok: true, distanciaM: null, observacionObligatoria: false });
+  });
+
+  test('FAIL-CLOSED: si el punto ya no es la conversion de lo ingresado, o falta/esta mal el original, NO es una propuesta valida de COORDENADAS_GMS', () => {
+    expect(L.ubicacionCorreccionLogic_evaluarPropuesta(VALORES_GMS({ lat: EXACTO.latExacta + 0.0001 })).errores.punto).toBeTruthy();
+    expect(L.ubicacionCorreccionLogic_evaluarPropuesta(VALORES_GMS({ coordenadaOriginal: undefined })).ok).toBe(false);
+    expect(L.ubicacionCorreccionLogic_evaluarPropuesta(VALORES_GMS({ coordenadaOriginal: { lat: { g: 33, m: 60, s: 0, h: 'S' }, lon: ORIGINAL.lon } })).ok).toBe(false);
+    expect(L.ubicacionCorreccionLogic_evaluarPropuesta(VALORES_GMS({ coordenadaOriginal: { lat: Object.assign({}, ORIGINAL.lat, { h: 'N' }), lon: ORIGINAL.lon } })).ok).toBe(false);
+  });
+
+  test('un metodo que NO es de coordenadas con coordenadaOriginal tampoco es valido (nunca viaja un original junto a un punto movido)', () => {
+    expect(L.ubicacionCorreccionLogic_evaluarPropuesta(VALORES_GMS({ metodo: 'PUNTO_EN_MAPA' })).ok).toBe(false);
+    expect(L.ubicacionCorreccionLogic_evaluarPropuesta(VALORES_GMS({ metodo: 'PUNTO_EN_MAPA', coordenadaOriginal: undefined })).ok).toBe(true);
+  });
+
+  test('payload de COORDENADAS_GMS: EXACTAMENTE 8 campos, lat/lon SIN redondear y coordenadaOriginal estructurada', () => {
+    const p = L.ubicacionCorreccionLogic_construirPayload(W, VALORES_GMS({ observacion: ' nota ' }), 'ucorr-abc12345');
+    expect(Object.keys(p).sort()).toEqual(['clientRequestId', 'coordenadaOriginal', 'lat', 'lon', 'metodo', 'observacion', 'precisionGpsM', 'wellId']);
+    expect(p).toMatchObject({ wellId: W, metodo: 'COORDENADAS_GMS', precisionGpsM: null, observacion: 'nota', clientRequestId: 'ucorr-abc12345' });
+    expect(p.lat).toBe(EXACTO.latExacta);
+    expect(p.lon).toBe(EXACTO.lonExacta);
+    // con segundos que NO caen en la grilla de 6 decimales, redondear perderia hasta ~5,5 cm: el payload manda el valor exacto
+    const fino = L.ubicacionCorreccionLogic_evaluarEntradaGms({ lat: { g: '33', m: '20', s: '51.541764', h: 'S' }, lon: { g: '69', m: '8', s: '43.62', h: 'O' } });
+    const pf = L.ubicacionCorreccionLogic_construirPayload(W, VALORES_GMS({ lat: fino.derivado.latExacta, lon: fino.derivado.lonExacta, coordenadaOriginal: fino.original }), 'ucorr-abc12345');
+    expect(pf.lat).toBe(fino.derivado.latExacta);
+    expect(pf.lat).not.toBe(Math.round(pf.lat * 1e6) / 1e6);
+    expect(p.coordenadaOriginal).toEqual(ORIGINAL);
+    expect(Object.keys(p.coordenadaOriginal.lat).sort()).toEqual(['g', 'h', 'm', 's']);
+  });
+
+  test('el payload NO lleva coordenadaOriginalTexto, crsOriginal, distancia, estado, email, nombre ni flags, aunque "valores" los traiga', () => {
+    const sucio = VALORES_GMS({
+      coordenadaOriginalTexto: 'X', crsOriginal: 'Y', distanciaM: 1, estado: 'VALIDADA', email: 'a@x.com', nombre: 'Ana', autoValidar: true, validada: true,
+      coordenadaOriginal: Object.assign({ coordenadaOriginalTexto: 'Z', extra: 1 }, { lat: Object.assign({ x: 1 }, ORIGINAL.lat), lon: ORIGINAL.lon })
+    });
+    const p = L.ubicacionCorreccionLogic_construirPayload(W, sucio, 'ucorr-abc12345');
+    expect(Object.keys(p).sort()).toEqual(['clientRequestId', 'coordenadaOriginal', 'lat', 'lon', 'metodo', 'observacion', 'precisionGpsM', 'wellId']);
+    expect(Object.keys(p.coordenadaOriginal).sort()).toEqual(['lat', 'lon']);
+    expect(Object.keys(p.coordenadaOriginal.lat).sort()).toEqual(['g', 'h', 'm', 's']);
+    expect(JSON.stringify(p)).not.toMatch(/coordenadaOriginalTexto|crsOriginal|distancia|estado|email|nombre|autoValid|validada|"x"|extra/);
+  });
+
+  test('GPS y mapa siguen mandando SIEMPRE los 7 campos de antes (sin coordenadaOriginal) y lat/lon redondeados a 6 decimales', () => {
+    ['GPS_ACTUAL', 'PUNTO_EN_MAPA'].forEach((metodo) => {
+      const p = L.ubicacionCorreccionLogic_construirPayload(W, { lat: -33.3474512345, lon: -69.1454512345, metodo, precisionGpsM: 8.44, observacion: '', coordenadaOriginal: ORIGINAL }, 'ucorr-abc12345');
+      expect(Object.keys(p).sort()).toEqual(['clientRequestId', 'lat', 'lon', 'metodo', 'observacion', 'precisionGpsM', 'wellId']);
+      expect([p.lat, p.lon]).toEqual([-33.347451, -69.145451]);
+    });
+  });
+
+  test('la firma incluye la coordenada ingresada: cambiar un segundo es OTRO contenido; lo mismo es lo mismo', () => {
+    const a = L.ubicacionCorreccionLogic_construirPayload(W, VALORES_GMS(), 'a');
+    const b = L.ubicacionCorreccionLogic_construirPayload(W, VALORES_GMS(), 'b');
+    const otra = L.ubicacionCorreccionLogic_construirPayload(W, VALORES_GMS({ coordenadaOriginal: { lat: Object.assign({}, ORIGINAL.lat, { s: 52 }), lon: ORIGINAL.lon } }), 'c');
+    expect(L.ubicacionCorreccionLogic_firmaPayload(a)).toBe(L.ubicacionCorreccionLogic_firmaPayload(b));
+    expect(L.ubicacionCorreccionLogic_firmaPayload(a)).not.toBe(L.ubicacionCorreccionLogic_firmaPayload(otra));
+  });
+
+  test('flujo de guardado: el reintento del MISMO contenido reutiliza el clientRequestId; si cambia el original, es otro; guardado ok -> otro intento', async () => {
+    const enviados = [];
+    let n = 0;
+    let falla = true;
+    const flujo = L.ubicacionCorreccionLogic_crearFlujoGuardado({
+      enviar: (p) => { enviados.push(p); return falla ? Promise.resolve({ status: 'error', code: 'SERVICE_UNAVAILABLE' }) : Promise.resolve({ status: 'ok', data: { correccion: { estado: 'PROPUESTA' }, duplicada: false } }); },
+      leer: () => Promise.resolve({ status: 'ok', data: { vigente: null, pendientes: [], historial: [] } }),
+      generarId: () => { n += 1; return 'ucorr-id-' + n; }
+    });
+    await flujo.guardar(W, VALORES_GMS());
+    await flujo.guardar(W, VALORES_GMS());
+    expect(enviados.map((p) => p.clientRequestId)).toEqual(['ucorr-id-1', 'ucorr-id-1']);
+    const g52 = L.ubicacionCorreccionLogic_evaluarEntradaGms({ lat: { g: '33', m: '20', s: '52', h: 'S' }, lon: { g: '69', m: '8', s: '43.62', h: 'O' } });
+    const OTRA = () => VALORES_GMS({ lat: g52.derivado.latExacta, lon: g52.derivado.lonExacta, coordenadaOriginal: g52.original });
+    await flujo.guardar(W, OTRA());                                    // otro segundo = otro contenido = otro clientRequestId
+    expect(enviados[2].clientRequestId).toBe('ucorr-id-2');
+    falla = false;
+    const ok = await flujo.guardar(W, OTRA());                         // reintento del mismo contenido: reutiliza el id y esta vez guarda
+    expect(ok).toMatchObject({ tipo: 'ok', resultado: 'pendiente' });
+    expect(enviados[3].clientRequestId).toBe('ucorr-id-2');
+    await flujo.guardar(W, OTRA());                                    // guardado ok: el proximo es otro intento
+    expect(enviados[4].clientRequestId).toBe('ucorr-id-3');
+  });
+
+  test('doble guardado simultaneo: una sola llamada', async () => {
+    let llamadas = 0;
+    const flujo = L.ubicacionCorreccionLogic_crearFlujoGuardado({
+      enviar: () => { llamadas += 1; return new Promise((r) => setTimeout(() => r({ status: 'ok', data: { correccion: { estado: 'PROPUESTA' } } }), 5)); },
+      leer: () => Promise.resolve({ status: 'ok', data: {} }),
+      generarId: () => 'ucorr-unico-1'
+    });
+    const [a, b] = await Promise.all([flujo.guardar(W, VALORES_GMS()), flujo.guardar(W, VALORES_GMS())]);
+    expect(llamadas).toBe(1);
+    expect(a).toBe(b);
+  });
+});
+
+describe('Ingresar coordenadas: mensajes de error amigables', () => {
+  test.each([
+    ['COORDENADA_INVALIDA', /coordenada ingresada no es válida/],
+    ['XY_INVERTIDOS', /X e Y están intercambiados/],
+    ['COORDENADA_INCONSISTENTE', /no coincide con el punto calculado/],
+    ['INVALID_COORDENADA_ORIGINAL', /No se pudo interpretar la coordenada/],
+    ['ESQUEMA_DESACTUALIZADO', /todavía no está disponible/],
+    ['FUERA_DE_MENDOZA', /fuera de Mendoza/]
+  ])('%s tiene mensaje propio, en espanol y sin el codigo tecnico', (code, texto) => {
+    const m = L.ubicacionCorreccionLogic_mensajeError(code, { message: 'texto tecnico del backend', detalle: 'MINUTOS_FUERA_DE_RANGO' });
+    expect(m).toMatch(texto);
+    expect(m).not.toMatch(new RegExp(code));
+    expect(m).not.toMatch(/tecnico|MINUTOS|_/);
+    expect(m).not.toBe(L.ubicacionCorreccionLogic_mensajeError('__nunca__'));
+  });
+});
+
+describe('Ingresar coordenadas: ficha e historial muestran el valor original (secundario) sin reemplazar la lat/lon', () => {
+  const GMS_CORR = {
+    correccionId: '33333333-3333-4333-8333-333333333333', wellId: W, lat: -33.34765, lon: -69.14545, metodo: 'COORDENADAS_GMS', precisionGpsM: null,
+    coordenadaOriginalTexto: '33° 20\' 51.54" S, 69° 8\' 43.62" O', crsOriginal: 'GMS_WGS84', observacion: '', nombrePropone: 'Ana Pérez',
+    timestamp: new Date(2026, 9, 13, 9, 30).toISOString(), distanciaM: 0.1, advertenciaDistancia: false, estado: 'VALIDADA', resolucion: null, propia: false
+  };
+  const VIEJA = Object.assign({}, GMS_CORR, { correccionId: '44444444-4444-4444-8444-444444444444', metodo: 'PUNTO_EN_MAPA', coordenadaOriginalTexto: '', crsOriginal: '' });
+  const SIN_CAMPOS = (() => { const c = Object.assign({}, VIEJA); delete c.coordenadaOriginalTexto; delete c.crsOriginal; return c; })();
+
+  test('la tarjeta muestra "Coordenadas GMS / WGS84", el valor original y el sistema, ademas de la lat/lon normalizada', () => {
+    const h = L.ubicacionCorreccionLogic_htmlTarjeta(GMS_CORR, { modo: 'vigente' });
+    expect(h).toContain('Coordenadas GMS / WGS84');
+    expect(h).toContain('-33.34765, -69.14545');
+    expect(h).toContain('Coordenada ingresada');
+    expect(h).toContain('33° 20&#39; 51.54&quot; S, 69° 8&#39; 43.62&quot; O');
+    expect(h).toContain('GMS / WGS84');
+    expect(h).toContain('ucorr-dato-original');
+    expect(h.indexOf('-33.34765, -69.14545')).toBeLessThan(h.indexOf('Coordenada ingresada'));
+  });
+
+  test('filas historicas con los campos vacios o AUSENTES se ven como siempre (sin fila de coordenada ingresada)', () => {
+    [VIEJA, SIN_CAMPOS].forEach((c) => {
+      const h = L.ubicacionCorreccionLogic_htmlTarjeta(c, { modo: 'historial' });
+      expect(h).not.toContain('Coordenada ingresada');
+      expect(h).not.toContain('ucorr-dato-original');
+      expect(h).toContain('Elegida en mapa');
+      expect(h).not.toMatch(/undefined|null/);
+    });
+  });
+
+  test('el texto original se escapa (nunca HTML sin escapar)', () => {
+    const h = L.ubicacionCorreccionLogic_htmlTarjeta(Object.assign({}, GMS_CORR, { coordenadaOriginalTexto: '<img src=x onerror=alert(1)>', crsOriginal: '<b>' }), { modo: 'historial' });
+    expect(h).not.toContain('<img');
+    expect(h).toContain('&lt;img');
+  });
+
+  test('la seccion con vigente GMS y un historial mixto (GMS + mapa) pinta ambos', () => {
+    const h = L.ubicacionCorreccionLogic_htmlSeccion({ vigente: GMS_CORR, pendientes: [], historial: [GMS_CORR, VIEJA] }, { puedeCorregir: true });
+    expect(h.match(/Coordenada ingresada/g)).toHaveLength(2);          // en la vigente y en su fila del historial; la fila vieja no suma
+    expect(h).toContain('Elegida en mapa');
+    expect(h).toContain('Coordenadas GMS / WGS84');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------
+// Etapa 4: Ingresar coordenadas con POSGAR 94 / Argentina 2 (EPSG:22182). X = Este, Y = Norte.
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------
+describe('POSGAR: catalogo, sistemas y etiquetas', () => {
+  test('el frontend conoce los 4 metodos del backend; los sistemas son GMS y POSGAR', () => {
+    expect(L.UCORR_METODOS).toEqual(['GPS_ACTUAL', 'PUNTO_EN_MAPA', 'COORDENADAS_GMS', 'COORDENADAS_POSGAR94_AR2']);
+    expect(L.UCORR_SISTEMAS_COORDENADAS.map((s) => s.id)).toEqual(['GMS', 'POSGAR']);
+    expect(L.ubicacionCorreccionLogic_sistemaPorId('POSGAR')).toMatchObject({ metodo: 'COORDENADAS_POSGAR94_AR2', etiqueta: 'POSGAR 94 / Argentina 2', etiquetaLarga: 'POSGAR 94 / Argentina 2 · EPSG:22182' });
+    expect(L.ubicacionCorreccionLogic_sistemaPorMetodo('COORDENADAS_GMS').id).toBe('GMS');
+    expect(L.ubicacionCorreccionLogic_sistemaPorMetodo('COORDENADAS_POSGAR94_AR2').id).toBe('POSGAR');
+    ['GPS_ACTUAL', 'PUNTO_EN_MAPA', 'otro', undefined, null].forEach((m) => expect(L.ubicacionCorreccionLogic_sistemaPorMetodo(m)).toBeNull());
+    expect(L.ubicacionCorreccionLogic_sistemaPorId('UTM')).toBeNull();
+  });
+
+  test('etiquetas: "Coordenadas POSGAR 94 / Argentina 2" y el sistema "POSGAR 94 / Argentina 2 · EPSG:22182"', () => {
+    expect(L.ubicacionCorreccionLogic_etiquetaMetodo('COORDENADAS_POSGAR94_AR2')).toBe('Coordenadas POSGAR 94 / Argentina 2');
+    expect(L.ubicacionCorreccionLogic_etiquetaCrs('EPSG:22182')).toBe('POSGAR 94 / Argentina 2 · EPSG:22182');
+    expect(L.ubicacionCorreccionLogic_etiquetaCrs('GMS_WGS84')).toBe('GMS / WGS84');
+    expect(L.ubicacionCorreccionLogic_etiquetaCrs('')).toBe('');
+    expect(L.ubicacionCorreccionLogic_etiquetaCrs('algo-raro')).toBe('');
+  });
+
+  test('la ayuda de la convencion es la pedida, sin cambiar de convencion', () => {
+    expect(L.UCORR_TEXTO_AYUDA_XY).toBe('En esta aplicación se ingresa X = Este e Y = Norte.');
+  });
+});
+
+describe('POSGAR: evaluarEntradaPosgar (validacion en vivo)', () => {
+  const P = (x, y) => L.ubicacionCorreccionLogic_evaluarEntradaPosgar({ x, y });
+
+  test('campos vacios: sin errores; con un solo eje bien escrito: "incompleto", sin errores ni propuesta', () => {
+    expect(L.ubicacionCorreccionLogic_entradaPosgarVacia()).toEqual({ x: '', y: '' });
+    expect(P('', '')).toMatchObject({ estado: 'vacio', errores: {}, derivado: null, original: null });
+    expect(P('  ', '')).toMatchObject({ estado: 'vacio' });
+    expect(P('2500000', '')).toMatchObject({ estado: 'incompleto', errores: {}, derivado: null });
+    expect(P('', '6350000')).toMatchObject({ estado: 'incompleto', errores: {}, derivado: null });
+    expect(L.ubicacionCorreccionLogic_evaluarEntradaPosgar(null).estado).toBe('vacio');
+  });
+
+  test.each([
+    ['entero', '2500000', '6350000', 2500000, 6350000],
+    ['punto decimal', '2500000.50', '6350000.25', 2500000.5, 6350000.25],
+    ['coma decimal', '2500000,50', '6350000,25', 2500000.5, 6350000.25],
+    ['separador de miles', '2.500.000', '6.350.000', 2500000, 6350000],
+    ['formato argentino 2.500.000,50', '2.500.000,50', '6.350.000,25', 2500000.5, 6350000.25],
+    ['con espacios', ' 2 500 000 ', ' 6 350 000,5 ', 2500000, 6350000.5],
+    ['numeros', 2500000, 6350000, 2500000, 6350000]
+  ])('valido (%s): se convierte y el original viaja como numeros', (_n, x, y, nx, ny) => {
+    const r = P(x, y);
+    expect(r.estado).toBe('valido');
+    expect(r.errores).toEqual({});
+    expect(r.original).toEqual({ x: nx, y: ny });
+    expect(r.invertido).toBe(false);
+    const tec = L.ubicacionCorreccionLogic_evaluarEntradaPosgar({ x: nx, y: ny });
+    expect(r.derivado).toEqual(tec.derivado);                     // cualquier escritura del mismo numero da el MISMO punto
+  });
+
+  test('transformacion conocida (pyproj): X(Este)=2500000, Y(Norte)=6350000 -> -32.992946, -69', () => {
+    const r = P('2.500.000', '6.350.000');
+    expect([r.derivado.lat, r.derivado.lon]).toEqual([-32.992946, -69]);
+    expect(r.textoOriginal).toBe('X(Este)=2500000.00, Y(Norte)=6350000.00');
+    expect(P('2.500.000,50', '6.350.000').textoOriginal).toBe('X(Este)=2500000.50, Y(Norte)=6350000.00');
+  });
+
+  test('el derivado trae el valor EXACTO (sin redondear) ademas del redondeado a 6 decimales', () => {
+    const r = P('2400000,123', '6200000,456');
+    expect(r.derivado.lat).toBe(Math.round(r.derivado.latExacta * 1e6) / 1e6);
+    expect(r.derivado.latExacta).not.toBe(r.derivado.lat);
+  });
+
+  test.each([
+    ['X no numerico', 'abc', '6350000', 'x', /X \/ Este.*número/],
+    ['Y no numerico', '2500000', '12a', 'y', /Y \/ Norte.*número/],
+    ['X con notacion cientifica', '2.5e6', '6350000', 'x', /X \/ Este/],
+    ['X NaN', 'NaN', '6350000', 'x', /X \/ Este/],
+    ['Y Infinity', '2500000', 'Infinity', 'y', /Y \/ Norte/],
+    ['X con dos separadores raros', '2.500.00', '6350000', 'x', /X \/ Este/],
+    ['Y con miles mal formados', '2500000', '6.35.000', 'y', /Y \/ Norte/],
+    ['X fuera de rango (muy chico)', '100', '6350000', 'x', /fuera de rango/],
+    ['X fuera de rango (muy grande)', '3500000', '6350000', 'x', /fuera de rango/],
+    ['Y fuera de rango', '2500000', '5000000', 'y', /fuera de rango/],
+    ['X con un solo grupo de miles (ambiguo)', '2.500', '6350000', 'x', /fuera de rango/]
+  ])('invalido: %s -> error EN el campo, sin propuesta', (_n, x, y, campo, texto) => {
+    const r = P(x, y);
+    expect(r.estado).toBe('invalido');
+    expect(r.errores[campo]).toMatch(texto);
+    expect(r.derivado).toBeNull();
+    expect(r.original).toBeNull();
+    expect(r.invertido).toBe(false);
+  });
+
+  test('un solo eje escrito y con error: el error se muestra YA (sin esperar al otro eje)', () => {
+    expect(P('100', '')).toMatchObject({ estado: 'invalido' });
+    expect(P('100', '').errores.x).toMatch(/fuera de rango/);
+    expect(P('', 'abc').errores.y).toMatch(/número/);
+    expect(P('100', '').errores.y).toBeUndefined();
+  });
+
+  test('dentro del rango pero fuera de la caja de Mendoza (esquina SO): error general; nunca se acepta', () => {
+    const r = P('2300000', '5800000');
+    expect(r.estado).toBe('invalido');
+    expect(r.errores.general).toMatch(/fuera de Mendoza/);
+    expect(r.derivado).toBeNull();
+    expect(r.invertido).toBe(false);
+  });
+
+  test('negativos: error general', () => {
+    const r = P('-2500000', '6350000');
+    expect(r.estado).toBe('invalido');
+    expect(r.errores.general || r.errores.x).toBeTruthy();
+  });
+
+  test('X/Y INVERTIDOS: invalido + invertido:true + sugerencia, SIN corregir nada', () => {
+    const entrada = { x: '6.350.000', y: '2.500.000' };
+    const copia = JSON.parse(JSON.stringify(entrada));
+    const r = L.ubicacionCorreccionLogic_evaluarEntradaPosgar(entrada);
+    expect(r.estado).toBe('invalido');
+    expect(r.invertido).toBe(true);
+    expect(r.errores.general).toMatch(/X e Y están intercambiados/);
+    expect(r.sugerencia).toEqual({ x: 2500000, y: 6350000 });
+    expect(r.derivado).toBeNull();
+    expect(r.original).toBeNull();
+    expect(entrada).toEqual(copia);                                   // la entrada no se toca
+  });
+
+  test('intercambiarXY intercambia los textos TAL CUAL (sin reformatear) y es lo unico que lo hace', () => {
+    expect(L.ubicacionCorreccionLogic_intercambiarXY({ x: '6.350.000,5', y: '2500000' })).toEqual({ x: '2500000', y: '6.350.000,5' });
+    expect(L.ubicacionCorreccionLogic_intercambiarXY({ x: 'a', y: undefined })).toEqual({ x: '', y: 'a' });
+    const inv = { x: '6350000', y: '2500000' };
+    const luego = L.ubicacionCorreccionLogic_evaluarEntradaPosgar(L.ubicacionCorreccionLogic_intercambiarXY(inv));
+    expect(luego.estado).toBe('valido');
+    expect(luego.original).toEqual({ x: 2500000, y: 6350000 });
+    // evaluar NUNCA intercambia: el mismo par invertido sigue invalido una y otra vez
+    expect(L.ubicacionCorreccionLogic_evaluarEntradaPosgar(inv).estado).toBe('invalido');
+    expect(L.ubicacionCorreccionLogic_evaluarEntradaPosgar(inv).estado).toBe('invalido');
+  });
+
+  test('evaluarEntrada despacha por sistema y entradaVacia da la forma de cada uno', () => {
+    expect(L.ubicacionCorreccionLogic_entradaVacia('GMS')).toEqual(L.ubicacionCorreccionLogic_entradaGmsVacia());
+    expect(L.ubicacionCorreccionLogic_entradaVacia('POSGAR')).toEqual({ x: '', y: '' });
+    expect(L.ubicacionCorreccionLogic_evaluarEntrada('POSGAR', { x: '2500000', y: '6350000' }).estado).toBe('valido');
+    expect(L.ubicacionCorreccionLogic_evaluarEntrada('GMS', { x: '2500000', y: '6350000' }).estado).toBe('vacio');       // no reutiliza valores del otro sistema
+    expect(L.ubicacionCorreccionLogic_evaluarEntrada('POSGAR', L.ubicacionCorreccionLogic_entradaGmsVacia()).estado).toBe('vacio');
+  });
+});
+
+describe('POSGAR: evaluarPropuesta, payload y flujo de guardado', () => {
+  const EV = L.ubicacionCorreccionLogic_evaluarEntradaPosgar({ x: '2.500.000,50', y: '6.350.000,25' });
+  const OFICIAL_POS = { lat: EV.derivado.lat, lon: EV.derivado.lon };
+  const VAL = (extra) => Object.assign({
+    lat: EV.derivado.latExacta, lon: EV.derivado.lonExacta, metodo: 'COORDENADAS_POSGAR94_AR2', precisionGpsM: null, observacion: '', coordenadaOriginal: EV.original, irrigacion: OFICIAL_POS
+  }, extra || {});
+
+  test('propuesta valida: ok y distancia orientativa', () => {
+    const ev = L.ubicacionCorreccionLogic_evaluarPropuesta(VAL());
+    expect(ev.ok).toBe(true);
+    expect(ev.distanciaM).toBeLessThan(0.5);
+  });
+
+  test('>250 m exige observacion; >1 km advertencia fuerte; sin Irrigacion se continua sin distancia', () => {
+    const lejos = (m) => { const e = L.ubicacionCorreccionLogic_evaluarEntradaPosgar({ x: '2500000.5', y: String(6350000.25 + m) }); return VAL({ lat: e.derivado.latExacta, lon: e.derivado.lonExacta, coordenadaOriginal: e.original }); };
+    const e300 = L.ubicacionCorreccionLogic_evaluarPropuesta(lejos(300));
+    expect(e300.distanciaM).toBeGreaterThan(290);
+    expect(e300.observacionObligatoria).toBe(true);
+    expect(e300.advertenciaFuerte).toBe(false);
+    expect(e300.ok).toBe(false);
+    expect(L.ubicacionCorreccionLogic_evaluarPropuesta(Object.assign(lejos(300), { observacion: 'motivo' })).ok).toBe(true);
+    const e1500 = L.ubicacionCorreccionLogic_evaluarPropuesta(Object.assign(lejos(1500), { observacion: 'lejos' }));
+    expect(e1500.advertenciaFuerte).toBe(true);
+    expect(e1500.ok).toBe(true);
+    expect(L.ubicacionCorreccionLogic_evaluarPropuesta(VAL({ irrigacion: null }))).toMatchObject({ ok: true, distanciaM: null, observacionObligatoria: false });
+  });
+
+  test('FAIL-CLOSED: si el punto ya no es la conversion de X/Y, o el original falta o es de otro sistema, NO es una propuesta valida', () => {
+    expect(L.ubicacionCorreccionLogic_evaluarPropuesta(VAL({ lat: EV.derivado.latExacta + 0.0001 })).errores.punto).toBeTruthy();
+    expect(L.ubicacionCorreccionLogic_evaluarPropuesta(VAL({ coordenadaOriginal: undefined })).ok).toBe(false);
+    expect(L.ubicacionCorreccionLogic_evaluarPropuesta(VAL({ coordenadaOriginal: { x: 6350000, y: 2500000 } })).ok).toBe(false);
+    expect(L.ubicacionCorreccionLogic_evaluarPropuesta(VAL({ coordenadaOriginal: { lat: { g: 33, m: 0, s: 0, h: 'S' }, lon: { g: 69, m: 0, s: 0, h: 'O' } } })).ok).toBe(false);
+    expect(L.ubicacionCorreccionLogic_puntoCoincideConCoordenada('COORDENADAS_POSGAR94_AR2', EV.original, EV.derivado.latExacta, EV.derivado.lonExacta)).toBe(true);
+    expect(L.ubicacionCorreccionLogic_puntoCoincideConCoordenada('COORDENADAS_GMS', EV.original, EV.derivado.latExacta, EV.derivado.lonExacta)).toBe(false);
+  });
+
+  test('un punto movido a mano (PUNTO_EN_MAPA) con coordenadaOriginal POSGAR NO es valido (el original no viaja)', () => {
+    expect(L.ubicacionCorreccionLogic_evaluarPropuesta(VAL({ metodo: 'PUNTO_EN_MAPA' })).ok).toBe(false);
+    expect(L.ubicacionCorreccionLogic_evaluarPropuesta(VAL({ metodo: 'PUNTO_EN_MAPA', coordenadaOriginal: undefined })).ok).toBe(true);
+  });
+
+  test('payload: 8 campos, lat/lon de MAXIMA precision (sin redondear) y coordenadaOriginal {x, y} numerica', () => {
+    const p = L.ubicacionCorreccionLogic_construirPayload(W, VAL({ observacion: ' nota ' }), 'ucorr-abc12345');
+    expect(Object.keys(p).sort()).toEqual(['clientRequestId', 'coordenadaOriginal', 'lat', 'lon', 'metodo', 'observacion', 'precisionGpsM', 'wellId']);
+    expect(p).toMatchObject({ wellId: W, metodo: 'COORDENADAS_POSGAR94_AR2', precisionGpsM: null, observacion: 'nota', clientRequestId: 'ucorr-abc12345' });
+    expect(p.lat).toBe(EV.derivado.latExacta);
+    expect(p.lon).toBe(EV.derivado.lonExacta);
+    expect(p.lat).not.toBe(EV.derivado.lat);
+    expect(p.coordenadaOriginal).toEqual({ x: 2500000.5, y: 6350000.25 });
+    expect(Object.keys(p.coordenadaOriginal).sort()).toEqual(['x', 'y']);
+    expect(typeof p.coordenadaOriginal.x).toBe('number');
+  });
+
+  test('el payload NO lleva coordenadaOriginalTexto, crsOriginal, distancia, estado, email, nombre ni flags, aunque "valores" los traiga', () => {
+    const p = L.ubicacionCorreccionLogic_construirPayload(W, VAL({
+      coordenadaOriginalTexto: 'X', crsOriginal: 'Y', distanciaM: 1, estado: 'VALIDADA', email: 'a@x.com', nombre: 'Ana', autoValidar: true, coordenadaOriginal: { x: 2500000.5, y: 6350000.25, z: 9, crsOriginal: 'E' }
+    }), 'ucorr-abc12345');
+    expect(Object.keys(p).sort()).toEqual(['clientRequestId', 'coordenadaOriginal', 'lat', 'lon', 'metodo', 'observacion', 'precisionGpsM', 'wellId']);
+    expect(Object.keys(p.coordenadaOriginal).sort()).toEqual(['x', 'y']);
+    expect(JSON.stringify(p)).not.toMatch(/coordenadaOriginalTexto|crsOriginal|distancia|estado|email|nombre|autoValid|"z"/);
+  });
+
+  test('la firma incluye {x, y}: cambiar un metro es otro contenido; lo mismo es lo mismo; GMS y POSGAR nunca comparten firma', () => {
+    const a = L.ubicacionCorreccionLogic_construirPayload(W, VAL(), 'a');
+    const b = L.ubicacionCorreccionLogic_construirPayload(W, VAL(), 'b');
+    const e2 = L.ubicacionCorreccionLogic_evaluarEntradaPosgar({ x: '2500001.5', y: '6350000.25' });
+    const c = L.ubicacionCorreccionLogic_construirPayload(W, VAL({ lat: e2.derivado.latExacta, lon: e2.derivado.lonExacta, coordenadaOriginal: e2.original }), 'c');
+    expect(L.ubicacionCorreccionLogic_firmaPayload(a)).toBe(L.ubicacionCorreccionLogic_firmaPayload(b));
+    expect(L.ubicacionCorreccionLogic_firmaPayload(a)).not.toBe(L.ubicacionCorreccionLogic_firmaPayload(c));
+  });
+
+  test('flujo de guardado: reintento del MISMO contenido reutiliza el clientRequestId; otro X/Y es otro id; guardado ok -> otro intento', async () => {
+    const enviados = [];
+    let n = 0;
+    let falla = true;
+    const flujo = L.ubicacionCorreccionLogic_crearFlujoGuardado({
+      enviar: (p) => { enviados.push(p); return falla ? Promise.resolve({ status: 'error', code: 'SERVICE_UNAVAILABLE' }) : Promise.resolve({ status: 'ok', data: { correccion: { estado: 'PROPUESTA' } } }); },
+      leer: () => Promise.resolve({ status: 'ok', data: { vigente: null, pendientes: [], historial: [] } }),
+      generarId: () => { n += 1; return 'ucorr-id-' + n; }
+    });
+    await flujo.guardar(W, VAL());
+    await flujo.guardar(W, VAL());
+    expect(enviados.map((p) => p.clientRequestId)).toEqual(['ucorr-id-1', 'ucorr-id-1']);
+    const e2 = L.ubicacionCorreccionLogic_evaluarEntradaPosgar({ x: '2500001.5', y: '6350000.25' });
+    const OTRO = () => VAL({ lat: e2.derivado.latExacta, lon: e2.derivado.lonExacta, coordenadaOriginal: e2.original });
+    await flujo.guardar(W, OTRO());
+    expect(enviados[2].clientRequestId).toBe('ucorr-id-2');
+    falla = false;
+    expect(await flujo.guardar(W, OTRO())).toMatchObject({ tipo: 'ok', resultado: 'pendiente' });
+    expect(enviados[3].clientRequestId).toBe('ucorr-id-2');
+    await flujo.guardar(W, OTRO());
+    expect(enviados[4].clientRequestId).toBe('ucorr-id-3');
+  });
+
+  test('XY_INVERTIDOS del backend tiene mensaje amigable en el frontend', () => {
+    expect(L.ubicacionCorreccionLogic_mensajeError('XY_INVERTIDOS')).toMatch(/X e Y están intercambiados/);
+  });
+});
+
+describe('POSGAR: ficha e historial', () => {
+  const POS_CORR = {
+    correccionId: '55555555-5555-4555-8555-555555555555', wellId: W, lat: -32.992946, lon: -69, metodo: 'COORDENADAS_POSGAR94_AR2', precisionGpsM: null,
+    coordenadaOriginalTexto: 'X(Este)=2500000.00, Y(Norte)=6350000.00', crsOriginal: 'EPSG:22182', observacion: '', nombrePropone: 'Ana Pérez',
+    timestamp: new Date(2026, 9, 13, 9, 30).toISOString(), distanciaM: 10, advertenciaDistancia: false, estado: 'VALIDADA', resolucion: null, propia: false
+  };
+
+  test('la tarjeta muestra el metodo, la coordenada ingresada y el sistema (secundarios); la lat/lon normalizada sigue siendo lo principal', () => {
+    const h = L.ubicacionCorreccionLogic_htmlTarjeta(POS_CORR, { modo: 'vigente' });
+    expect(h).toContain('Coordenadas POSGAR 94 / Argentina 2');
+    expect(h).toContain('-32.992946, -69');
+    expect(h).toContain('Coordenada ingresada');
+    expect(h).toContain('X(Este)=2500000.00, Y(Norte)=6350000.00');
+    expect(h).toContain('<dt>Sistema</dt>');
+    expect(h).toContain('POSGAR 94 / Argentina 2 · EPSG:22182');
+    expect(h.indexOf('-32.992946, -69')).toBeLessThan(h.indexOf('Coordenada ingresada'));
+    expect(h.indexOf('Coordenada ingresada')).toBeLessThan(h.indexOf('<dt>Sistema</dt>'));
+  });
+
+  test('GMS tambien muestra su sistema en fila aparte; las filas historicas sin campos no muestran ni coordenada ni sistema', () => {
+    const gms = L.ubicacionCorreccionLogic_htmlTarjeta(Object.assign({}, POS_CORR, { metodo: 'COORDENADAS_GMS', coordenadaOriginalTexto: '33° 20\' 51.54" S, 69° 8\' 43.62" O', crsOriginal: 'GMS_WGS84' }), { modo: 'historial' });
+    expect(gms).toContain('<dt>Sistema</dt>');
+    expect(gms).toContain('GMS / WGS84');
+    const vieja = Object.assign({}, POS_CORR, { metodo: 'PUNTO_EN_MAPA', coordenadaOriginalTexto: '', crsOriginal: '' });
+    delete vieja.crsOriginal;
+    const h = L.ubicacionCorreccionLogic_htmlTarjeta(vieja, { modo: 'historial' });
+    expect(h).not.toContain('Coordenada ingresada');
+    expect(h).not.toContain('<dt>Sistema</dt>');
+    expect(h).not.toMatch(/undefined|null/);
+  });
+
+  test('un crsOriginal desconocido no muestra la fila "Sistema"; un texto con HTML se escapa', () => {
+    const h = L.ubicacionCorreccionLogic_htmlTarjeta(Object.assign({}, POS_CORR, { crsOriginal: 'raro', coordenadaOriginalTexto: '<b>x</b>' }), { modo: 'historial' });
+    expect(h).not.toContain('<dt>Sistema</dt>');
+    expect(h).not.toContain('<b>x</b>');
+    expect(h).toContain('&lt;b&gt;');
+  });
+});
+
+describe('REGRESION GMS, GPS y mapa al sumar POSGAR', () => {
+  test('GMS sigue valido, con el mismo payload de 8 campos', () => {
+    const ev = L.ubicacionCorreccionLogic_evaluarEntradaGms({ lat: { g: '33', m: '20', s: '51,54', h: 'S' }, lon: { g: '69', m: '8', s: '43,62', h: 'O' } });
+    expect(ev.estado).toBe('valido');
+    const p = L.ubicacionCorreccionLogic_construirPayload(W, { lat: ev.derivado.latExacta, lon: ev.derivado.lonExacta, metodo: 'COORDENADAS_GMS', precisionGpsM: null, observacion: '', coordenadaOriginal: ev.original }, 'ucorr-abc12345');
+    expect(Object.keys(p).sort()).toEqual(['clientRequestId', 'coordenadaOriginal', 'lat', 'lon', 'metodo', 'observacion', 'precisionGpsM', 'wellId']);
+    expect(Object.keys(p.coordenadaOriginal).sort()).toEqual(['lat', 'lon']);
+    expect(L.ubicacionCorreccionLogic_evaluarPropuesta({ lat: ev.derivado.latExacta, lon: ev.derivado.lonExacta, metodo: 'COORDENADAS_GMS', precisionGpsM: null, observacion: '', coordenadaOriginal: ev.original, irrigacion: IRR }).ok).toBe(true);
+  });
+
+  test('un GMS no acepta un original POSGAR ni al reves; GPS y mapa no aceptan ningun original', () => {
+    const pos = { x: 2500000, y: 6350000 };
+    const gms = { lat: { g: 33, m: 20, s: 51.54, h: 'S' }, lon: { g: 69, m: 8, s: 43.62, h: 'O' } };
+    const base = { lat: -33.34765, lon: -69.14545, precisionGpsM: null, observacion: '', irrigacion: IRR };
+    expect(L.ubicacionCorreccionLogic_evaluarPropuesta(Object.assign({}, base, { metodo: 'COORDENADAS_GMS', coordenadaOriginal: pos })).ok).toBe(false);
+    expect(L.ubicacionCorreccionLogic_evaluarPropuesta(Object.assign({}, base, { metodo: 'COORDENADAS_POSGAR94_AR2', coordenadaOriginal: gms })).ok).toBe(false);
+    expect(L.ubicacionCorreccionLogic_evaluarPropuesta(Object.assign({}, base, { metodo: 'PUNTO_EN_MAPA', coordenadaOriginal: pos })).ok).toBe(false);
+    expect(L.ubicacionCorreccionLogic_evaluarPropuesta(Object.assign({}, base, { metodo: 'GPS_ACTUAL', precisionGpsM: 8, coordenadaOriginal: gms })).ok).toBe(false);
+  });
+
+  test('GPS y mapa: payload de 7 campos con lat/lon a 6 decimales, como siempre', () => {
+    ['GPS_ACTUAL', 'PUNTO_EN_MAPA'].forEach((metodo) => {
+      const p = L.ubicacionCorreccionLogic_construirPayload(W, { lat: -33.3474512345, lon: -69.1454512345, metodo, precisionGpsM: 8.44, observacion: '', coordenadaOriginal: { x: 1, y: 2 } }, 'ucorr-abc12345');
+      expect(Object.keys(p).sort()).toEqual(['clientRequestId', 'lat', 'lon', 'metodo', 'observacion', 'precisionGpsM', 'wellId']);
+      expect([p.lat, p.lon]).toEqual([-33.347451, -69.145451]);
+    });
+  });
+
+  test('las reglas de distancia / observacion son las mismas en los cuatro metodos', () => {
+    const lejos = { lat: IRR.lat + 0.003, lon: IRR.lon, irrigacion: IRR, observacion: '' };        // ~333 m
+    const gps = L.ubicacionCorreccionLogic_evaluarPropuesta(Object.assign({ metodo: 'GPS_ACTUAL', precisionGpsM: 8 }, lejos));
+    const mapa = L.ubicacionCorreccionLogic_evaluarPropuesta(Object.assign({ metodo: 'PUNTO_EN_MAPA', precisionGpsM: null }, lejos));
+    expect(gps.observacionObligatoria).toBe(true);
+    expect(mapa.observacionObligatoria).toBe(true);
+    expect(gps.distanciaM).toBe(mapa.distanciaM);
   });
 });
