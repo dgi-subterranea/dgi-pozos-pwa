@@ -1096,6 +1096,7 @@ function handleProponerCorreccionUbicacion(sessionToken, datos) {
     // el reintento completo una correccion que habia quedado sin su evento PROPUESTA: queda constancia en Historial
     logHistoryEvent(session.email, 'proponerCorreccionUbicacion', d.wellId, 'AUTOCURADA');
   }
+  avisarValidadoresCorreccion(session.email, d.wellId, resultado);
   var data = { correccion: resultado.correccion, duplicada: resultado.duplicada, curada: resultado.curada === true };
   if (resultado.autoValidada === true) {
     // la validacion directa queda auditada como lo que es: una validacion (ademas de la propuesta), a nombre del mismo usuario
@@ -1104,6 +1105,30 @@ function handleProponerCorreccionUbicacion(sessionToken, datos) {
     data.supersedidas = resultado.supersedidas || [];
   }
   return { status: 'ok', data: data };
+}
+
+// Aviso por email a quienes validan (UbicacionCorreccionNotificacion.js) cuando una correccion NUEVA queda PROPUESTA. No avisa si quedo VALIDADA
+// (correccion directa de quien corrige y valida) ni en un reintento idempotente (duplicada) - salvo el autocurado de una escritura parcial, que es
+// cuando esa correccion recien llega a PROPUESTA. Es best-effort: cualquier problema (sin permiso de MailApp, cuota, hoja de usuarios) se registra
+// en Historial y NUNCA cambia la respuesta ni deshace la propuesta.
+function avisarValidadoresCorreccion(email, wellId, resultado) {
+  var c = resultado && resultado.correccion;
+  if (!c || c.estado !== 'PROPUESTA' || resultado.autoValidada === true) {
+    return;
+  }
+  if (resultado.duplicada === true && resultado.curada !== true) {
+    return;
+  }
+  var aviso;
+  try {
+    aviso = ubicacionCorreccionNotificacion_notificarPendiente(email, c);
+  } catch (err) {
+    aviso = { resultado: 'ERROR' };
+  }
+  var texto = ubicacionCorreccionNotificacion_textoAuditoria(aviso);
+  if (texto) {
+    logHistoryEvent(email, 'notificarCorreccionUbicacion', wellId, texto);
+  }
 }
 
 function handleGetCorreccionesUbicacionPozo(sessionToken, wellId) {

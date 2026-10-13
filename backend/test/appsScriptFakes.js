@@ -129,6 +129,8 @@ function installAppsScriptFakes() {
   global.ubicacionCorreccionService_validar = jest.fn();
   global.ubicacionCorreccionService_rechazar = jest.fn();
   global.ubicacionCorreccionService_revertir = jest.fn();
+  global.ubicacionCorreccionNotificacion_notificarPendiente = jest.fn();
+  global.ubicacionCorreccionNotificacion_textoAuditoria = jest.fn();
   global.FOTOS_UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 }
 

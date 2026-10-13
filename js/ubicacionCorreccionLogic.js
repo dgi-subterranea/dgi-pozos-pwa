@@ -35,6 +35,11 @@ function ubicacionCorreccionLogic_puedeCorregir(permisos) {
   return !!permisos && permisos.ubicacion === true && permisos.ubicacion_corregir === true;
 }
 
+// Fail-closed: ver y validar la cola exige los DOS permisos (igual que el backend: getCorreccionesUbicacionPendientes pide ubicacion + ubicacion_validar).
+function ubicacionCorreccionLogic_puedeValidar(permisos) {
+  return !!permisos && permisos.ubicacion === true && permisos.ubicacion_validar === true;
+}
+
 // --- Numeros, distancia, formato ---
 
 function ubicacionCorreccionLogic_esNumero(v) {
@@ -381,6 +386,112 @@ function ubicacionCorreccionLogic_crearFlujoGuardado(deps) {
   return { guardar: guardar, enCurso: function () { return enCurso !== null; } };
 }
 
+// --- Indicador "Correcciones pendientes: N" del hub (solo quien valida) ---
+
+var UCORR_BADGE_INTERVALO_MS = 15000;      // entre refrescos AUTOMATICOS (entrar al hub); validar/rechazar y el login refrescan siempre
+
+// '' si no hay nada que mostrar (0 o dato invalido): el indicador se oculta.
+function ubicacionCorreccionLogic_textoBadgePendientes(total) {
+  return typeof total === 'number' && isFinite(total) && total > 0 && Math.floor(total) === total ? 'Correcciones pendientes: ' + total : '';
+}
+
+// getCorreccionesUbicacionPendientes -> {total, inconsistentes, pendientes[]}. Solo se usa "total" (entero >= 0); cualquier otra cosa es un dato invalido.
+function ubicacionCorreccionLogic_totalDePendientes(resp) {
+  var t = resp && resp.status === 'ok' && resp.data ? resp.data.total : undefined;
+  return typeof t === 'number' && isFinite(t) && t >= 0 && Math.floor(t) === t ? t : null;
+}
+
+// Estado del indicador, sin DOM. deps: {obtenerContexto() -> {sessionToken, permisos, onSessionExpired, onUserDisabled}|null,
+//   consultar(sessionToken) -> Promise<respuesta de getCorreccionesUbicacionPendientes>, pintar(total|null), ahora() -> ms (opcional), intervaloMs (opcional)}
+//  - Sin permiso EXACTO (ubicacion + ubicacion_validar) no consulta nada y se oculta (fail-closed).
+//  - Un fallo de la consulta (red, servidor) NO bloquea nada: conserva el ultimo valor conocido y la proxima entrada al hub reintenta.
+//  - Sesion vencida / usuario deshabilitado se delegan a la app (igual que el resto de las pantallas).
+//  - Una respuesta de una consulta vieja (o de otra sesion, tras reset()) se descarta.
+//  - refrescar() automatico respeta un intervalo minimo; refrescar(true) / alResolver() / el login lo fuerzan.
+// refrescar() resuelve (nunca rechaza) con {tipo: 'ok'|'sin_permiso'|'reciente'|'obsoleta'|'sesion'|'sin_acceso'|'error', total?}
+function ubicacionCorreccionLogic_crearBadgePendientes(deps) {
+  var ahora = deps.ahora || function () { return Date.now(); };
+  var intervalo = typeof deps.intervaloMs === 'number' ? deps.intervaloMs : UCORR_BADGE_INTERVALO_MS;
+  var total = null;
+  var generacion = 0;
+  var ultima = null;
+  var enCurso = null;
+
+  function pintar(valor) {
+    total = valor;
+    deps.pintar(valor);
+  }
+
+  function reset() {
+    generacion += 1;
+    ultima = null;
+    enCurso = null;
+    pintar(null);
+  }
+
+  function refrescar(forzar) {
+    var ctx = deps.obtenerContexto();
+    if (!ctx || !ctx.sessionToken || !ubicacionCorreccionLogic_puedeValidar(ctx.permisos)) {
+      reset();
+      return Promise.resolve({ tipo: 'sin_permiso' });
+    }
+    if (!forzar) {
+      if (enCurso) {
+        return enCurso;
+      }
+      if (ultima !== null && ahora() - ultima < intervalo) {
+        return Promise.resolve({ tipo: 'reciente', total: total });
+      }
+    }
+    generacion += 1;
+    var mia = generacion;
+    ultima = ahora();
+    var p = Promise.resolve()
+      .then(function () { return deps.consultar(ctx.sessionToken); })
+      .then(function (resp) {
+        if (mia !== generacion) {
+          return { tipo: 'obsoleta' };
+        }
+        var t = ubicacionCorreccionLogic_totalDePendientes(resp);
+        if (t !== null) {
+          pintar(t);
+          return { tipo: 'ok', total: t };
+        }
+        var code = resp && resp.code;
+        if (code === 'USER_DISABLED') {
+          reset();
+          if (ctx.onUserDisabled) { ctx.onUserDisabled(); }
+          return { tipo: 'sesion' };
+        }
+        if (code === 'UNAUTHORIZED') {
+          reset();
+          if (ctx.onSessionExpired) { ctx.onSessionExpired(); }
+          return { tipo: 'sesion' };
+        }
+        if (code === 'PERMISSION_DENIED') {
+          pintar(null);                                // el permiso ya no esta: se oculta (sin cerrar sesion)
+          return { tipo: 'sin_acceso' };
+        }
+        ultima = null;                                 // error del servidor: la proxima entrada al hub vuelve a intentar
+        return { tipo: 'error' };
+      }, function () {
+        if (mia === generacion) { ultima = null; }
+        return { tipo: 'error' };
+      })
+      .then(function (r) { if (enCurso === p) { enCurso = null; } return r; });
+    enCurso = p;
+    return p;
+  }
+
+  return {
+    refrescar: refrescar,
+    // despues de validar o rechazar una correccion: la cola cambio, se vuelve a pedir SIEMPRE
+    alResolver: function () { return refrescar(true); },
+    reset: reset,
+    total: function () { return total; }
+  };
+}
+
 // --- Centro inicial del mapa ---
 // 1) correccion vigente, 2) ubicacion de Irrigacion, 3) ubicacion del dispositivo, 4) vista general de Mendoza.
 function ubicacionCorreccionLogic_centroInicialMapa(o) {
@@ -537,6 +648,11 @@ if (typeof module !== 'undefined' && module.exports) {
     UCORR_GPS_PRECISION_MAX_M, UCORR_OBSERVACION_DESDE_M, UCORR_ADVERTENCIA_DESDE_M, UCORR_OBSERVACION_MAX, UCORR_METODOS,
     UCORR_MENSAJES_ERROR, UCORR_TEXTO_ADVERTENCIA_1KM, UCORR_TEXTO_NO_REEMPLAZA, UCORR_MENSAJE_VALIDADA, UCORR_MENSAJE_PENDIENTE, UCORR_MENSAJE_RED, UCORR_ETIQUETAS_ESTADO,
     ubicacionCorreccionLogic_puedeCorregir,
+    ubicacionCorreccionLogic_puedeValidar,
+    ubicacionCorreccionLogic_textoBadgePendientes,
+    ubicacionCorreccionLogic_totalDePendientes,
+    ubicacionCorreccionLogic_crearBadgePendientes,
+    UCORR_BADGE_INTERVALO_MS,
     ubicacionCorreccionLogic_oficialDisponible,
     ubicacionCorreccionLogic_tieneCorrecciones,
     ubicacionCorreccionLogic_ofrecerModulo,

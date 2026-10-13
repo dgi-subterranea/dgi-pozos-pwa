@@ -71,8 +71,48 @@ function sheetUserRepository_getUserStatus(email) {
   return { found: false, active: false, permisos: sheetUserRepository_permisosVacios(), nombre: null };
 }
 
+// Usuarios ACTIVOS (estado "activo" exacto) que tienen TODOS los permisos indicados (cada uno SOLO con "SI", igual que getUserStatus), sin emails
+// vacios ni repetidos. Fail-closed: si falta la columna de algun permiso pedido, nadie lo tiene y la lista queda vacia. data = valores de la hoja
+// (fila 1 = encabezado). Devuelve [{email (normalizado), nombre|null}]. Logica pura: se testea sin SpreadsheetApp.
+function sheetUserRepository_filtrarConPermisos(data, permisosRequeridos) {
+  if (!data || data.length === 0) {
+    return [];
+  }
+  var indices = sheetUserRepository_indiceColumnas(data[0]);
+  var vistos = {};
+  var lista = [];
+  for (var i = 1; i < data.length; i++) {
+    var row = data[i];
+    var email = indices.email >= 0 ? String(row[indices.email]).trim().toLowerCase() : '';
+    var activo = indices.estado >= 0 && String(row[indices.estado]).trim().toLowerCase() === 'activo';
+    if (!email || !activo || vistos[email] === true) {
+      continue;
+    }
+    var todos = (permisosRequeridos || []).length > 0 && permisosRequeridos.every(function (p) {
+      return sheetUserRepository_leerPermiso(row, indices, p);
+    });
+    if (todos) {
+      vistos[email] = true;
+      lista.push({ email: email, nombre: indices.nombre >= 0 ? (String(row[indices.nombre]).trim() || null) : null });
+    }
+  }
+  return lista;
+}
+
+// Lee la hoja "Usuarios" (sin cache: es para avisos, no para autorizar) y aplica el filtro de arriba.
+function sheetUserRepository_listarConPermisos(permisosRequeridos) {
+  var spreadsheet = SpreadsheetApp.openById(getSpreadsheetId());
+  var sheet = spreadsheet.getSheetByName('Usuarios');
+  if (!sheet) {
+    throw new Error('No existe una hoja llamada "Usuarios" en el spreadsheet configurado');
+  }
+  return sheetUserRepository_filtrarConPermisos(sheet.getDataRange().getValues(), permisosRequeridos);
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
+    sheetUserRepository_filtrarConPermisos,
+    sheetUserRepository_listarConPermisos,
     sheetUserRepository_getUserStatus,
     sheetUserRepository_indiceColumnas,
     sheetUserRepository_leerPermiso

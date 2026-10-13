@@ -229,6 +229,12 @@ function apiGetCorreccionesUbicacionPozo(sessionToken, wellId) {
   return callBackend('getCorreccionesUbicacionPozo', { sessionToken: sessionToken, wellId: wellId });
 }
 
+// Cola de validacion (solo con ubicacion + ubicacion_validar). Se usa por ahora solo para el indicador "Correcciones pendientes: N" del hub: lo unico que
+// lee el frontend es data.total.
+function apiGetCorreccionesUbicacionPendientes(sessionToken) {
+  return callBackend('getCorreccionesUbicacionPendientes', { sessionToken: sessionToken });
+}
+
 // LISTA BLANCA de campos: wellId, lat, lon, metodo, precisionGpsM, observacion, clientRequestId. La identidad (email/nombre) sale de la
 // sesion del lado del backend; la distancia, el snapshot de Irrigacion y el estado los calcula el backend. Nada mas viaja, aunque
 // "datos" traiga mas campos. Sin keepalive: el usuario espera la confirmacion para refrescar la ficha.

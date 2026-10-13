@@ -157,10 +157,10 @@ distancia, estado, emails— se ignora).
 - **Concurrencia:** leer → decidir → escribir va bajo `LockService` (el padrón se lee antes, fuera del lock).
 
 ## Auditoría
-Hoja `Historial` (como el resto): `proponer/validar/rechazar/revertirCorreccionUbicacion` con `OK`, `PERMISSION_DENIED`, `INVALID_TRANSITION`,
+Hoja `Historial` (como el resto): `proponer/validar/rechazar/revertirCorreccionUbicacion` (y `notificarCorreccionUbicacion` para el aviso por email, ver abajo) con `OK`, `PERMISSION_DENIED`, `INVALID_TRANSITION`,
 `SELF_REJECTION`, `INCONSISTENT_STATE`, `AUTOCURADA` y los demás códigos de error. Una corrección directa registra `proponerCorreccionUbicacion` `OK` y
 `validarCorreccionUbicacion` `OK`. No se auditan las lecturas ni los
-reenvíos idempotentes. **Sin Telegram.** Además
+reenvíos idempotentes. **Sin Telegram (el aviso a validadores es por email, ver abajo).** Además
 `UbicacionCorreccionesLog` es el registro de dominio (quién, cuándo, motivo).
 
 ## Frontend — etapa 1: ficha individual del pozo
@@ -213,6 +213,37 @@ que todo script/link local de `index.html` esté en `SHELL_FILES`. Lo que se car
 
 **Código**: `js/ubicacionCorreccionLogic.js` (lógica pura con tests: permisos, GPS, distancia, observación, payload, flujo de guardado, HTML de la sección),
 `js/ubicacionCorreccion.js` (controlador DOM: sección, modal, GPS, mapa), `js/api.js` (2 funciones), `index.html` (modal), `css/styles.css` (`.ucorr-*`).
+
+## Aviso por email a validadores + indicador de pendientes (costo $0)
+**Qué hace.** Cuando una corrección nueva queda `PROPUESTA`, el backend manda un email a quienes la pueden validar, y el hub muestra a esas mismas personas «Correcciones pendientes: N».
+No hay servicios externos ni de pago: solo `MailApp` de Apps Script (backend actual) y el frontend actual.
+
+**Cuándo se manda** (`backend/src/UbicacionCorreccionNotificacion.js`, llamado desde `handleProponerCorreccionUbicacion` en `Api.js`):
+- **Sí:** propuesta nueva que quedó `PROPUESTA` (usuario con `ubicacion_corregir` y sin `ubicacion_validar`), y el reintento que *recién* completa una escritura parcial dejándola `PROPUESTA` (autocurado).
+- **No:** corrección `VALIDADA` directa (corregir + validar); reintento idempotente (`duplicada`); errores de validación o de permiso. Segunda defensa: marca en `CacheService` por `correccionId` (6 h).
+- **Destinatarios:** usuarios **activos** con `ubicacion=SI` **y** `ubicacion_validar=SI` (los dos permisos que el backend exige para ver la cola y validar), sin repetidos, con un email de forma válida y **sin el propio proponente**. Se manda **un email por destinatario**
+  (los validadores no ven las direcciones de los demás y un fallo individual no afecta al resto). La lista se lee de la hoja `Usuarios` en el momento (sin caché).
+- **Contenido:** asunto `DGI Pozos — Corrección de ubicación pendiente: 14-0001`; cuerpo con pozo, quién propuso (nombre), fecha/hora, método (*GPS (± n m)* / *Elegida en mapa*), distancia a Irrigación, observación,
+  advertencia si pasa de 250 m o de 1 km y, si está configurada, la URL de la PWA. **No** lleva coordenadas, emails, datos del padrón ni ids. El texto de usuario se limpia de saltos de línea y caracteres de control (nadie puede fabricar líneas falsas).
+- **Best-effort:** si falla la lectura de usuarios, el permiso de `MailApp`, la cuota o un destinatario, **la propuesta sigue creada** y la respuesta al cliente no cambia; se registra y se sigue.
+
+**Auditoría** (Historial, acción `notificarCorreccionUbicacion`, a nombre de quien propuso; nunca el cuerpo ni direcciones): `EMAIL_ENVIADO (N destinatarios)`, `EMAIL_PARCIAL (k de N enviados[, cuota diaria agotada])`,
+`EMAIL_FALLO (0 de N enviados[, cuota diaria agotada])`, `EMAIL_SIN_DESTINATARIOS`, `EMAIL_ERROR` (no se pudo leer la hoja de usuarios). Un aviso repetido o una corrección no pendiente no registran nada.
+
+**Cuotas de MailApp** (cuenta que despliega el Web App, que es la que envía; cada destinatario cuenta): Gmail personal **100 destinatarios/día**; Google Workspace **1.500/día**; hasta 50 destinatarios y 200 KB por mensaje (acá: 1 destinatario y ~1 KB).
+Antes de enviar se consulta `MailApp.getRemainingDailyQuota()` y no se pasa de lo disponible (lo que no entra queda como parcial/fallo con «cuota diaria agotada»). La cuota se renueva en un día móvil.
+Con 5 validadores, una cuenta Gmail aguanta ~20 propuestas por día: de sobra para el uso previsto.
+
+**Configuración manual (una sola vez, ANTES de desplegar la versión nueva a producción):**
+1. **Autorizar el permiso de enviar correo.** El manifest no declara `oauthScopes` (los permisos se detectan solos), así que al subir código con `MailApp` el proyecto pasa a requerir `script.send_mail`. La cuenta que despliega debe aprobarlo: en el editor de Apps Script,
+   con el código nuevo ya en HEAD, ejecutar **`diagnosticoCorreccionesEmail`** y aceptar el aviso de autorización (no envía ningún email; muestra cuota, URL y cantidad de validadores). **Hacerlo antes de crear la versión y de actualizar el deployment**: un Web App «ejecutar como yo» que requiere un permiso no
+   autorizado puede fallar (para todas las acciones, no solo las correcciones) hasta que el dueño lo apruebe.
+2. **(Opcional) `PWA_URL`** en Script Properties (`https://…`, URL pública de la PWA en GitHub Pages) para que el email lleve el enlace. Sin ella el aviso sale sin enlace. Solo se acepta `https://host[/ruta]` sin espacios, parámetros ni credenciales.
+3. Verificar en la hoja `Usuarios` que los validadores tengan estado `activo`, `ubicacion=SI` y `ubicacion_validar=SI` y un email real.
+
+**Indicador del hub** (`js/ubicacionPendientes.js` + `ubicacionCorreccionLogic_crearBadgePendientes`): solo con `ubicacion === true` **y** `ubicacion_validar === true` exactos (fail-closed); usa `getCorreccionesUbicacionPendientes` (`data.total`).
+Se actualiza al iniciar sesión / abrir la app y cada vez que se vuelve al hub (con un mínimo de 15 s entre refrescos automáticos), y **siempre** después de validar o rechazar: la futura cola de validación llama `ubicacionPendientesController_alResolver()` al terminar cada acción.
+Con 0 pendientes, sin permiso o ante un error no se ve; un fallo de la consulta nunca bloquea la app (conserva el último valor); sesión vencida cierra sesión y usuario deshabilitado va a su pantalla, como el resto de la app. Todavía no hay cola de validación en el frontend: el indicador solo informa.
 
 ## Tests
 `backend/test/UbicacionCorreccion{Repository,Service,E2E}.test.js` y `ApiUbicacionCorreccion.test.js`; el E2E lee un padrón de un Drive en memoria

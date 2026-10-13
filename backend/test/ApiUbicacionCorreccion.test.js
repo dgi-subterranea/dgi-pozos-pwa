@@ -378,3 +378,103 @@ describe('creacion directa (corregir + validar) en la capa Api', () => {
     expect(global.ubicacionCorreccionService_validar).toHaveBeenCalledWith('sesion@example.com', 'Nombre Sesion', ID, 'ok');
   });
 });
+
+describe('aviso a validadores: enganche en handleProponerCorreccionUbicacion (el servicio de aviso esta simulado: aca se prueba CUANDO se invoca)', () => {
+  const pendiente = Object.assign({}, vista, { estado: 'PROPUESTA' });
+  const validada = Object.assign({}, vista, { estado: 'VALIDADA' });
+  const notificar = () => global.ubicacionCorreccionNotificacion_notificarPendiente;
+
+  beforeEach(() => {
+    const real = require('../src/UbicacionCorreccionNotificacion');
+    global.ubicacionCorreccionNotificacion_textoAuditoria = real.ubicacionCorreccionNotificacion_textoAuditoria;
+    notificar().mockReturnValue({ resultado: 'ENVIADO', destinatarios: 2, enviados: 2, fallidos: 0, sinCuota: false });
+    sesion({ ubicacion: true, ubicacion_corregir: true });
+  });
+
+  test('propuesta NUEVA que quedo PROPUESTA: se avisa una vez con el email de la sesion y la vista, y se audita la cantidad', () => {
+    global.ubicacionCorreccionService_proponer.mockReturnValue({ ok: true, correccion: pendiente, duplicada: false, curada: false });
+    const r = llamadas.proponer();
+    expect(r.status).toBe('ok');
+    expect(notificar()).toHaveBeenCalledTimes(1);
+    expect(notificar()).toHaveBeenCalledWith('sesion@example.com', pendiente);
+    expect(global.logHistoryEvent).toHaveBeenCalledWith('sesion@example.com', 'notificarCorreccionUbicacion', W, 'EMAIL_ENVIADO (2 destinatarios)');
+  });
+
+  test('VALIDADA directa (autoValidada): no se avisa', () => {
+    global.ubicacionCorreccionService_proponer.mockReturnValue({ ok: true, correccion: validada, duplicada: false, curada: false, autoValidada: true, supersedidas: [] });
+    llamadas.proponer();
+    expect(notificar()).not.toHaveBeenCalled();
+  });
+
+  test('aunque el servicio dijera autoValidada con una vista todavia PROPUESTA, no se avisa (la validacion directa nunca avisa)', () => {
+    global.ubicacionCorreccionService_proponer.mockReturnValue({ ok: true, correccion: pendiente, duplicada: false, curada: false, autoValidada: true });
+    llamadas.proponer();
+    expect(notificar()).not.toHaveBeenCalled();
+  });
+
+  test('estado distinto de PROPUESTA (VALIDADA sin flag, RECHAZADA...): no se avisa', () => {
+    ['VALIDADA', 'RECHAZADA', 'SUPERADA', 'INCONSISTENTE'].forEach((estado) => {
+      global.ubicacionCorreccionService_proponer.mockReturnValue({ ok: true, correccion: Object.assign({}, vista, { estado: estado }), duplicada: false, curada: false });
+      llamadas.proponer();
+    });
+    expect(notificar()).not.toHaveBeenCalled();
+  });
+
+  test('reintento idempotente (duplicada) PROPUESTA: no se avisa de nuevo ni se audita', () => {
+    global.ubicacionCorreccionService_proponer.mockReturnValue({ ok: true, correccion: pendiente, duplicada: true, curada: false });
+    llamadas.proponer();
+    expect(notificar()).not.toHaveBeenCalled();
+    expect(global.logHistoryEvent).not.toHaveBeenCalled();
+  });
+
+  test('autocurado (duplicada + curada) que deja la correccion PROPUESTA: SI se avisa (recien ahi llega a ser una propuesta valida)', () => {
+    global.ubicacionCorreccionService_proponer.mockReturnValue({ ok: true, correccion: pendiente, duplicada: true, curada: true });
+    llamadas.proponer();
+    expect(notificar()).toHaveBeenCalledTimes(1);
+  });
+
+  test('un error de validacion o de permiso no avisa', () => {
+    global.ubicacionCorreccionService_proponer.mockReturnValue({ ok: false, code: 'FUERA_DE_MENDOZA', message: 'x' });
+    llamadas.proponer();
+    sesion({ ubicacion: true });
+    llamadas.proponer();
+    expect(notificar()).not.toHaveBeenCalled();
+  });
+
+  test('si el aviso LANZA, la propuesta sigue ok, la respuesta no cambia y queda registrado EMAIL_ERROR', () => {
+    global.ubicacionCorreccionService_proponer.mockReturnValue({ ok: true, correccion: pendiente, duplicada: false, curada: false });
+    notificar().mockImplementation(() => { throw new Error('MailApp roto'); });
+    const r = llamadas.proponer();
+    expect(r).toEqual({ status: 'ok', data: { correccion: pendiente, duplicada: false, curada: false } });
+    expect(global.logHistoryEvent).toHaveBeenCalledWith('sesion@example.com', 'notificarCorreccionUbicacion', W, 'EMAIL_ERROR');
+  });
+
+  test('cada resultado del aviso se audita con su texto (sin cuerpo ni direcciones); DEDUPED / NO_APLICA no', () => {
+    global.ubicacionCorreccionService_proponer.mockReturnValue({ ok: true, correccion: pendiente, duplicada: false, curada: false });
+    const casos = [
+      [{ resultado: 'SIN_DESTINATARIOS', destinatarios: 0, enviados: 0, fallidos: 0 }, 'EMAIL_SIN_DESTINATARIOS'],
+      [{ resultado: 'FALLO', destinatarios: 3, enviados: 0, fallidos: 3 }, 'EMAIL_FALLO (0 de 3 enviados)'],
+      [{ resultado: 'PARCIAL', destinatarios: 3, enviados: 2, fallidos: 1 }, 'EMAIL_PARCIAL (2 de 3 enviados)']
+    ];
+    casos.forEach(([r, texto]) => {
+      global.logHistoryEvent.mockClear();
+      notificar().mockReturnValue(r);
+      llamadas.proponer();
+      expect(global.logHistoryEvent).toHaveBeenCalledWith('sesion@example.com', 'notificarCorreccionUbicacion', W, texto);
+    });
+    ['DEDUPED', 'NO_APLICA'].forEach((resultado) => {
+      global.logHistoryEvent.mockClear();
+      notificar().mockReturnValue({ resultado: resultado });
+      llamadas.proponer();
+      expect(global.logHistoryEvent.mock.calls.filter((c) => c[1] === 'notificarCorreccionUbicacion')).toEqual([]);      // la propuesta nueva si se audita, el aviso repetido / no aplicable no
+    });
+  });
+
+  test('el aviso se hace DESPUES de crear la propuesta y no altera lo que recibe el cliente', () => {
+    global.ubicacionCorreccionService_proponer.mockReturnValue({ ok: true, correccion: pendiente, duplicada: false, curada: false });
+    notificar().mockReturnValue({ resultado: 'FALLO', destinatarios: 1, enviados: 0, fallidos: 1 });
+    const r = llamadas.proponer();
+    expect(Object.keys(r.data).sort()).toEqual(['correccion', 'curada', 'duplicada']);
+    expect(JSON.stringify(r)).not.toMatch(/EMAIL|enviados|destinatarios/);
+  });
+});

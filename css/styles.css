@@ -4054,6 +4054,29 @@ body.con-bandeja {
   padding-top: 6px;
   border-top: 1px solid var(--color-border-soft);
 }
+.ucorr-pendientes {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 0 14px;
+  padding: 6px 13px 6px 11px;
+  border-radius: 999px;
+  background: var(--color-warn-tint);
+  color: var(--color-warn);
+  border: 1px solid #ecd49c;
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+.ucorr-pendientes-punto {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-accent);
+}
 .ucorr-nota {
   margin: -2px 0 12px;
   font-size: 0.78rem;

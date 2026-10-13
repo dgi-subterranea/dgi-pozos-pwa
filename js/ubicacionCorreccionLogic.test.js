@@ -688,3 +688,250 @@ describe('visibilidad del modulo Ubicacion: corregir controla el boton, no la in
     expect(necesita(undefined)).toBe(false);
   });
 });
+
+describe('indicador "Correcciones pendientes: N" del hub', () => {
+  const VALIDADOR = { ubicacion: true, ubicacion_validar: true };
+  const okTotal = (total) => ({ status: 'ok', data: { total: total, inconsistentes: 0, pendientes: [] } });
+
+  // reloj y consultas controlados; "pinta" registra cada valor que se mostraria
+  function crear(opc) {
+    const o = opc || {};
+    const est = { permisos: o.permisos === undefined ? VALIDADOR : o.permisos, token: o.token === undefined ? 'tok-real' : o.token, ahora: 1000000, pintados: [], consultas: [], sesion: 0, deshabilitado: 0 };
+    const respuestas = o.respuestas || [];
+    const b = L.ubicacionCorreccionLogic_crearBadgePendientes({
+      obtenerContexto: () => (est.sinContexto ? null : { sessionToken: est.token, permisos: est.permisos, onSessionExpired: () => { est.sesion += 1; }, onUserDisabled: () => { est.deshabilitado += 1; } }),
+      consultar: jest.fn((token) => {
+        est.consultas.push(token);
+        const r = respuestas.length ? respuestas[Math.min(est.consultas.length - 1, respuestas.length - 1)] : okTotal(3);
+        return typeof r === 'function' ? r() : Promise.resolve(r);
+      }),
+      pintar: (t) => { est.pintados.push(t); },
+      ahora: () => est.ahora
+    });
+    return { b, est };
+  }
+
+  describe('texto y validacion del dato', () => {
+    test('"Correcciones pendientes: N" con N > 0; vacio con 0 o dato invalido', () => {
+      expect(L.ubicacionCorreccionLogic_textoBadgePendientes(3)).toBe('Correcciones pendientes: 3');
+      expect(L.ubicacionCorreccionLogic_textoBadgePendientes(1)).toBe('Correcciones pendientes: 1');
+      [0, -1, 1.5, NaN, Infinity, null, undefined, '3', {}].forEach((v) => expect(L.ubicacionCorreccionLogic_textoBadgePendientes(v)).toBe(''));
+    });
+
+    test('totalDePendientes: solo un entero >= 0 de una respuesta ok', () => {
+      expect(L.ubicacionCorreccionLogic_totalDePendientes(okTotal(0))).toBe(0);
+      expect(L.ubicacionCorreccionLogic_totalDePendientes(okTotal(7))).toBe(7);
+      [okTotal(-1), okTotal(2.5), okTotal('3'), okTotal(null), { status: 'ok', data: {} }, { status: 'ok' }, { status: 'error', code: 'X', data: { total: 3 } }, null, undefined].forEach((r) => {
+        expect(L.ubicacionCorreccionLogic_totalDePendientes(r)).toBeNull();
+      });
+    });
+  });
+
+  describe('permisos fail-closed', () => {
+    test('puedeValidar exige ubicacion Y ubicacion_validar EXACTAMENTE true', () => {
+      expect(L.ubicacionCorreccionLogic_puedeValidar({ ubicacion: true, ubicacion_validar: true })).toBe(true);
+      [{ ubicacion: true }, { ubicacion_validar: true }, { ubicacion: true, ubicacion_validar: 'SI' }, { ubicacion: 1, ubicacion_validar: true }, { ubicacion: true, ubicacion_corregir: true }, {}, null, undefined].forEach((p) => {
+        expect(L.ubicacionCorreccionLogic_puedeValidar(p)).toBe(false);
+      });
+    });
+
+    test.each([
+      ['solo corregir', { ubicacion: true, ubicacion_corregir: true }],
+      ['validar sin ubicacion', { ubicacion_validar: true }],
+      ['valores no exactos', { ubicacion: true, ubicacion_validar: 'SI' }],
+      ['sin permisos', {}],
+      ['permisos nulos', null]
+    ])('%s: NO consulta nada y el indicador queda oculto', async (n, permisos) => {
+      const { b, est } = crear({ permisos: permisos });
+      expect(await b.refrescar()).toEqual({ tipo: 'sin_permiso' });
+      expect(await b.refrescar(true)).toEqual({ tipo: 'sin_permiso' });
+      expect(est.consultas).toHaveLength(0);
+      expect(est.pintados[est.pintados.length - 1]).toBeNull();
+    });
+
+    test('sin sesion (sin token o sin contexto): no consulta y se oculta', async () => {
+      const a = crear({ token: null });
+      expect((await a.b.refrescar()).tipo).toBe('sin_permiso');
+      const c = crear();
+      c.est.sinContexto = true;
+      expect((await c.b.refrescar()).tipo).toBe('sin_permiso');
+      expect(a.est.consultas.concat(c.est.consultas)).toHaveLength(0);
+    });
+
+    test('si el permiso se pierde (cambio de cuenta o de permisos), el indicador se oculta en la siguiente actualizacion y deja de consultar', async () => {
+      const { b, est } = crear();
+      await b.refrescar();
+      expect(est.pintados[est.pintados.length - 1]).toBe(3);
+      est.permisos = { ubicacion: true };
+      await b.refrescar(true);
+      expect(est.pintados[est.pintados.length - 1]).toBeNull();
+      expect(est.consultas).toHaveLength(1);
+    });
+  });
+
+  describe('visible / oculto', () => {
+    test('con pendientes se muestra el total del backend; usa el token fresco', async () => {
+      const { b, est } = crear({ respuestas: [okTotal(3)] });
+      expect(await b.refrescar()).toEqual({ tipo: 'ok', total: 3 });
+      expect(est.pintados).toEqual([3]);
+      expect(est.consultas).toEqual(['tok-real']);
+      expect(L.ubicacionCorreccionLogic_textoBadgePendientes(b.total())).toBe('Correcciones pendientes: 3');
+    });
+
+    test('con 0 pendientes se pinta 0 (el DOM lo oculta: texto vacio)', async () => {
+      const { b, est } = crear({ respuestas: [okTotal(0)] });
+      await b.refrescar();
+      expect(est.pintados).toEqual([0]);
+      expect(L.ubicacionCorreccionLogic_textoBadgePendientes(0)).toBe('');
+    });
+
+    test('el total cambia en cada actualizacion forzada', async () => {
+      const { b, est } = crear({ respuestas: [okTotal(3), okTotal(2), okTotal(0)] });
+      await b.refrescar(true);
+      await b.refrescar(true);
+      await b.refrescar(true);
+      expect(est.pintados).toEqual([3, 2, 0]);
+    });
+  });
+
+  describe('refresco despues de validar o rechazar', () => {
+    test('alResolver() vuelve a consultar SIEMPRE (aunque se haya consultado hace instantes) y actualiza el numero', async () => {
+      const { b, est } = crear({ respuestas: [okTotal(3), okTotal(2), okTotal(1)] });
+      await b.refrescar();                              // 3 (al entrar al hub)
+      est.ahora += 500;                                 // 0,5 s despues: un refresco automatico se saltearia
+      expect((await b.refrescar()).tipo).toBe('reciente');
+      expect(await b.alResolver()).toEqual({ tipo: 'ok', total: 2 });        // validar una
+      est.ahora += 100;
+      expect(await b.alResolver()).toEqual({ tipo: 'ok', total: 1 });        // rechazar otra
+      expect(est.pintados).toEqual([3, 2, 1]);
+      expect(est.consultas).toHaveLength(3);
+    });
+
+    test('alResolver() tambien oculta el indicador cuando era la ultima pendiente', async () => {
+      const { b, est } = crear({ respuestas: [okTotal(1), okTotal(0)] });
+      await b.refrescar();
+      await b.alResolver();
+      expect(est.pintados).toEqual([1, 0]);
+    });
+
+    test('alResolver() sin permiso no consulta', async () => {
+      const { b, est } = crear({ permisos: { ubicacion: true } });
+      expect((await b.alResolver()).tipo).toBe('sin_permiso');
+      expect(est.consultas).toHaveLength(0);
+    });
+  });
+
+  describe('refresco automatico al entrar al hub', () => {
+    test('respeta el intervalo minimo (15 s) y despues vuelve a consultar', async () => {
+      const { b, est } = crear({ respuestas: [okTotal(3), okTotal(4)] });
+      expect(L.UCORR_BADGE_INTERVALO_MS).toBe(15000);
+      await b.refrescar();
+      est.ahora += 14999;
+      expect((await b.refrescar()).tipo).toBe('reciente');
+      expect(est.consultas).toHaveLength(1);
+      est.ahora += 2;
+      expect(await b.refrescar()).toEqual({ tipo: 'ok', total: 4 });
+      expect(est.consultas).toHaveLength(2);
+    });
+
+    test('entradas simultaneas al hub comparten UNA consulta en curso', async () => {
+      let resolver;
+      const { b, est } = crear({ respuestas: [() => new Promise((r) => { resolver = r; })] });
+      const p1 = b.refrescar();
+      const p2 = b.refrescar();
+      expect(p2).toBe(p1);
+      await Promise.resolve();
+      resolver(okTotal(5));
+      expect(await p1).toEqual({ tipo: 'ok', total: 5 });
+      expect(est.consultas).toHaveLength(1);
+    });
+
+    test('un refresco FORZADO mientras hay otra consulta en curso gana: la respuesta vieja se descarta', async () => {
+      const resolvers = [];
+      const { b, est } = crear({ respuestas: [() => new Promise((r) => { resolvers.push(r); }), () => new Promise((r) => { resolvers.push(r); })] });
+      const vieja = b.refrescar();
+      await Promise.resolve();
+      const nueva = b.alResolver();
+      await Promise.resolve();
+      resolvers[1](okTotal(1));
+      expect(await nueva).toEqual({ tipo: 'ok', total: 1 });
+      resolvers[0](okTotal(9));
+      expect(await vieja).toEqual({ tipo: 'obsoleta' });
+      expect(est.pintados).toEqual([1]);
+    });
+  });
+
+  describe('un fallo NO bloquea nada', () => {
+    test('error de servidor o de red: conserva el ultimo valor, no lanza y la proxima entrada reintenta de inmediato', async () => {
+      const { b, est } = crear({ respuestas: [okTotal(3), { status: 'error', code: 'SERVICE_UNAVAILABLE' }, () => Promise.reject(new Error('Failed to fetch')), okTotal(2)] });
+      await b.refrescar();
+      expect(await b.refrescar(true)).toEqual({ tipo: 'error' });
+      expect(b.total()).toBe(3);
+      expect(await b.refrescar()).toEqual({ tipo: 'error' });          // sin esperar el intervalo: el error no lo consume
+      expect(b.total()).toBe(3);
+      expect(await b.refrescar()).toEqual({ tipo: 'ok', total: 2 });
+      expect(est.pintados).toEqual([3, 2]);
+      expect(est.sesion + est.deshabilitado).toBe(0);
+    });
+
+    test('una respuesta con dato invalido se trata como error (no pinta basura)', async () => {
+      const { b, est } = crear({ respuestas: [okTotal(3), { status: 'ok', data: { total: 'muchas' } }] });
+      await b.refrescar();
+      expect((await b.refrescar(true)).tipo).toBe('error');
+      expect(est.pintados).toEqual([3]);
+    });
+
+    test('sin valor previo, un fallo deja el indicador oculto (nunca un numero inventado)', async () => {
+      const { b, est } = crear({ respuestas: [() => Promise.reject(new Error('x'))] });
+      expect(await b.refrescar()).toEqual({ tipo: 'error' });
+      expect(est.pintados).toEqual([]);
+      expect(b.total()).toBeNull();
+    });
+
+    test('PERMISSION_DENIED del backend (permiso revocado): se oculta, sin cerrar sesion', async () => {
+      const { b, est } = crear({ respuestas: [okTotal(3), { status: 'error', code: 'PERMISSION_DENIED' }] });
+      await b.refrescar();
+      expect(await b.refrescar(true)).toEqual({ tipo: 'sin_acceso' });
+      expect(est.pintados).toEqual([3, null]);
+      expect(est.sesion + est.deshabilitado).toBe(0);
+    });
+  });
+
+  describe('sesion vencida', () => {
+    test('UNAUTHORIZED: avisa a la app (que cierra sesion), oculta el indicador y no reintenta solo', async () => {
+      const { b, est } = crear({ respuestas: [okTotal(3), { status: 'error', code: 'UNAUTHORIZED' }] });
+      await b.refrescar();
+      expect(await b.refrescar(true)).toEqual({ tipo: 'sesion' });
+      expect(est.sesion).toBe(1);
+      expect(est.deshabilitado).toBe(0);
+      expect(est.pintados).toEqual([3, null]);
+    });
+
+    test('USER_DISABLED: va a la pantalla de usuario deshabilitado (no a cerrar sesion)', async () => {
+      const { b, est } = crear({ respuestas: [{ status: 'error', code: 'USER_DISABLED' }] });
+      expect(await b.refrescar()).toEqual({ tipo: 'sesion' });
+      expect(est.deshabilitado).toBe(1);
+      expect(est.sesion).toBe(0);
+    });
+
+    test('despues de reset() (logout) una respuesta tardia de la sesion anterior no pinta nada', async () => {
+      let resolver;
+      const { b, est } = crear({ respuestas: [() => new Promise((r) => { resolver = r; })] });
+      const p = b.refrescar();
+      await Promise.resolve();
+      b.reset();
+      resolver(okTotal(8));
+      expect(await p).toEqual({ tipo: 'obsoleta' });
+      expect(est.pintados).toEqual([null]);
+    });
+
+    test('reset() oculta, y el primer refresco de la sesion siguiente no espera el intervalo', async () => {
+      const { b, est } = crear({ respuestas: [okTotal(3), okTotal(1)] });
+      await b.refrescar();
+      b.reset();
+      expect(est.pintados).toEqual([3, null]);
+      expect(b.total()).toBeNull();
+      expect(await b.refrescar()).toEqual({ tipo: 'ok', total: 1 });
+    });
+  });
+});

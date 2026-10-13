@@ -20,7 +20,8 @@ const norte = (grados) => OFICIAL.lat + grados;
 const USUARIOS = {
   'ana@x.com': { nombre: 'Ana', permisos: { ubicacion: true, ubicacion_corregir: true } },
   'carla@x.com': { nombre: 'Carla', permisos: { ubicacion: true, ubicacion_corregir: true, ubicacion_validar: true } },
-  'lector@x.com': { nombre: 'Lector', permisos: { ubicacion: true } }
+  'lector@x.com': { nombre: 'Lector', permisos: { ubicacion: true } },
+  'val@x.com': { nombre: 'Valeria', permisos: { ubicacion: true, ubicacion_validar: true } }
 };
 
 // Campos de la vista de correccion que el BACKEND entrega (congelados: si cambian, hay que revisar el frontend a proposito).
@@ -376,5 +377,89 @@ describe('contrato de acciones y permisos', () => {
       expect(F.ubicacionCorreccionLogic_etiquetaEstado(e)).not.toBe('Estado desconocido');
     });
     S.UBICACION_CORR_METODOS.forEach((m) => expect(F.ubicacionCorreccionLogic_etiquetaMetodo(m)).not.toBe(m));
+  });
+});
+
+describe('indicador de pendientes contra el backend REAL (getCorreccionesUbicacionPendientes + validar / rechazar)', () => {
+  const accion = (usuario, action, extra) => JSON.parse(Api.doPost({ postData: { contents: JSON.stringify(Object.assign({ action: action, sessionToken: 'tok-' + usuario }, extra || {})) } }).text);
+  function indicador(usuario) {
+    const est = { pintados: [], sesion: 0 };
+    const permisos = USUARIOS[usuario] ? USUARIOS[usuario].permisos : {};
+    const b = F.ubicacionCorreccionLogic_crearBadgePendientes({
+      obtenerContexto: () => ({ sessionToken: 'tok-' + usuario, permisos: permisos, onSessionExpired: () => { est.sesion += 1; }, onUserDisabled: () => {} }),
+      consultar: (token) => ctxFrontend.apiGetCorreccionesUbicacionPendientes(token),
+      pintar: (t) => { est.pintados.push(t); }
+    });
+    return { b, est };
+  }
+
+  test('el backend devuelve {total, inconsistentes, pendientes[]} y el frontend solo usa total (entero)', async () => {
+    await proponer('ana@x.com');
+    const r = await ctxFrontend.apiGetCorreccionesUbicacionPendientes('tok-val@x.com');
+    expect(r.status).toBe('ok');
+    expect(claves(r.data)).toEqual(['inconsistentes', 'pendientes', 'total']);
+    expect(r.data.total).toBe(1);
+    expect(F.ubicacionCorreccionLogic_totalDePendientes(r)).toBe(1);
+    expect(JSON.stringify(r)).not.toMatch(/@/);
+  });
+
+  test('la accion existe en doPost con los permisos que el frontend asume (ubicacion + ubicacion_validar)', () => {
+    expect(apiFrontend).toContain("callBackend('getCorreccionesUbicacionPendientes'");
+    expect(fuenteApi).toContain("body.action === 'getCorreccionesUbicacionPendientes'");
+    expect(fuenteApi).toMatch(/validarPermisosTodos\(session, 'getCorreccionesUbicacionPendientes', null, \['ubicacion', 'ubicacion_validar'\]\)/);
+    expect(F.ubicacionCorreccionLogic_puedeValidar({ ubicacion: true, ubicacion_validar: true })).toBe(true);
+  });
+
+  test('quien NO valida recibe PERMISSION_DENIED del backend (y el frontend ni siquiera pregunta)', async () => {
+    for (const u of ['ana@x.com', 'lector@x.com']) {
+      expect(await ctxFrontend.apiGetCorreccionesUbicacionPendientes('tok-' + u)).toMatchObject({ status: 'error', code: 'PERMISSION_DENIED' });
+      const { b, est } = indicador(u);
+      expect((await b.refrescar()).tipo).toBe('sin_permiso');
+      expect(est.pintados[est.pintados.length - 1]).toBeNull();
+    }
+  });
+
+  test('flujo completo: 3 propuestas -> indicador 3 -> validar una -> 2 -> rechazar otra -> 1 (con las acciones reales del backend)', async () => {
+    const ids = [];
+    for (let i = 0; i < 3; i += 1) {
+      ids.push((await proponer('ana@x.com', { lat: norte(0.0002 * (i + 1)) })).data.correccion.correccionId);
+    }
+    const { b, est } = indicador('val@x.com');
+    expect(await b.refrescar()).toEqual({ tipo: 'ok', total: 3 });
+    expect(F.ubicacionCorreccionLogic_textoBadgePendientes(b.total())).toBe('Correcciones pendientes: 3');
+
+    expect(accion('val@x.com', 'validarCorreccionUbicacion', { correccionId: ids[0], motivo: 'ok' }).status).toBe('ok');
+    expect(await b.alResolver()).toEqual({ tipo: 'ok', total: 2 });
+
+    expect(accion('val@x.com', 'rechazarCorreccionUbicacion', { correccionId: ids[1], motivo: 'No coincide' }).status).toBe('ok');
+    expect(await b.alResolver()).toEqual({ tipo: 'ok', total: 1 });
+
+    expect(accion('val@x.com', 'rechazarCorreccionUbicacion', { correccionId: ids[2], motivo: 'Tampoco' }).status).toBe('ok');
+    expect(await b.alResolver()).toEqual({ tipo: 'ok', total: 0 });
+    expect(est.pintados).toEqual([3, 2, 1, 0]);
+    expect(F.ubicacionCorreccionLogic_textoBadgePendientes(0)).toBe('');
+  });
+
+  test('una correccion directa de quien corrige y valida NO suma pendientes', async () => {
+    await proponer('carla@x.com');
+    const { b } = indicador('val@x.com');
+    expect(await b.refrescar()).toEqual({ tipo: 'ok', total: 0 });
+  });
+
+  test('quien tiene corregir Y validar tambien ve el indicador (sus propias propuestas directas no cuentan)', async () => {
+    await proponer('ana@x.com');
+    const { b } = indicador('carla@x.com');
+    expect(await b.refrescar()).toEqual({ tipo: 'ok', total: 1 });
+  });
+
+  test('token invalido (sesion vencida): el backend responde UNAUTHORIZED y el indicador avisa a la app', async () => {
+    const est = { sesion: 0 };
+    const b = F.ubicacionCorreccionLogic_crearBadgePendientes({
+      obtenerContexto: () => ({ sessionToken: 'tok-fantasma@x.com', permisos: { ubicacion: true, ubicacion_validar: true }, onSessionExpired: () => { est.sesion += 1; } }),
+      consultar: (t) => ctxFrontend.apiGetCorreccionesUbicacionPendientes(t),
+      pintar: () => {}
+    });
+    expect(await b.refrescar()).toEqual({ tipo: 'sesion' });
+    expect(est.sesion).toBe(1);
   });
 });

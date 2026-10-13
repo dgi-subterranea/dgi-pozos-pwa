@@ -66,6 +66,10 @@
       </div>
     </header>
 
+    <!-- Indicador discreto SOLO para quien valida correcciones de ubicacion (ubicacion + ubicacion_validar): "Correcciones pendientes: N". Oculto con 0, sin
+         permiso o ante un error. Ver js/ubicacionPendientes.js. -->
+    <p id="ucorr-pendientes" class="ucorr-pendientes" role="status" hidden><span class="ucorr-pendientes-punto" aria-hidden="true"></span><span id="ucorr-pendientes-texto"></span></p>
+
     <p class="search-label">Número de pozo</p>
     <form id="search-form">
       <div class="input-wrapper">
@@ -1388,6 +1392,7 @@
   <script src="js/reemplazo.js"></script>
   <script src="js/ubicacionCorreccionLogic.js"></script>
   <script src="js/ubicacionCorreccion.js"></script>
+  <script src="js/ubicacionPendientes.js"></script>
   <script src="js/app.js"></script>
   <!-- Va DESPUES de app.js en el documento a proposito, para que
        onGsiLoaded/onGsiLoadError ya existan antes de que puedan

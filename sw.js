@@ -55,6 +55,7 @@ var SHELL_FILES = [
   './js/reemplazo.js',
   './js/ubicacionCorreccionLogic.js',
   './js/ubicacionCorreccion.js',
+  './js/ubicacionPendientes.js',
   './js/app.js',
   './manifest.json',
   './icons/icon-192.png',

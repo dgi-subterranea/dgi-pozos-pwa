@@ -102,6 +102,14 @@ function getFotosStorageSecret() {
   return secret;
 }
 
+// URL publica de la PWA (GitHub Pages) para el enlace de los avisos por email. OPCIONAL: sin ella (o si no es https) el aviso sale sin enlace. Script
+// Property PWA_URL; nunca se usa un valor que no sea una URL https simple (sin espacios ni saltos de linea).
+function getPwaUrl() {
+  var url = PropertiesService.getScriptProperties().getProperty('PWA_URL');
+  url = url ? String(url).trim() : '';
+  return /^https:\/\/[A-Za-z0-9.-]+(:[0-9]+)?(\/[A-Za-z0-9._~\-\/%]*)?$/.test(url) ? url : '';
+}
+
 function getSpreadsheetId() {
   var spreadsheetId = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
   if (!spreadsheetId) {
@@ -122,4 +130,9 @@ function setupSessionSecret() {
   var secret = Utilities.getUuid() + Utilities.getUuid();
   props.setProperty('SESSION_SECRET', secret);
   Logger.log('SESSION_SECRET generado y guardado en Script Properties.');
+}
+
+// Solo para tests (en Apps Script `module` no existe y esto no hace nada).
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { getPwaUrl };
 }

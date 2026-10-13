@@ -32,6 +32,11 @@
 
   function showScreen(name) {
     pantallaActual = name;
+    // Volver al hub (login, checkSession o regreso de un modulo): se actualiza el indicador de correcciones pendientes (solo quien valida; ver
+    // js/ubicacionPendientes.js). Es asincrono y nunca bloquea la pantalla.
+    if (name === 'main' && typeof ubicacionPendientesController_refrescar === 'function') {
+      ubicacionPendientesController_refrescar();
+    }
     Object.keys(screens).forEach(function (key) {
       screens[key].hidden = key !== name;
     });
@@ -1286,6 +1291,8 @@
     permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false, ubicacion_corregir: false, ubicacion_validar: false };
     // un modal de correccion abierto no sobrevive a la sesion
     ubicacionCorreccionController_cerrar();
+    // ni el indicador de correcciones pendientes
+    ubicacionPendientesController_reset();
     // el resumen de aptitud no sobrevive a la sesion
     reemplazoEstadosController_reset();
     // ni el resumen de fotos, la galeria abierta o la cola de subida
@@ -1905,6 +1912,21 @@
       permisos: permisosActuales,
       onSessionExpired: function () {
         logout();
+      }
+    };
+  });
+
+  // Indicador "Correcciones pendientes: N" del hub (solo ubicacion + ubicacion_validar exactos). Una sesion vencida cierra sesion; un usuario deshabilitado
+  // va a su pantalla, igual que en la busqueda. La futura cola de validacion llama ubicacionPendientesController_alResolver() tras validar o rechazar.
+  ubicacionPendientesController_inicializar(function () {
+    return {
+      sessionToken: sessionToken,
+      permisos: permisosActuales,
+      onSessionExpired: function () {
+        logout();
+      },
+      onUserDisabled: function () {
+        showScreen('disabled');
       }
     };
   });
