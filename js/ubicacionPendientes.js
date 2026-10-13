@@ -3,8 +3,9 @@
 // respuestas viejas, refresco al resolver) viven en ubicacionCorreccionLogic_crearBadgePendientes (js/ubicacionCorreccionLogic.js, con tests).
 //
 // Cuando se refresca: al entrar al hub (login, checkSession y cada vuelta al hub: ver showScreen('main') en app.js) con un intervalo minimo, y SIEMPRE despues
-// de validar o rechazar una correccion: la futura cola de validacion llama window.ubicacionPendientesController_alResolver() al terminar cada accion.
-// Es discreto: con 0 pendientes (o sin permiso, o con un dato invalido) no se ve.
+// de validar o rechazar una correccion: la bandeja de validacion (js/ubicacionValidacion.js) llama ubicacionPendientesController_alResolver() al terminar cada
+// accion. La bandeja, al leer la cola completa, tambien fija el total directamente (ubicacionPendientesController_fijarTotal).
+// Es discreto: con 0 pendientes (o sin permiso, o con un dato invalido) no se ve. Con pendientes es un BOTON: al tocarlo abre la bandeja "Correcciones pendientes".
 (function () {
   var badgeEl = document.getElementById('ucorr-pendientes');
   var textoEl = document.getElementById('ucorr-pendientes-texto');
@@ -33,6 +34,10 @@
     return badge ? badge.alResolver() : Promise.resolve({ tipo: 'sin_permiso' });
   }
 
+  function ubicacionPendientesController_fijarTotal(total) {
+    return badge ? badge.fijarTotal(total) : false;
+  }
+
   function ubicacionPendientesController_reset() {
     if (badge) { badge.reset(); } else { pintar(null); }
   }
@@ -41,4 +46,12 @@
   window.ubicacionPendientesController_refrescar = ubicacionPendientesController_refrescar;
   window.ubicacionPendientesController_alResolver = ubicacionPendientesController_alResolver;
   window.ubicacionPendientesController_reset = ubicacionPendientesController_reset;
+  window.ubicacionPendientesController_fijarTotal = ubicacionPendientesController_fijarTotal;
+
+  // Tocar el indicador abre la bandeja de validacion (que vuelve a comprobar el permiso: sin ubicacion + ubicacion_validar exactos no abre nada).
+  badgeEl.addEventListener('click', function () {
+    if (typeof ubicacionValidacionController_abrirBandeja === 'function') {
+      ubicacionValidacionController_abrirBandeja(badgeEl);
+    }
+  });
 })();

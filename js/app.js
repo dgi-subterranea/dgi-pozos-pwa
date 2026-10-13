@@ -1291,6 +1291,8 @@
     permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false, ubicacion_corregir: false, ubicacion_validar: false };
     // un modal de correccion abierto no sobrevive a la sesion
     ubicacionCorreccionController_cerrar();
+    // ni la bandeja / el detalle de validacion abiertos
+    ubicacionValidacionController_cerrar();
     // ni el indicador de correcciones pendientes
     ubicacionPendientesController_reset();
     // el resumen de aptitud no sobrevive a la sesion
@@ -1916,9 +1918,10 @@
     };
   });
 
-  // Indicador "Correcciones pendientes: N" del hub (solo ubicacion + ubicacion_validar exactos). Una sesion vencida cierra sesion; un usuario deshabilitado
-  // va a su pantalla, igual que en la busqueda. La futura cola de validacion llama ubicacionPendientesController_alResolver() tras validar o rechazar.
-  ubicacionPendientesController_inicializar(function () {
+  // Indicador "Correcciones pendientes: N" del hub (solo ubicacion + ubicacion_validar exactos) y la validacion que abre (bandeja + detalle): comparten el
+  // contexto (token y permisos SIEMPRE frescos). Una sesion vencida cierra sesion; un usuario deshabilitado va a su pantalla, igual que en la busqueda.
+  // La bandeja llama ubicacionPendientesController_alResolver() tras validar o rechazar.
+  var contextoValidacion = function () {
     return {
       sessionToken: sessionToken,
       permisos: permisosActuales,
@@ -1929,7 +1932,9 @@
         showScreen('disabled');
       }
     };
-  });
+  };
+  ubicacionPendientesController_inicializar(contextoValidacion);
+  ubicacionValidacionController_inicializar(contextoValidacion);
 
   // Estado de aptitud de reemplazo compartido por mapa, Cerca Mio y Mi
   // seleccion: sin reemplazo=SI (permisosActuales) no hace ninguna llamada.

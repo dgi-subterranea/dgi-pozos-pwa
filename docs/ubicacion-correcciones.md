@@ -245,8 +245,8 @@ Con 5 validadores, una cuenta Gmail aguanta ~20 propuestas por día: de sobra pa
 3. Verificar en la hoja `Usuarios` que los validadores tengan estado `activo`, `ubicacion=SI` y `ubicacion_validar=SI` y un email real.
 
 **Indicador del hub** (`js/ubicacionPendientes.js` + `ubicacionCorreccionLogic_crearBadgePendientes`): solo con `ubicacion === true` **y** `ubicacion_validar === true` exactos (fail-closed); usa `getCorreccionesUbicacionPendientes` (`data.total`).
-Se actualiza al iniciar sesión / abrir la app y cada vez que se vuelve al hub (con un mínimo de 15 s entre refrescos automáticos), y **siempre** después de validar o rechazar: la futura cola de validación llama `ubicacionPendientesController_alResolver()` al terminar cada acción.
-Con 0 pendientes, sin permiso o ante un error no se ve; un fallo de la consulta nunca bloquea la app (conserva el último valor); sesión vencida cierra sesión y usuario deshabilitado va a su pantalla, como el resto de la app. Todavía no hay cola de validación en el frontend: el indicador solo informa.
+Se actualiza al iniciar sesión / abrir la app y cada vez que se vuelve al hub (con un mínimo de 15 s entre refrescos automáticos), y **siempre** después de validar o rechazar: la bandeja de validación llama `ubicacionPendientesController_alResolver()` al terminar cada acción (y `ubicacionPendientesController_fijarTotal(n)` cuando acaba de leer la cola completa).
+Con 0 pendientes, sin permiso o ante un error no se ve; un fallo de la consulta nunca bloquea la app (conserva el último valor); sesión vencida cierra sesión y usuario deshabilitado va a su pantalla, como el resto de la app. Desde la etapa de validación (abajo) el indicador es un **botón** que abre la bandeja «Correcciones pendientes».
 
 ## Coordenadas ingresadas — etapa 2 (backend): `COORDENADAS_GMS` y `COORDENADAS_POSGAR94_AR2`
 Solo backend (el modal y el resto del frontend vienen en etapas siguientes; hoy ninguna pantalla manda estos métodos). Una persona con `ubicacion_corregir` puede proponer una ubicación **tipeando**
@@ -347,6 +347,35 @@ email, nombre ni flags.
 **Contrato**: el frontend conoce ya los 4 métodos y todos los errores del backend (`UCORR_METODOS` = `UBICACION_CORR_METODOS`); no quedan listas temporales de «solo backend».
 **Offline**: `js/coordenadasConversion.js` está en el precache del service worker y no usa red ni librerías.
 
+## Frontend — etapa 5: validación (bandeja, detalle, Validar / Rechazar)
+**Qué hace.** Quien tiene `ubicacion=SI` **y** `ubicacion_validar=SI` resuelve las correcciones `PROPUESTA` desde la app, sin tocar la hoja. **No hay endpoints nuevos**: se reutilizan los que el backend ya tenía (y tenía probados):
+
+| Uso | Acción (`POST action`) | Permisos que exige el backend |
+|---|---|---|
+| Bandeja (lista de todas las pendientes) y total del indicador | `getCorreccionesUbicacionPendientes` | `ubicacion` + `ubicacion_validar` |
+| Ubicación validada vigente del pozo (para el mapa y el aviso de reemplazo); detecta «ya resuelta» | `getCorreccionesUbicacionPozo` | `ubicacion` |
+| Validar | `validarCorreccionUbicacion` `{correccionId}` | `ubicacion` + `ubicacion_validar` |
+| Rechazar | `rechazarCorreccionUbicacion` `{correccionId, motivo}` (motivo obligatorio, ≤ 300) | `ubicacion` + `ubicacion_validar` |
+
+**Flujo desde el indicador.** «Correcciones pendientes: N» (hub) → bandeja (un renglón-botón por propuesta: pozo, quién propuso y cuándo, método, coordenada WGS84, original ingresado y sistema si hay, distancia a Irrigación, observación y advertencias *Más de 250 m* / *Más de 1 km*) →
+detalle con **mapa propio** (Irrigación fija, validada vigente si hay, y la propuesta con el pin; ninguno se puede mover) y los datos para decidir → **[Validar ubicación]** o **[Rechazar]**.
+**Flujo desde el pozo.** La tarjeta *Pendiente* de la ficha trae **[Validar]** y **[Rechazar]** (solo con los dos permisos): abren **el mismo detalle y la misma confirmación** (`ubicacionValidacionController_abrirDetalle`); no hay lógica ni llamadas duplicadas.
+**Validar** pide confirmación «¿Validar esta ubicación?»: pasa a ser la vigente, la validada anterior (si hay) queda `SUPERADA` y la ubicación de Irrigación **no se modifica ni se elimina**. **Rechazar** pide un motivo obligatorio y «Confirmar rechazo»; la rechazada nunca es vigente. Sobre la **propia** propuesta no se ofrece Rechazar (el backend responde `SELF_REJECTION`); validarla sí se puede.
+
+**Después de resolver** (sin recargar la app): el indicador se vuelve a pedir (se oculta con 0), la ficha del mismo pozo se vuelve a leer y se pinta (la pendiente desaparece, cambia el historial y la vigente; `ubicacionCorreccionController_alResolver`), y la bandeja abierta recarga su lista con el aviso «Ubicación validada.» / «Corrección rechazada.».
+**Estados y errores:** *Validando…* / *Rechazando…* (botones deshabilitados; ni cerrar ni Escape mientras se envía), *Esta corrección ya fue resuelta.* (`INVALID_TRANSITION` / `CORRECCION_NOT_FOUND`: otra persona se adelantó; se refresca todo), error de conexión con reintento, sesión vencida (cierra sesión) y usuario deshabilitado (su pantalla).
+Doble toque: un solo envío (el flujo devuelve la misma promesa y el botón se deshabilita).
+
+**Permisos (fail-closed).** Todo pasa por `ubicacionCorreccionLogic_puedeValidar` (`ubicacion === true` y `ubicacion_validar === true` exactos): sin ellos no se pinta el indicador, no se abre la bandeja ni el detalle, no hay botones en la ficha y, aunque alguien fuerce el DOM, el flujo no envía nada (el permiso se consulta **en cada envío**).
+El backend sigue siendo la autoridad (permisos, transiciones, `SELF_REJECTION`): el frontend solo evita pedidos que ya sabe que fallarían.
+Las correcciones directas (corregir + validar) siguen naciendo `VALIDADA` y no pasan por la bandeja.
+
+**Límites conocidos.** La vista de pendientes del backend no trae el titular del pozo ni su nombre (solo `wellId`): mostrarlo exigiría el permiso `datos` y una llamada por pozo, y queda fuera de esta etapa. Si hay más de 200 pendientes el backend entrega las más antiguas y la bandeja avisa «Se muestran las N más antiguas de M».
+**No se toca:** el mapa provincial y su overlay de correcciones validadas, Cerca Mío, selección geográfica, Reemplazos ni NE. **Archivos:** `js/ubicacionValidacion.js` (DOM: bandeja, detalle, mapa, confirmaciones), `js/ubicacionCorreccionLogic.js` (reglas puras), `js/api.js` (`apiValidarCorreccionUbicacion`, `apiRechazarCorreccionUbicacion`),
+`js/ubicacionCorreccion.js` (botones de la ficha + `alResolver`), `js/ubicacionPendientes.js` (indicador-botón), `index.html` (`#uval-overlay`), `css/styles.css` (`.uval-*`), `sw.js` (precache) y `js/app.js` (contexto compartido y cierre de sesión).
+
 ## Tests
+Validación (etapa 5): `js/ubicacionCorreccionLogic.test.js` (reglas puras), `js/ubicacionValidacionController.test.js` (DOM y Leaflet simulados con un servidor en memoria), `js/ubicacionValidacionWiring.test.js` (index.html, SW, api.js, app.js, estilos), `js/ubicacionCorreccionController.test.js` (botones de la ficha y `alResolver`),
+`js/ubicacionPendientes.test.js` (indicador-botón) y `backend/test/UbicacionValidacionContratoFrontend.test.js` (frontend real contra el backend real).
 `backend/test/UbicacionCorreccion{Repository,Service,E2E,Coordenadas}.test.js`, `CoordenadasConversion.test.js` (módulo del backend: contrato numérico contra pyproj, paridad con el frontend) y `ApiUbicacionCorreccion.test.js`; el E2E lee un padrón de un Drive en memoria
 de **solo lectura** que falla ante cualquier escritura.

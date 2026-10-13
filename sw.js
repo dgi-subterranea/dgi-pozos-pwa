@@ -56,6 +56,7 @@ var SHELL_FILES = [
   './js/coordenadasConversion.js',
   './js/ubicacionCorreccionLogic.js',
   './js/ubicacionCorreccion.js',
+  './js/ubicacionValidacion.js',
   './js/ubicacionPendientes.js',
   './js/app.js',
   './manifest.json',

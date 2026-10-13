@@ -1562,3 +1562,419 @@ describe('REGRESION GMS, GPS y mapa al sumar POSGAR', () => {
     expect(gps.distanciaM).toBe(mapa.distanciaM);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------
+// Validacion de correcciones pendientes: bandeja, detalle, confirmaciones y flujo de resolucion (logica pura)
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------
+describe('validacion: permisos y advertencias de distancia', () => {
+  const VAL = { ubicacion: true, ubicacion_validar: true };
+
+  test('puede validar solo con ubicacion + ubicacion_validar EXACTOS (fail-closed)', () => {
+    expect(L.ubicacionCorreccionLogic_puedeValidar(VAL)).toBe(true);
+    [null, undefined, {}, { ubicacion: true }, { ubicacion_validar: true }, { ubicacion: true, ubicacion_validar: 'SI' }, { ubicacion: 1, ubicacion_validar: true },
+      { ubicacion: true, ubicacion_corregir: true, ubicacion_validar: false }].forEach((p) => expect(L.ubicacionCorreccionLogic_puedeValidar(p)).toBe(false));
+  });
+
+  test('rechazar NO se ofrece sobre una propuesta propia (el backend responde SELF_REJECTION) ni sin el permiso', () => {
+    expect(L.ubicacionCorreccionLogic_puedeRechazarPropuesta(VAL, { propia: false })).toBe(true);
+    expect(L.ubicacionCorreccionLogic_puedeRechazarPropuesta(VAL, { propia: true })).toBe(false);
+    expect(L.ubicacionCorreccionLogic_puedeRechazarPropuesta({ ubicacion: true }, { propia: false })).toBe(false);
+    expect(L.ubicacionCorreccionLogic_puedeRechazarPropuesta(VAL, null)).toBe(false);
+  });
+
+  test.each([
+    [0, null, null], [250, null, null], [250.1, 'media', 'Más de 250 m de Irrigación'], [1000, 'media', 'Más de 250 m de Irrigación'],
+    [1000.1, 'fuerte', 'Más de 1 km de Irrigación'], [5000, 'fuerte', 'Más de 1 km de Irrigación']
+  ])('distancia %p m -> advertencia %p', (d, nivel, corto) => {
+    const a = L.ubicacionCorreccionLogic_advertenciaDistancia(d, false);
+    if (nivel === null) { expect(a).toBeNull(); } else { expect(a).toMatchObject({ nivel, corto }); }
+  });
+
+  test('sin distancia (sin Irrigacion) manda la bandera del backend; sin ninguna, nada', () => {
+    expect(L.ubicacionCorreccionLogic_advertenciaDistancia(null, true)).toMatchObject({ nivel: 'fuerte' });
+    expect(L.ubicacionCorreccionLogic_advertenciaDistancia(null, false)).toBeNull();
+    expect(L.ubicacionCorreccionLogic_advertenciaDistancia(undefined, undefined)).toBeNull();
+    expect(L.ubicacionCorreccionLogic_advertenciaDistancia(NaN, true)).toMatchObject({ nivel: 'fuerte' });
+    expect(L.ubicacionCorreccionLogic_advertenciaDistancia(300, true).nivel).toBe('media');           // con distancia numerica manda ella
+  });
+
+  test('textos de la advertencia fuerte: claros y orientados a quien VALIDA', () => {
+    expect(L.ubicacionCorreccionLogic_advertenciaDistancia(2000).texto).toBe('La ubicación propuesta está a más de 1 km de la ubicación de Irrigación. Verificala con cuidado antes de validarla.');
+    expect(L.ubicacionCorreccionLogic_advertenciaDistancia(300).texto).toBe('La ubicación propuesta está a más de 250 m de la ubicación de Irrigación.');
+  });
+});
+
+describe('validacion: renglon de la bandeja', () => {
+  const BASE = {
+    correccionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', wellId: '14-0001', lat: -33.34765, lon: -69.14545, metodo: 'PUNTO_EN_MAPA', precisionGpsM: null, observacion: '',
+    nombrePropone: 'Ana Pérez', timestamp: new Date(2026, 9, 13, 9, 30).toISOString(), distanciaM: 22.2, advertenciaDistancia: false, estado: 'PROPUESTA', propia: false,
+    coordenadaOriginalTexto: '', crsOriginal: '', irrigacion: { lat: -33.3478, lon: -69.1456, estado: 'unica' }
+  };
+  const item = (extra) => L.ubicacionCorreccionLogic_htmlItemPendiente(Object.assign({}, BASE, extra || {}));
+
+  test('el renglon ENTERO es un boton con el id de la correccion y muestra pozo, quien, cuando, metodo, coordenada, distancia', () => {
+    const h = item();
+    expect(h).toMatch(/^<li class="uval-item-li"><button type="button" class="uval-item" data-uval-correccion="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa">/);
+    expect(h.match(/<button/g)).toHaveLength(1);
+    expect(h).toContain('14-0001');
+    expect(h).toContain('Propuesta por Ana Pérez · 13/10/2026 09:30');
+    expect(h).toContain('Elegida en mapa');
+    expect(h).toContain('-33.34765, -69.14545');
+    expect(h).toContain('A 22,2 m de la ubicación de Irrigación');
+    expect(h).not.toContain('uval-adv');
+    expect(h).not.toContain('Ingresada:');
+  });
+
+  test.each([
+    ['GPS_ACTUAL', { precisionGpsM: 8.4 }, 'GPS (± 8,4 m)'],
+    ['PUNTO_EN_MAPA', {}, 'Elegida en mapa'],
+    ['COORDENADAS_GMS', { coordenadaOriginalTexto: '33° 20\' 51.54" S, 69° 8\' 43.62" O', crsOriginal: 'GMS_WGS84' }, 'Coordenadas GMS / WGS84'],
+    ['COORDENADAS_POSGAR94_AR2', { coordenadaOriginalTexto: 'X(Este)=2500000.00, Y(Norte)=6350000.00', crsOriginal: 'EPSG:22182' }, 'Coordenadas POSGAR 94 / Argentina 2']
+  ])('metodo %s se rotula con su etiqueta', (metodo, extra, etiqueta) => {
+    const h = item(Object.assign({ metodo }, extra));
+    expect(h).toContain(etiqueta);
+  });
+
+  test('con coordenada ingresada muestra el valor original y el sistema (secundario); la lat/lon normalizada sigue ahi', () => {
+    const h = item({ metodo: 'COORDENADAS_POSGAR94_AR2', coordenadaOriginalTexto: 'X(Este)=2500000.00, Y(Norte)=6350000.00', crsOriginal: 'EPSG:22182' });
+    expect(h).toContain('Ingresada: <span class="mono">X(Este)=2500000.00, Y(Norte)=6350000.00</span> · POSGAR 94 / Argentina 2 · EPSG:22182');
+    expect(h).toContain('-33.34765, -69.14545');
+  });
+
+  test('advertencias: >250 m (media) y >1 km (fuerte, con estilo propio); con texto y no solo color', () => {
+    const media = item({ distanciaM: 300 });
+    expect(media).toContain('uval-adv uval-adv-media">Más de 250 m de Irrigación<');
+    expect(media).not.toContain('uval-item-fuerte');
+    const fuerte = item({ distanciaM: 1800, advertenciaDistancia: true });
+    expect(fuerte).toContain('uval-adv uval-adv-fuerte">Más de 1 km de Irrigación<');
+    expect(fuerte).toContain('class="uval-item uval-item-fuerte"');
+  });
+
+  test('sin Irrigacion para comparar: lo dice, sin distancia inventada', () => {
+    const h = item({ distanciaM: null, irrigacion: { lat: null, lon: null, estado: 'sinCoordenadas' } });
+    expect(h).toContain('Sin ubicación de Irrigación para comparar');
+    expect(h).not.toMatch(/ A \d/);
+  });
+
+  test('la observacion se muestra (y se escapa); texto de usuario nunca como HTML', () => {
+    const h = item({ observacion: '<img src=x onerror=alert(1)> el pozo esta al otro lado', nombrePropone: '<b>Ana</b>' });
+    expect(h).toContain('Observación: &lt;img src=x onerror=alert(1)&gt; el pozo esta al otro lado');
+    expect(h).not.toContain('<img');
+    expect(h).not.toContain('<b>Ana</b>');
+    expect(h).toContain('&lt;b&gt;Ana&lt;/b&gt;');
+    expect(item({ observacion: '   ' })).not.toContain('Observación:');
+  });
+
+  test('un id con comillas no rompe el atributo', () => {
+    const h = item({ correccionId: '" onclick="x' });
+    expect(h).toContain('data-uval-correccion="&quot; onclick=&quot;x"');
+  });
+
+  test('sin datos opcionales no muestra undefined ni null', () => {
+    const h = L.ubicacionCorreccionLogic_htmlItemPendiente({ correccionId: 'x', wellId: '14-0001', lat: -33.1, lon: -69.1, metodo: 'GPS_ACTUAL', estado: 'PROPUESTA' });
+    expect(h).not.toMatch(/undefined|null|NaN/);
+    expect(h).toContain('Propuesta por —');
+  });
+});
+
+describe('validacion: resumen de la bandeja (getCorreccionesUbicacionPendientes)', () => {
+  const P = (id, extra) => Object.assign({ correccionId: id, wellId: '14-0001', estado: 'PROPUESTA' }, extra || {});
+
+  test('lee total, items y notas; solo PROPUESTA con id', () => {
+    const r = L.ubicacionCorreccionLogic_resumenPendientes({ status: 'ok', data: { total: 2, inconsistentes: 0, pendientes: [P('a'), P('b'), P('c', { estado: 'VALIDADA' }), { wellId: 'x', estado: 'PROPUESTA' }, null] } });
+    expect(r).toMatchObject({ ok: true, total: 2, nota: '' });
+    expect(r.items.map((c) => c.correccionId)).toEqual(['a', 'b']);
+  });
+
+  test('con mas pendientes que las listadas (tope del backend) lo avisa; con inconsistentes tambien', () => {
+    const r = L.ubicacionCorreccionLogic_resumenPendientes({ status: 'ok', data: { total: 250, inconsistentes: 2, pendientes: [P('a')] } });
+    expect(r.total).toBe(250);
+    expect(r.nota).toMatch(/Se muestran las 1 más antiguas de 250/);
+    expect(r.nota).toMatch(/2 corrección\(es\) con un historial inconsistente/);
+  });
+
+  test('sin total valido usa la cantidad listada; respuestas de error o invalidas no son ok', () => {
+    expect(L.ubicacionCorreccionLogic_resumenPendientes({ status: 'ok', data: { pendientes: [P('a')] } }).total).toBe(1);
+    [null, undefined, { status: 'error', code: 'X' }, { status: 'ok' }, { status: 'ok', data: {} }, { status: 'ok', data: { pendientes: 'x' } }].forEach((r) => {
+      expect(L.ubicacionCorreccionLogic_resumenPendientes(r)).toMatchObject({ ok: false, items: [] });
+    });
+  });
+});
+
+describe('validacion: detalle y confirmaciones', () => {
+  const C = {
+    correccionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', wellId: '14-0001', lat: -33.34765, lon: -69.14545, metodo: 'COORDENADAS_POSGAR94_AR2', precisionGpsM: null,
+    observacion: 'La boca del pozo está dentro del predio, junto al tanque, a unos 40 m de la ruta', nombrePropone: 'Ana Pérez', timestamp: new Date(2026, 9, 13, 9, 30).toISOString(),
+    distanciaM: 1500, advertenciaDistancia: true, estado: 'PROPUESTA', propia: false, coordenadaOriginalTexto: 'X(Este)=2500000.00, Y(Norte)=6350000.00', crsOriginal: 'EPSG:22182',
+    irrigacion: { lat: -33.3478, lon: -69.1456, estado: 'unica' }
+  };
+  const VIG = { lat: -33.3474, lon: -69.1455, nombrePropone: 'Federico', estado: 'VALIDADA' };
+
+  test('muestra todo lo necesario para decidir', () => {
+    const h = L.ubicacionCorreccionLogic_htmlDetalleValidacion(C, { vigente: VIG, vigenteEstado: 'ok' });
+    ['14-0001', '-33.34765, -69.14545', 'Ana Pérez', '13/10/2026 09:30', 'Coordenadas POSGAR 94 / Argentina 2', 'X(Este)=2500000.00, Y(Norte)=6350000.00',
+      'POSGAR 94 / Argentina 2 · EPSG:22182', '1,5 km', '-33.3478, -69.1456', '-33.3474, -69.1455 (Federico)', 'La boca del pozo está dentro del predio'].forEach((t) => expect(h).toContain(t));
+    expect(h).toContain('class="ucorr-advertencia" role="alert"');
+    expect(h).toContain('Verificala con cuidado antes de validarla.');
+  });
+
+  test('advertencia media (>250 m) con estilo de aviso; sin advertencia si esta cerca', () => {
+    expect(L.ubicacionCorreccionLogic_htmlDetalleValidacion(Object.assign({}, C, { distanciaM: 300, advertenciaDistancia: false }), {})).toContain('class="ucorr-mensaje" role="alert">La ubicación propuesta está a más de 250 m');
+    const cerca = L.ubicacionCorreccionLogic_htmlDetalleValidacion(Object.assign({}, C, { distanciaM: 20, advertenciaDistancia: false }), {});
+    expect(cerca).not.toContain('role="alert"');
+  });
+
+  test('estados de la vigente: ninguna, cargando, con error', () => {
+    expect(L.ubicacionCorreccionLogic_htmlDetalleValidacion(C, { vigente: null, vigenteEstado: 'ok' })).toContain('Ninguna: hoy rige la de Irrigación');
+    expect(L.ubicacionCorreccionLogic_htmlDetalleValidacion(C, { vigenteEstado: 'cargando' })).toContain('Cargando…');
+    expect(L.ubicacionCorreccionLogic_htmlDetalleValidacion(C, { vigenteEstado: 'error' })).toContain('No se pudo cargar');
+  });
+
+  test('sin Irrigacion ni observacion: lo dice; nada de undefined; texto escapado', () => {
+    const h = L.ubicacionCorreccionLogic_htmlDetalleValidacion({ correccionId: 'x', wellId: '14-0001', lat: -33.1, lon: -69.1, metodo: 'GPS_ACTUAL', precisionGpsM: 9, estado: 'PROPUESTA', nombrePropone: '<i>x</i>' }, {});
+    expect(h).toContain('Sin ubicación de Irrigación para comparar');
+    expect(h).toContain('No disponible');
+    expect(h).toContain('Sin observación');
+    expect(h).toContain('GPS (± 9 m)');
+    expect(h).not.toMatch(/undefined|null|NaN/);
+    expect(h).not.toContain('<i>');
+  });
+
+  test('confirmacion de Validar: pasa a ser la vigente; si hay otra queda SUPERADA; Irrigacion NO se modifica ni se elimina', () => {
+    const con = L.ubicacionCorreccionLogic_textosConfirmacionValidar(true);
+    expect(con.titulo).toBe('¿Validar esta ubicación?');
+    expect(con.puntos).toEqual([
+      'Pasará a ser la ubicación validada vigente de este pozo.',
+      'La ubicación validada anterior quedará reemplazada (estado SUPERADA).',
+      'La ubicación de Irrigación NO se modifica ni se elimina.'
+    ]);
+    const sin = L.ubicacionCorreccionLogic_textosConfirmacionValidar(false);
+    expect(sin.puntos).toHaveLength(2);
+    expect(sin.puntos.join(' ')).not.toMatch(/SUPERADA/);
+    const nose = L.ubicacionCorreccionLogic_textosConfirmacionValidar(null);
+    expect(nose.puntos.join(' ')).toMatch(/Si ya existe otra ubicación validada, quedará reemplazada/);
+    [con, sin, nose].forEach((t) => expect(t.puntos[t.puntos.length - 1]).toBe('La ubicación de Irrigación NO se modifica ni se elimina.'));
+  });
+});
+
+describe('validacion: motivo del rechazo y mensajes', () => {
+  test.each([[''], ['   '], ['\n\t '], [null], [undefined], [123]])('motivo vacio o invalido %j: obligatorio', (m) => {
+    expect(L.ubicacionCorreccionLogic_validarMotivoRechazo(m)).toEqual({ ok: false, motivo: '', error: 'Indicá el motivo del rechazo.' });
+  });
+
+  test('motivo valido: se recorta; hasta 300 caracteres; mas de 300 no', () => {
+    expect(L.ubicacionCorreccionLogic_validarMotivoRechazo('  no coincide  ')).toEqual({ ok: true, motivo: 'no coincide', error: '' });
+    expect(L.ubicacionCorreccionLogic_validarMotivoRechazo('x'.repeat(300)).ok).toBe(true);
+    const largo = L.ubicacionCorreccionLogic_validarMotivoRechazo('x'.repeat(301));
+    expect(largo.ok).toBe(false);
+    expect(largo.error).toBe('El motivo admite hasta 300 caracteres.');
+    expect(L.UCORR_MOTIVO_MAX).toBe(300);
+  });
+
+  test('mensajes de error de la resolucion: en espanol, sin codigos tecnicos', () => {
+    ['PERMISSION_DENIED', 'SELF_REJECTION', 'INVALID_MOTIVO', 'INVALID_CORRECCION_ID', 'INCONSISTENT_STATE', 'SERVICE_UNAVAILABLE', 'SERVICE_RETRY'].forEach((code) => {
+      const m = L.ubicacionCorreccionLogic_mensajeErrorResolver(code);
+      expect(m).toBe(L.UCORR_MENSAJES_ERROR_RESOLVER[code]);
+      expect(m).not.toMatch(/[A-Z]{3,}_[A-Z]/);
+    });
+    expect(L.ubicacionCorreccionLogic_mensajeErrorResolver('ALGO_RARO')).toBe('No se pudo completar la operación. Intentá nuevamente.');
+    expect(L.UCORR_MENSAJE_VALIDADA_OK).toBe('Ubicación validada.');
+    expect(L.UCORR_MENSAJE_RECHAZADA_OK).toBe('Corrección rechazada.');
+    expect(L.UCORR_MENSAJE_YA_RESUELTA).toBe('Esta corrección ya fue resuelta.');
+  });
+});
+
+describe('validacion: flujo de resolucion (un solo camino para la bandeja y la ficha)', () => {
+  const PERM = { ubicacion: true, ubicacion_validar: true };
+  const C = { correccionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', wellId: '14-0001', estado: 'PROPUESTA', propia: false };
+  const OK = (estado) => ({ status: 'ok', data: { correccion: Object.assign({}, C, { estado }), supersedidas: ['x'] } });
+  function crear(opc) {
+    const o = opc || {};
+    const llamadas = { validar: [], rechazar: [] };
+    const flujo = L.ubicacionCorreccionLogic_crearFlujoResolucion({
+      permisos: () => (o.permisos === undefined ? PERM : o.permisos),
+      validar: (id) => { llamadas.validar.push(id); return o.validar ? o.validar(id) : Promise.resolve(OK('VALIDADA')); },
+      rechazar: (id, m) => { llamadas.rechazar.push([id, m]); return o.rechazar ? o.rechazar(id, m) : Promise.resolve(OK('RECHAZADA')); }
+    });
+    return { flujo, llamadas };
+  }
+
+  test('validar: envia SOLO el id y devuelve ok con el mensaje, la correccion y las supersedidas', async () => {
+    const { flujo, llamadas } = crear();
+    const r = await flujo.resolver('validar', C, 'texto que no debe viajar');
+    expect(r).toMatchObject({ tipo: 'ok', accion: 'validar', mensaje: 'Ubicación validada.', supersedidas: ['x'] });
+    expect(r.correccion.estado).toBe('VALIDADA');
+    expect(llamadas.validar).toEqual([C.correccionId]);
+    expect(llamadas.rechazar).toEqual([]);
+  });
+
+  test('rechazar: envia id y motivo recortado; mensaje "Corrección rechazada."', async () => {
+    const { flujo, llamadas } = crear();
+    const r = await flujo.resolver('rechazar', C, '  no coincide con el pozo ');
+    expect(r).toMatchObject({ tipo: 'ok', accion: 'rechazar', mensaje: 'Corrección rechazada.' });
+    expect(llamadas.rechazar).toEqual([[C.correccionId, 'no coincide con el pozo']]);
+  });
+
+  test('rechazar sin motivo (o solo espacios): NO se envia nada', async () => {
+    const { flujo, llamadas } = crear();
+    for (const m of ['', '   ', null, undefined]) {
+      expect(await flujo.resolver('rechazar', C, m)).toEqual({ tipo: 'invalido', mensaje: 'Indicá el motivo del rechazo.' });
+    }
+    expect(llamadas.rechazar).toEqual([]);
+  });
+
+  test('rechazar una propuesta PROPIA: no se envia (el backend diria SELF_REJECTION); validar la propia si se puede', async () => {
+    const { flujo, llamadas } = crear();
+    expect(await flujo.resolver('rechazar', Object.assign({}, C, { propia: true }), 'motivo')).toMatchObject({ tipo: 'invalido', mensaje: 'No podés rechazar una corrección que propusiste vos.' });
+    expect(llamadas.rechazar).toEqual([]);
+    expect((await flujo.resolver('validar', Object.assign({}, C, { propia: true }))).tipo).toBe('ok');
+  });
+
+  test.each([
+    ['sin ningun permiso', null], ['solo ubicacion', { ubicacion: true }], ['solo ubicacion_validar', { ubicacion_validar: true }],
+    ['permiso no exacto ("SI")', { ubicacion: true, ubicacion_validar: 'SI' }], ['corregir pero no validar', { ubicacion: true, ubicacion_corregir: true, ubicacion_validar: false }]
+  ])('FAIL-CLOSED (%s): no se envia NADA, ni validar ni rechazar', async (_n, permisos) => {
+    const { flujo, llamadas } = crear({ permisos });
+    expect(await flujo.resolver('validar', C)).toMatchObject({ tipo: 'sin_permiso' });
+    expect(await flujo.resolver('rechazar', C, 'motivo')).toMatchObject({ tipo: 'sin_permiso' });
+    expect(llamadas).toEqual({ validar: [], rechazar: [] });
+  });
+
+  test('el permiso se consulta EN CADA envio (si se pierde mientras la pantalla estaba abierta, no se envia)', async () => {
+    let permisos = PERM;
+    const llamadas = [];
+    const flujo = L.ubicacionCorreccionLogic_crearFlujoResolucion({ permisos: () => permisos, validar: (id) => { llamadas.push(id); return Promise.resolve(OK('VALIDADA')); }, rechazar: () => Promise.resolve(OK('RECHAZADA')) });
+    expect((await flujo.resolver('validar', C)).tipo).toBe('ok');
+    permisos = { ubicacion: true, ubicacion_validar: false };
+    expect((await flujo.resolver('validar', C)).tipo).toBe('sin_permiso');
+    expect(llamadas).toHaveLength(1);
+  });
+
+  test.each([[undefined], [null], [{}], [{ correccionId: '' }], [{ correccionId: 5 }]])('correccion invalida %p: no se envia', async (c) => {
+    const { flujo, llamadas } = crear();
+    expect((await flujo.resolver('validar', c)).tipo).toBe('invalido');
+    expect(llamadas.validar).toEqual([]);
+  });
+
+  test('accion desconocida: no se envia', async () => {
+    const { flujo, llamadas } = crear();
+    expect((await flujo.resolver('revertir', C, 'x')).tipo).toBe('invalido');
+    expect(llamadas).toEqual({ validar: [], rechazar: [] });
+  });
+
+  test('DOBLE TOQUE: mientras hay un envio en curso devuelve la MISMA promesa y no manda nada mas', async () => {
+    let resolver;
+    const { flujo, llamadas } = crear({ validar: () => new Promise((r) => { resolver = r; }) });
+    const a = flujo.resolver('validar', C);
+    const b = flujo.resolver('validar', C);
+    const c = flujo.resolver('rechazar', C, 'motivo');
+    expect(flujo.enCurso()).toBe(true);
+    expect(b).toBe(a);
+    expect(c).toBe(a);
+    await new Promise((r) => setTimeout(r, 0));                                       // el envio sale en un turno posterior
+    resolver(OK('VALIDADA'));
+    await a;
+    expect(llamadas.validar).toHaveLength(1);
+    expect(llamadas.rechazar).toHaveLength(0);
+    expect(flujo.enCurso()).toBe(false);
+  });
+
+  test.each([['INVALID_TRANSITION'], ['CORRECCION_NOT_FOUND']])('%s = "ya fue resuelta" (otra persona la resolvio)', async (code) => {
+    for (const accion of ['validar', 'rechazar']) {
+      const { flujo } = crear({ validar: () => Promise.resolve({ status: 'error', code }), rechazar: () => Promise.resolve({ status: 'error', code }) });
+      expect(await flujo.resolver(accion, C, 'motivo')).toEqual({ tipo: 'resuelta', mensaje: 'Esta corrección ya fue resuelta.' });
+    }
+  });
+
+  test.each([['UNAUTHORIZED'], ['USER_DISABLED']])('%s: sesion (la app cierra sesion o va a su pantalla)', async (code) => {
+    const { flujo } = crear({ validar: () => Promise.resolve({ status: 'error', code }) });
+    expect(await flujo.resolver('validar', C)).toEqual({ tipo: 'sesion', code });
+  });
+
+  test.each([
+    ['PERMISSION_DENIED', 'No tenés permiso para validar o rechazar correcciones.'],
+    ['SELF_REJECTION', 'No podés rechazar una corrección que propusiste vos.'],
+    ['INCONSISTENT_STATE', 'Esta corrección tiene un problema en su historial y requiere revisión manual.'],
+    ['SERVICE_UNAVAILABLE', 'No se pudo completar la operación. Intentá nuevamente.'],
+    ['OTRO_CODIGO', 'No se pudo completar la operación. Intentá nuevamente.']
+  ])('error del backend %s: mensaje amigable (nunca el texto tecnico)', async (code, mensaje) => {
+    const { flujo } = crear({ validar: () => Promise.resolve({ status: 'error', code, message: 'texto tecnico interno' }) });
+    const r = await flujo.resolver('validar', C);
+    expect(r).toEqual({ tipo: 'error', code, mensaje });
+    expect(r.mensaje).not.toMatch(/tecnico/);
+  });
+
+  test('sin conexion (la promesa rechaza): tipo red con mensaje claro, y el flujo queda libre para reintentar', async () => {
+    let n = 0;
+    const { flujo, llamadas } = crear({ validar: () => { n += 1; return n === 1 ? Promise.reject(new Error('Failed to fetch')) : Promise.resolve(OK('VALIDADA')); } });
+    expect(await flujo.resolver('validar', C)).toEqual({ tipo: 'red', mensaje: 'No se pudo completar. Revisá tu conexión e intentá de nuevo.' });
+    expect(flujo.enCurso()).toBe(false);
+    expect((await flujo.resolver('validar', C)).tipo).toBe('ok');
+    expect(llamadas.validar).toHaveLength(2);
+  });
+
+  test('una respuesta ok sin correccion no se toma por exito', async () => {
+    const { flujo } = crear({ validar: () => Promise.resolve({ status: 'ok', data: {} }) });
+    expect((await flujo.resolver('validar', C)).tipo).toBe('error');
+  });
+});
+
+describe('validacion: tarjeta pendiente de la ficha del pozo (botones)', () => {
+  const PEND = {
+    correccionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', wellId: '14-0001', lat: -33.34765, lon: -69.14545, metodo: 'GPS_ACTUAL', precisionGpsM: 8, observacion: '',
+    nombrePropone: 'Ana Pérez', timestamp: new Date(2026, 9, 13, 9, 30).toISOString(), distanciaM: 20, advertenciaDistancia: false, estado: 'PROPUESTA', propia: false
+  };
+  const tarjeta = (c, opc) => L.ubicacionCorreccionLogic_htmlTarjeta(c, Object.assign({ modo: 'pendiente' }, opc || {}));
+
+  test('con puedeValidar: [Validar] y [Rechazar] con el id de la correccion', () => {
+    const h = tarjeta(PEND, { puedeValidar: true });
+    expect(h).toContain('<button type="button" class="button uval-btn-validar" data-uval-accion="validar" data-uval-correccion="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa">Validar</button>');
+    expect(h).toContain('<button type="button" class="button button-secondary uval-btn-rechazar" data-uval-accion="rechazar" data-uval-correccion="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa">Rechazar</button>');
+    expect(h.indexOf('Validar</button>')).toBeLessThan(h.indexOf('Rechazar</button>'));
+  });
+
+  test('propia: solo Validar (no se puede rechazar la propia)', () => {
+    const h = tarjeta(Object.assign({}, PEND, { propia: true }), { puedeValidar: true });
+    expect(h).toContain('data-uval-accion="validar"');
+    expect(h).not.toContain('data-uval-accion="rechazar"');
+  });
+
+  test('FAIL-CLOSED: sin puedeValidar === true (undefined, false, "SI", 1) no hay botones', () => {
+    [undefined, false, 'SI', 1, null].forEach((v) => expect(tarjeta(PEND, { puedeValidar: v })).not.toContain('data-uval-accion'));
+    expect(tarjeta(PEND)).not.toContain('<button');
+  });
+
+  test('solo las tarjetas PENDIENTES y en estado PROPUESTA llevan botones (no la vigente, no el historial, no una ya resuelta)', () => {
+    expect(L.ubicacionCorreccionLogic_htmlTarjeta(Object.assign({}, PEND, { estado: 'VALIDADA' }), { modo: 'vigente', puedeValidar: true })).not.toContain('data-uval-accion');
+    expect(L.ubicacionCorreccionLogic_htmlTarjeta(PEND, { modo: 'historial', puedeValidar: true })).not.toContain('data-uval-accion');
+    expect(tarjeta(Object.assign({}, PEND, { estado: 'RECHAZADA' }), { puedeValidar: true })).not.toContain('data-uval-accion');
+  });
+
+  test('la seccion pasa el permiso SOLO a las pendientes; con vigente + pendiente, la vigente no lleva botones', () => {
+    const VIG = Object.assign({}, PEND, { correccionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', estado: 'VALIDADA', resolucion: null });
+    const h = L.ubicacionCorreccionLogic_htmlSeccion({ vigente: VIG, pendientes: [PEND], historial: [PEND, VIG] }, { puedeCorregir: true, puedeValidar: true });
+    expect((h.match(/data-uval-accion="validar"/g) || [])).toHaveLength(1);
+    expect((h.match(/data-uval-accion="rechazar"/g) || [])).toHaveLength(1);
+    expect(L.ubicacionCorreccionLogic_htmlSeccion({ vigente: VIG, pendientes: [PEND], historial: [PEND, VIG] }, { puedeCorregir: true })).not.toContain('data-uval-accion');
+    expect(L.ubicacionCorreccionLogic_htmlSeccion({ vigente: VIG, pendientes: [PEND], historial: [PEND, VIG] }, { puedeCorregir: true, puedeValidar: 'SI' })).not.toContain('data-uval-accion');
+  });
+});
+
+describe('validacion: fijarTotal del indicador', () => {
+  test('el indicador toma el total de la bandeja sin consultar; con 0 se oculta; sin permiso no hace nada', () => {
+    const pintados = [];
+    const b = L.ubicacionCorreccionLogic_crearBadgePendientes({
+      obtenerContexto: () => ({ sessionToken: 't', permisos: { ubicacion: true, ubicacion_validar: true } }), consultar: () => { throw new Error('no debe consultar'); }, pintar: (t) => pintados.push(t)
+    });
+    expect(b.fijarTotal(4)).toBe(true);
+    expect(b.fijarTotal(0)).toBe(true);
+    expect(b.fijarTotal(-1)).toBe(false);
+    expect(b.fijarTotal(2.5)).toBe(false);
+    expect(b.fijarTotal('3')).toBe(false);
+    expect(pintados).toEqual([4, 0]);
+    expect(b.total()).toBe(0);
+    const sin = L.ubicacionCorreccionLogic_crearBadgePendientes({ obtenerContexto: () => ({ sessionToken: 't', permisos: { ubicacion: true } }), consultar: () => {}, pintar: (t) => pintados.push(t) });
+    expect(sin.fijarTotal(9)).toBe(false);
+    expect(pintados).toEqual([4, 0]);
+  });
+});

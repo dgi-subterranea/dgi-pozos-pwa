@@ -229,10 +229,19 @@ function apiGetCorreccionesUbicacionPozo(sessionToken, wellId) {
   return callBackend('getCorreccionesUbicacionPozo', { sessionToken: sessionToken, wellId: wellId });
 }
 
-// Cola de validacion (solo con ubicacion + ubicacion_validar). Se usa por ahora solo para el indicador "Correcciones pendientes: N" del hub: lo unico que
-// lee el frontend es data.total.
+// Cola de validacion (solo con ubicacion + ubicacion_validar): el indicador "Correcciones pendientes: N" del hub lee data.total y la bandeja lista data.pendientes.
 function apiGetCorreccionesUbicacionPendientes(sessionToken) {
   return callBackend('getCorreccionesUbicacionPendientes', { sessionToken: sessionToken });
+}
+
+// Validar / rechazar una correccion pendiente (solo con ubicacion + ubicacion_validar; el backend lo exige). Solo viajan sessionToken, correccionId y motivo
+// (obligatorio al rechazar): la identidad del validador sale de la sesion del lado del backend.
+function apiValidarCorreccionUbicacion(sessionToken, correccionId) {
+  return callBackend('validarCorreccionUbicacion', { sessionToken: sessionToken, correccionId: correccionId });
+}
+
+function apiRechazarCorreccionUbicacion(sessionToken, correccionId, motivo) {
+  return callBackend('rechazarCorreccionUbicacion', { sessionToken: sessionToken, correccionId: correccionId, motivo: motivo });
 }
 
 // LISTA BLANCA de campos: wellId, lat, lon, metodo, precisionGpsM, observacion, clientRequestId y, solo en los metodos por coordenadas ingresadas,

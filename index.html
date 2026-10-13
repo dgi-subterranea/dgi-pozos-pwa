@@ -66,9 +66,9 @@
       </div>
     </header>
 
-    <!-- Indicador discreto SOLO para quien valida correcciones de ubicacion (ubicacion + ubicacion_validar): "Correcciones pendientes: N". Oculto con 0, sin
+    <!-- Indicador discreto (y boton que abre la bandeja de validacion) SOLO para quien valida correcciones de ubicacion (ubicacion + ubicacion_validar): "Correcciones pendientes: N". Oculto con 0, sin
          permiso o ante un error. Ver js/ubicacionPendientes.js. -->
-    <p id="ucorr-pendientes" class="ucorr-pendientes" role="status" hidden><span class="ucorr-pendientes-punto" aria-hidden="true"></span><span id="ucorr-pendientes-texto"></span></p>
+    <button type="button" id="ucorr-pendientes" class="ucorr-pendientes" aria-haspopup="dialog" title="Ver las correcciones pendientes" hidden><span class="ucorr-pendientes-punto" aria-hidden="true"></span><span id="ucorr-pendientes-texto"></span><span class="ucorr-pendientes-ir" aria-hidden="true">›</span></button>
 
     <p class="search-label">Número de pozo</p>
     <form id="search-form">
@@ -1386,6 +1386,68 @@
     </div>
   </div>
 
+  <!-- Validacion de correcciones de ubicacion (solo ubicacion + ubicacion_validar): bandeja "Correcciones pendientes" (desde el indicador del hub) y detalle con mapa
+       para decidir. El MISMO detalle y la MISMA confirmacion se abren desde las tarjetas "Pendiente" de la ficha del pozo. Reutiliza los endpoints existentes
+       (getCorreccionesUbicacionPendientes / validarCorreccionUbicacion / rechazarCorreccionUbicacion). Ver js/ubicacionValidacion.js (DOM) y
+       js/ubicacionCorreccionLogic.js (reglas, con tests). -->
+  <div id="uval-overlay" class="ucorr-overlay uval-overlay" role="dialog" aria-modal="true" aria-labelledby="uval-titulo" hidden>
+    <div class="ucorr-panel uval-panel">
+      <div class="ucorr-cabecera">
+        <h2 id="uval-titulo" class="ucorr-titulo">Correcciones pendientes</h2>
+        <button type="button" id="btn-uval-cerrar" class="ucorr-cerrar" aria-label="Cerrar">&times;</button>
+      </div>
+      <p id="uval-aviso" class="ucorr-aviso ucorr-aviso-ok" role="status" hidden></p>
+
+      <div id="uval-vista-lista" class="ucorr-vista">
+        <div id="uval-lista-cargando" class="cargando cargando-md" data-cargando hidden>Cargando correcciones…</div>
+        <p id="uval-lista-error" class="error-message" role="alert" hidden></p>
+        <button type="button" id="btn-uval-lista-reintentar" class="button button-secondary ucorr-opcion" hidden>Reintentar</button>
+        <p id="uval-lista-vacia" class="ucorr-vacio" hidden>No hay correcciones pendientes.</p>
+        <p id="uval-lista-nota" class="ucorr-nota" hidden></p>
+        <ul id="uval-lista" class="uval-lista"></ul>
+        <button type="button" id="btn-uval-lista-cerrar" class="button button-secondary ucorr-opcion">Cerrar</button>
+      </div>
+
+      <div id="uval-vista-detalle" class="ucorr-vista" hidden>
+        <div id="uval-detalle-datos"></div>
+        <p id="uval-vigente-aviso" class="ucorr-mensaje" role="alert" hidden></p>
+        <div class="ucorr-capas">
+          <button type="button" class="mapa-capa-chip uval-capa-chip active" data-capa="calle" aria-pressed="true">Mapa</button>
+          <button type="button" class="mapa-capa-chip uval-capa-chip" data-capa="satelite" aria-pressed="false">Satélite</button>
+        </div>
+        <div id="uval-mapa-cargando" class="cargando cargando-md" data-cargando hidden>Cargando mapa…</div>
+        <p id="uval-mapa-error" class="ucorr-mensaje" hidden>No se pudo cargar el mapa. Podés decidir con los datos de arriba.</p>
+        <div id="uval-mapa" class="ucorr-mapa" hidden></div>
+        <ul class="ucorr-leyenda">
+          <li><span class="ucorr-leyenda-punto ucorr-leyenda-irr"></span>Irrigación (fija)</li>
+          <li><span class="ucorr-leyenda-punto ucorr-leyenda-vig"></span>Validada vigente</li>
+          <li><span class="ucorr-leyenda-punto ucorr-leyenda-nueva"></span>Propuesta</li>
+        </ul>
+        <p id="uval-estado" class="uval-estado" role="status" hidden></p>
+        <p id="uval-error" class="error-message" role="alert" hidden></p>
+        <div id="uval-acciones" class="uval-acciones">
+          <button type="button" id="btn-uval-validar" class="button uval-btn-validar">Validar ubicación</button>
+          <button type="button" id="btn-uval-rechazar" class="button button-secondary uval-btn-rechazar">Rechazar</button>
+        </div>
+        <div id="uval-confirmar-validar" class="uval-bloque" role="group" aria-labelledby="uval-confirmar-titulo" hidden>
+          <p id="uval-confirmar-titulo" class="uval-bloque-titulo">¿Validar esta ubicación?</p>
+          <ul id="uval-confirmar-puntos" class="uval-bloque-lista"></ul>
+          <button type="button" id="btn-uval-validar-confirmar" class="button ucorr-opcion">Sí, validar ubicación</button>
+          <button type="button" id="btn-uval-validar-cancelar" class="button button-secondary ucorr-opcion">Cancelar</button>
+        </div>
+        <div id="uval-rechazo" class="uval-bloque" role="group" aria-labelledby="uval-rechazo-titulo" hidden>
+          <p id="uval-rechazo-titulo" class="uval-bloque-titulo">Rechazar esta corrección</p>
+          <label for="uval-motivo" class="field-label">Motivo del rechazo (obligatorio)</label>
+          <textarea id="uval-motivo" class="ucorr-observacion" rows="3" maxlength="300" placeholder="Ej.: el punto no coincide con la boca del pozo"></textarea>
+          <p id="uval-err-motivo" class="ucorr-err" role="alert" hidden></p>
+          <button type="button" id="btn-uval-rechazar-confirmar" class="button button-secondary uval-btn-rechazar ucorr-opcion">Confirmar rechazo</button>
+          <button type="button" id="btn-uval-rechazar-cancelar" class="button button-secondary ucorr-opcion">Cancelar</button>
+        </div>
+        <button type="button" id="btn-uval-detalle-volver" class="button button-secondary ucorr-opcion">Volver a la lista</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Bandeja de seleccion (item D/I): persistente, fuera de cualquier
        .screen a proposito - sobrevive la navegacion SPA completa. Solo
        visible con seleccion.length > 0 (ver seleccionController en
@@ -1458,6 +1520,7 @@
   <script src="js/coordenadasConversion.js"></script>
   <script src="js/ubicacionCorreccionLogic.js"></script>
   <script src="js/ubicacionCorreccion.js"></script>
+  <script src="js/ubicacionValidacion.js"></script>
   <script src="js/ubicacionPendientes.js"></script>
   <script src="js/app.js"></script>
   <!-- Va DESPUES de app.js en el documento a proposito, para que

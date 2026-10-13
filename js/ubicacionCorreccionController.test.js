@@ -2081,3 +2081,148 @@ describe('D. REGRESION: sumar POSGAR no rompe GMS, GPS, mapa, permisos ni reglas
     }
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------- validar desde la tarjeta "Pendiente"
+describe('ficha: Validar / Rechazar en la tarjeta Pendiente (abre el detalle compartido; sin logica propia)', () => {
+  const PERM_VALIDA = { ubicacion: true, ubicacion_corregir: true, ubicacion_validar: true };
+  const AJENA = Object.assign({}, PENDIENTE, { propia: false });                     // propuesta de otra persona: se puede validar y rechazar
+  const LECTURA_PEND = { vigente: VIGENTE, pendientes: [AJENA], historial: [AJENA, VIGENTE] };
+
+  // el clic llega al contenedor con un target que sabe su closest() y sus atributos, como el DOM real
+  function tocar(t, accion, id) {
+    const boton = { getAttribute: (n) => ({ 'data-uval-accion': accion, 'data-uval-correccion': id })[n] || null };
+    t.contenedor.emit('click', { target: { closest: (sel) => (sel === '[data-uval-accion]' ? boton : null) } });
+    return boton;
+  }
+
+  async function abrirConPendiente(permisos, lectura) {
+    const t = cargar({ permisos: permisos, lectura: lectura || LECTURA_PEND });
+    t.ctx.ubicacionValidacionController_abrirDetalle = jest.fn();
+    await abrirFicha(t);
+    return t;
+  }
+
+  test('con ubicacion + ubicacion_validar: la tarjeta pendiente trae [Validar] y [Rechazar]', async () => {
+    const t = await abrirConPendiente(PERM_VALIDA);
+    expect(t.contenedor.innerHTML).toContain('data-uval-accion="validar" data-uval-correccion="' + PENDIENTE.correccionId + '"');
+    expect(t.contenedor.innerHTML).toContain('data-uval-accion="rechazar" data-uval-correccion="' + PENDIENTE.correccionId + '"');
+  });
+
+  test('sin ubicacion_validar (incluido quien solo corrige): la tarjeta pendiente NO trae botones', async () => {
+    for (const permisos of [{ ubicacion: true, ubicacion_corregir: true }, { ubicacion: true }, { ubicacion: true, ubicacion_validar: 'SI' }, { ubicacion_validar: true }]) {
+      const t = await abrirConPendiente(permisos);
+      expect(t.contenedor.innerHTML).not.toContain('data-uval-accion');
+    }
+  });
+
+  test('tocar Validar abre el MISMO detalle con la correccion, la vigente ya cargada, la accion y el boton como origen del foco', async () => {
+    const t = await abrirConPendiente(PERM_VALIDA);
+    const boton = tocar(t, 'validar', PENDIENTE.correccionId);
+    expect(t.ctx.ubicacionValidacionController_abrirDetalle).toHaveBeenCalledTimes(1);
+    const info = t.ctx.ubicacionValidacionController_abrirDetalle.mock.calls[0][0];
+    expect(info.correccion.correccionId).toBe(PENDIENTE.correccionId);
+    expect(info.vigente.correccionId).toBe(VIGENTE.correccionId);
+    expect(info.accion).toBe('validar');
+    expect(info.opener).toBe(boton);
+  });
+
+  test('tocar Rechazar abre el detalle con la accion "rechazar"', async () => {
+    const t = await abrirConPendiente(PERM_VALIDA);
+    tocar(t, 'rechazar', PENDIENTE.correccionId);
+    expect(t.ctx.ubicacionValidacionController_abrirDetalle.mock.calls[0][0].accion).toBe('rechazar');
+  });
+
+  test('FAIL-CLOSED aunque se fuerce el DOM: sin el permiso, el clic de un boton inyectado no abre nada', async () => {
+    const t = await abrirConPendiente({ ubicacion: true, ubicacion_corregir: true });
+    tocar(t, 'validar', PENDIENTE.correccionId);
+    tocar(t, 'rechazar', PENDIENTE.correccionId);
+    expect(t.ctx.ubicacionValidacionController_abrirDetalle).not.toHaveBeenCalled();
+  });
+
+  test('el permiso se consulta AL TOCAR: si se pierde con la ficha abierta, el clic no hace nada', async () => {
+    const t = await abrirConPendiente(PERM_VALIDA);
+    t.sesion.permisos = { ubicacion: true, ubicacion_corregir: true, ubicacion_validar: false };
+    tocar(t, 'validar', PENDIENTE.correccionId);
+    expect(t.ctx.ubicacionValidacionController_abrirDetalle).not.toHaveBeenCalled();
+  });
+
+  test('un id que no esta entre las pendientes del pozo (DOM manipulado) o un clic fuera de los botones no abre nada; sin el detalle cargado no rompe', async () => {
+    const t = await abrirConPendiente(PERM_VALIDA);
+    tocar(t, 'validar', 'otro-id-inventado');
+    t.contenedor.emit('click', { target: { closest: () => null } });
+    t.contenedor.emit('click', { target: {} });
+    t.contenedor.emit('click', {});
+    expect(t.ctx.ubicacionValidacionController_abrirDetalle).not.toHaveBeenCalled();
+    delete t.ctx.ubicacionValidacionController_abrirDetalle;
+    expect(() => tocar(t, 'validar', PENDIENTE.correccionId)).not.toThrow();
+  });
+
+  test('el oyente se enlaza UNA vez aunque la seccion se vuelva a pintar (un clic = una apertura)', async () => {
+    const t = await abrirConPendiente(PERM_VALIDA);
+    t.ctx.ubicacionCorreccionController_alResolver({ wellId: W, mensaje: 'x', tipo: 'ok' });
+    await flush();
+    tocar(t, 'validar', PENDIENTE.correccionId);
+    expect(t.ctx.ubicacionValidacionController_abrirDetalle).toHaveBeenCalledTimes(1);
+  });
+
+  describe('alResolver: la validacion termino sobre un pozo', () => {
+    test('si es el de esta ficha: vuelve a leer, pinta (la pendiente desaparece, la nueva vigente aparece) y muestra el aviso', async () => {
+      const t = cargar({ permisos: PERM_VALIDA, lectura: LECTURA_PEND });
+      await abrirFicha(t);
+      expect(t.contenedor.innerHTML).toContain('data-uval-accion');
+      const nueva = Object.assign({}, PENDIENTE, { estado: 'VALIDADA', resolucion: { evento: 'VALIDADA', nombre: 'Validador', timestamp: PENDIENTE.timestamp, motivo: '' } });
+      t.ctx.apiGetCorreccionesUbicacionPozo.mockImplementation(() => Promise.resolve({ status: 'ok', data: { vigente: nueva, pendientes: [], historial: [nueva, Object.assign({}, VIGENTE, { estado: 'SUPERADA' })] } }));
+      const antes = t.ctx.apiGetCorreccionesUbicacionPozo.mock.calls.length;
+      t.ctx.ubicacionCorreccionController_alResolver({ wellId: W, mensaje: 'Ubicación validada.', tipo: 'ok' });
+      await flush();
+      expect(t.ctx.apiGetCorreccionesUbicacionPozo.mock.calls.length).toBe(antes + 1);
+      expect(t.contenedor.innerHTML).toContain('Ubicación validada.');
+      expect(t.contenedor.innerHTML).not.toContain('data-uval-accion');
+      expect(t.contenedor.innerHTML).toContain('Reemplazada por una corrección posterior');
+    });
+
+    test('"ya resuelta": el aviso es informativo (no de exito)', async () => {
+      const t = cargar({ permisos: PERM_VALIDA, lectura: LECTURA_PEND });
+      await abrirFicha(t);
+      t.ctx.ubicacionCorreccionController_alResolver({ wellId: W, mensaje: 'Esta corrección ya fue resuelta.', tipo: 'resuelta' });
+      await flush();
+      expect(t.contenedor.innerHTML).toContain('Esta corrección ya fue resuelta.');
+      expect(t.contenedor.innerHTML).not.toContain('ucorr-aviso-ok');
+    });
+
+    test('si es OTRO pozo, o no hay ficha abierta, o falta la info: no se toca nada ni se lee', async () => {
+      const t = cargar({ permisos: PERM_VALIDA, lectura: LECTURA_PEND });
+      t.ctx.ubicacionCorreccionController_alResolver({ wellId: W, mensaje: 'x', tipo: 'ok' });         // sin ficha abierta
+      expect(t.ctx.apiGetCorreccionesUbicacionPozo).not.toHaveBeenCalled();
+      await abrirFicha(t);
+      const antes = t.ctx.apiGetCorreccionesUbicacionPozo.mock.calls.length;
+      t.ctx.ubicacionCorreccionController_alResolver({ wellId: '99-9999', mensaje: 'x', tipo: 'ok' });
+      t.ctx.ubicacionCorreccionController_alResolver(null);
+      t.ctx.ubicacionCorreccionController_alResolver();
+      await flush();
+      expect(t.ctx.apiGetCorreccionesUbicacionPozo.mock.calls.length).toBe(antes);
+    });
+
+    test('si al releer falla, la ficha no queda mostrando botones de una pendiente que ya no es', async () => {
+      const t = cargar({ permisos: PERM_VALIDA, lectura: LECTURA_PEND });
+      await abrirFicha(t);
+      t.ctx.apiGetCorreccionesUbicacionPozo.mockImplementation(() => Promise.reject(new Error('sin red')));
+      t.ctx.ubicacionCorreccionController_alResolver({ wellId: W, mensaje: 'Ubicación validada.', tipo: 'ok' });
+      await flush();
+      expect(t.contenedor.innerHTML).not.toContain('data-uval-accion');
+    });
+  });
+
+  test('regresion: corregir + validar (auto-validacion) sigue guardando como siempre, sin pasar por el detalle de validacion', async () => {
+    const t = cargar({ permisos: PERM_VALIDA });
+    t.ctx.ubicacionValidacionController_abrirDetalle = jest.fn();
+    await abrirModalMapa(t);
+    tocarMapa(t, PUNTO_REAL.lat, PUNTO_REAL.lon);
+    t.el('btn-ucorr-mapa-usar').click();
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    expect(t.ctx.apiProponerCorreccionUbicacion).toHaveBeenCalledTimes(1);
+    expect(t.contenedor.innerHTML).toContain('Ubicación corregida y validada.');
+    expect(t.ctx.ubicacionValidacionController_abrirDetalle).not.toHaveBeenCalled();
+  });
+});

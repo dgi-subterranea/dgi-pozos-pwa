@@ -524,6 +524,18 @@ function ubicacionCorreccionLogic_crearBadgePendientes(deps) {
     refrescar: refrescar,
     // despues de validar o rechazar una correccion: la cola cambio, se vuelve a pedir SIEMPRE
     alResolver: function () { return refrescar(true); },
+    // La bandeja acaba de leer la cola completa: el indicador toma ESE total sin pedir nada mas (solo con permiso y un entero >= 0; una consulta
+    // que estaba en vuelo queda obsoleta).
+    fijarTotal: function (nuevo) {
+      var ctx = deps.obtenerContexto();
+      if (!ctx || !ubicacionCorreccionLogic_puedeValidar(ctx.permisos) || typeof nuevo !== 'number' || !isFinite(nuevo) || nuevo < 0 || Math.floor(nuevo) !== nuevo) {
+        return false;
+      }
+      generacion += 1;
+      enCurso = null;
+      pintar(nuevo);
+      return true;
+    },
     reset: reset,
     total: function () { return total; }
   };
@@ -734,6 +746,230 @@ function ubicacionCorreccionLogic_puntoCoincideConGms(original, lat, lon) {
   return ubicacionCorreccionLogic_puntoCoincideConCoordenada('COORDENADAS_GMS', original, lat, lon);
 }
 
+// --- Validacion de correcciones pendientes (bandeja del badge + detalle, tambien desde la ficha del pozo) ---
+//
+// Logica PURA de quien valida (ubicacion + ubicacion_validar exactos). Reutiliza los endpoints que YA existen: getCorreccionesUbicacionPendientes (bandeja),
+// getCorreccionesUbicacionPozo (la vigente del pozo), validarCorreccionUbicacion y rechazarCorreccionUbicacion. El backend sigue siendo la autoridad
+// (permisos, transiciones, quien no puede rechazar su propia propuesta): aca solo se ordena la UX y se corta temprano lo que seguro va a fallar.
+
+var UCORR_MOTIVO_MAX = 300;
+var UCORR_MENSAJE_VALIDADA_OK = 'Ubicación validada.';
+var UCORR_MENSAJE_RECHAZADA_OK = 'Corrección rechazada.';
+var UCORR_MENSAJE_YA_RESUELTA = 'Esta corrección ya fue resuelta.';
+var UCORR_TEXTO_ADVERTENCIA_1KM_VALIDAR = 'La ubicación propuesta está a más de 1 km de la ubicación de Irrigación. Verificala con cuidado antes de validarla.';
+var UCORR_TEXTO_ADVERTENCIA_250M_VALIDAR = 'La ubicación propuesta está a más de 250 m de la ubicación de Irrigación.';
+var UCORR_CODIGOS_YA_RESUELTA = ['INVALID_TRANSITION', 'CORRECCION_NOT_FOUND'];
+
+// Quien puede ver la bandeja y validar: ubicacion + ubicacion_validar exactos (ubicacionCorreccionLogic_puedeValidar). Rechazar ademas NO es posible sobre una
+// propuesta PROPIA (el backend responde SELF_REJECTION): el boton directamente no se ofrece.
+function ubicacionCorreccionLogic_puedeRechazarPropuesta(permisos, correccion) {
+  return ubicacionCorreccionLogic_puedeValidar(permisos) && !!correccion && correccion.propia !== true;
+}
+
+// null | {nivel:'media'|'fuerte', corto, texto}. Con distancia numerica manda ella; sin ella, la bandera que calculo el backend.
+function ubicacionCorreccionLogic_advertenciaDistancia(distanciaM, banderaBackend) {
+  var d = ubicacionCorreccionLogic_esNumero(distanciaM) ? distanciaM : null;
+  if ((d !== null && d > UCORR_ADVERTENCIA_DESDE_M) || (d === null && banderaBackend === true)) {
+    return { nivel: 'fuerte', corto: 'Más de 1 km de Irrigación', texto: UCORR_TEXTO_ADVERTENCIA_1KM_VALIDAR };
+  }
+  if (d !== null && d > UCORR_OBSERVACION_DESDE_M) {
+    return { nivel: 'media', corto: 'Más de 250 m de Irrigación', texto: UCORR_TEXTO_ADVERTENCIA_250M_VALIDAR };
+  }
+  return null;
+}
+
+function ubicacionCorreccionLogic_textoDistancia(c) {
+  return ubicacionCorreccionLogic_esNumero(c.distanciaM)
+    ? 'A ' + ubicacionCorreccionLogic_formatearDistancia(c.distanciaM) + ' de la ubicación de Irrigación'
+    : 'Sin ubicación de Irrigación para comparar';
+}
+
+// Un elemento de la bandeja: TODO el renglon es un boton (toque grande) con los datos para decidir si abrirla. Texto de usuario siempre escapado.
+function ubicacionCorreccionLogic_htmlItemPendiente(c) {
+  var esc = ubicacionCorreccionLogic_escapar;
+  var adv = ubicacionCorreccionLogic_advertenciaDistancia(c.distanciaM, c.advertenciaDistancia);
+  var fecha = ubicacionCorreccionLogic_formatearFecha(c.timestamp);
+  var h = '<li class="uval-item-li"><button type="button" class="uval-item' + (adv && adv.nivel === 'fuerte' ? ' uval-item-fuerte' : '') + '" data-uval-correccion="' + esc(c.correccionId) + '">';
+  h += '<span class="uval-item-top"><span class="uval-item-pozo mono">' + esc(c.wellId) + '</span>';
+  if (adv) {
+    h += '<span class="uval-adv uval-adv-' + adv.nivel + '">' + esc(adv.corto) + '</span>';
+  }
+  h += '</span>';
+  h += '<span class="uval-item-linea">Propuesta por ' + esc(c.nombrePropone || '—') + (fecha ? ' · ' + esc(fecha) : '') + '</span>';
+  h += '<span class="uval-item-linea">' + esc(ubicacionCorreccionLogic_textoMetodo(c)) + '</span>';
+  h += '<span class="uval-item-coord mono">' + esc(ubicacionCorreccionLogic_formatearCoordenadas(c.lat, c.lon)) + '</span>';
+  var texto = typeof c.coordenadaOriginalTexto === 'string' ? c.coordenadaOriginalTexto.trim() : '';
+  if (texto) {
+    var crs = ubicacionCorreccionLogic_etiquetaCrs(c.crsOriginal);
+    h += '<span class="uval-item-linea uval-item-original">Ingresada: <span class="mono">' + esc(texto) + '</span>' + (crs ? ' · ' + esc(crs) : '') + '</span>';
+  }
+  h += '<span class="uval-item-linea">' + esc(ubicacionCorreccionLogic_textoDistancia(c)) + '</span>';
+  if (typeof c.observacion === 'string' && c.observacion.trim() !== '') {
+    h += '<span class="uval-item-obs">Observación: ' + esc(c.observacion) + '</span>';
+  }
+  h += '<span class="uval-item-ir" aria-hidden="true">Revisar ›</span></button></li>';
+  return h;
+}
+
+// Respuesta de getCorreccionesUbicacionPendientes -> {ok, total, items[], nota} (solo PROPUESTA con id; el resto se ignora). total = el que informa el backend.
+function ubicacionCorreccionLogic_resumenPendientes(resp) {
+  var d = resp && resp.status === 'ok' ? resp.data : null;
+  if (!d || !Array.isArray(d.pendientes)) {
+    return { ok: false, total: null, items: [], nota: '' };
+  }
+  var items = d.pendientes.filter(function (c) { return !!c && typeof c.correccionId === 'string' && c.correccionId !== '' && c.estado === 'PROPUESTA'; });
+  var total = typeof d.total === 'number' && isFinite(d.total) && d.total >= 0 ? d.total : items.length;
+  var nota = '';
+  if (total > items.length) {
+    nota = 'Se muestran las ' + items.length + ' más antiguas de ' + total + ' pendientes. Al resolverlas aparecen las siguientes.';
+  }
+  if (typeof d.inconsistentes === 'number' && d.inconsistentes > 0) {
+    nota += (nota ? ' ' : '') + 'Hay ' + d.inconsistentes + ' corrección(es) con un historial inconsistente que requieren revisión manual y no se listan.';
+  }
+  return { ok: true, total: total, items: items, nota: nota };
+}
+
+// Detalle para decidir: ubicacion propuesta, quien/cuando/como, la coordenada ingresada y su sistema, Irrigacion, la vigente (si hay) y las advertencias.
+// o: {vigente: vista de correccion|null, vigenteEstado: 'ok'|'cargando'|'error'}
+function ubicacionCorreccionLogic_htmlDetalleValidacion(c, o) {
+  var op = o || {};
+  var esc = ubicacionCorreccionLogic_escapar;
+  var fila = ubicacionCorreccionLogic_filaDato;
+  var h = '<p class="uval-pozo">Pozo <span class="mono">' + esc(c.wellId) + '</span></p>';
+  var adv = ubicacionCorreccionLogic_advertenciaDistancia(c.distanciaM, c.advertenciaDistancia);
+  if (adv) {
+    h += '<p class="' + (adv.nivel === 'fuerte' ? 'ucorr-advertencia' : 'ucorr-mensaje') + '" role="alert">' + esc(adv.texto) + '</p>';
+  }
+  h += '<p class="field-label">Ubicación propuesta</p><div class="ucorr-coord mono">' + esc(ubicacionCorreccionLogic_formatearCoordenadas(c.lat, c.lon)) + '</div>';
+  h += '<dl class="ucorr-datos">';
+  h += fila('Propuesta por', c.nombrePropone || '—');
+  var fecha = ubicacionCorreccionLogic_formatearFecha(c.timestamp);
+  if (fecha) {
+    h += fila('Fecha', fecha);
+  }
+  h += fila('Método', ubicacionCorreccionLogic_textoMetodo(c));
+  h += ubicacionCorreccionLogic_filaOriginal(c);
+  h += fila('Distancia a Irrigación', ubicacionCorreccionLogic_esNumero(c.distanciaM) ? ubicacionCorreccionLogic_formatearDistancia(c.distanciaM) : 'Sin ubicación de Irrigación para comparar');
+  var irr = c.irrigacion;
+  h += fila('Ubicación de Irrigación', irr && ubicacionCorreccionLogic_esNumero(irr.lat) && ubicacionCorreccionLogic_esNumero(irr.lon)
+    ? ubicacionCorreccionLogic_formatearCoordenadas(irr.lat, irr.lon) : 'No disponible');
+  var v = op.vigente;
+  if (v) {
+    h += fila('Validada vigente', ubicacionCorreccionLogic_formatearCoordenadas(v.lat, v.lon) + (v.nombrePropone ? ' (' + v.nombrePropone + ')' : ''));
+  } else if (op.vigenteEstado === 'cargando') {
+    h += fila('Validada vigente', 'Cargando…');
+  } else if (op.vigenteEstado === 'error') {
+    h += fila('Validada vigente', 'No se pudo cargar');
+  } else {
+    h += fila('Validada vigente', 'Ninguna: hoy rige la de Irrigación');
+  }
+  h += fila('Observación', typeof c.observacion === 'string' && c.observacion.trim() !== '' ? c.observacion : 'Sin observación');
+  h += '</dl>';
+  return h;
+}
+
+// Textos de la confirmacion de "Validar ubicación". hayVigente: true | false | null (no se sabe: la carga fallo).
+function ubicacionCorreccionLogic_textosConfirmacionValidar(hayVigente) {
+  var puntos = ['Pasará a ser la ubicación validada vigente de este pozo.'];
+  if (hayVigente === true) {
+    puntos.push('La ubicación validada anterior quedará reemplazada (estado SUPERADA).');
+  } else if (hayVigente === null) {
+    puntos.push('Si ya existe otra ubicación validada, quedará reemplazada (estado SUPERADA).');
+  }
+  puntos.push('La ubicación de Irrigación NO se modifica ni se elimina.');
+  return { titulo: '¿Validar esta ubicación?', puntos: puntos };
+}
+
+// Motivo del rechazo: obligatorio (no vacio ni solo espacios), hasta 300 caracteres, sin caracteres de control. {ok, motivo, error}
+function ubicacionCorreccionLogic_validarMotivoRechazo(texto) {
+  var m = typeof texto === 'string' ? texto.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').trim() : '';
+  if (m === '') {
+    return { ok: false, motivo: '', error: 'Indicá el motivo del rechazo.' };
+  }
+  if (m.length > UCORR_MOTIVO_MAX) {
+    return { ok: false, motivo: m, error: 'El motivo admite hasta ' + UCORR_MOTIVO_MAX + ' caracteres.' };
+  }
+  return { ok: true, motivo: m, error: '' };
+}
+
+var UCORR_MENSAJES_ERROR_RESOLVER = {
+  PERMISSION_DENIED: 'No tenés permiso para validar o rechazar correcciones.',
+  SELF_REJECTION: 'No podés rechazar una corrección que propusiste vos.',
+  INVALID_MOTIVO: 'El motivo no es válido (obligatorio al rechazar, hasta 300 caracteres).',
+  INVALID_CORRECCION_ID: 'No se pudo identificar la corrección. Actualizá la lista.',
+  INCONSISTENT_STATE: 'Esta corrección tiene un problema en su historial y requiere revisión manual.',
+  SERVICE_UNAVAILABLE: 'No se pudo completar la operación. Intentá nuevamente.',
+  SERVICE_RETRY: 'El servidor estaba ocupado. Intentá nuevamente.'
+};
+
+function ubicacionCorreccionLogic_mensajeErrorResolver(code) {
+  return UCORR_MENSAJES_ERROR_RESOLVER[code] || 'No se pudo completar la operación. Intentá nuevamente.';
+}
+
+// Flujo de resolucion (validar / rechazar) compartido por la bandeja y por la ficha del pozo: un solo camino, un solo envio a la vez.
+// deps: {permisos() -> permisos vigentes, validar(correccionId) -> Promise<respuesta>, rechazar(correccionId, motivo) -> Promise<respuesta>}
+// resolver(accion, correccion, motivo) resuelve (nunca rechaza) con:
+//   {tipo:'sin_permiso', mensaje}      fail-closed: sin ubicacion + ubicacion_validar exactos NO se envia nada (aunque alguien fuerce el DOM)
+//   {tipo:'invalido', mensaje}         motivo vacio / demasiado largo, rechazo de la propia, accion o id invalidos: no se envia nada
+//   {tipo:'ok', accion, mensaje, correccion, supersedidas}
+//   {tipo:'resuelta', mensaje}         otra persona ya la resolvio (INVALID_TRANSITION / CORRECCION_NOT_FOUND): refrescar
+//   {tipo:'sesion', code}              sesion vencida o usuario deshabilitado
+//   {tipo:'error', code, mensaje}      el backend rechazo la operacion
+//   {tipo:'red', mensaje}              no hubo respuesta
+// Doble toque: mientras hay un envio en curso devuelve LA MISMA promesa y no manda nada mas.
+function ubicacionCorreccionLogic_crearFlujoResolucion(deps) {
+  var enCurso = null;
+
+  function mapear(accion, resp) {
+    if (resp && resp.status === 'ok' && resp.data && resp.data.correccion) {
+      return {
+        tipo: 'ok', accion: accion, mensaje: accion === 'validar' ? UCORR_MENSAJE_VALIDADA_OK : UCORR_MENSAJE_RECHAZADA_OK,
+        correccion: resp.data.correccion, supersedidas: Array.isArray(resp.data.supersedidas) ? resp.data.supersedidas : []
+      };
+    }
+    var code = resp && resp.code;
+    if (UCORR_CODIGOS_YA_RESUELTA.indexOf(code) !== -1) {
+      return { tipo: 'resuelta', mensaje: UCORR_MENSAJE_YA_RESUELTA };
+    }
+    if (UCORR_CODIGOS_SESION.indexOf(code) !== -1) {
+      return { tipo: 'sesion', code: code };
+    }
+    return { tipo: 'error', code: code, mensaje: ubicacionCorreccionLogic_mensajeErrorResolver(code) };
+  }
+
+  function resolver(accion, correccion, motivo) {
+    if (enCurso) {
+      return enCurso;
+    }
+    if (!ubicacionCorreccionLogic_puedeValidar(deps.permisos())) {
+      return Promise.resolve({ tipo: 'sin_permiso', mensaje: ubicacionCorreccionLogic_mensajeErrorResolver('PERMISSION_DENIED') });
+    }
+    if ((accion !== 'validar' && accion !== 'rechazar') || !correccion || typeof correccion.correccionId !== 'string' || correccion.correccionId === '') {
+      return Promise.resolve({ tipo: 'invalido', mensaje: ubicacionCorreccionLogic_mensajeErrorResolver('INVALID_CORRECCION_ID') });
+    }
+    var m = null;
+    if (accion === 'rechazar') {
+      if (!ubicacionCorreccionLogic_puedeRechazarPropuesta(deps.permisos(), correccion)) {
+        return Promise.resolve({ tipo: 'invalido', mensaje: ubicacionCorreccionLogic_mensajeErrorResolver('SELF_REJECTION') });
+      }
+      m = ubicacionCorreccionLogic_validarMotivoRechazo(motivo);
+      if (!m.ok) {
+        return Promise.resolve({ tipo: 'invalido', mensaje: m.error });
+      }
+    }
+    var id = correccion.correccionId;
+    enCurso = Promise.resolve()
+      .then(function () { return accion === 'validar' ? deps.validar(id) : deps.rechazar(id, m.motivo); })
+      .then(function (resp) { return mapear(accion, resp); }, function () {
+        return { tipo: 'red', mensaje: 'No se pudo completar. Revisá tu conexión e intentá de nuevo.' };
+      })
+      .then(function (r) { enCurso = null; return r; });
+    return enCurso;
+  }
+
+  return { resolver: resolver, enCurso: function () { return enCurso !== null; } };
+}
+
 // --- Centro inicial del mapa ---
 // 1) correccion vigente, 2) ubicacion de Irrigacion, 3) ubicacion del dispositivo, 4) vista general de Mendoza.
 function ubicacionCorreccionLogic_centroInicialMapa(o) {
@@ -841,6 +1077,14 @@ function ubicacionCorreccionLogic_htmlTarjeta(c, opc) {
       h += '<p class="ucorr-motivo">Motivo: ' + esc(motivo) + '</p>';
     }
   }
+  if (modo === 'pendiente' && estado === 'PROPUESTA' && opc && opc.puedeValidar === true && typeof c.correccionId === 'string') {
+    // Quien valida (ubicacion + ubicacion_validar): abre el MISMO detalle y la MISMA confirmacion que la bandeja. Rechazar no se ofrece sobre la propia.
+    var id = esc(c.correccionId);
+    h += '<div class="uval-acciones-ficha">' +
+      '<button type="button" class="button uval-btn-validar" data-uval-accion="validar" data-uval-correccion="' + id + '">Validar</button>' +
+      (c.propia === true ? '' : '<button type="button" class="button button-secondary uval-btn-rechazar" data-uval-accion="rechazar" data-uval-correccion="' + id + '">Rechazar</button>') +
+      '</div>';
+  }
   if (modo === 'vigente') {
     h += '<a class="maps-btn ucorr-maps" href="' + esc(ubicacionCorreccionLogic_urlGoogleMaps(c.lat, c.lon)) + '" target="_blank" rel="noopener">Abrir esta ubicación en Google Maps</a>';
   }
@@ -859,7 +1103,7 @@ function ubicacionCorreccionLogic_ordenCronologico(historial) {
 }
 
 // data: respuesta de getCorreccionesUbicacionPozo {vigente, pendientes[], historial[]}
-// opc: {puedeCorregir, aviso:{tipo:'ok'|'info', texto, recargar?}, enSesion}
+// opc: {puedeCorregir, puedeValidar (botones Validar / Rechazar en las pendientes), aviso:{tipo:'ok'|'info', texto, recargar?}, enSesion}
 function ubicacionCorreccionLogic_htmlSeccion(data, opc) {
   var o = opc || {};
   var d = data || {};
@@ -884,7 +1128,7 @@ function ubicacionCorreccionLogic_htmlSeccion(data, opc) {
 
   if (pendientes.length) {
     h += '<p class="ucorr-subtitulo">' + (vigente ? 'Correcciones pendientes de validación' : 'Corrección pendiente de validación') + ' (' + pendientes.length + ')</p>';
-    pendientes.forEach(function (c) { h += ubicacionCorreccionLogic_htmlTarjeta(c, { modo: 'pendiente' }); });
+    pendientes.forEach(function (c) { h += ubicacionCorreccionLogic_htmlTarjeta(c, { modo: 'pendiente', puedeValidar: o.puedeValidar === true }); });
   }
 
   if (!vigente && !pendientes.length) {
@@ -959,6 +1203,17 @@ if (typeof module !== 'undefined' && module.exports) {
     ubicacionCorreccionLogic_htmlTarjeta,
     ubicacionCorreccionLogic_htmlSeccion,
     ubicacionCorreccionLogic_ordenCronologico,
+    ubicacionCorreccionLogic_puedeRechazarPropuesta,
+    ubicacionCorreccionLogic_advertenciaDistancia,
+    ubicacionCorreccionLogic_textoDistancia,
+    ubicacionCorreccionLogic_htmlItemPendiente,
+    ubicacionCorreccionLogic_resumenPendientes,
+    ubicacionCorreccionLogic_htmlDetalleValidacion,
+    ubicacionCorreccionLogic_textosConfirmacionValidar,
+    ubicacionCorreccionLogic_validarMotivoRechazo,
+    ubicacionCorreccionLogic_mensajeErrorResolver,
+    ubicacionCorreccionLogic_crearFlujoResolucion,
+    UCORR_MOTIVO_MAX, UCORR_MENSAJE_VALIDADA_OK, UCORR_MENSAJE_RECHAZADA_OK, UCORR_MENSAJE_YA_RESUELTA, UCORR_MENSAJES_ERROR_RESOLVER,
     ubicacionCorreccionLogic_escapar
   };
 }

@@ -95,12 +95,43 @@
     return !!ctx && ubicacionCorreccionLogic_puedeCorregir(ctx.permisos);
   }
 
+  // Quien valida (ubicacion + ubicacion_validar exactos, fail-closed): ve Validar / Rechazar en las tarjetas "Pendiente".
+  function puedeValidarAhora() {
+    var ctx = contexto();
+    return !!ctx && ubicacionCorreccionLogic_puedeValidar(ctx.permisos);
+  }
+
+  // Validar / Rechazar en una tarjeta pendiente abre el MISMO detalle y la MISMA confirmacion que la bandeja (js/ubicacionValidacion.js): aca no hay logica de
+  // validacion ni llamadas al backend. Un solo oyente en el contenedor (la seccion se vuelve a pintar entera cada vez).
+  function enlazarAccionesDeValidacion(cont) {
+    if (cont.ucorrAccionesEnlazadas === true) {
+      return;
+    }
+    cont.ucorrAccionesEnlazadas = true;
+    cont.addEventListener('click', function (e) {
+      var t = e && e.target;
+      var el = t && typeof t.closest === 'function' ? t.closest('[data-uval-accion]') : null;
+      if (!el || !puedeValidarAhora() || typeof ubicacionValidacionController_abrirDetalle !== 'function') {
+        return;
+      }
+      var id = el.getAttribute('data-uval-correccion');
+      var c = ((estado.lectura && estado.lectura.pendientes) || []).filter(function (p) { return p.correccionId === id; })[0];
+      if (!c) {
+        return;
+      }
+      ubicacionValidacionController_abrirDetalle({
+        correccion: c, vigente: (estado.lectura && estado.lectura.vigente) || null, accion: el.getAttribute('data-uval-accion') === 'rechazar' ? 'rechazar' : 'validar', opener: el
+      });
+    });
+  }
+
   function pintarSeccion() {
     var cont = contenedor();
     if (!cont) {
       return;
     }
-    cont.innerHTML = ubicacionCorreccionLogic_htmlSeccion(estado.lectura, { puedeCorregir: puedeCorregir(), aviso: estado.aviso });
+    enlazarAccionesDeValidacion(cont);
+    cont.innerHTML = ubicacionCorreccionLogic_htmlSeccion(estado.lectura, { puedeCorregir: puedeCorregir(), puedeValidar: puedeValidarAhora(), aviso: estado.aviso });
     var abrir = $('btn-ubic-corr-abrir');
     if (abrir) {
       abrir.addEventListener('click', function () { abrirModal(abrir); });
@@ -162,6 +193,16 @@
 
   function ubicacionCorreccionController_cerrar() {
     cerrarModal(true);
+  }
+
+  // La validacion (bandeja o tarjeta) termino sobre un pozo: si es el de esta ficha, se vuelve a leer y se pinta (pendientes, historial y vigente) con el aviso del
+  // resultado; si es otro, no se toca nada. info: {wellId, mensaje, tipo ('ok' | 'resuelta')}.
+  function ubicacionCorreccionController_alResolver(info) {
+    if (!info || !estado.wellId || info.wellId !== estado.wellId || !contenedor()) {
+      return;
+    }
+    estado.aviso = info.mensaje ? { tipo: info.tipo === 'ok' ? 'ok' : 'info', texto: info.mensaje } : null;
+    cargarLectura(estado.aperturaId);
   }
 
   // --- Modal ---
@@ -813,4 +854,5 @@
   window.ubicacionCorreccionController_inicializar = ubicacionCorreccionController_inicializar;
   window.ubicacionCorreccionController_abrir = ubicacionCorreccionController_abrir;
   window.ubicacionCorreccionController_cerrar = ubicacionCorreccionController_cerrar;
+  window.ubicacionCorreccionController_alResolver = ubicacionCorreccionController_alResolver;
 })();

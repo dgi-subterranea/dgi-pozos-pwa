@@ -18,7 +18,11 @@ const flush = async () => { for (let i = 0; i < 6; i += 1) { await new Promise((
 
 function cargar(opc) {
   const o = opc || {};
-  const elementos = { 'ucorr-pendientes': { hidden: true, textContent: '' }, 'ucorr-pendientes-texto': { hidden: false, textContent: '' } };
+  const oyentes = {};
+  const elementos = {
+    'ucorr-pendientes': { hidden: true, textContent: '', addEventListener: (tipo, f) => { oyentes[tipo] = f; } },
+    'ucorr-pendientes-texto': { hidden: false, textContent: '' }
+  };
   const ctx = vm.createContext({ console, Promise, JSON, Math, Date, Object, Array, String, Number, isFinite, setTimeout });
   ctx.window = ctx;
   ctx.document = { getElementById: (id) => elementos[id] };
@@ -29,13 +33,14 @@ function cargar(opc) {
     const r = respuestas[Math.min(llamadas.length - 1, respuestas.length - 1)];
     return typeof r === 'function' ? r() : Promise.resolve(r);
   });
+  ctx.ubicacionValidacionController_abrirBandeja = jest.fn();
   vm.runInContext(fuenteLogica, ctx);
   vm.runInContext(fuenteControlador, ctx);
   const sesion = { sessionToken: 'tok-real', permisos: o.permisos || { ubicacion: true, ubicacion_validar: true }, onSessionExpired: jest.fn(), onUserDisabled: jest.fn() };
   ctx.ubicacionPendientesController_inicializar(() => sesion);
   const visible = () => !elementos['ucorr-pendientes'].hidden;
   const texto = () => elementos['ucorr-pendientes-texto'].textContent;
-  return { ctx, sesion, llamadas, visible, texto };
+  return { ctx, sesion, llamadas, visible, texto, tocar: () => oyentes.click(), oyentes, boton: elementos['ucorr-pendientes'] };
 }
 
 describe('lo que se ve', () => {
@@ -117,8 +122,9 @@ describe('lo que se ve', () => {
 });
 
 describe('cableado: index.html, app.js, API y service worker', () => {
-  test('el indicador existe oculto, discreto y accesible (role status) en el hub, antes del buscador', () => {
-    expect(html).toMatch(/<p id="ucorr-pendientes" class="ucorr-pendientes" role="status" hidden>/);
+  test('el indicador existe oculto, discreto y es un BOTON accesible (abre la bandeja) en el hub, antes del buscador', () => {
+    expect(html).toMatch(/<button type="button" id="ucorr-pendientes" class="ucorr-pendientes" aria-haspopup="dialog" title="Ver las correcciones pendientes" hidden>/);
+    expect(html).not.toMatch(/<p id="ucorr-pendientes"/);
     expect(html).toMatch(/id="ucorr-pendientes-texto"/);
     expect(html.indexOf('id="ucorr-pendientes"')).toBeGreaterThan(html.indexOf('id="screen-main"'));
     expect(html.indexOf('id="ucorr-pendientes"')).toBeLessThan(html.indexOf('id="search-form"'));
@@ -147,7 +153,9 @@ describe('cableado: index.html, app.js, API y service worker', () => {
   });
 
   test('app.js: contexto fresco (token + permisos), sesion vencida cierra sesion, deshabilitado va a su pantalla', () => {
-    expect(app).toMatch(/ubicacionPendientesController_inicializar\(function \(\) \{\s*return \{\s*sessionToken: sessionToken,\s*permisos: permisosActuales,\s*onSessionExpired: function \(\) \{\s*logout\(\);\s*\},\s*onUserDisabled: function \(\) \{\s*showScreen\('disabled'\);/);
+    expect(app).toMatch(/var contextoValidacion = function \(\) \{\s*return \{\s*sessionToken: sessionToken,\s*permisos: permisosActuales,\s*onSessionExpired: function \(\) \{\s*logout\(\);\s*\},\s*onUserDisabled: function \(\) \{\s*showScreen\('disabled'\);/);
+    expect(app).toContain('ubicacionPendientesController_inicializar(contextoValidacion);');
+    expect(app).toContain('ubicacionValidacionController_inicializar(contextoValidacion);');
   });
 
   test('app.js: se refresca al entrar al hub (showScreen main: login, checkSession y cada regreso) y se resetea en logout', () => {
@@ -162,8 +170,50 @@ describe('cableado: index.html, app.js, API y service worker', () => {
     expect(app).toMatch(/permisosActuales = result\.data\.permisos \|\| permisosActuales;\s*localStorage\.setItem\('sessionToken', sessionToken\);\s*enterMain\(\);/);
   });
 
-  test('la futura cola de validacion tiene el gancho publico alResolver()', () => {
+  test('el gancho publico alResolver() lo usa la bandeja de validacion al terminar cada accion', () => {
     expect(fuenteControlador).toContain('window.ubicacionPendientesController_alResolver = ubicacionPendientesController_alResolver;');
+    expect(leer(__dirname, 'ubicacionValidacion.js')).toContain('ubicacionPendientesController_alResolver();');
+  });
+
+  test('tocar el indicador abre la bandeja de validacion (y nada mas: no consulta ni cambia el numero)', async () => {
+    const t = cargar();
+    await t.ctx.ubicacionPendientesController_refrescar();
+    t.tocar();
+    expect(t.ctx.ubicacionValidacionController_abrirBandeja).toHaveBeenCalledTimes(1);
+    expect(t.ctx.ubicacionValidacionController_abrirBandeja).toHaveBeenCalledWith(t.boton);
+    expect(t.llamadas).toHaveLength(1);
+    expect(t.texto()).toBe('Correcciones pendientes: 3');
+  });
+
+  test('sin la bandeja cargada, tocar el indicador no rompe', async () => {
+    const t = cargar();
+    delete t.ctx.ubicacionValidacionController_abrirBandeja;
+    expect(() => t.tocar()).not.toThrow();
+  });
+
+  test('fijarTotal: la bandeja pinta el total que acaba de leer (0 oculta el indicador); sin permiso o con un dato invalido no hace nada', async () => {
+    const t = cargar();
+    expect(t.ctx.ubicacionPendientesController_fijarTotal(5)).toBe(true);
+    expect(t.visible()).toBe(true);
+    expect(t.texto()).toBe('Correcciones pendientes: 5');
+    expect(t.ctx.ubicacionPendientesController_fijarTotal(0)).toBe(true);
+    expect(t.visible()).toBe(false);
+    ['x', -1, 1.5, NaN, null, undefined].forEach((v) => expect(t.ctx.ubicacionPendientesController_fijarTotal(v)).toBe(false));
+    const sin = cargar({ permisos: { ubicacion: true, ubicacion_corregir: true } });
+    expect(sin.ctx.ubicacionPendientesController_fijarTotal(4)).toBe(false);
+    expect(sin.visible()).toBe(false);
+  });
+
+  test('fijarTotal vuelve obsoleta una consulta que estaba en vuelo (no pisa el total mas nuevo)', async () => {
+    let resolver;
+    const t = cargar({ respuestas: [() => new Promise((r) => { resolver = r; })] });
+    const pendiente = t.ctx.ubicacionPendientesController_refrescar();
+    await flush();                                  // la consulta ya salio y esta en vuelo
+    t.ctx.ubicacionPendientesController_fijarTotal(2);
+    resolver({ status: 'ok', data: { total: 9, inconsistentes: 0, pendientes: [] } });
+    await pendiente;
+    await flush();
+    expect(t.texto()).toBe('Correcciones pendientes: 2');
   });
 
   test('la UI no bloquea: ningun alert/confirm, nada persistido, solo textContent', () => {

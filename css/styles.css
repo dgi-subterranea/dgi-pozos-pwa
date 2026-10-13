@@ -4070,6 +4070,30 @@ body.con-bandeja {
   font-weight: 800;
   letter-spacing: 0.01em;
 }
+/* el indicador es un boton que abre la bandeja de validacion */
+button.ucorr-pendientes {
+  font-family: inherit;
+  text-align: left;
+  min-height: 36px;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+button.ucorr-pendientes:hover {
+  background: #fbe6b3;
+}
+button.ucorr-pendientes:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+button.ucorr-pendientes[hidden] {
+  display: none;
+}
+.ucorr-pendientes-ir {
+  flex: none;
+  font-size: 1.1rem;
+  line-height: 1;
+}
 .ucorr-pendientes-punto {
   flex: none;
   width: 8px;
@@ -4420,6 +4444,164 @@ body.ucorr-abierto {
   font-size: 0.82rem;
   font-weight: 700;
   color: var(--color-warn);
+}
+
+/* Validacion de correcciones pendientes: bandeja (renglones-boton), detalle con mapa y acciones. Mobile first: todo en una columna, botones de 44 px o mas. */
+.uval-lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.uval-item {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  width: 100%;
+  min-height: 44px;
+  padding: 12px 14px;
+  text-align: left;
+  font: inherit;
+  color: var(--color-text);
+  background: var(--color-warn-tint);
+  border: 1.5px solid #ecd49c;
+  border-radius: 14px;
+  cursor: pointer;
+  box-shadow: none;
+}
+.uval-item:hover {
+  background: #fbe6b3;
+}
+.uval-item-fuerte:hover {
+  background: #ffecea;
+}
+.uval-item:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+.uval-item-fuerte {
+  background: #fff7f6;
+  border-color: var(--color-error);
+}
+.uval-item-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 10px;
+}
+.uval-item-pozo {
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+.uval-adv {
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1.5px solid currentColor;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+.uval-adv-media {
+  color: var(--color-warn);
+}
+.uval-adv-fuerte {
+  color: var(--color-error);
+}
+.uval-item-linea,
+.uval-item-obs {
+  font-size: 0.85rem;
+  color: var(--color-text-soft);
+  overflow-wrap: anywhere;
+}
+.uval-item-coord {
+  font-size: 0.95rem;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+.uval-item-obs {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--color-text);
+}
+.uval-item-ir {
+  align-self: flex-end;
+  font-size: 0.85rem;
+  font-weight: 800;
+  color: var(--color-primary);
+}
+.uval-pozo {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+.uval-estado {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--color-primary);
+}
+.uval-estado[hidden] {
+  display: none;
+}
+#uval-detalle-datos {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+#uval-detalle-datos .ucorr-datos dd {
+  overflow-wrap: anywhere;
+}
+.uval-acciones,
+.uval-acciones-ficha {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.uval-acciones[hidden] {
+  display: none;
+}
+.uval-acciones-ficha {
+  margin-top: 10px;
+}
+.uval-acciones .button,
+.uval-acciones-ficha .button {
+  width: 100%;
+}
+/* Rechazar: secundario y destructivo; no depende solo del color (contorno + texto distinto + separacion del boton principal) */
+.uval-btn-rechazar,
+.uval-btn-rechazar:hover {
+  background: transparent;
+  color: var(--color-error);
+  border: 2px solid var(--color-error);
+}
+.uval-bloque {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1.5px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-bg);
+}
+.uval-bloque[hidden] {
+  display: none;
+}
+.uval-bloque-titulo {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 800;
+}
+.uval-bloque-lista {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 0.9rem;
+  line-height: 1.45;
 }
 
 /* Ingresar coordenadas (GMS / WGS84): dos ejes con grados / minutos / segundos / hemisferio, errores EN CONTEXTO, equivalencia WGS84 y aviso de punto movido */
