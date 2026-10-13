@@ -438,10 +438,10 @@ function ubicacionCorreccionService_getPorPozo(email, wellId) {
   var delPozo = ubicacionCorreccionService_leerDerivadas().filter(function (c) { return c.wellId === wellId; });
   delPozo.sort(ubicacionCorreccionService_masReciente);
   function v(c) { return ubicacionCorreccionService_vista(c, email); }
-  var vigentes = delPozo.filter(function (c) { return c.estado === 'VALIDADA'; });
+  var vigente = ubicacionCorreccionService_elegirVigente(delPozo);
   return {
     wellId: wellId,
-    vigente: vigentes.length ? v(vigentes[0]) : null,
+    vigente: vigente ? v(vigente) : null,
     pendientes: delPozo.filter(function (c) { return c.estado === 'PROPUESTA'; }).map(v),
     historial: delPozo.map(v)
   };
@@ -457,6 +457,134 @@ function ubicacionCorreccionService_getPendientes(email) {
     inconsistentes: derivadas.filter(function (c) { return c.estado === UBICACION_CORR_ESTADO_INCONSISTENTE; }).length,
     pendientes: pendientes.slice(0, UBICACION_CORR_PENDIENTES_MAX).map(function (c) { return ubicacionCorreccionService_vista(c, email); })
   };
+}
+
+// --- Ubicaciones validadas vigentes (delta del PUNTO OPERATIVO: getUbicacionesValidadas) ---
+// Una sola interpretacion de la cadena de estados: se parte de ubicacionCorreccionService_leerDerivadas() (la misma que usan getPorPozo y la cola) y la VIGENTE de un
+// pozo se elige con ubicacionCorreccionService_elegirVigente(), la MISMA rutina que usa getPorPozo. Solo una correccion en estado VALIDADA genera delta: SUPERADA,
+// REVERTIDA, RECHAZADA, PROPUESTA e INCONSISTENTE no.
+// Payload MINIMO (lo recibe cualquier usuario activo, igual que getMapaPozos): {wellId, lat, lon, vts}. Nada de autor, observacion, metodo, motivo, ids, coordenada
+// original, distancia ni snapshot del padron: es la ubicacion final que reemplaza a la base que esos mismos usuarios ya ven.
+// vts = timestamp del evento VALIDADA vigente (la hoja UbicacionCorreccionesLog, columna `timestamp`): el instante en que esa ubicacion paso a ser la vigente. No es
+// la fecha de la propuesta.
+var UBICACION_VALIDADAS_CACHE_KEY = 'ubicaciones_validadas_v1';
+var UBICACION_VALIDADAS_INVAL_KEY = 'ubicaciones_validadas_v1_inval';
+var UBICACION_VALIDADAS_CACHE_SEGUNDOS = 120;
+var UBICACION_VALIDADAS_INVAL_SEGUNDOS = 180;
+var UBICACION_VALIDADAS_CACHE_MAX_CARACTERES = 90000;      // CacheService admite 100 KB por valor: pasado esto no se cachea (se calcula en cada llamada)
+var UBICACION_VALIDADAS_MARGEN_CARRERA_MS = 2000;
+
+// De una lista de correcciones derivadas DE UN MISMO POZO, la vigente: la VALIDADA mas reciente (misma regla que getPorPozo: orden de masReciente). null si no hay.
+function ubicacionCorreccionService_elegirVigente(delPozo) {
+  var ordenadas = (delPozo || []).slice().sort(ubicacionCorreccionService_masReciente);
+  var vigentes = ordenadas.filter(function (c) { return c.estado === 'VALIDADA'; });
+  return vigentes.length ? vigentes[0] : null;
+}
+
+function ubicacionCorreccionService_isoDe(valor) {
+  if (valor instanceof Date) {
+    return isNaN(valor.getTime()) ? '' : valor.toISOString();
+  }
+  return typeof valor === 'string' ? valor : '';
+}
+
+// derivadas -> [{wellId, lat, lon, vts}] ordenado por wellId. Coordenadas invalidas (no numericas o fuera de Mendoza) no salen.
+function ubicacionCorreccionService_ubicacionesValidadas(derivadas) {
+  var porPozo = {};
+  (derivadas || []).forEach(function (c) {
+    if (c.estado === 'VALIDADA') {
+      (porPozo[c.wellId] = porPozo[c.wellId] || []).push(c);
+    }
+  });
+  var salida = [];
+  Object.keys(porPozo).sort().forEach(function (wellId) {
+    var c = ubicacionCorreccionService_elegirVigente(porPozo[wellId]);
+    if (!c || !ubicacionCorreccionService_esNumero(c.lat) || !ubicacionCorreccionService_esNumero(c.lon) || !ubicacionCorreccionService_dentroDeMendoza(c.lat, c.lon)) {
+      return;
+    }
+    var vts = ubicacionCorreccionService_isoDe(c.ultimoEvento ? c.ultimoEvento.timestamp : null) || ubicacionCorreccionService_isoDe(c.timestamp);
+    salida.push({ wellId: wellId, lat: c.lat, lon: c.lon, vts: vts });
+  });
+  return salida;
+}
+
+function ubicacionCorreccionService_logCache(mensaje) {
+  if (typeof Logger !== 'undefined' && Logger && typeof Logger.log === 'function') {
+    Logger.log('Ubicaciones validadas (cache): ' + mensaje);
+  }
+}
+
+// El cache nunca es indispensable: si CacheService falla se sigue sin el.
+function ubicacionCorreccionService_cacheValidadas() {
+  try {
+    return CacheService.getScriptCache();
+  } catch (err) {
+    ubicacionCorreccionService_logCache('CacheService no disponible: ' + String(err));
+    return null;
+  }
+}
+
+// Se llama DESPUES de que la escritura que cambia la vigente quedo confirmada (SpreadsheetApp.flush dentro del repositorio). NUNCA lanza: si falla, la operacion
+// principal sigue y el TTL (120 s) acota el desfasaje. Ademas deja una marca con la hora de la invalidacion: un lector que empezo a calcular ANTES de ella no guarda su
+// resultado (posiblemente viejo) en el cache (ver getUbicacionesValidadas).
+function ubicacionCorreccionService_invalidarUbicacionesValidadas() {
+  var cache = ubicacionCorreccionService_cacheValidadas();
+  if (!cache) {
+    return false;
+  }
+  var ok = true;
+  try {
+    cache.put(UBICACION_VALIDADAS_INVAL_KEY, String(Date.now()), UBICACION_VALIDADAS_INVAL_SEGUNDOS);
+  } catch (err) {
+    ok = false;
+    ubicacionCorreccionService_logCache('no se pudo marcar la invalidacion: ' + String(err));
+  }
+  try {
+    cache.remove(UBICACION_VALIDADAS_CACHE_KEY);
+  } catch (err) {
+    ok = false;
+    ubicacionCorreccionService_logCache('no se pudo invalidar: ' + String(err));
+  }
+  return ok;
+}
+
+// {ubicaciones: [{wellId, lat, lon, vts}]}. Primero el cache (contenido ya sanitizado); si no esta, se calcula desde las hojas y se guarda 120 s.
+function ubicacionCorreccionService_getUbicacionesValidadas() {
+  var cache = ubicacionCorreccionService_cacheValidadas();
+  if (cache) {
+    try {
+      var crudo = cache.get(UBICACION_VALIDADAS_CACHE_KEY);
+      if (crudo !== null && crudo !== undefined) {
+        var parseado = JSON.parse(crudo);
+        if (parseado && Array.isArray(parseado.ubicaciones)) {
+          return parseado;
+        }
+      }
+    } catch (err) {
+      ubicacionCorreccionService_logCache('lectura de cache invalida, se recalcula: ' + String(err));
+    }
+  }
+
+  var inicio = Date.now();
+  var payload = { ubicaciones: ubicacionCorreccionService_ubicacionesValidadas(ubicacionCorreccionService_leerDerivadas()) };
+
+  if (cache) {
+    try {
+      var marca = cache.get(UBICACION_VALIDADAS_INVAL_KEY);
+      var invalidadaDuranteElCalculo = marca !== null && marca !== undefined && Number(marca) >= inicio - UBICACION_VALIDADAS_MARGEN_CARRERA_MS;
+      var json = JSON.stringify(payload);
+      if (invalidadaDuranteElCalculo) {
+        ubicacionCorreccionService_logCache('se invalido mientras se calculaba: no se guarda');
+      } else if (json.length > UBICACION_VALIDADAS_CACHE_MAX_CARACTERES) {
+        ubicacionCorreccionService_logCache('payload de ' + json.length + ' caracteres: supera el limite de CacheService, no se guarda');
+      } else {
+        cache.put(UBICACION_VALIDADAS_CACHE_KEY, json, UBICACION_VALIDADAS_CACHE_SEGUNDOS);
+      }
+    } catch (err) {
+      ubicacionCorreccionService_logCache('no se pudo guardar: ' + String(err));
+    }
+  }
+  return payload;
 }
 
 // --- Escrituras ---
@@ -529,6 +657,9 @@ function ubicacionCorreccionService_atenderExistente(existente, v, wellId, email
       supersedidas = val.supersedidas;
     }
     ubicacionCorreccionRepository_agregarEventos(aEscribir);
+    if (auto === true) {
+      ubicacionCorreccionService_invalidarUbicacionesValidadas();       // la escritura ya incluye una VALIDADA: cambio la vigente
+    }
     existente = ubicacionCorreccionService_buscarPorClientRequestId(ubicacionCorreccionService_leerDerivadas(), emailN, v.clientRequestId);
     curada = true;
   }
@@ -639,6 +770,9 @@ function ubicacionCorreccionService_proponer(email, nombre, wellId, datos, opcio
       supersedidas = val.supersedidas;
     }
     ubicacionCorreccionRepository_agregarCorreccionConEventos(correccion, aEscribir);
+    if (auto) {
+      ubicacionCorreccionService_invalidarUbicacionesValidadas();       // nacio VALIDADA (y supersedio a la anterior): cambio la vigente
+    }
 
     var iso = ahora.toISOString();
     var derivada = ubicacionCorreccionService_derivar(
@@ -712,6 +846,9 @@ function ubicacionCorreccionService_resolver(accion, email, nombre, correccionId
       eventos = [{ correccionId: objetivo.correccionId, timestamp: ahora, evento: regla.hasta, email: emailN, nombre: nombre || '', motivo: m.motivo }];
     }
     ubicacionCorreccionRepository_agregarEventos(eventos);
+    if (accion === 'validar' || accion === 'revertir') {
+      ubicacionCorreccionService_invalidarUbicacionesValidadas();       // rechazar no cambia la vigente: no invalida
+    }
 
     var iso = ahora.toISOString();
     var vistaFinal = Object.assign({}, objetivo, {
@@ -748,6 +885,8 @@ if (typeof module !== 'undefined' && module.exports) {
     UBICACION_CORR_OBSERVACION_MAX,
     UBICACION_CORR_MENDOZA_BBOX,
     UBICACION_CORR_PENDIENTES_MAX,
+    UBICACION_VALIDADAS_CACHE_KEY,
+    UBICACION_VALIDADAS_CACHE_SEGUNDOS,
     ubicacionCorreccionService_distanciaMetros,
     ubicacionCorreccionService_distanciaMetrosExacta,
     ubicacionCorreccionService_dentroDeMendoza,
@@ -757,6 +896,10 @@ if (typeof module !== 'undefined' && module.exports) {
     ubicacionCorreccionService_vista,
     ubicacionCorreccionService_getPorPozo,
     ubicacionCorreccionService_getPendientes,
+    ubicacionCorreccionService_elegirVigente,
+    ubicacionCorreccionService_ubicacionesValidadas,
+    ubicacionCorreccionService_getUbicacionesValidadas,
+    ubicacionCorreccionService_invalidarUbicacionesValidadas,
     ubicacionCorreccionService_proponer,
     ubicacionCorreccionService_validar,
     ubicacionCorreccionService_rechazar,

@@ -129,6 +129,7 @@ function installAppsScriptFakes() {
   global.ubicacionCorreccionService_proponer = jest.fn();
   global.ubicacionCorreccionService_getPorPozo = jest.fn();
   global.ubicacionCorreccionService_getPendientes = jest.fn();
+  global.ubicacionCorreccionService_getUbicacionesValidadas = jest.fn(() => ({ ubicaciones: [] }));
   global.ubicacionCorreccionService_validar = jest.fn();
   global.ubicacionCorreccionService_rechazar = jest.fn();
   global.ubicacionCorreccionService_revertir = jest.fn();

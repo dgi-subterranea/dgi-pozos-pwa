@@ -37,6 +37,8 @@ function doPost(e) {
         response = handleRegisterWellSearch(body.sessionToken, body.wellId, body.modulos);
       } else if (body.action === 'getMapaPozos') {
         response = handleGetMapaPozos(body.sessionToken);
+      } else if (body.action === 'getUbicacionesValidadas') {
+        response = handleGetUbicacionesValidadas(body.sessionToken);
       } else if (body.action === 'getWellSummary') {
         response = handleGetWellSummary(body.sessionToken, body.wellId);
       } else if (body.action === 'getMapaNE') {
@@ -448,6 +450,21 @@ function handleGetMapaPozos(sessionToken) {
   }
 
   return { status: 'ok', data: { pozos: result.pozos, metadata: result.metadata } };
+}
+
+// Ubicaciones VALIDADAS vigentes (delta del punto operativo): {wellId, lat, lon, vts} por pozo. Mismo contrato de permisos que getMapaPozos: CUALQUIER usuario
+// activo, sin permiso de modulo (todos los usuarios deben ver la misma posicion del mismo pozo, y esta coordenada es la que reemplaza a la base que ya ven). Sesion
+// invalida -> UNAUTHORIZED; usuario inactivo -> USER_DISABLED. No se audita por wellId (no recibe ninguno). Nada de autor, observacion, ids ni historial.
+function handleGetUbicacionesValidadas(sessionToken) {
+  var validation = validateSession(sessionToken, 'getUbicacionesValidadas');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  try {
+    return { status: 'ok', data: ubicacionCorreccionService_getUbicacionesValidadas() };
+  } catch (err) {
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
 }
 
 // Popup liviano del Mapa de Pozos: reutiliza el mismo
@@ -1242,6 +1259,7 @@ if (typeof module !== 'undefined' && module.exports) {
     handleGetWellLocation,
     handleRegisterWellSearch,
     handleGetMapaPozos,
+    handleGetUbicacionesValidadas,
     handleGetWellSummary,
     handleGetMapaNE,
     handleGetIndiceBusquedaProvincia,

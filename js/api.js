@@ -52,6 +52,12 @@ function apiGetMapaPozos(sessionToken) {
   return callBackend('getMapaPozos', { sessionToken: sessionToken });
 }
 
+// Ubicaciones VALIDADAS vigentes (delta del punto operativo): [{wellId, lat, lon, vts}], sin autor ni datos internos. Cualquier usuario activo, igual que
+// getMapaPozos. TODAVIA no la llama nadie (el overlay en mapaDataset_obtener es una etapa posterior); queda lista para probar el contrato frontend/backend.
+function apiGetUbicacionesValidadas(sessionToken) {
+  return callBackend('getUbicacionesValidadas', { sessionToken: sessionToken });
+}
+
 // Popup liviano del mapa: solo se llama si datos=SI (ver
 // mapaLogic_debeConsultarSummary) - nunca para mostrar "denegado", el
 // permiso se respeta antes de disparar la llamada de red.
