@@ -249,7 +249,7 @@
     <div class="tv-header">
       <div>
         <p class="mapa-titulo">Mapa de Pozos</p>
-        <p class="tv-header-label">Ubicaciones confirmadas y disponibles del padrón</p>
+        <p class="tv-header-label">Ubicaciones del padrón y validadas en campo</p>
       </div>
     </div>
     <!-- Mapa/Satelite: control compacto, arriba del mapa (aprobado - ver
@@ -379,8 +379,9 @@
         <p class="mapa-filtro-label">Ubicación</p>
         <div id="mapa-estado-chips" class="mapa-chips-wrap">
           <button type="button" class="mapa-estado-chip active" data-estado="todos" aria-pressed="true">Todos</button>
-          <button type="button" class="mapa-estado-chip mapa-estado-chip-confirmada" data-estado="C" aria-pressed="false">Confirmada</button>
+          <button type="button" class="mapa-estado-chip mapa-estado-chip-confirmada" data-estado="C" aria-pressed="false">Coincidente</button>
           <button type="button" class="mapa-estado-chip mapa-estado-chip-disponible" data-estado="D" aria-pressed="false">Disponible</button>
+          <button type="button" class="mapa-estado-chip mapa-estado-chip-validada" data-estado="V" aria-pressed="false">Validada en campo</button>
         </div>
       </div>
 
@@ -491,6 +492,8 @@
       <button type="button" id="btn-mapa-limpiar-filtros" class="mapa-expandir-btn">Limpiar filtros</button>
     </div>
     <div id="mapa-contador" class="mapa-contador" hidden></div>
+    <!-- Aviso discreto si no se pudieron traer las ubicaciones validadas (mapa con las ubicaciones base). js/mapaDataset.js marca data.degradado. -->
+    <p id="mapa-aviso-ubicaciones" class="aviso-ubicaciones" role="status" hidden>No se pudieron actualizar las ubicaciones validadas. Se muestran las ubicaciones base.</p>
     <div class="mapa-viewport">
       <div id="mapa-loading" class="mapa-loading">
         <div class="cargando" data-cargando>Cargando mapa...</div>
@@ -747,6 +750,7 @@
           <p class="mapa-filtro-label">Aptitud para reemplazo</p>
           <div id="cercamio-reemplazo-chips" class="mapa-chips-wrap"></div>
         </div>
+        <p id="cercamio-aviso-ubicaciones" class="aviso-ubicaciones" role="status" hidden>No se pudieron actualizar las ubicaciones validadas. Se muestran las ubicaciones base.</p>
         <p id="cercamio-contador" class="mapa-contador"></p>
         <div id="cercamio-lista" class="cercamio-lista"></div>
         <button type="button" id="btn-cercamio-ver-todos-mapa" class="button-secondary cercamio-ver-todos-mapa">Ver todos en el mapa</button>
@@ -1496,6 +1500,7 @@
   <script src="js/mapaLogic.js"></script>
   <script src="js/reemplazoResumenLogic.js"></script>
   <script src="js/reemplazoEstados.js"></script>
+  <script src="js/ubicacionOperativaLogic.js"></script>
   <script src="js/mapaDataset.js"></script>
   <script src="js/mapaNEDataset.js"></script>
   <script src="js/busquedaProvinciaDataset.js"></script>

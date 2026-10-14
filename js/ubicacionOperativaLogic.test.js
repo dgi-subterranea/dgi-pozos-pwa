@@ -690,15 +690,19 @@ describe('rendimiento y datos reales', () => {
   });
 });
 
-describe('aislamiento: este modulo todavia no se usa en ninguna pantalla', () => {
+describe('aislamiento: el unico consumidor es mapaDataset_obtener (el punto central del overlay)', () => {
   const raiz = path.join(__dirname, '..');
   const leer = (...p) => fs.readFileSync(path.join(raiz, ...p), 'utf8');
 
-  test('ningun archivo de la app (index.html, service worker, js/*.js, backend/src) lo referencia aun', () => {
-    expect(leer('index.html')).not.toMatch(/ubicacionOperativa/);
-    expect(leer('sw.js')).not.toMatch(/ubicacionOperativa/);
+  test('solo js/mapaDataset.js lo usa (ni mapa, Cerca Mio, seleccion ni reemplazos); se carga en index.html y se precachea; el backend no lo referencia', () => {
+    expect(leer('index.html')).toMatch(/<script src="js\/ubicacionOperativaLogic\.js"><\/script>/);
+    expect(leer('sw.js')).toContain("'./js/ubicacionOperativaLogic.js'");
     fs.readdirSync(path.join(raiz, 'js')).filter((f) => f.endsWith('.js') && !f.endsWith('.test.js') && f !== 'ubicacionOperativaLogic.js').forEach((f) => {
-      expect(leer('js', f)).not.toMatch(/ubicacionOperativa/);
+      if (f === 'mapaDataset.js') {
+        expect(leer('js', f)).toMatch(/ubicacionOperativaLogic_aplicarOverlay/);
+      } else {
+        expect(leer('js', f)).not.toMatch(/ubicacionOperativa/);
+      }
     });
     fs.readdirSync(path.join(raiz, 'backend', 'src')).forEach((f) => expect(leer('backend', 'src', f)).not.toMatch(/ubicacionOperativa/));
   });

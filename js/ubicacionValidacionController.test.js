@@ -124,6 +124,7 @@ function cargar(opc) {
   ctx.ubicacionPendientesController_alResolver = jest.fn();
   ctx.ubicacionPendientesController_fijarTotal = jest.fn();
   ctx.ubicacionCorreccionController_alResolver = jest.fn();
+  ctx.mapaDataset_invalidarDeltas = jest.fn();
 
   vm.runInContext(fuenteConversion, ctx);
   vm.runInContext(fuenteLogica, ctx);
@@ -796,6 +797,50 @@ describe('desde la ficha del pozo: mismo detalle, misma confirmacion, mismo back
     await flush();
     expect(t.ctx.ubicacionCorreccionController_alResolver).not.toHaveBeenCalled();
     expect(visible(t, 'uval-overlay')).toBe(false);
+  });
+});
+
+describe('el mapa vuelve a pedir las ubicaciones validadas cuando cambia la vigente', () => {
+  test('validar INVALIDA los deltas del mapa (bandeja y ficha); rechazar NO', async () => {
+    const t = cargar();
+    await abrirDetalleDesdeLista(t, P1.correccionId);
+    t.el('btn-uval-validar').click();
+    t.el('btn-uval-validar-confirmar').click();
+    await flush();
+    expect(t.ctx.mapaDataset_invalidarDeltas).toHaveBeenCalledTimes(1);
+
+    const r = cargar();
+    await abrirDetalleDesdeLista(r, P1.correccionId);
+    r.el('btn-uval-rechazar').click();
+    r.el('uval-motivo').value = 'No coincide';
+    r.el('btn-uval-rechazar-confirmar').click();
+    await flush();
+    expect(r.ctx.mapaDataset_invalidarDeltas).not.toHaveBeenCalled();
+  });
+
+  test('"ya resuelta" por otra persona tambien invalida (no sabemos como se resolvio); desde la ficha igual', async () => {
+    const t = cargar({ validar: { status: 'error', code: 'INVALID_TRANSITION' } });
+    t.ctx.ubicacionValidacionController_abrirDetalle({ correccion: P1, vigente: null, accion: 'validar', opener: { focus() {} } });
+    await flush();
+    t.el('btn-uval-validar-confirmar').click();
+    await flush();
+    expect(t.ctx.mapaDataset_invalidarDeltas).toHaveBeenCalledTimes(1);
+  });
+
+  test('un error del backend o de conexion NO invalida (no cambio nada); sin la funcion del mapa cargada no rompe', async () => {
+    const t = cargar({ validar: { status: 'error', code: 'SERVICE_UNAVAILABLE' } });
+    await abrirDetalleDesdeLista(t, P1.correccionId);
+    t.el('btn-uval-validar').click();
+    t.el('btn-uval-validar-confirmar').click();
+    await flush();
+    expect(t.ctx.mapaDataset_invalidarDeltas).not.toHaveBeenCalled();
+    const s = cargar();
+    delete s.ctx.mapaDataset_invalidarDeltas;
+    await abrirDetalleDesdeLista(s, P1.correccionId);
+    s.el('btn-uval-validar').click();
+    s.el('btn-uval-validar-confirmar').click();
+    await flush();
+    expect(s.srv.validadas).toEqual([P1.correccionId]);
   });
 });
 

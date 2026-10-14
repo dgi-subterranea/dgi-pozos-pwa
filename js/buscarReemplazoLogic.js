@@ -154,13 +154,18 @@ function buscarReemplazoLogic_construirReferencia(puntoNE, pozosProvincia) {
   if (puntoNE.wellId && pozosProvincia) {
     for (var i = 0; i < pozosProvincia.length; i++) {
       if (pozosProvincia[i].wellId === puntoNE.wellId) {
-        var distancia = cercaMioLogic_haversineMetros(puntoNE.lat, puntoNE.lon, pozosProvincia[i].lat, pozosProvincia[i].lon);
-        coordenadaProvincia = {
-          lat: pozosProvincia[i].lat,
-          lon: pozosProvincia[i].lon,
-          distanciaMetros: distancia,
-          discrepante: distancia >= BUSCAR_REEMPLAZO_UMBRAL_COORDENADA_METROS
-        };
+        // El texto del aviso dice "padron de Provincia": si el punto tiene una ubicacion VALIDADA (overlay del punto operativo, fuente 'CAMPO') se compara contra
+        // la base de Irrigacion (punto.base), nunca contra la validada; sin base (el pozo no estaba en el mapa) no se inventa ninguna comparacion.
+        var ref = pozosProvincia[i].fuente === 'CAMPO' ? pozosProvincia[i].base : pozosProvincia[i];
+        if (ref && buscarReemplazoLogic_esNumero(ref.lat) && buscarReemplazoLogic_esNumero(ref.lon)) {
+          var distancia = cercaMioLogic_haversineMetros(puntoNE.lat, puntoNE.lon, ref.lat, ref.lon);
+          coordenadaProvincia = {
+            lat: ref.lat,
+            lon: ref.lon,
+            distanciaMetros: distancia,
+            discrepante: distancia >= BUSCAR_REEMPLAZO_UMBRAL_COORDENADA_METROS
+          };
+        }
         break;
       }
     }
@@ -465,7 +470,7 @@ function buscarReemplazoLogic_explicar(c, ref) {
     clave: 'coordenada',
     // "Disponible" (1 fuente) es lo normal (88 % de los pozos): se informa
     // como dato, no como alerta.
-    texto: c.estadoCoordenada === 'C' ? 'Coordenada confirmada' : 'Coordenada disponible (1 fuente)',
+    texto: c.estadoCoordenada === 'V' ? 'Coordenada validada en campo' : (c.estadoCoordenada === 'C' ? 'Coordenada coincidente' : 'Coordenada disponible (1 fuente)'),
     tipo: 'dato'
   });
 

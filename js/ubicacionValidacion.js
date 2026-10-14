@@ -460,6 +460,12 @@
 
   // Termino la accion (validada, rechazada o ya resuelta por otro): se vuelve a la lista (refrescada) o, si se vino de la ficha, se cierra y la ficha se actualiza.
   function terminar(c, r) {
+    // validar (o que otra persona la resolviera: no sabemos como) puede haber cambiado la ubicacion vigente: el mapa vuelve a pedir los deltas. Rechazar no la cambia.
+    if ((r.tipo === 'ok' && r.accion === 'validar') || r.tipo === 'resuelta') {
+      if (typeof mapaDataset_invalidarDeltas === 'function') {
+        mapaDataset_invalidarDeltas();
+      }
+    }
     notificarResolucion(c, r);
     if (estado.origen === 'badge') {
       ponerAviso(r.mensaje);

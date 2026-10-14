@@ -22,6 +22,9 @@
      "baja"/atencion en el resto de la app, ver .hub-chip.baja). */
   --color-mapa-confirmada: #0b5a7a;
   --color-mapa-disponible: #4fa3c4;
+  /* Validada en campo (V): mismo hex que MAPA_COLOR_VALIDADA / MAPA_COLOR_VALIDADA_BORDE en js/mapa.js. */
+  --color-mapa-validada: #43a047;
+  --color-mapa-validada-borde: #14532d;
   /* Geografia de seleccion (poligono, vertices, punto/circulo de radio,
      anillo de pozos seleccionados) - mismo hex que MAPA_COLOR_SELECCION en
      js/mapaShared.js (Leaflet no lee variables CSS: mantener en sync). */
@@ -1801,6 +1804,25 @@ table.ne-table tr:last-child td {
   background: var(--color-mapa-disponible);
   color: #fff;
   border-color: var(--color-mapa-disponible);
+}
+.mapa-estado-chip-validada.active {
+  background: var(--color-mapa-validada);
+  color: #fff;
+  border-color: var(--color-mapa-validada-borde);
+}
+/* Aviso discreto (ubicaciones validadas no disponibles): una linea de texto, sin alarma. */
+.aviso-ubicaciones {
+  margin: 6px 18px 0;
+  padding: 6px 10px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--color-warn);
+  background: var(--color-warn-tint);
+  border-radius: 10px;
+}
+.aviso-ubicaciones[hidden] {
+  display: none;
 }
 
 /* Chip "Niveles estáticos" (v2.1.0, grupo Tiene): mismo color activo que

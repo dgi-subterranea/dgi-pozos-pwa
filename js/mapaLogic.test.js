@@ -63,9 +63,14 @@ describe('mapaLogic_nombreDepartamento', () => {
 });
 
 describe('mapaLogic_estadoLabel', () => {
-  test('C -> Confirmada, D -> Disponible', () => {
-    expect(mapaLogic_estadoLabel('C')).toBe('Confirmada');
+  test('C -> Coincidente, D -> Disponible, V -> Validada en campo', () => {
+    expect(mapaLogic_estadoLabel('C')).toBe('Coincidente');
     expect(mapaLogic_estadoLabel('D')).toBe('Disponible');
+    expect(mapaLogic_estadoLabel('V')).toBe('Validada en campo');
+  });
+
+  test('"Confirmada" ya no existe como etiqueta del mapa (C es coincidencia entre fuentes, no una validacion humana)', () => {
+    expect(JSON.stringify(['C', 'D', 'V'].map(mapaLogic_estadoLabel))).not.toMatch(/onfirmad/);
   });
 
   test('estado desconocido -> devuelve el valor tal cual, no rompe', () => {
@@ -131,7 +136,7 @@ describe('mapaLogic_filtrarPorEstado', () => {
     expect(mapaLogic_filtrarPorEstado(pozos, { C: true, D: true })).toEqual(pozos);
   });
 
-  test('solo Confirmada -> solo puntos estado C', () => {
+  test('solo Coincidente -> solo puntos estado C', () => {
     const r = mapaLogic_filtrarPorEstado(pozos, { C: true, D: false });
     expect(r).toEqual([punto('01-0001', 'C'), punto('19-0001', 'C')]);
   });
@@ -156,6 +161,37 @@ describe('mapaLogic_filtrarPorEstado', () => {
 
   test('dataset vacio -> lista vacia con cualquier combinacion', () => {
     expect(mapaLogic_filtrarPorEstado([], { C: true, D: false })).toEqual([]);
+  });
+});
+
+describe('mapaLogic_filtrarPorEstado con Validada en campo (V)', () => {
+  const pozos = [punto('01-0001', 'C'), punto('04-0001', 'D'), punto('04-0002', 'V'), punto('19-0001', 'C'), punto('19-0002', 'V')];
+
+  test('ningun chip activo -> muestra TODO, V incluida (no desaparece)', () => {
+    expect(mapaLogic_filtrarPorEstado(pozos, {})).toEqual(pozos);
+    expect(mapaLogic_filtrarPorEstado(pozos, { C: false, D: false, V: false })).toEqual(pozos);
+  });
+
+  test('solo V -> solo validadas en campo; solo D -> solo disponibles; solo C -> solo coincidentes', () => {
+    expect(mapaLogic_filtrarPorEstado(pozos, { V: true }).map((p) => p.wellId)).toEqual(['04-0002', '19-0002']);
+    expect(mapaLogic_filtrarPorEstado(pozos, { D: true }).map((p) => p.wellId)).toEqual(['04-0001']);
+    expect(mapaLogic_filtrarPorEstado(pozos, { C: true }).map((p) => p.wellId)).toEqual(['01-0001', '19-0001']);
+  });
+
+  test('combinaciones = UNION de los estados elegidos', () => {
+    expect(mapaLogic_filtrarPorEstado(pozos, { C: true, V: true }).map((p) => p.wellId)).toEqual(['01-0001', '04-0002', '19-0001', '19-0002']);
+    expect(mapaLogic_filtrarPorEstado(pozos, { D: true, V: true }).map((p) => p.wellId)).toEqual(['04-0001', '04-0002', '19-0002']);
+    expect(mapaLogic_filtrarPorEstado(pozos, { C: true, D: true }).map((p) => p.wellId)).toEqual(['01-0001', '04-0001', '19-0001']);
+    expect(mapaLogic_filtrarPorEstado(pozos, { C: true, D: true, V: true })).toEqual(pozos);
+  });
+
+  test('un estado desconocido nunca entra por un chip', () => {
+    expect(mapaLogic_filtrarPorEstado([punto('01-0001', 'X')], { C: true, D: true, V: true })).toEqual([]);
+  });
+
+  test('conteo: C, D y V; ignora otros valores', () => {
+    expect(mapaLogic_contarPorEstado(pozos)).toEqual({ C: 2, D: 1, V: 2 });
+    expect(mapaLogic_contarPorEstado([{ estado: 'V' }, { estado: 'x' }, {}])).toEqual({ C: 0, D: 0, V: 1 });
   });
 });
 
@@ -1030,9 +1066,9 @@ describe('conteos contextuales de los chips', () => {
     expect(globales[0].cantidad).toBe(6739);
   });
 
-  test('mapaLogic_contarPorEstado cuenta C y D e ignora otros valores', () => {
-    expect(mapaLogic_contarPorEstado([{ estado: 'C' }, { estado: 'D' }, { estado: 'D' }, { estado: 'X' }, {}])).toEqual({ C: 1, D: 2 });
-    expect(mapaLogic_contarPorEstado([])).toEqual({ C: 0, D: 0 });
+  test('mapaLogic_contarPorEstado cuenta C, D y V e ignora otros valores', () => {
+    expect(mapaLogic_contarPorEstado([{ estado: 'C' }, { estado: 'D' }, { estado: 'D' }, { estado: 'X' }, {}])).toEqual({ C: 1, D: 2, V: 0 });
+    expect(mapaLogic_contarPorEstado([])).toEqual({ C: 0, D: 0, V: 0 });
   });
 
   test('mapaLogic_contarEnSetNE cuenta la interseccion; sin Set devuelve null', () => {

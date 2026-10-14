@@ -32,6 +32,7 @@ var SHELL_FILES = [
   './js/mapaLogic.js',
   './js/reemplazoResumenLogic.js',
   './js/reemplazoEstados.js',
+  './js/ubicacionOperativaLogic.js',
   './js/mapaDataset.js',
   './js/mapaNEDataset.js',
   './js/busquedaProvinciaDataset.js',

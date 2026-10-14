@@ -2213,6 +2213,27 @@ describe('ficha: Validar / Rechazar en la tarjeta Pendiente (abre el detalle com
     });
   });
 
+  test('una correccion DIRECTA (corregir + validar) invalida los deltas del mapa; una propuesta pendiente (solo corregir) NO', async () => {
+    const directa = cargar({ permisos: PERM_VALIDA });
+    directa.ctx.mapaDataset_invalidarDeltas = jest.fn();
+    await abrirModalMapa(directa);
+    tocarMapa(directa, PUNTO_REAL.lat, PUNTO_REAL.lon);
+    directa.el('btn-ucorr-mapa-usar').click();
+    directa.el('btn-ucorr-guardar').click();
+    await flush();
+    expect(directa.ctx.mapaDataset_invalidarDeltas).toHaveBeenCalledTimes(1);
+
+    const pendiente = cargar({ permisos: { ubicacion: true, ubicacion_corregir: true }, proponer: () => Promise.resolve({ status: 'ok', data: { correccion: Object.assign({}, PENDIENTE, { propia: true }), duplicada: false, curada: false } }) });
+    pendiente.ctx.mapaDataset_invalidarDeltas = jest.fn();
+    await abrirModalMapa(pendiente);
+    tocarMapa(pendiente, PUNTO_REAL.lat, PUNTO_REAL.lon);
+    pendiente.el('btn-ucorr-mapa-usar').click();
+    pendiente.el('btn-ucorr-guardar').click();
+    await flush();
+    expect(pendiente.ctx.apiProponerCorreccionUbicacion).toHaveBeenCalledTimes(1);
+    expect(pendiente.ctx.mapaDataset_invalidarDeltas).not.toHaveBeenCalled();
+  });
+
   test('regresion: corregir + validar (auto-validacion) sigue guardando como siempre, sin pasar por el detalle de validacion', async () => {
     const t = cargar({ permisos: PERM_VALIDA });
     t.ctx.ubicacionValidacionController_abrirDetalle = jest.fn();

@@ -778,6 +778,10 @@
         mostrarErrorGuardado(r.mensaje);
         return;
       }
+      // Una correccion directa (corregir + validar) queda VIGENTE de inmediato: el mapa tiene que volver a pedir los deltas.
+      if (r.resultado === 'validada' && typeof mapaDataset_invalidarDeltas === 'function') {
+        mapaDataset_invalidarDeltas();
+      }
       // Guardado: se cierra el modal y se pinta DESDE LA RELECTURA del backend (nunca desde lo que se envio).
       cerrarModal(true);
       if (aperturaId !== estado.aperturaId) {

@@ -435,7 +435,7 @@
         cuenca: campoTexto(p.cuenca),
         profundidad: p.profundidad !== undefined && p.profundidad !== null ? p.profundidad + ' m' : '—',
         tipoPozo: p.surgencia ? (SELECCION_ETIQUETAS_TIPO_POZO[p.surgencia] || p.surgencia) : '—',
-        estadoUbicacion: permisos.ubicacion ? campoTexto(p.estado === 'C' ? 'Confirmada' : (p.estado === 'D' ? 'Disponible' : p.estado)) : '—',
+        estadoUbicacion: permisos.ubicacion ? campoTexto(mapaLogic_estadoLabel(p.estado)) : '—',
         tieneItf: permisos.perfil ? (estado.disponibilidadItf[wellId] ? 'Sí' : 'No') : '—',
         tieneNe: permisos.ne ? (neSet.has(wellId) ? 'Sí' : 'No') : '—',
         profundidadNum: typeof p.profundidad === 'number' ? p.profundidad : -1,

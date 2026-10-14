@@ -19,6 +19,10 @@
 (function () {
   var MAPA_COLOR_CONFIRMADA = '#0b5a7a';
   var MAPA_COLOR_DISPONIBLE = '#4fa3c4';
+  // Validada en campo (V): verde con borde oscuro y un punto algo mas grande (no depende solo del color: el chip "Validada en campo" es la leyenda). Mismo hex que
+  // --color-mapa-validada / --color-mapa-validada-borde en css/styles.css (Leaflet no lee variables CSS).
+  var MAPA_COLOR_VALIDADA = '#43a047';
+  var MAPA_COLOR_VALIDADA_BORDE = '#14532d';
   // Mismo valor que disableClusteringAtZoom del clusterGroup (ver
   // mapaController_crearMapaSiHaceFalta) - a este zoom un marker
   // individual deja de estar agrupado, sin importar cuantos vecinos
@@ -57,7 +61,7 @@
     departamentoActivos: {},
     opcionesCuenca: [],      // mapaLogic_construirOpcionesCampoNE sobre 'cuenca' (reusa la funcion generica ya usada para Cuenca/Zona en el mapa NE, nunca la duplica)
     cuencaActivos: {},
-    estadosActivos: {},      // chips Ubicacion (Confirmada/Disponible)
+    estadosActivos: {},      // chips Ubicacion (Coincidente/Disponible/Validada en campo)
     deptosExpandido: false,  // true = "+N mas" ya tocado, se ven todos los chips de departamento
     markersPorWellId: {},    // se reconstruye en cada renderPuntos() - permite ubicar el marker de un wellId puntual para enfoque:{tipo:'pozo'}
     neWellIdSet: null,       // Set de wellId de la red NE (mapaLogic_setWellIdNE sobre getMapaNE) - se arma UNA sola vez, la PRIMERA vez que se activa el filtro "Tiene: Niveles estáticos" (carga diferida real)
@@ -105,7 +109,7 @@
     opcionesCondicionGlobal: [],
     claveUniverso: null,          // clave del universo cuyos conteos estan pintados (null = recalcular)
     totalUniverso: 0,             // "Todos (N)" de Departamento
-    conteoEstado: null,           // {C, D} del universo
+    conteoEstado: null,           // {C, D, V} del universo
     conteoNE: null,               // pozos del universo en la red NE (null mientras el Set NE no se cargo)
 
     // Aptitud para reemplazo (Reemplazos v3). SOLO con reemplazo=SI: el
@@ -122,6 +126,7 @@
   var errorMensajeEl = document.getElementById('mapa-error-mensaje');
   var mapaEl = document.getElementById('mapa-leaflet');
   var contadorEl = document.getElementById('mapa-contador');
+  var avisoUbicacionesEl = document.getElementById('mapa-aviso-ubicaciones');
   var deptosChipsEl = document.getElementById('mapa-deptos-chips');
   var btnDeptosExpandirEl = document.getElementById('btn-mapa-deptos-expandir');
   var cuencaChipsEl = document.getElementById('mapa-cuenca-chips');
@@ -322,7 +327,8 @@
   // popup se queda con wellId + estado + Abrir pozo nada mas - nunca se
   // dispara el fetch (ver mapaLogic_debeConsultarSummary).
   function mapaController_crearMarker(punto, contexto) {
-    var color = punto.estado === 'C' ? MAPA_COLOR_CONFIRMADA : MAPA_COLOR_DISPONIBLE;
+    var color = punto.estado === 'V' ? MAPA_COLOR_VALIDADA : (punto.estado === 'C' ? MAPA_COLOR_CONFIRMADA : MAPA_COLOR_DISPONIBLE);
+    var esValidada = punto.estado === 'V';
     // Item J: un pozo del contexto geografico (seleccion confirmada o
     // vista previa de Cerca Mio) se distingue con un borde mas grueso en
     // MAPA_COLOR_SELECCION (el mismo magenta de poligono/circulo) - el
@@ -341,9 +347,9 @@
     var evaluado = estadoR === 'APTO' || estadoR === 'DUDOSO' || estadoR === 'NO_APTO';
     var conAnillo = evaluado && !seleccionado;
     var marker = L.circleMarker([punto.lat, punto.lon], {
-      radius: seleccionado ? 9 : (conAnillo ? 8 : 7),
-      color: seleccionado ? MAPA_COLOR_SELECCION : (conAnillo ? MAPA_COLOR_REEMPLAZO[estadoR] : '#ffffff'),
-      weight: seleccionado ? 3 : (conAnillo ? 3 : 1.5),
+      radius: seleccionado ? 9 : (conAnillo ? 8 : (esValidada ? 8 : 7)),
+      color: seleccionado ? MAPA_COLOR_SELECCION : (conAnillo ? MAPA_COLOR_REEMPLAZO[estadoR] : (esValidada ? MAPA_COLOR_VALIDADA_BORDE : '#ffffff')),
+      weight: seleccionado ? 3 : (conAnillo ? 3 : (esValidada ? 2.5 : 1.5)),
       fillColor: color,
       fillOpacity: 0.9,
       esSeleccionado: seleccionado, // lo lee iconCreateFunction del clusterGroup
@@ -1609,6 +1615,10 @@
       }
 
       mapaEstado.puntosCrudos = result.data.pozos;
+      // Si no se pudieron traer las ubicaciones validadas, el mapa sigue con las ubicaciones base y lo avisa sin tecnicismos (ver js/mapaDataset.js).
+      if (avisoUbicacionesEl) {
+        avisoUbicacionesEl.hidden = result.data.degradado !== true;
+      }
 
       loadingEl.hidden = true;
       mapaEl.hidden = false;

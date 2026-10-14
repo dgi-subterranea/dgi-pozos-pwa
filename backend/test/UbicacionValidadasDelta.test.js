@@ -596,13 +596,13 @@ describe('endpoint getUbicacionesValidadas: permisos y contrato frontend/backend
     expect(d.vts).toBe(delPozo.resolucion.timestamp);
   });
 
-  test('la accion esta ruteada en doPost y NO existe un consumidor en la app (todavia)', () => {
+  test('la accion esta ruteada en doPost y su UNICO consumidor es mapaDataset_obtener (el mapa, Cerca Mio, seleccion y reemplazos la heredan de ahi)', () => {
     const fuenteApi = fs.readFileSync(path.join(raiz, 'backend', 'src', 'Api.js'), 'utf8');
     expect(fuenteApi).toContain("body.action === 'getUbicacionesValidadas'");
-    ['js/mapaDataset.js', 'js/mapa.js', 'js/cercaMio.js', 'js/seleccion.js', 'js/buscarReemplazo.js', 'js/app.js', 'js/ubicacionCorreccion.js', 'js/ubicacionValidacion.js'].forEach((f) => {
-      expect(fs.readFileSync(path.join(raiz, f), 'utf8')).not.toMatch(/getUbicacionesValidadas|apiGetUbicacionesValidadas|ubicacionOperativa/);
+    expect(fs.readFileSync(path.join(raiz, 'js', 'mapaDataset.js'), 'utf8')).toMatch(/apiGetUbicacionesValidadas\(sessionToken\)/);
+    ['js/mapa.js', 'js/cercaMio.js', 'js/seleccion.js', 'js/buscarReemplazo.js', 'js/app.js', 'js/ubicacionCorreccion.js', 'js/ubicacionValidacion.js'].forEach((f) => {
+      expect(fs.readFileSync(path.join(raiz, f), 'utf8')).not.toMatch(/getUbicacionesValidadas|apiGetUbicacionesValidadas|ubicacionOperativaLogic/);
     });
-    expect(fs.readFileSync(path.join(raiz, 'index.html'), 'utf8')).not.toMatch(/ubicacionOperativa/);
   });
 
   test('COMPATIBILIDAD con el modulo puro del punto operativo: el overlay acepta el payload tal cual, sin descartar nada', async () => {

@@ -223,6 +223,10 @@
         return;
       }
       estado.datasetCache = result.data.pozos;
+      var avisoUbicaciones = document.getElementById('cercamio-aviso-ubicaciones');
+      if (avisoUbicaciones) {
+        avisoUbicaciones.hidden = result.data.degradado !== true;
+      }
       cercaMioController_renderizarResultados(contexto);
     }).catch(function () {
       if (aperturaId !== estado.aperturaId) {

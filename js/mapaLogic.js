@@ -30,7 +30,9 @@ var MAPA_DEPARTAMENTOS = {
   '19': 'Malargüe'
 };
 
-var MAPA_ESTADO_LABEL = { C: 'Confirmada', D: 'Disponible' };
+// C = Ubicacion COINCIDENTE (2+ fuentes del padron coinciden; NO es una validacion humana), D = Ubicacion DISPONIBLE (una sola fuente), V = VALIDADA EN CAMPO
+// (una correccion validada por una persona; viene del overlay del punto operativo, ver js/mapaDataset.js).
+var MAPA_ESTADO_LABEL = { C: 'Coincidente', D: 'Disponible', V: 'Validada en campo' };
 
 function mapaLogic_departamentoDeWellId(wellId) {
   return wellId.substring(0, 2);
@@ -70,20 +72,21 @@ function mapaLogic_filtrarPorDepartamento(pozos, codigo) {
   return pozos.filter(function (p) { return mapaLogic_departamentoDeWellId(p.wellId) === codigo; });
 }
 
-// Filtro por estado (chips Confirmada/Disponible - Etapa v2.1.0). Nunca
+// Filtro por estado (chips Coincidente/Disponible/Validada en campo). Nunca
 // deja el mapa en un estado ambiguo: si por algun motivo llegaran los 2
 // apagados (la UI de mapa.js ya lo impide del lado del click - ver
 // mapaController_toggleEstado - pero esta funcion no depende de eso para
 // ser correcta), se interpreta como "sin filtro de estado" y se
 // devuelve el dataset completo, nunca una lista vacia que parezca un
-// error. estadosActivos: {C: bool, D: bool}.
+// error. estadosActivos: {C: bool, D: bool, V: bool}. Varios chips = UNION de los estados elegidos; V nunca cae en un "else".
 function mapaLogic_filtrarPorEstado(pozos, estadosActivos) {
   var c = !!(estadosActivos && estadosActivos.C);
   var d = !!(estadosActivos && estadosActivos.D);
-  if (!c && !d) {
+  var v = !!(estadosActivos && estadosActivos.V);
+  if (!c && !d && !v) {
     return pozos;
   }
-  return pozos.filter(function (p) { return (p.estado === 'C' && c) || (p.estado === 'D' && d); });
+  return pozos.filter(function (p) { return (p.estado === 'C' && c) || (p.estado === 'D' && d) || (p.estado === 'V' && v); });
 }
 
 // Divide las opciones de departamento en "visibles de entrada" y
@@ -564,11 +567,11 @@ function mapaLogic_aplicarConteosContextuales(globales, contextuales, clave, act
   return resultado;
 }
 
-// Conteo de Ubicacion: { C: n, D: n } sobre el universo.
+// Conteo de Ubicacion: { C: n, D: n, V: n } sobre el universo.
 function mapaLogic_contarPorEstado(pozos) {
-  var conteo = { C: 0, D: 0 };
+  var conteo = { C: 0, D: 0, V: 0 };
   (pozos || []).forEach(function (p) {
-    if (p.estado === 'C' || p.estado === 'D') {
+    if (p.estado === 'C' || p.estado === 'D' || p.estado === 'V') {
       conteo[p.estado] += 1;
     }
   });

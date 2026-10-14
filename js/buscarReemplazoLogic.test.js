@@ -375,8 +375,14 @@ describe('explicacion por candidato: datos crudos y "Sin dato"', () => {
       'Filtros: 80–100 m',
       'Semisurgente',
       'Río Mendoza',
-      'Coordenada confirmada'
+      'Coordenada coincidente'
     ]);
+  });
+  test('la etiqueta de la coordenada: D disponible (1 fuente), C coincidente, V validada en campo (nunca "confirmada")', () => {
+    const etiqueta = (estado) => textos(una({ estado }))[textos(una({ estado })).length - 1];
+    expect(etiqueta('D')).toBe('Coordenada disponible (1 fuente)');
+    expect(etiqueta('C')).toBe('Coordenada coincidente');
+    expect(etiqueta('V')).toBe('Coordenada validada en campo');
   });
   test('todo lo que falta se dice Sin dato y nunca se completa', () => {
     const items = L.buscarReemplazoLogic_explicar(una({ profundidad: null, tramosFiltrantes: [], surgencia: null, cuenca: null }), ref);

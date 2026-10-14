@@ -933,7 +933,7 @@
   // usuario - puede ser la unica y estar mal). "corroborada" es la unica
   // etiqueta que implica 2+ fuentes de acuerdo.
   var UBICACION_ESTADO_LABEL = {
-    corroborada: 'Ubicación confirmada',
+    corroborada: 'Ubicación coincidente',
     unica: 'Ubicación disponible'
   };
   // "Irrigación" (no "Provincia"): la capa coordProvincia sale de un
