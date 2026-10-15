@@ -132,6 +132,10 @@
     }
     enlazarAccionesDeValidacion(cont);
     cont.innerHTML = ubicacionCorreccionLogic_htmlSeccion(estado.lectura, { puedeCorregir: puedeCorregir(), puedeValidar: puedeValidarAhora(), aviso: estado.aviso });
+    // "Ubicaciones conocidas" suma la correccion vigente (validada en campo) apenas se la lee; si no se pudo leer, queda solo lo del padron.
+    if (typeof ubicacionesConocidasController_actualizarVigente === 'function') {
+      ubicacionesConocidasController_actualizarVigente(estado.wellId, (estado.lectura && estado.lectura.vigente) || null);
+    }
     var abrir = $('btn-ubic-corr-abrir');
     if (abrir) {
       abrir.addEventListener('click', function () { abrirModal(abrir); });

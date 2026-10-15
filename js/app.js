@@ -950,19 +950,6 @@
     return 'x ' + c.x + ' / y ' + c.y;
   }
 
-  function buildFuentesUbicacion(ubicacion) {
-    var fuentes = [];
-    if (ubicacion.coordenadas) {
-      fuentes.push({ etiqueta: FUENTE_LABEL.reportePozos, c: ubicacion.coordenadas });
-    }
-    var provincia = ubicacion.coordenadasProvincia || [];
-    provincia.forEach(function (c, i) {
-      var etiqueta = FUENTE_LABEL.coordProvincia + (provincia.length > 1 ? ' (' + (i + 1) + ')' : '');
-      fuentes.push({ etiqueta: etiqueta, c: c });
-    });
-    return fuentes;
-  }
-
   // location: respuesta plana de getWellLocation - {wellId, coordenadas,
   // coordenadasProvincia, ubicacionResuelta}. Independiente del registro
   // de Datos (puede haber Ubicacion sin permiso "datos").
@@ -1001,19 +988,15 @@
     }
     html += '</div>';
 
-    var fuentes = buildFuentesUbicacion(location);
-    if (fuentes.length > 1) {
-      html += '<p class="field-label">Fuentes (detalle técnico)</p><div class="src-list">';
-      fuentes.forEach(function (f) {
-        html += '<div class="src-item"><div class="src-tag">' + escapeHtml(f.etiqueta) + '</div><div class="src-xy mono">' + formatXY(f.c) + '</div></div>';
-      });
-      html += '</div>';
-    }
+    // "Ubicaciones conocidas": cada fuente por separado (Reporte Pozos, Irrigacion 1..N y la validada en campo) con su enlace a Google Maps y el visor
+    // comparativo. Reemplaza al antiguo detalle tecnico de fuentes (mismos x/y, ahora con lat/lon, distancia al punto operativo y mapa). Solo lectura.
+    html += '<div id="ubic-conocidas" class="ubic-conocidas"></div>';
 
     // Contenedor de la seccion "Ubicacion corregida" (la rellena ubicacionCorreccionController_abrir con la lectura del backend)
     html += '<div id="ubic-correcciones" class="ubic-correcciones"></div>';
 
     ubicacionContent.innerHTML = html;
+    ubicacionesConocidasController_abrir({ wellId: location.wellId, location: location, iconoMaps: ICON_MAPS });
     ubicacionCorreccionController_abrir({ wellId: location.wellId, location: location });
   }
 
@@ -1291,6 +1274,8 @@
     permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false, ubicacion_corregir: false, ubicacion_validar: false };
     // un modal de correccion abierto no sobrevive a la sesion
     ubicacionCorreccionController_cerrar();
+    // ni el visor de ubicaciones conocidas
+    ubicacionesConocidasController_cerrar();
     // ni la bandeja / el detalle de validacion abiertos
     ubicacionValidacionController_cerrar();
     // ni el indicador de correcciones pendientes

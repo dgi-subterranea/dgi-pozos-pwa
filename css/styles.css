@@ -312,6 +312,47 @@ h1 {
   height: calc(176px * 169 / 807);
 }
 
+/* Pantalla de arranque (#screen-loading): logo + nombre + pozo animado + "Cargando...", centrado en el
+   viewport REAL. 100dvh (con 100vh de respaldo) sigue a la barra de Safari y a la PWA; se descuentan el
+   padding vertical del body (24 + 24) y las safe areas, de modo que el bloque ocupa exactamente el alto
+   visible y no genera scroll. Sin altura fija: crece o encoge con el viewport. El display:flex va solo
+   cuando NO esta [hidden] (misma razon que #google-signin-button). */
+body:has(#screen-loading:not([hidden])) {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+#screen-loading:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+  min-height: calc(100vh - 48px);
+  min-height: calc(100dvh - 48px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+.inicio-marca {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+.irr-logo-inicio {
+  width: 200px;
+  max-width: 70vw;
+  height: auto;
+  aspect-ratio: 807 / 169;
+}
+.inicio-nombre {
+  margin: 0;
+  font-size: 1.3rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  text-align: center;
+  color: var(--color-text);
+}
+
 /* Version chica y apagada del logo institucional, al pie del resto de
    pantallas - visible pero fuera del camino del buscador/perfil. En el
    estado vacio de la pantalla principal (sin resultado ni error) se
@@ -2212,11 +2253,26 @@ table.ne-table tr:last-child td {
   padding: 8px 12px;
 }
 
+/* Bloque de acciones del resultado: los dos botones siguen siendo un grupo, pero con aire entre si (antes
+   quedaban pegados y parecian un solo boton) y sin tocar el borde inferior en modo PWA. */
+.cercamio-acciones {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
 .cercamio-ver-todos-mapa {
   width: 100%;
 }
 
 @media (min-width: 640px) {
+  /* En escritorio las pantallas son una tarjeta; la de arranque no: logo y pozo flotan sobre el fondo,
+     centrados en la ventana (el centrado vertical ya lo da #screen-loading). */
+  #screen-loading {
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+  }
   body {
     background:
       radial-gradient(1100px 380px at 15% -10%, rgba(11, 90, 122, 0.06), transparent 60%),
@@ -4857,6 +4913,167 @@ body.ucorr-abierto {
   color: var(--color-text);
   white-space: nowrap;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* --- Ubicaciones conocidas (ficha del pozo): una fila por fuente + visor comparativo de solo lectura --- */
+.ubic-conocidas {
+  margin-top: 6px;
+}
+.ucon-nota {
+  margin: 0 0 10px;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--color-text-soft);
+}
+.ucon-nota-aviso {
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: var(--color-primary-tint);
+  color: var(--color-text);
+}
+.ucon-lista {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ucon-fuente {
+  padding: 11px 12px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 10px;
+  font-size: 0.8rem;
+}
+.ucon-operativa {
+  border: 1.5px solid var(--color-primary);
+  background: var(--color-primary-tint);
+}
+.ucon-cab {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.ucon-nombre {
+  font-weight: 700;
+  color: var(--color-text);
+}
+.ucon-chip-operativo {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--color-primary);
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.ucon-coord {
+  margin-top: 6px;
+  font-size: 0.8rem;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+.ucon-coord-invalida {
+  color: var(--color-text-soft);
+  font-style: italic;
+}
+.ucon-meta {
+  display: flex;
+  flex-direction: column;
+  margin-top: 3px;
+  font-size: 0.7rem;
+  line-height: 1.5;
+  color: var(--color-text-soft);
+}
+.ucon-maps {
+  margin-top: 10px;
+}
+.ucon-ver-todas {
+  width: 100%;
+}
+.ucon-leyenda {
+  list-style: none;
+  margin: 10px 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ucon-leyenda-fila,
+.ucon-leyenda-fila:hover {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 12px;
+  justify-content: flex-start;
+  gap: 10px;
+  text-align: left;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 10px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.8rem;
+  font-weight: 500;
+  box-shadow: none;
+}
+.ucon-leyenda-fila:hover {
+  background: var(--color-primary-tint);
+}
+.ucon-leyenda-texto {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}
+.ucon-leyenda-texto span {
+  font-size: 0.72rem;
+  color: var(--color-text-soft);
+}
+.ucon-leyenda-punto {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1.5px var(--color-border);
+}
+/* Colores de los marcadores (Leaflet no lee variables CSS: repiten --color-accent, --color-mapa-confirmada y --color-reemplazo-apto). El punto operativo suma un aro oscuro. */
+.ucon-marker { width: 76px; }
+.ucon-marker-reporte .ucorr-marker-punto,
+.ucon-leyenda-punto.ucon-marker-reporte { background: #b8632f; }
+.ucon-marker-irr .ucorr-marker-punto,
+.ucon-leyenda-punto.ucon-marker-irr { background: #0b5a7a; }
+.ucon-marker-campo .ucorr-marker-punto,
+.ucon-leyenda-punto.ucon-marker-campo { background: #1f9d55; }
+.ucon-marker-op .ucorr-marker-punto {
+  box-shadow: 0 0 0 3px #16212a, 0 0 0 5px rgba(255, 255, 255, 0.95), 0 2px 6px rgba(0, 0, 0, 0.45);
+}
+.ucon-leyenda-punto.ucon-marker-op {
+  box-shadow: 0 0 0 2px #16212a;
+}
+.ucon-marker-op .ucorr-marker-texto {
+  background: #16212a;
+  color: #fff;
+}
+.ucon-popup {
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+.ucon-popup-coord {
+  margin-top: 3px;
+  font-size: 0.74rem;
+}
+.ucon-popup-dist {
+  font-size: 0.74rem;
+  color: var(--color-text-soft);
+}
+.ucon-popup-maps {
+  display: inline-block;
+  margin-top: 6px;
+  font-weight: 700;
+  color: var(--color-primary);
 }
 
 @media (min-width: 640px) {

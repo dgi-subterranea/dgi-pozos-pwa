@@ -427,6 +427,47 @@ cada una se muestra por separado con su **FUENTE** (nunca «coordenada 1/2»), s
 **Decisiones aprobadas para las etapas siguientes:** endpoint `getUbicacionesValidadas` (cualquier usuario activo, payload mínimo `wellId, lat, lon, vts`); caché de backend 120 s con invalidación al auto-validar, validar y revertir; refresco del cliente a los 60 s e invalidación al validar o revertir (rechazar no cambia la vigente);
 si el endpoint falla el mapa sigue con la base y muestra un aviso discreto. **Auditoría futura pendiente:** «coordenada operativa fuera o cerca del límite de la cuenca declarada».
 
+## Ubicaciones conocidas (ficha del pozo) — solo lectura
+
+Sección de la ficha de **Ubicación** que trata **cada coordenada conocida por separado** (`js/ubicacionesConocidasLogic.js` puro + `js/ubicacionesConocidas.js` DOM; reemplaza al antiguo «Fuentes (detalle técnico)»).
+
+- **Fuentes que lista** (todas de lectura): *Reporte Pozos* (`ubicacion.coordenadas`), *Irrigación* o *Irrigación (1..N)* (`ubicacion.coordenadasProvincia[]`; el número es **posicional**) y *Validada en campo* (la corrección VIGENTE, que la ficha ya lee con `getCorreccionesUbicacionPozo`). El padrón solo trae `x, y` (POSGAR 94 / Argentina 2): la lat/lon de cada fuente se calcula en el cliente con `coordenadas_posgarAWgs84` (misma conversión validada contra pyproj); **no hace falta backend nuevo**.
+- **Punto operativo:** lo dice `ubicacionOperativaLogic_resolver` (R1 validada en campo, R2 punto del padrón, R0 ninguno); este módulo solo identifica **cuál** de las fuentes es (por `x/y` exactos del padrón; respaldo: la más cercana a ≤ 2 m). Sin punto operativo (discrepancia) ninguna fuente lo es y no se calculan distancias.
+- **Por fuente:** nombre, lat/lon, `x/y` del padrón, indicador «Punto operativo», «A XX m del punto operativo» (no hay matriz N×N) y «Abrir en Google Maps». Una coordenada inválida (ausente, no numérica, fuera de Mendoza) se lista como «Coordenada no válida», sin enlace ni marcador.
+- **Google Maps:** `https://www.google.com/maps/search/?api=1&query=LAT,LON` con 5 decimales y nada más (sin `wellId`, titular, autor, observación, email, motivo ni historial; sin API key). Los enlaces viejos de la ficha (`maps?q=`) no se tocaron.
+- **«Ver todas en el mapa»:** visor interno de **solo lectura** (`#ucon-overlay`, mismo patrón que el modal de correcciones): un marcador por fuente válida (color por tipo + etiqueta; el operativo con aro oscuro y ★, siempre arriba), popup con fuente / lat,lon / distancia / «Abrir en Google Maps», leyenda tocable que centra y abre cada popup (sirve cuando dos puntos se superponen), capas Mapa/Satélite. Si el mapa no carga, la lista y los enlaces siguen sirviendo. **No llama al backend.**
+- **No incluye (a propósito):** «Validar fuente» / «Descartar fuente» (ver abajo), propuestas pendientes ni correcciones históricas (SUPERADA / RECHAZADA / REVERTIDA).
+
+### Modelo actual de las fuentes (auditoría para «aceptar / descartar» una fuente)
+
+| Qué | Dónde vive | Quién la escribe | Mutable |
+| --- | --- | --- | --- |
+| **Reporte Pozos** (1 por pozo) | `Reporte Pozos *.csv` → `scripts/reindex_pozos.py` → JSON por departamento en Drive (`ubicacion.coordenadas {x,y}`) | solo el indexador | **No** desde la app; se **reemplaza entero** en cada reindexado |
+| **Irrigación (1..N)** | `Coord_pozos_provincia.csv` → mismo JSON (`ubicacion.coordenadasProvincia[] {x,y}`, orden = orden del CSV) | solo el indexador | **No** desde la app; en un reindexado puede cambiar el orden o la cantidad (el «(2)» **no es una identidad estable**) |
+| **Resultado del padrón** | mismo JSON (`ubicacionResuelta`: `sinCoordenadas / unica / corroborada(≤10 m) / dudosoLeve(≤50) / revisar(≤500) / revisarGrave`) y `pozos.json` (`D/C`) | indexador (offline) | **No**; es un cálculo, no una decisión humana |
+| **Correcciones** (PROPUESTA / VALIDADA / RECHAZADA / SUPERADA / REVERTIDA) | Sheets `UbicacionCorrecciones` (20 col.) + `UbicacionCorreccionesLog` | los usuarios, por la app | Filas **append-only**; el estado se **deriva** del log |
+
+- **¿Existe hoy un estado válida / descartada / ignorada / preferida para una fuente del padrón?** **No.** Los únicos estados de una fuente son los del resultado calculado por el indexador. Validar / rechazar solo opera sobre **propuestas** de `UbicacionCorrecciones` (necesita un `correccionId`).
+- **«Validar Reporte Pozos» hoy:** no tiene significado propio. Lo más cercano es **proponer una corrección en esa misma coordenada** (distancia ≈ 0) y validarla: queda **«Validada en campo»** (`V`). Es una verificación física, no una revisión de gabinete. Pasó con 14-0001 (GMS a 0,0 m).
+- **«Descartar Irrigación (2)» hoy:** no hay camino. Una corrección validada la pisa (R1) pero no marca la fuente como equivocada y se pierde esa señal.
+- **No confundir:** (A) validar / rechazar una **propuesta de corrección** de un usuario ≠ (B) aceptar / descartar la **coordenada de una fuente** registral. (B) necesita primero una definición de producto.
+
+### Propuesta (no implementada): capa de decisiones sobre fuentes
+
+Principio obligatorio: **la coordenada original nunca se borra ni se modifica**; una fuente descartada se conserva y queda marcada «descartada / no operativa».
+
+- **Hoja `UbicacionFuenteDecisiones` (append-only, una fila por evento, mismo libro que las correcciones):** el esquema FINAL (14 columnas, secuencia global, eventos `ACEPTADA` / `DESCARTADA` / `ACEPTACION_QUITADA` / `RESTAURADA`) quedo definido e implementado en el backend; ver `docs/ubicacion-fuente-decisiones.md` (§3 y «Etapa 2»). El estado vigente de una fuente se deriva reproduciendo los eventos por `secuencia`.
+- **Identidad de la fuente = `(wellId, fuenteTipo, x, y)`, no «Irrigación (2)»:** si un reindexado cambia o saca esa coordenada, la decisión queda **obsoleta** (se conserva y se muestra en el historial, deja de aplicar).
+- **Permisos:** reutilizar `ubicacion_validar` (nada de permiso nuevo por ahora); fail-closed como el resto.
+- **Interacción:** (1) **Validada en campo gana siempre (R1)**: con una vigente, las decisiones sobre fuentes son informativas. (2) **Punto operativo:** una fuente DESCARTADA sale del cálculo del padrón (p. ej. 3 fuentes con una descartada → se recalcula con las 2 restantes; si no queda ninguna, `SIN_COORDENADAS`). Como ese cálculo hoy es offline (Python), el backend necesitaría **replicarlo en JS** (con test de paridad contra los mismos casos) y entregar un **delta** igual que `getUbicacionesValidadas`. (3) **Overlay / Cerca Mío / selección / reemplazos:** heredan el cambio **sin tocar nada**, porque todos consumen `mapaDataset_obtener` (el único punto del overlay). (4) **Revertir** una validada en campo vuelve al padrón **con las decisiones aplicadas**. (5) Una fuente ACEPTADA nunca se llama «validada en campo»: sería otra categoría («aceptada por revisión») para no repetir el problema de «Confirmada».
+- **Necesita backend y esquema nuevo:** sí (hoja, repositorio, servicio, 2 endpoints —registrar decisión y leer decisiones/deltas—, permisos, invalidación de caché, tests). Sin cambios en el padrón ni en `UbicacionCorrecciones`.
+- **Definiciones de producto previas:** quién puede decidir (solo `ubicacion_validar`); si DESCARTAR cambia el punto operativo o solo la etiqueta en una primera fase; qué hace exactamente ACEPTAR (informativo, o desempate en discrepancias); si se puede descartar *Reporte Pozos*; qué pasa si se descartan todas; cómo se nombra el estado resultante en el mapa (`D/C/V` o uno nuevo); y cómo se avisa una decisión obsoleta tras un reindexado.
+- **Etapas sugeridas:** (1) esquema + servicio + tests, sin UI; (2) delta + overlay (un solo punto: `mapaDataset_obtener`); (3) botones «Aceptar» / «Descartar» (con motivo y confirmación) en el popup del visor.
+
+## Ajustes visuales (prueba real en celular)
+- **Pantalla de arranque:** logo de Irrigación (`#irr-logo`, el símbolo oficial que ya está en `index.html`; no se agregó ningún recurso), «Consulta de Pozos», el pozo animado y «Cargando…», centrados en el viewport real (`100dvh` con respaldo `100vh`, descontando el padding del `body` y las safe areas); en escritorio sin tarjeta. `prefers-reduced-motion` sigue desactivando las animaciones del pozo.
+- **Cerca Mío:** «Ver todos en el mapa» y «Usar estos pozos» quedan en `.cercamio-acciones` (columna flex, `gap: 14px`, `padding-bottom: env(safe-area-inset-bottom)`).
+
 ## Tests
 Punto operativo (etapa 1): `js/ubicacionOperativaLogic.test.js`. Etapa 2: `backend/test/UbicacionValidadasDelta.test.js`. Etapa 3: `js/mapaDatasetOperativo.test.js`, `js/mapaLogic.test.js` y `js/buscarReemplazoLogic.test.js`.
 Validación (etapa 5): `js/ubicacionCorreccionLogic.test.js` (reglas puras), `js/ubicacionValidacionController.test.js` (DOM y Leaflet simulados con un servidor en memoria), `js/ubicacionValidacionWiring.test.js` (index.html, SW, api.js, app.js, estilos), `js/ubicacionCorreccionController.test.js` (botones de la ficha y `alResolver`),

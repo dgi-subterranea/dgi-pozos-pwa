@@ -690,16 +690,18 @@ describe('rendimiento y datos reales', () => {
   });
 });
 
-describe('aislamiento: el unico consumidor es mapaDataset_obtener (el punto central del overlay)', () => {
+describe('aislamiento: solo lo consumen mapaDataset_obtener (overlay de los mapas) y la logica de "Ubicaciones conocidas" (ficha del pozo)', () => {
   const raiz = path.join(__dirname, '..');
   const leer = (...p) => fs.readFileSync(path.join(raiz, ...p), 'utf8');
 
-  test('solo js/mapaDataset.js lo usa (ni mapa, Cerca Mio, seleccion ni reemplazos); se carga en index.html y se precachea; el backend no lo referencia', () => {
+  test('solo js/mapaDataset.js y js/ubicacionesConocidasLogic.js lo usan (ni mapa, Cerca Mio, seleccion ni reemplazos); se carga en index.html y se precachea; el backend no lo referencia', () => {
     expect(leer('index.html')).toMatch(/<script src="js\/ubicacionOperativaLogic\.js"><\/script>/);
     expect(leer('sw.js')).toContain("'./js/ubicacionOperativaLogic.js'");
     fs.readdirSync(path.join(raiz, 'js')).filter((f) => f.endsWith('.js') && !f.endsWith('.test.js') && f !== 'ubicacionOperativaLogic.js').forEach((f) => {
       if (f === 'mapaDataset.js') {
         expect(leer('js', f)).toMatch(/ubicacionOperativaLogic_aplicarOverlay/);
+      } else if (f === 'ubicacionesConocidasLogic.js') {
+        expect(leer('js', f)).toMatch(/ubicacionOperativaLogic_resolver/);
       } else {
         expect(leer('js', f)).not.toMatch(/ubicacionOperativa/);
       }

@@ -95,7 +95,8 @@ describe('integracion en app.js', () => {
     expect(render.indexOf('Ubicación de Irrigación')).toBeLessThan(render.indexOf('ubic-correcciones'));
     expect(render).toContain('resuelta.lat');                                  // las coordenadas oficiales siguen pintandose
     expect(render).toContain('Abrir en Google Maps');                            // y su enlace
-    expect(render).toContain('Fuentes (detalle técnico)');                       // y el detalle tecnico
+    expect(render).toContain('id="ubic-conocidas"');                             // y las "Ubicaciones conocidas" (cada fuente por separado; reemplazan al detalle tecnico)
+    expect(render).not.toContain('Fuentes (detalle técnico)');
   });
 
   test('el controlador recibe sessionToken y permisos FRESCOS en cada uso y cierra sesion si vence', () => {

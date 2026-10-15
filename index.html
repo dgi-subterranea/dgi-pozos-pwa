@@ -23,7 +23,11 @@
     </defs>
   </svg>
 
-  <div id="screen-loading" class="screen">
+  <div id="screen-loading" class="screen screen-inicio">
+    <div class="inicio-marca">
+      <svg class="irr-logo irr-logo-inicio" role="img" aria-label="Irrigación"><use href="#irr-logo"></use></svg>
+      <p class="inicio-nombre">Consulta de Pozos</p>
+    </div>
     <div class="cargando cargando-lg" data-cargando>Cargando…</div>
   </div>
 
@@ -753,11 +757,13 @@
         <p id="cercamio-aviso-ubicaciones" class="aviso-ubicaciones" role="status" hidden>No se pudieron actualizar las ubicaciones validadas. Se muestran las ubicaciones base.</p>
         <p id="cercamio-contador" class="mapa-contador"></p>
         <div id="cercamio-lista" class="cercamio-lista"></div>
-        <button type="button" id="btn-cercamio-ver-todos-mapa" class="button-secondary cercamio-ver-todos-mapa">Ver todos en el mapa</button>
-        <!-- Item D del cierre: radio y poligono desembocan en la MISMA
-             seleccion - ver seleccionController_usarResultados en
-             js/seleccion.js, llamado con los wellId de la busqueda actual. -->
-        <button type="button" id="btn-cercamio-usar-seleccion" class="button cercamio-ver-todos-mapa">Usar estos pozos</button>
+        <div class="cercamio-acciones">
+          <button type="button" id="btn-cercamio-ver-todos-mapa" class="button-secondary cercamio-ver-todos-mapa">Ver todos en el mapa</button>
+          <!-- Item D del cierre: radio y poligono desembocan en la MISMA
+               seleccion - ver seleccionController_usarResultados en
+               js/seleccion.js, llamado con los wellId de la busqueda actual. -->
+          <button type="button" id="btn-cercamio-usar-seleccion" class="button cercamio-ver-todos-mapa">Usar estos pozos</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1452,6 +1458,30 @@
     </div>
   </div>
 
+  <!-- Visor comparativo de "Ubicaciones conocidas" (ficha del pozo): SOLO LECTURA. Un mapa con TODAS las coordenadas conocidas del pozo (padron: Reporte Pozos e
+       Irrigacion 1..N; y la validada en campo si existe). El punto operativo va destacado; las demas muestran su distancia a el. Cada marcador abre una ficha con
+       fuente, lat/lon, distancia y "Abrir en Google Maps" (solo lat,lon). No valida ni descarta nada. Ver js/ubicacionesConocidas.js y js/ubicacionesConocidasLogic.js. -->
+  <div id="ucon-overlay" class="ucorr-overlay ucon-overlay" role="dialog" aria-modal="true" aria-labelledby="ucon-titulo" hidden>
+    <div class="ucorr-panel ucon-panel">
+      <div class="ucorr-cabecera">
+        <h2 id="ucon-titulo" class="ucorr-titulo">Ubicaciones conocidas</h2>
+        <button type="button" id="btn-ucon-cerrar" class="ucorr-cerrar" aria-label="Cerrar">&times;</button>
+      </div>
+      <div class="ucorr-vista">
+        <div class="ucorr-capas">
+          <button type="button" class="mapa-capa-chip ucon-capa-chip active" data-capa="calle" aria-pressed="true">Mapa</button>
+          <button type="button" class="mapa-capa-chip ucon-capa-chip" data-capa="satelite" aria-pressed="false">Satélite</button>
+        </div>
+        <div id="ucon-mapa-cargando" class="cargando cargando-md" data-cargando hidden>Cargando mapa…</div>
+        <p id="ucon-mapa-error" class="ucorr-mensaje" hidden>No se pudo cargar el mapa. Podés abrir cada ubicación en Google Maps desde la ficha.</p>
+        <div id="ucon-mapa" class="ucorr-mapa" hidden></div>
+        <p id="ucon-visor-nota" class="ucorr-nota ucon-nota-aviso" role="status" hidden></p>
+        <ul id="ucon-leyenda" class="ucon-leyenda"></ul>
+        <button type="button" id="btn-ucon-cerrar-abajo" class="button button-secondary ucorr-opcion">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Bandeja de seleccion (item D/I): persistente, fuera de cualquier
        .screen a proposito - sobrevive la navegacion SPA completa. Solo
        visible con seleccion.length > 0 (ver seleccionController en
@@ -1524,6 +1554,8 @@
   <script src="js/reemplazo.js"></script>
   <script src="js/coordenadasConversion.js"></script>
   <script src="js/ubicacionCorreccionLogic.js"></script>
+  <script src="js/ubicacionesConocidasLogic.js"></script>
+  <script src="js/ubicacionesConocidas.js"></script>
   <script src="js/ubicacionCorreccion.js"></script>
   <script src="js/ubicacionValidacion.js"></script>
   <script src="js/ubicacionPendientes.js"></script>
