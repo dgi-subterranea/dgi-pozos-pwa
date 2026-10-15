@@ -119,6 +119,20 @@ function doPost(e) {
         response = handleRechazarCorreccionUbicacion(body.sessionToken, body.correccionId, body.motivo);
       } else if (body.action === 'revertirCorreccionUbicacion') {
         response = handleRevertirCorreccionUbicacion(body.sessionToken, body.correccionId, body.motivo);
+      } else if (body.action === 'getDecisionesFuentesPozo') {
+        response = handleGetDecisionesFuentesPozo(body.sessionToken, body.wellId);
+      } else if (body.action === 'decidirFuenteUbicacion') {
+        // Lista blanca de campos: la identidad (email, nombre), la secuencia, la fecha, el estado y el punto operativo NO se leen del cliente.
+        response = handleDecidirFuenteUbicacion(body.sessionToken, {
+          wellId: body.wellId,
+          fuenteTipo: body.fuenteTipo,
+          x: body.x,
+          y: body.y,
+          accion: body.accion,
+          motivo: body.motivo,
+          versionVista: body.versionVista,
+          clientRequestId: body.clientRequestId
+        });
       } else {
         Logger.log('doPost: accion desconocida: ' + api_limpiarMensajeLog(body.action));
         response = { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'accion desconocida: ' + body.action };
@@ -163,9 +177,10 @@ function validateSessionAndWellId(sessionToken, wellId, accion) {
   }
   var session = sessionValidation.session;
 
-  if (!wellId || !/^\d{2}-\d{4}$/.test(wellId)) {
-    logHistoryEvent(session.email, accion, wellId, 'INVALID_WELL_ID');
-    return { ok: false, response: { status: 'error', code: 'INVALID_WELL_ID', message: 'formato invalido: ' + wellId } };
+  // typeof: un wellId que no es texto (un arreglo, un objeto) jamas pasa; antes un arreglo ['14-0001'] pasaba el regex (se convierte a texto) y rompia mas abajo
+  if (typeof wellId !== 'string' || !wellId || !/^\d{2}-\d{4}$/.test(wellId)) {
+    logHistoryEvent(session.email, accion, typeof wellId === 'string' ? wellId : null, 'INVALID_WELL_ID');
+    return { ok: false, response: { status: 'error', code: 'INVALID_WELL_ID', message: 'formato invalido: ' + (typeof wellId === 'string' ? wellId : typeof wellId) } };
   }
 
   // Los departamentos validos van de 01 a 19. Esta regla existe tambien
@@ -1239,9 +1254,101 @@ function handleRevertirCorreccionUbicacion(sessionToken, correccionId, motivo) {
   return resolverCorreccionUbicacion('revertirCorreccionUbicacion', function (e, n, id, m) { return ubicacionCorreccionService_revertir(e, n, id, m); }, sessionToken, correccionId, motivo);
 }
 
+// --- Decisiones sobre las fuentes registrales de ubicacion (aceptar / descartar / quitar la aceptacion / restaurar) ---
+// Hoja append-only UbicacionFuenteDecisiones (ver UbicacionFuenteDecisionesRepository.js); NO son correcciones de campo. Permisos (fail-closed, mas el usuario activo):
+//   leer las fuentes y decisiones de un pozo ..... ubicacion
+//   decidir (aceptar / descartar / quitar / restaurar) ... ubicacion + ubicacion_validar   (ubicacion_corregir NO alcanza)
+// Orden de chequeos, igual que el resto: sesion -> formato de wellId -> permisos -> contenido. email/nombre SIEMPRE de la sesion + hoja Usuarios.
+// Auditoria en Historial: ademas de la hoja (que ya guarda quien, cuando, que y por que), se registra CADA INTENTO: lo que la hoja no puede guardar (permiso denegado,
+// transicion invalida, estado viejo, errores) y, para una decision escrita, la accion legible FUENTE_ACEPTADA / FUENTE_DESCARTADA / FUENTE_ACEPTACION_QUITADA /
+// FUENTE_RESTAURADA con resultado OK. Nunca el payload, el motivo, el email de otra persona ni coordenadas. Los reintentos idempotentes y las lecturas no se auditan.
+// Un fallo interno (p. ej. de Sheets) devuelve un mensaje generico: el detalle va a Logger.
+
+function respuestaErrorDecisionFuente(resultado) {
+  var r = { status: 'error', code: resultado.code, message: resultado.message };
+  if (resultado.versionActual !== undefined && resultado.versionActual !== null) {
+    r.versionActual = resultado.versionActual;
+  }
+  return r;
+}
+
+function respuestaServicioNoDisponibleDecision(accion, email, wellId, err) {
+  Logger.log('Decisiones de fuentes: ' + accion + ' fallo: ' + api_limpiarMensajeLog(err));
+  logHistoryEvent(email, accion, wellId, 'SERVICE_UNAVAILABLE');
+  return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'servicio no disponible' };
+}
+
+function handleGetDecisionesFuentesPozo(sessionToken, wellId) {
+  var validation = validateSessionAndWellId(sessionToken, wellId, 'getDecisionesFuentesPozo');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var permiso = validarPermiso(session, 'getDecisionesFuentesPozo', wellId, 'ubicacion');
+  if (!permiso.ok) {
+    return permiso.response;
+  }
+
+  var resultado;
+  try {
+    resultado = ubicacionFuenteDecisionesService_getPorPozo(wellId);
+  } catch (err) {
+    return respuestaServicioNoDisponibleDecision('getDecisionesFuentesPozo', session.email, wellId, err);
+  }
+  if (!resultado.ok) {
+    return respuestaErrorDecisionFuente(resultado);
+  }
+  return { status: 'ok', data: resultado.data };
+}
+
+function handleDecidirFuenteUbicacion(sessionToken, datos) {
+  var d = datos || {};
+  var validation = validateSessionAndWellId(sessionToken, d.wellId, 'decidirFuenteUbicacion');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var permisos = validarPermisosTodos(session, 'decidirFuenteUbicacion', d.wellId, ['ubicacion', 'ubicacion_validar']);
+  if (!permisos.ok) {
+    return permisos.response;
+  }
+
+  var access = getUserAccess(session.email);
+  var resultado;
+  try {
+    resultado = ubicacionFuenteDecisionesService_decidir(session.email, access.nombre, {
+      wellId: d.wellId,
+      fuenteTipo: d.fuenteTipo,
+      x: d.x,
+      y: d.y,
+      accion: d.accion,
+      motivo: d.motivo,
+      versionVista: d.versionVista,
+      clientRequestId: d.clientRequestId
+    });
+  } catch (err) {
+    return respuestaServicioNoDisponibleDecision('decidirFuenteUbicacion', session.email, d.wellId, err);
+  }
+  if (!resultado.ok) {
+    logHistoryEvent(session.email, 'decidirFuenteUbicacion', d.wellId, resultado.code);
+    return respuestaErrorDecisionFuente(resultado);
+  }
+  if (!resultado.duplicada) {
+    logHistoryEvent(session.email, resultado.auditoria || 'decidirFuenteUbicacion', d.wellId, 'OK');
+  }
+  var data = resultado.data ? Object.assign({}, resultado.data) : { wellId: d.wellId };
+  data.decision = resultado.decision;
+  data.duplicada = resultado.duplicada === true;
+  return { status: 'ok', data: data };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     doPost,
+    handleGetDecisionesFuentesPozo,
+    handleDecidirFuenteUbicacion,
     handleProponerCorreccionUbicacion,
     handleGetCorreccionesUbicacionPozo,
     handleGetCorreccionesUbicacionPendientes,

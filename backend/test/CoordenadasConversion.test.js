@@ -140,15 +140,67 @@ describe('paridad bit a bit con el modulo del frontend', () => {
       });
   });
 
+  // Codigo sin comentarios ni lineas vacias, comparable entre copias. Los finales de linea (CRLF de un checkout de Windows, CR, LF) se normalizan ANTES: sin eso, en un
+  // checkout limpio con CRLF el "\r" impedia reconocer los comentarios y las dos copias parecian distintas. Solo ignora finales de linea y comentarios; cualquier
+  // otra diferencia (expresiones, constantes, estructura) sigue haciendo fallar la comparacion.
+  const codigo = (fuente) => fuente.replace(/\r\n?/g, '\n').split('\n')
+    .map((l) => l.replace(/\s+\/\/ .*$/, '').replace(/^\s*\/\/.*$/, '').trimEnd())
+    .filter((l) => l.trim() !== '')
+    .join('\n');
+
   test('NO DERIVA: el codigo sin comentarios de las dos copias es identico', () => {
-    const codigo = (fuente) => fuente.split('\n')
-      .map((l) => l.replace(/\s+\/\/ .*$/, '').replace(/^\s*\/\/.*$/, '').trimEnd())
-      .filter((l) => l.trim() !== '')
-      .join('\n');
     const b = codigo(fuenteBack);
     const f = codigo(fuenteFront);
     expect(b.length).toBeGreaterThan(5000);
     expect(b).toBe(f);
+  });
+
+  describe('NO DERIVA: independiente de los finales de linea y sensible a cambios reales', () => {
+    const aLf = (x) => x.replace(/\r\n?/g, '\n');
+    const aCrlf = (x) => aLf(x).replace(/\n/g, '\r\n');
+    const aCr = (x) => aLf(x).replace(/\n/g, '\r');
+
+    test('las dos copias en LF coinciden', () => {
+      expect(codigo(aLf(fuenteBack))).toBe(codigo(aLf(fuenteFront)));
+    });
+
+    test('las dos copias en CRLF coinciden', () => {
+      expect(codigo(aCrlf(fuenteBack))).toBe(codigo(aCrlf(fuenteFront)));
+    });
+
+    test('una copia en CRLF y la otra en LF (mezcla tipica de un checkout de Windows) coinciden', () => {
+      expect(codigo(aCrlf(fuenteBack))).toBe(codigo(aLf(fuenteFront)));
+      expect(codigo(aLf(fuenteBack))).toBe(codigo(aCrlf(fuenteFront)));
+    });
+
+    test('CR solo tambien coincide', () => {
+      expect(codigo(aCr(fuenteBack))).toBe(codigo(aLf(fuenteFront)));
+    });
+
+    test('el resultado es el mismo con cualquier final de linea', () => {
+      expect(codigo(aCrlf(fuenteFront))).toBe(codigo(aLf(fuenteFront)));
+    });
+
+    test('FALLA si se cambia una expresion real en una de las copias (en LF y en CRLF)', () => {
+      const lineaReal = aLf(fuenteFront).split('\n').find((l) => /[0-9]/.test(l) && !/^\s*\/\//.test(l) && /=|return/.test(l));
+      expect(lineaReal).toBeDefined();
+      const mutada = lineaReal.replace(/[0-9]/, (d) => String((Number(d) + 1) % 10));
+      expect(mutada).not.toBe(lineaReal);
+      const tocada = aLf(fuenteFront).replace(lineaReal, mutada);
+      expect(codigo(tocada)).not.toBe(codigo(aLf(fuenteBack)));
+      expect(codigo(aCrlf(tocada))).not.toBe(codigo(aCrlf(fuenteBack)));
+    });
+
+    test('FALLA si cambia un operador o se agrega codigo', () => {
+      const f = aLf(fuenteFront);
+      expect(codigo(f.replace('return', 'return !'))).not.toBe(codigo(aLf(fuenteBack)));
+      expect(codigo(f + '\nvar extra = 1;')).not.toBe(codigo(aLf(fuenteBack)));
+    });
+
+    test('un comentario distinto NO es una deriva (comportamiento existente), aunque haya CRLF', () => {
+      const f = aCrlf(fuenteFront).replace('\r\n', '\r\n// comentario nuevo que no existe en el backend\r\n');
+      expect(codigo(f)).toBe(codigo(aLf(fuenteBack)));
+    });
   });
 });
 
