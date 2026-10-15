@@ -268,6 +268,9 @@ function diagnosticoCorreccionesEmail() {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     UBICACION_CORR_MAIL_DEDUPE_SEGUNDOS,
+    ubicacionCorreccionNotificacion_limpiar,
+    ubicacionCorreccionNotificacion_formatearFecha,
+    ubicacionCorreccionNotificacion_errorSeguro,
     ubicacionCorreccionNotificacion_destinatarios,
     ubicacionCorreccionNotificacion_armarMensaje,
     ubicacionCorreccionNotificacion_notificarPendiente,

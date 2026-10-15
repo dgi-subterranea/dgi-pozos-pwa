@@ -354,8 +354,10 @@ describe('lo que NO cambia', () => {
   });
 
   test('las hojas de correcciones no existen en este entorno y nada las toco ni las necesito', () => {
-    expect(Object.keys(t.hojas)).toEqual(['UbicacionFuenteDecisiones']);
+    // solo existen las dos hojas del modulo (decisiones y sugerencias): ninguna hoja de correcciones, y decidir directo NO escribe nada en las sugerencias
+    expect(Object.keys(t.hojas)).toEqual(['UbicacionFuenteDecisiones', 'UbicacionFuenteSugerencias']);
     decidir();
-    expect(Object.keys(t.hojas)).toEqual(['UbicacionFuenteDecisiones']);
+    expect(Object.keys(t.hojas)).toEqual(['UbicacionFuenteDecisiones', 'UbicacionFuenteSugerencias']);
+    expect(t.hojas.UbicacionFuenteSugerencias.filas).toHaveLength(1);                        // solo el encabezado
   });
 });

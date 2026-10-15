@@ -145,7 +145,7 @@ describe('reintento idempotente: sin invalidar y sin inconsistencias', () => {
     t.cache.remove.mockClear();
     for (let i = 0; i < 5; i += 1) { decidirSol({ ...sol }); }
     expect(t.filas()).toHaveLength(1);
-    expect(t.cache.remove).toHaveBeenCalledTimes(1);
+    expect(t.cache.remove.mock.calls.filter((c) => c[0] === CLAVE)).toHaveLength(1);     // (ademas se invalidan las vistas de sugerencias del pozo: otras claves)
   });
 });
 

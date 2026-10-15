@@ -51,8 +51,19 @@ function armar(opciones) {
   ctx.Repo = require('../src/UbicacionFuenteDecisionesRepository');
   ctx.Corr = require('../src/UbicacionCorreccionService');
   ctx.S = require('../src/UbicacionFuenteDecisionesService');
-  Object.assign(global, ctx.Dominio, ctx.Repo, ctx.Corr, ctx.S);                    // en Apps Script todo es global
-  ctx.hojas = instalarSheetsFalsos(o.sinHoja ? {} : { UbicacionFuenteDecisiones: [ctx.Repo.UBICACION_FUENTE_DECISIONES_COLUMNAS] });
+  ctx.RepoSug = require('../src/UbicacionFuenteSugerenciasRepository');
+  ctx.Sug = require('../src/UbicacionFuenteSugerenciasService');
+  ctx.CorrNotif = require('../src/UbicacionCorreccionNotificacion');
+  ctx.Notif = require('../src/UbicacionFuenteSugerenciaNotificacion');
+  Object.assign(global, ctx.Dominio, ctx.Repo, ctx.Corr, ctx.S, ctx.RepoSug, ctx.Sug, ctx.CorrNotif, ctx.Notif);                    // en Apps Script todo es global
+  const hojasIniciales = {};
+  if (!o.sinHoja) {
+    hojasIniciales.UbicacionFuenteDecisiones = [ctx.Repo.UBICACION_FUENTE_DECISIONES_COLUMNAS];
+    if (!o.sinHojaSug) {
+      hojasIniciales.UbicacionFuenteSugerencias = [ctx.RepoSug.UBICACION_FUENTE_SUGERENCIAS_COLUMNAS];
+    }
+  }
+  ctx.hojas = instalarSheetsFalsos(hojasIniciales);
   ctx.padron = padronInicial();
   ctx.metadata = { periodo: '2026-09' };
   global.registryService_getWellLocation = jest.fn((id) => (ctx.padron[id] ? { found: true, location: { wellId: id, ...JSON.parse(JSON.stringify(ctx.padron[id])), ubicacionResuelta: { estado: 'x' } } } : { found: false }));

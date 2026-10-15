@@ -290,7 +290,7 @@ Backend usado tal cual esta desplegado en v41: `getDecisionesFuentesPozo` (lectu
 
 ---
 
-## Etapa B — propuesta de SUGERENCIAS para quien no valida (diseño, NO implementado)
+## Etapa B — propuesta de SUGERENCIAS para quien no valida (diseño; la versión FINAL implementada está en «Etapa C», más abajo)
 
 ### Auditoría de lo existente (patrón real del proyecto)
 - Correcciones: hoja de estado + hoja `…Log` de eventos, `LockService`, `clientRequestId` por usuario, cola `getCorreccionesUbicacionPendientes` (`ubicacion` + `ubicacion_validar`) con `total` para el indicador del hub (refresco al entrar al hub, 15 s), validar/rechazar con motivo obligatorio al rechazar, Historial por intento, aviso interno + `MailApp` best-effort a usuarios activos con `ubicacion` y `ubicacion_validar` (sin el proponente, sin repetidos, un mail por destinatario, sin coordenadas ni emails en el cuerpo, respetando `getRemainingDailyQuota()`; cuota compartida: 100/día en Gmail personal, 1500 en Workspace).
@@ -363,4 +363,60 @@ Lista con pozo, fuente, acción sugerida, quién, cuándo, motivo y **estado act
 4. Tope de pendientes por usuario (10) y reserva de cuota de mail (20).
 5. Incluir `cancelarSugerenciaFuente` en la primera versión (recomendado).
 6. Las sugerencias aprobadas con una validada en campo vigente: se aplican igual (como Aceptar directo), con el mismo aviso.
+
+---
+
+## Etapa C — backend de sugerencias (implementado; sin UI, sin commit, sin setup real)
+
+Decisiones de producto cerradas: se pueden sugerir `ACEPTAR`, `DESCARTAR` y `RESTAURAR` (**no** `QUITAR_ACEPTACION`); motivo obligatorio al sugerir descartar y al rechazar, opcional en el resto; el backend acepta sugerencias de un validador pero la UI futura no se las ofrece; máximo 10 pendientes por usuario; reserva de 20 destinatarios de la cuota de `MailApp`; el autor puede cancelar la suya mientras esté pendiente; con una validada en campo vigente la aprobación crea igual la decisión registral (la validada conserva la prioridad operativa).
+
+### Archivos
+`backend/src/UbicacionFuenteSugerenciasRepository.js` (hoja, setup), `UbicacionFuenteSugerenciasService.js` (estado derivado, sugerir / resolver / cancelar, lecturas, caché), `UbicacionFuenteSugerenciaNotificacion.js` (mail + reserva de cuota), `Api.js` (5 rutas y handlers). Cambios en lo ya desplegado: `UbicacionFuenteDecisionesService.js` (se **extrajo** el núcleo autoritativo `ubicacionFuenteDecisionesService_aplicarDecision`, sin cambiar su comportamiento: los 2.489 tests anteriores pasan sin tocar; `decidirFuenteUbicacion` rechaza los `clientRequestId` que empiezan con `sug-`; al escribir invalida el caché de sugerencias) y `UbicacionCorreccionNotificacion.js` (solo 3 exports de Node).
+
+### Esquema FINAL de `UbicacionFuenteSugerencias` (14 columnas, append-only)
+`sugerenciaId | secuencia | evento | wellId | fuenteTipo | x | y | accionSugerida | motivo | email | nombre | timestampUtc | clientRequestId | versionVista`
+- `evento`: `PROPUESTA | APROBADA | RECHAZADA | CANCELADA | OBSOLETA`. `email` / `nombre` son de quien genera **ese** evento (proponente, validador o autor). Los eventos de resolución repiten pozo, fuente y acción de la propuesta para que cada fila se entienda sola (si no coinciden, esa sugerencia queda inconsistente).
+- **Sin** `decisionId` (la decisión que crea una aprobación lleva `clientRequestId = 'sug-' + sugerenciaId`: el vínculo se deduce), **sin** `causaSugerenciaId`, `padronPeriodo`, snapshot ni columnas mutables (`estadoActual`, `resueltaPor`, `resueltaEn`: se derivan del log). Si hiciera falta un campo, se **agrega** una columna al final (el esquema tolera columnas extra).
+- Identidad de la fuente: **la misma** de las decisiones (`wellId + tipo + x + y` a 3 decimales).
+- Texto plano (`@`) salvo `secuencia`, `x`, `y`, `versionVista`; `secuencia` = `max + 1` bajo el **mismo lock de script** que las decisiones; una secuencia inválida en cualquier fila bloquea las escrituras (fail-closed) pero no las lecturas.
+
+### Máquina de estados
+`PENDIENTE → APROBADA | RECHAZADA | CANCELADA | OBSOLETA` (terminales). Estados **derivados al leer** (sin escribir): *no aplicable* (la fuente ya no existe en el padrón, la acción ya no corresponde, o el historial del pozo es inconsistente) y *curada* (ver «Corte»). Una sugerencia con un registro inconsistente se excluye, se cuenta aparte y se loguea; no contamina a las demás.
+
+### Endpoints y permisos
+| Endpoint | Permiso | Resultado |
+|---|---|---|
+| `sugerirDecisionFuente` | `ubicacion` | `{sugerencia, duplicada}`; errores `ALREADY_PENDING` (+`sugerencia`), `PENDING_LIMIT_REACHED` (+`limite`) |
+| `getSugerenciasFuentesPozo` | `ubicacion` | quien no valida: **solo las suyas** (todos los estados); quien valida: las pendientes del pozo. `{wellId, version, integro, sugerencias[]}` |
+| `getSugerenciasFuentesPendientes` | `ubicacion` + `ubicacion_validar` | `{total (solo aplicables), noAplicables, inconsistentes, pendientes[] (≤200, más viejas primero, con lat/lon, estado actual y versión del pozo)}` |
+| `resolverSugerenciaFuente` | `ubicacion` + `ubicacion_validar` | `{resultado: APROBADA \| RECHAZADA \| OBSOLETA, sugerencia, decision?, fuentes? (la vista de decisiones actualizada), motivoNoAplicable?}` |
+| `cancelarSugerenciaFuente` | `ubicacion` (solo el autor) | `{sugerencia, duplicada}`; para cualquier otra persona la sugerencia «no existe» |
+
+Respuestas sin emails, `clientRequestId`, secuencias ni diagnóstico técnico (el nombre del proponente sí).
+
+### Deduplicación, límite e idempotencia
+Dedupe **independiente del `clientRequestId`**: mismo usuario + pozo + fuente + acción mientras siga PENDIENTE → `ALREADY_PENDING` con la existente, sin escribir (se evalúa después de validar que la acción sea razonable hoy). **Límite: 10 pendientes APLICABLES por usuario** (`PENDING_LIMIT_REACHED`). Se cuentan solo las sugerencias del usuario que (1) siguen PENDIENTES en el estado derivado, (2) son suyas y (3) **siguen siendo aplicables HOY** según padrón + estado actual de la fuente (el mismo criterio del indicador `total` de la cola). Una pendiente que dejó de ser aplicable (reindexado, decisión posterior) **se conserva intacta y auditable**, se muestra como no aplicable y **no consume cupo**; si vuelve a ser aplicable (p. ej. se restaura la fuente) vuelve a contar. **Nada se escribe al leer ni al contar:** no se convierte ninguna PENDIENTE en OBSOLETA; el único camino a `OBSOLETA` es que un validador intente aprobarla. Si no se puede verificar la aplicabilidad de una pendiente (el padrón de otro pozo falla), esa pendiente **cuenta** (fail-closed: una caída no esquiva el límite). Tampoco cuentan aprobadas, rechazadas, canceladas, obsoletas ni curadas. La deduplicación usa el mismo criterio: una equivalente pendiente pero no aplicable no bloquea (en la práctica no puede coexistir con una acción hoy válida sobre la misma fuente, así que no se crean duplicados absurdos). Idempotencia por `(usuario, clientRequestId)` en toda la hoja; otro contenido con el mismo id → `IDEMPOTENCY_CONFLICT`; una solicitud rechazada antes de escribir no consume el id.
+
+### Aprobar (núcleo compartido) y la versión
+Todo en un solo lock: relee sugerencias, padrón y decisiones → revalida contra el estado **actual** → llama a `ubicacionFuenteDecisionesService_aplicarDecision` (**la misma** función que usa `decidirFuenteUbicacion`) con `clientRequestId = 'sug-<id>'` y el motivo de la sugerencia → escribe el evento `APROBADA`. **No** se confía en la `versionVista` del proponente (queda como auditoría): se compara la del **validador** con la actual (`STALE_STATE` + `versionActual`, nada escrito).
+- Fuente inexistente (reindexado: nunca se transfiere a una fuente nueva), acción ya cumplida o que ya no corresponde (`SOURCE_NOT_FOUND`, `ALREADY_IN_STATE`, `INVALID_TRANSITION`) → **no se aplica** y se escribe `OBSOLETA` (resultado amistoso `motivoNoAplicable`: `FUENTE_NO_EXISTE | YA_ESTA_ASI | YA_NO_CORRESPONDE`).
+- Historial inconsistente o secuencia inválida → `INCONSISTENT_STATE`, nada escrito (no se marca obsoleta a ciegas).
+
+### Corte entre las dos escrituras
+La decisión se escribe **primero**. Si falla el evento `APROBADA`, la decisión `sug-<id>` ya existe: toda lectura muestra la sugerencia como APROBADA (curada; sale de la cola y del límite) y el **reintento** (del mismo validador o de otro) encuentra esa decisión, comprueba que coincide (pozo, fuente, evento; si no → `INCONSISTENT_STATE`), **no crea otra** y solo escribe el evento faltante. Rechazar o cancelar una curada → `ALREADY_RESOLVED`. Los `clientRequestId` `sug-…` son reservados del servidor.
+
+### Mail y cuota
+Reutiliza `UbicacionCorreccionNotificacion` (destinatarios activos con `ubicacion` + `ubicacion_validar`, sin el proponente, sin repetidos, un mail por persona). Cuerpo: pozo, tipo de sugerencia, fuente, proponente, fecha, motivo y enlace; **sin** emails, ids ni coordenadas. **Reserva de 20:** nunca se usan los últimos 20 destinatarios de `getRemainingDailyQuota()` (con 25 restantes, a lo sumo 5); con ≤ 20 o con la cuota ilegible no se envía nada. Best-effort: un fallo no cambia la respuesta ni deshace la sugerencia; queda en Historial (`notificarSugerenciaFuente`). Las correcciones mantienen su comportamiento.
+
+### Caché (120 s, nunca para escribir)
+`ufs_v1_cola` (la cola y el contador `total` para el futuro indicador del hub) y `ufs_v1_pozo_<wellId>` (vista del validador; la de quien no valida depende de quién pregunta y no se cachea), con marca de invalidación `ufs_v1_inval`. Se invalida al crear, aprobar, rechazar, cancelar, marcar obsoleta **y ante cualquier decisión directa** (cambia lo que dicen las sugerencias). Las escrituras ni siquiera leen el caché.
+
+### Historial
+`FUENTE_SUGERIDA`, `FUENTE_SUGERENCIA_APROBADA` (más la línea de la decisión creada, p. ej. `FUENTE_DESCARTADA`), `FUENTE_SUGERENCIA_RECHAZADA`, `FUENTE_SUGERENCIA_CANCELADA`, `FUENTE_SUGERENCIA_OBSOLETA`; fallos con su código. Sin payload, motivos, coordenadas ni emails ajenos.
+
+### Errores
+`INVALID_WELL_ID`, `WELL_NOT_FOUND`, `INVALID_ACCION`, `INVALID_RESOLUCION`, `INVALID_SUGERENCIA_ID`, `INVALID_CLIENT_REQUEST_ID`, `INVALID_FUENTE`, `INVALID_VERSION`, `INVALID_MOTIVO`, `SOURCE_NOT_FOUND`, `STALE_STATE`, `INCONSISTENT_STATE`, `INVALID_TRANSITION`, `ALREADY_IN_STATE`, `IDEMPOTENCY_CONFLICT`, `ALREADY_PENDING`, `PENDING_LIMIT_REACHED`, `SUGGESTION_NOT_FOUND`, `ALREADY_RESOLVED`, más los de sesión y permisos; fallas internas = `SERVICE_UNAVAILABLE` genérico.
+
+### Setup (NO ejecutado)
+`setupUbicacionFuenteSugerenciasSheet()` (en `UbicacionFuenteSugerenciasRepository.js`): idempotente, crea la hoja si falta, si existe solo valida encabezados, no borra ni reordena ni toca filas, falla cerrado ante un esquema inesperado o una hoja vacía. Orden de producción: `gas:push` → setup manual → `gas:version` → `gas:deploy`. Sin la hoja, los endpoints de sugerencias devuelven `SERVICE_UNAVAILABLE` genérico y **las decisiones directas siguen funcionando**.
 

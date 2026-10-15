@@ -776,7 +776,8 @@ describe('el modulo es puro, esta aislado y no toca nada', () => {
     fs.readdirSync(path.join(raiz, 'js')).filter((f) => f.endsWith('.js') && !f.endsWith('.test.js') && f !== 'ubicacionFuenteDecisionesLogic.js').forEach((f) => {
       expect(fs.readFileSync(path.join(raiz, 'js', f), 'utf8')).not.toMatch(/\bufd_|ubicacionFuenteDecisionesLogic/);
     });
-    const delModulo = ['UbicacionFuenteDecisionesLogic.js', 'UbicacionFuenteDecisionesRepository.js', 'UbicacionFuenteDecisionesService.js', 'Api.js'];
+    // el backend de decisiones (copia exacta + repositorio + servicio + Api) y el de SUGERENCIAS (Etapa C: reutiliza el servicio de decisiones; su propio test de aislamiento fija el resto)
+    const delModulo = ['UbicacionFuenteDecisionesLogic.js', 'UbicacionFuenteDecisionesRepository.js', 'UbicacionFuenteDecisionesService.js', 'UbicacionFuenteSugerenciasRepository.js', 'UbicacionFuenteSugerenciasService.js', 'UbicacionFuenteSugerenciaNotificacion.js', 'Api.js'];
     fs.readdirSync(path.join(raiz, 'backend', 'src')).filter((f) => delModulo.indexOf(f) === -1).forEach((f) => {
       expect(fs.readFileSync(path.join(raiz, 'backend', 'src', f), 'utf8')).not.toMatch(/ufd_|ubicacionFuenteDecisiones|UbicacionFuenteDecisiones/);
     });

@@ -133,6 +133,36 @@ function doPost(e) {
           versionVista: body.versionVista,
           clientRequestId: body.clientRequestId
         });
+      } else if (body.action === 'sugerirDecisionFuente') {
+        // Lista blanca de campos: la identidad (email, nombre), la secuencia, la fecha y el estado NO se leen del cliente.
+        response = handleSugerirDecisionFuente(body.sessionToken, {
+          wellId: body.wellId,
+          fuenteTipo: body.fuenteTipo,
+          x: body.x,
+          y: body.y,
+          accionSugerida: body.accionSugerida,
+          motivo: body.motivo,
+          versionVista: body.versionVista,
+          clientRequestId: body.clientRequestId
+        });
+      } else if (body.action === 'getSugerenciasFuentesPozo') {
+        response = handleGetSugerenciasFuentesPozo(body.sessionToken, body.wellId);
+      } else if (body.action === 'getSugerenciasFuentesPendientes') {
+        response = handleGetSugerenciasFuentesPendientes(body.sessionToken);
+      } else if (body.action === 'resolverSugerenciaFuente') {
+        response = handleResolverSugerenciaFuente(body.sessionToken, {
+          sugerenciaId: body.sugerenciaId,
+          resolucion: body.resolucion,
+          motivo: body.motivo,
+          versionVista: body.versionVista,
+          clientRequestId: body.clientRequestId
+        });
+      } else if (body.action === 'cancelarSugerenciaFuente') {
+        response = handleCancelarSugerenciaFuente(body.sessionToken, {
+          sugerenciaId: body.sugerenciaId,
+          motivo: body.motivo,
+          clientRequestId: body.clientRequestId
+        });
       } else {
         Logger.log('doPost: accion desconocida: ' + api_limpiarMensajeLog(body.action));
         response = { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'accion desconocida: ' + body.action };
@@ -1269,6 +1299,16 @@ function respuestaErrorDecisionFuente(resultado) {
   if (resultado.versionActual !== undefined && resultado.versionActual !== null) {
     r.versionActual = resultado.versionActual;
   }
+  // sugerencias: ALREADY_PENDING referencia la que ya existe (item seguro, sin emails); PENDING_LIMIT_REACHED informa el tope; ALREADY_RESOLVED el estado en que quedo
+  if (resultado.sugerencia && typeof resultado.sugerencia === 'object') {
+    r.sugerencia = resultado.sugerencia;
+  }
+  if (typeof resultado.limite === 'number') {
+    r.limite = resultado.limite;
+  }
+  if (typeof resultado.estado === 'string') {
+    r.estado = resultado.estado;
+  }
   return r;
 }
 
@@ -1344,9 +1384,216 @@ function handleDecidirFuenteUbicacion(sessionToken, datos) {
   return { status: 'ok', data: data };
 }
 
+
+// --- Sugerencias sobre las fuentes registrales (quien NO valida pide aceptar / descartar / restaurar; un validador aprueba o rechaza) ---
+// Hoja append-only UbicacionFuenteSugerencias (ver UbicacionFuenteSugerenciasRepository.js). Una sugerencia NO es una decision: por si sola no cambia nada. Permisos (fail-closed,
+// mas el usuario activo):
+//   sugerir / leer las sugerencias de un pozo / cancelar la propia ........ ubicacion
+//   la cola de pendientes y resolver (aprobar / rechazar) .................. ubicacion + ubicacion_validar
+// El backend permite que un validador tambien sugiera (la UI no se lo ofrece). Orden de chequeos: sesion -> formato de wellId (si lo hay) -> permisos -> contenido.
+// Auditoria en Historial (sin payload, motivos, coordenadas ni emails ajenos): FUENTE_SUGERIDA, FUENTE_SUGERENCIA_APROBADA / _RECHAZADA / _CANCELADA / _OBSOLETA (y, al aprobar, la
+// accion de la decision que se creo: FUENTE_ACEPTADA...). Los fallos se registran con su codigo. Los reintentos idempotentes y las lecturas no se auditan.
+
+function avisarValidadoresSugerencia(email, wellId, resultado) {
+  if (!resultado || resultado.nueva !== true || !resultado.notificar) {
+    return;
+  }
+  var aviso;
+  try {
+    aviso = ubicacionFuenteSugerenciaNotificacion_notificarPendiente(email, resultado.notificar);
+  } catch (err) {
+    aviso = { resultado: 'ERROR' };
+  }
+  var texto = ubicacionCorreccionNotificacion_textoAuditoria(aviso);
+  if (texto) {
+    logHistoryEvent(email, 'notificarSugerenciaFuente', wellId, texto);
+  }
+}
+
+function handleSugerirDecisionFuente(sessionToken, datos) {
+  var d = datos || {};
+  var validation = validateSessionAndWellId(sessionToken, d.wellId, 'sugerirDecisionFuente');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var permiso = validarPermiso(session, 'sugerirDecisionFuente', d.wellId, 'ubicacion');
+  if (!permiso.ok) {
+    return permiso.response;
+  }
+
+  var access = getUserAccess(session.email);
+  var resultado;
+  try {
+    resultado = ubicacionFuenteSugerenciasService_sugerir(session.email, access.nombre, {
+      wellId: d.wellId,
+      fuenteTipo: d.fuenteTipo,
+      x: d.x,
+      y: d.y,
+      accionSugerida: d.accionSugerida,
+      motivo: d.motivo,
+      versionVista: d.versionVista,
+      clientRequestId: d.clientRequestId
+    });
+  } catch (err) {
+    return respuestaServicioNoDisponibleDecision('sugerirDecisionFuente', session.email, d.wellId, err);
+  }
+  if (!resultado.ok) {
+    logHistoryEvent(session.email, 'sugerirDecisionFuente', d.wellId, resultado.code);
+    return respuestaErrorDecisionFuente(resultado);
+  }
+  if (!resultado.duplicada) {
+    logHistoryEvent(session.email, resultado.auditoria || 'sugerirDecisionFuente', d.wellId, 'OK');
+    avisarValidadoresSugerencia(session.email, d.wellId, resultado);
+  }
+  return { status: 'ok', data: { sugerencia: resultado.sugerencia, duplicada: resultado.duplicada === true } };
+}
+
+function handleGetSugerenciasFuentesPozo(sessionToken, wellId) {
+  var validation = validateSessionAndWellId(sessionToken, wellId, 'getSugerenciasFuentesPozo');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var permiso = validarPermiso(session, 'getSugerenciasFuentesPozo', wellId, 'ubicacion');
+  if (!permiso.ok) {
+    return permiso.response;
+  }
+
+  // quien valida ve todas las pendientes del pozo; el resto, solo las suyas (la consulta de permisos no se audita: es una lectura)
+  var esValidador = hasPermission(session.email, 'ubicacion_validar') === true;
+  var resultado;
+  try {
+    resultado = ubicacionFuenteSugerenciasService_getPorPozo(session.email, esValidador, wellId);
+  } catch (err) {
+    return respuestaServicioNoDisponibleDecision('getSugerenciasFuentesPozo', session.email, wellId, err);
+  }
+  if (!resultado.ok) {
+    logHistoryEvent(session.email, 'getSugerenciasFuentesPozo', wellId, resultado.code);
+    return respuestaErrorDecisionFuente(resultado);
+  }
+  return { status: 'ok', data: resultado.data };
+}
+
+function handleGetSugerenciasFuentesPendientes(sessionToken) {
+  var validation = validateSession(sessionToken, 'getSugerenciasFuentesPendientes');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var permisos = validarPermisosTodos(session, 'getSugerenciasFuentesPendientes', null, ['ubicacion', 'ubicacion_validar']);
+  if (!permisos.ok) {
+    return permisos.response;
+  }
+
+  var resultado;
+  try {
+    resultado = ubicacionFuenteSugerenciasService_getPendientes();
+  } catch (err) {
+    return respuestaServicioNoDisponibleDecision('getSugerenciasFuentesPendientes', session.email, null, err);
+  }
+  if (!resultado.ok) {
+    logHistoryEvent(session.email, 'getSugerenciasFuentesPendientes', null, resultado.code);
+    return respuestaErrorDecisionFuente(resultado);
+  }
+  return { status: 'ok', data: resultado.data };
+}
+
+function handleResolverSugerenciaFuente(sessionToken, datos) {
+  var d = datos || {};
+  var validation = validateSession(sessionToken, 'resolverSugerenciaFuente');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var permisos = validarPermisosTodos(session, 'resolverSugerenciaFuente', null, ['ubicacion', 'ubicacion_validar']);
+  if (!permisos.ok) {
+    return permisos.response;
+  }
+
+  var access = getUserAccess(session.email);
+  var resultado;
+  try {
+    resultado = ubicacionFuenteSugerenciasService_resolver(session.email, access.nombre, {
+      sugerenciaId: d.sugerenciaId,
+      resolucion: d.resolucion,
+      motivo: d.motivo,
+      versionVista: d.versionVista,
+      clientRequestId: d.clientRequestId
+    });
+  } catch (err) {
+    return respuestaServicioNoDisponibleDecision('resolverSugerenciaFuente', session.email, null, err);
+  }
+  if (!resultado.ok) {
+    logHistoryEvent(session.email, 'resolverSugerenciaFuente', null, resultado.code);
+    return respuestaErrorDecisionFuente(resultado);
+  }
+  if (!resultado.duplicada) {
+    // la decision real (si se creo) tiene su propia linea legible, igual que si se hubiera decidido directo; despues, la de la sugerencia
+    if (resultado.auditoriaDecision) {
+      logHistoryEvent(session.email, resultado.auditoriaDecision, resultado.wellId, 'OK');
+    }
+    logHistoryEvent(session.email, resultado.auditoria || 'resolverSugerenciaFuente', resultado.wellId, 'OK');
+  }
+  var data = { resultado: resultado.resultado, sugerencia: resultado.sugerencia, duplicada: resultado.duplicada === true };
+  if (resultado.decision) {
+    data.decision = resultado.decision;
+  }
+  if (resultado.data) {
+    data.fuentes = resultado.data;                 // la vista actualizada del pozo (la misma de getDecisionesFuentesPozo)
+  }
+  if (resultado.motivoNoAplicable) {
+    data.motivoNoAplicable = resultado.motivoNoAplicable;
+  }
+  return { status: 'ok', data: data };
+}
+
+function handleCancelarSugerenciaFuente(sessionToken, datos) {
+  var d = datos || {};
+  var validation = validateSession(sessionToken, 'cancelarSugerenciaFuente');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var permiso = validarPermiso(session, 'cancelarSugerenciaFuente', null, 'ubicacion');
+  if (!permiso.ok) {
+    return permiso.response;
+  }
+
+  var access = getUserAccess(session.email);
+  var resultado;
+  try {
+    resultado = ubicacionFuenteSugerenciasService_cancelar(session.email, access.nombre, {
+      sugerenciaId: d.sugerenciaId,
+      motivo: d.motivo,
+      clientRequestId: d.clientRequestId
+    });
+  } catch (err) {
+    return respuestaServicioNoDisponibleDecision('cancelarSugerenciaFuente', session.email, null, err);
+  }
+  if (!resultado.ok) {
+    logHistoryEvent(session.email, 'cancelarSugerenciaFuente', null, resultado.code);
+    return respuestaErrorDecisionFuente(resultado);
+  }
+  if (!resultado.duplicada) {
+    logHistoryEvent(session.email, resultado.auditoria || 'cancelarSugerenciaFuente', resultado.wellId, 'OK');
+  }
+  return { status: 'ok', data: { sugerencia: resultado.sugerencia, duplicada: resultado.duplicada === true } };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     doPost,
+    handleSugerirDecisionFuente,
+    handleGetSugerenciasFuentesPozo,
+    handleGetSugerenciasFuentesPendientes,
+    handleResolverSugerenciaFuente,
+    handleCancelarSugerenciaFuente,
     handleGetDecisionesFuentesPozo,
     handleDecidirFuenteUbicacion,
     handleProponerCorreccionUbicacion,

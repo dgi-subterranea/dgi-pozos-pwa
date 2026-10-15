@@ -37,6 +37,8 @@ const endpoints = {
   getMapaPozos: () => Api.handleGetMapaPozos('t'),
   getUbicacionesValidadas: () => Api.handleGetUbicacionesValidadas('t'),
   getDecisionesFuentesPozo: () => Api.handleGetDecisionesFuentesPozo('t', W),
+  getSugerenciasFuentesPozo: () => Api.handleGetSugerenciasFuentesPozo('t', W),
+  getSugerenciasFuentesPendientes: () => Api.handleGetSugerenciasFuentesPendientes('t'),
   getMapaNE: () => Api.handleGetMapaNE('t'),
   getWellLocation: () => Api.handleGetWellLocation('t', W),
   getWellRecord: () => Api.handleGetWellRecord('t', W),
@@ -55,6 +57,8 @@ const exige = {
   getMapaPozos: null,
   getUbicacionesValidadas: null,
   getDecisionesFuentesPozo: 'ubicacion',
+  getSugerenciasFuentesPozo: 'ubicacion',
+  getSugerenciasFuentesPendientes: ['ubicacion', 'ubicacion_validar'],
   getMapaNE: 'ne',
   getWellLocation: 'ubicacion',
   getWellRecord: 'datos',
@@ -69,6 +73,9 @@ const exige = {
   subirFotoPozo: 'fotos_carga'
 };
 
+// un endpoint puede exigir UN permiso o VARIOS a la vez (todos, nunca "alguno")
+const cumple = (permisos, necesario) => necesario === null || [].concat(necesario).every((m) => permisos[m] === true);
+
 const perfiles = [
   ['solo perfil', { perfil: true }],
   ['solo ne', { ne: true }],
@@ -80,13 +87,17 @@ const perfiles = [
   ['solo fotos_carga (cargar, no ver)', { fotos_carga: true }],
   ['fotos + fotos_carga', { fotos: true, fotos_carga: true }],
   ['ne + reemplazo sin fotos', { ne: true, reemplazo: true }],
-  ['todos los permisos', { perfil: true, datos: true, ubicacion: true, ne: true, reemplazo: true, fotos: true, fotos_carga: true }]
+  ['todos los permisos', { perfil: true, datos: true, ubicacion: true, ne: true, reemplazo: true, fotos: true, fotos_carga: true }],
+  ['solo ubicacion (ve y sugiere, no valida)', { ubicacion: true }],
+  ['solo ubicacion_validar (sin ubicacion: no alcanza)', { ubicacion_validar: true }],
+  ['ubicacion + ubicacion_corregir (corregir no concede validar)', { ubicacion: true, ubicacion_corregir: true }],
+  ['ubicacion + ubicacion_validar', { ubicacion: true, ubicacion_validar: true }]
 ];
 
 describe.each(perfiles)('usuario activo: %s', (nombre, permisos) => {
   Object.keys(endpoints).forEach((ep) => {
     const necesario = exige[ep];
-    const permitido = necesario === null || permisos[necesario] === true;
+    const permitido = cumple(permisos, necesario);
     test(ep + ' -> ' + (permitido ? 'OK' : 'PERMISSION_DENIED'), () => {
       como(permisos, true);
       const r = endpoints[ep]();

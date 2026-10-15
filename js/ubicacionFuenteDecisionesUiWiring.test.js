@@ -130,8 +130,9 @@ describe('alcance de esta etapa: nada de mapas globales, Cerca Mio, seleccion ni
       expect(leer('js', f)).not.toMatch(/ufdui_|DecisionesFuentes|decidirFuente|ubicacionFuenteDecisiones/i);
     }
   });
-  test('el backend tampoco cambio en esta etapa: no hay endpoints de sugerencias ni delta', () => {
-    const apiBack = leer('backend', 'src', 'Api.js');
-    expect(apiBack).not.toMatch(/getDecisionesFuentesDelta|Sugerencia/i);
+  test('sigue sin haber delta de decisiones ni estado R en el backend (Etapa 3), y la interfaz no usa los endpoints de sugerencias (la UI de sugerencias es posterior)', () => {
+    expect(leer('backend', 'src', 'Api.js')).not.toMatch(/getDecisionesFuentesDelta/);
+    expect(api).not.toMatch(/Sugerencia/);
+    expect(leer('js', 'ubicacionFuenteDecisionesUi.js') + leer('js', 'ubicacionFuenteDecisionesUiLogic.js') + leer('js', 'ubicacionesConocidas.js')).not.toMatch(/sugerirDecision|SugerenciasFuente|resolverSugerencia|cancelarSugerencia/);
   });
 });

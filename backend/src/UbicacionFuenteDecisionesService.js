@@ -12,6 +12,7 @@
 // SOURCE_NOT_FOUND, STALE_STATE (+versionActual), INCONSISTENT_STATE, INVALID_TRANSITION, ALREADY_IN_STATE, IDEMPOTENCY_CONFLICT. Nunca se devuelve el texto de un
 // error interno de Sheets: el detalle tecnico va a Logger.
 
+var UFD_SVC_PREFIJO_ID_SUGERENCIA = 'sug-';          // clientRequestId reservado: lo escribe el servidor al aprobar una sugerencia
 var UFD_SVC_ACCIONES = { ACEPTAR: 'ACEPTAR', DESCARTAR: 'DESCARTAR', QUITAR_ACEPTACION: 'QUITAR', RESTAURAR: 'RESTAURAR' };    // accion del API -> decision del dominio
 var UFD_SVC_AUDITORIA = { ACEPTADA: 'FUENTE_ACEPTADA', DESCARTADA: 'FUENTE_DESCARTADA', ACEPTACION_QUITADA: 'FUENTE_ACEPTACION_QUITADA', RESTAURADA: 'FUENTE_RESTAURADA' };
 var UFD_SVC_ERRORES_DOMINIO = {
@@ -176,6 +177,10 @@ function ubicacionFuenteDecisionesService_cache() {
 
 // Despues de CADA escritura confirmada (el repositorio hace flush). NUNCA lanza: si falla, la operacion principal sigue y el TTL acota el desfasaje.
 function ubicacionFuenteDecisionesService_invalidar(wellId) {
+  // las sugerencias muestran el estado ACTUAL de cada fuente: una decision cambia lo que dicen (cola, contador, vista del pozo)
+  if (typeof ubicacionFuenteSugerenciasService_invalidar === 'function') {
+    ubicacionFuenteSugerenciasService_invalidar(wellId);
+  }
   var cache = ubicacionFuenteDecisionesService_cache();
   if (!cache) {
     return false;
@@ -249,7 +254,8 @@ function ubicacionFuenteDecisionesService_getPorPozo(wellId) {
 // Siguiente secuencia = MAX(secuencia de TODAS las filas de la hoja, de cualquier pozo) + 1. Una secuencia valida es un entero seguro >= 1. Si ALGUNA fila (de
 // cualquier pozo) no la tiene (vacia con el resto de la fila lleno, texto, 0, negativa, decimal, fuera de rango) el maximo deja de ser confiable (esa fila podria "ser"
 // cualquier numero): FAIL-CLOSED, no se escribe. Devuelve {ok, siguiente} o {ok:false, invalidas:[decisionId...]} (el detalle va solo al log).
-function ubicacionFuenteDecisionesService_siguienteSecuencia(filas) {
+function ubicacionFuenteDecisionesService_siguienteSecuencia(filas, campoId) {
+  var campo = campoId || 'decisionId';
   var max = 0;
   var invalidas = [];
   filas.forEach(function (f) {
@@ -259,7 +265,7 @@ function ubicacionFuenteDecisionesService_siguienteSecuencia(filas) {
         max = n;
       }
     } else {
-      invalidas.push(f.decisionId || '(sin decisionId)');
+      invalidas.push(f[campo] || '(sin ' + campo + ')');
     }
   });
   return invalidas.length === 0 ? { ok: true, siguiente: max + 1 } : { ok: false, invalidas: invalidas };
@@ -295,6 +301,10 @@ function ubicacionFuenteDecisionesService_decidir(email, nombre, solicitud) {
   }
   var s = v.solicitud;
   var emailN = ubicacionCorreccionService_normalizarEmail(email);
+  // Los clientRequestId que empiezan con "sug-" los genera el SERVIDOR al aprobar una sugerencia (UbicacionFuenteSugerenciasService.js): ningun cliente puede usarlos.
+  if (s.clientRequestId.indexOf(UFD_SVC_PREFIJO_ID_SUGERENCIA) === 0) {
+    return ubicacionFuenteDecisionesService_error('INVALID_CLIENT_REQUEST_ID');
+  }
 
   // Reintento de una solicitud ya escrita: se responde ANTES de mirar el padron o la version (el padron pudo haber cambiado y la version avanzo con esta misma escritura).
   var previa = ubicacionFuenteDecisionesService_buscarPorClientRequestId(ubicacionFuenteDecisionesRepository_listar(), emailN, s.clientRequestId);
@@ -314,38 +324,47 @@ function ubicacionFuenteDecisionesService_decidir(email, nombre, solicitud) {
     if (!padron.ok) {
       return padron;
     }
-    var sig = ubicacionFuenteDecisionesService_siguienteSecuencia(filas);
-    if (!sig.ok) {
-      ubicacionFuenteDecisionesService_log('secuencia invalida en ' + sig.invalidas.length + ' fila(s) (decisionId: ' + sig.invalidas.slice(0, 5).join(', ') + '): no se escribe');
-      return ubicacionFuenteDecisionesService_error('INCONSISTENT_STATE', 'el registro de decisiones tiene un valor de secuencia invalido: no se puede registrar una decision hasta que se revise');
-    }
-    var calculo = ubicacionFuenteDecisionesService_calcular(s.wellId, padron.fuentes, filas);
-    var r = ufd_decidir(calculo.estado, { decision: s.decision, fuenteTipo: s.fuenteTipo, x: s.x, y: s.y, motivo: s.motivo, versionVista: s.versionVista });
-    if (!r.ok) {
-      var extra = r.codigo === 'STALE_STATE' ? { versionActual: r.versionActual } : null;
-      return ubicacionFuenteDecisionesService_error(UFD_SVC_ERRORES_DOMINIO[r.codigo] || 'SERVICE_UNAVAILABLE', r.mensaje, extra);
-    }
-    var fila = {
-      decisionId: Utilities.getUuid(),
-      secuencia: sig.siguiente,
-      wellId: s.wellId,
-      fuenteTipo: r.evento.fuenteTipo,
-      x: r.evento.x,
-      y: r.evento.y,
-      evento: r.evento.evento,
-      motivo: r.evento.motivo,
-      email: emailN,
-      nombre: nombre || '',
-      timestampUtc: new Date(Date.now()).toISOString(),
-      clientRequestId: s.clientRequestId,
-      versionVista: s.versionVista,
-      padronPeriodo: padron.periodo
-    };
-    ubicacionFuenteDecisionesRepository_agregar(fila);
-    ubicacionFuenteDecisionesService_invalidar(s.wellId);
-    var nuevo = ubicacionFuenteDecisionesService_calcular(s.wellId, padron.fuentes, filas.concat([fila]));
-    return { ok: true, duplicada: false, decision: ubicacionFuenteDecisionesService_itemDecision(fila), evento: fila.evento, auditoria: UFD_SVC_AUDITORIA[fila.evento], data: ubicacionFuenteDecisionesService_vista(s.wellId, nuevo, padron.periodo) };
+    return ubicacionFuenteDecisionesService_aplicarDecision(emailN, nombre, s, filas, padron);
   });
+}
+
+// NUCLEO AUTORITATIVO COMPARTIDO: valida UNA decision contra el estado ACTUAL del pozo (dominio ufd_decidir), asigna decisionId / secuencia / fecha, escribe UNA fila,
+// invalida el cache y arma la vista. Lo usan decidirFuenteUbicacion (ubicacionFuenteDecisionesService_decidir) y la APROBACION de una sugerencia
+// (UbicacionFuenteSugerenciasService.js): hay una sola logica de decision. DEBE llamarse DENTRO de ubicacionFuenteDecisionesRepository_conLock, con `filas` (TODAS las filas
+// de la hoja) y `padron` ya leidos DENTRO de ese lock. `s` es una solicitud ya validada por ubicacionFuenteDecisionesService_validarSolicitud.
+// {ok:true, duplicada:false, decision, evento, auditoria, data} | {ok:false, code, message, ...}
+function ubicacionFuenteDecisionesService_aplicarDecision(emailN, nombre, s, filas, padron) {
+  var sig = ubicacionFuenteDecisionesService_siguienteSecuencia(filas);
+  if (!sig.ok) {
+    ubicacionFuenteDecisionesService_log('secuencia invalida en ' + sig.invalidas.length + ' fila(s) (decisionId: ' + sig.invalidas.slice(0, 5).join(', ') + '): no se escribe');
+    return ubicacionFuenteDecisionesService_error('INCONSISTENT_STATE', 'el registro de decisiones tiene un valor de secuencia invalido: no se puede registrar una decision hasta que se revise');
+  }
+  var calculo = ubicacionFuenteDecisionesService_calcular(s.wellId, padron.fuentes, filas);
+  var r = ufd_decidir(calculo.estado, { decision: s.decision, fuenteTipo: s.fuenteTipo, x: s.x, y: s.y, motivo: s.motivo, versionVista: s.versionVista });
+  if (!r.ok) {
+    var extra = r.codigo === 'STALE_STATE' ? { versionActual: r.versionActual } : null;
+    return ubicacionFuenteDecisionesService_error(UFD_SVC_ERRORES_DOMINIO[r.codigo] || 'SERVICE_UNAVAILABLE', r.mensaje, extra);
+  }
+  var fila = {
+    decisionId: Utilities.getUuid(),
+    secuencia: sig.siguiente,
+    wellId: s.wellId,
+    fuenteTipo: r.evento.fuenteTipo,
+    x: r.evento.x,
+    y: r.evento.y,
+    evento: r.evento.evento,
+    motivo: r.evento.motivo,
+    email: emailN,
+    nombre: nombre || '',
+    timestampUtc: new Date(Date.now()).toISOString(),
+    clientRequestId: s.clientRequestId,
+    versionVista: s.versionVista,
+    padronPeriodo: padron.periodo
+  };
+  ubicacionFuenteDecisionesRepository_agregar(fila);
+  ubicacionFuenteDecisionesService_invalidar(s.wellId);
+  var nuevo = ubicacionFuenteDecisionesService_calcular(s.wellId, padron.fuentes, filas.concat([fila]));
+  return { ok: true, duplicada: false, decision: ubicacionFuenteDecisionesService_itemDecision(fila), evento: fila.evento, auditoria: UFD_SVC_AUDITORIA[fila.evento], data: ubicacionFuenteDecisionesService_vista(s.wellId, nuevo, padron.periodo) };
 }
 
 // Reintento: mismo contenido -> la decision original + la vista de HOY (sin escribir); otro contenido -> IDEMPOTENCY_CONFLICT.
@@ -409,7 +428,15 @@ if (typeof module !== 'undefined' && module.exports) {
     UFD_SVC_CACHE_INVAL_KEY,
     UFD_SVC_CACHE_SEGUNDOS,
     UFD_SVC_CACHE_MAX_CARACTERES,
+    UFD_SVC_PREFIJO_ID_SUGERENCIA,
+    UFD_SVC_ACCIONES,
+    UFD_SVC_ERRORES_DOMINIO,
     ubicacionFuenteDecisionesService_validarSolicitud,
+    ubicacionFuenteDecisionesService_aplicarDecision,
+    ubicacionFuenteDecisionesService_itemDecision,
+    ubicacionFuenteDecisionesService_padron,
+    ubicacionFuenteDecisionesService_calcular,
+    ubicacionFuenteDecisionesService_siguienteSecuencia,
     ubicacionFuenteDecisionesService_getPorPozo,
     ubicacionFuenteDecisionesService_decidir,
     ubicacionFuenteDecisionesService_invalidar,

@@ -135,6 +135,11 @@ function installAppsScriptFakes() {
   global.ubicacionCorreccionService_revertir = jest.fn();
   global.ubicacionFuenteDecisionesService_getPorPozo = jest.fn(() => ({ ok: true, data: { wellId: '04-0263', version: 0, fuentes: [] } }));
   global.ubicacionFuenteDecisionesService_decidir = jest.fn();
+  global.ubicacionFuenteSugerenciasService_sugerir = jest.fn();
+  global.ubicacionFuenteSugerenciasService_getPorPozo = jest.fn(() => ({ ok: true, data: { wellId: '04-0263', version: 0, integro: true, sugerencias: [] } }));
+  global.ubicacionFuenteSugerenciasService_getPendientes = jest.fn(() => ({ ok: true, data: { total: 0, noAplicables: 0, inconsistentes: 0, pendientes: [] } }));
+  global.ubicacionFuenteSugerenciasService_resolver = jest.fn();
+  global.ubicacionFuenteSugerenciasService_cancelar = jest.fn();
   global.ubicacionCorreccionNotificacion_notificarPendiente = jest.fn();
   global.ubicacionCorreccionNotificacion_textoAuditoria = jest.fn();
   global.FOTOS_UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
