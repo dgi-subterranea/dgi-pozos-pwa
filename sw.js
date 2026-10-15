@@ -58,6 +58,8 @@ var SHELL_FILES = [
   './js/ubicacionCorreccionLogic.js',
   './js/ubicacionCorreccion.js',
   './js/ubicacionFuenteDecisionesUiLogic.js',
+  './js/ubicacionSugerenciasLogic.js',
+  './js/ubicacionSugerencias.js',
   './js/ubicacionFuenteDecisionesUi.js',
   './js/ubicacionesConocidasLogic.js',
   './js/ubicacionesConocidas.js',

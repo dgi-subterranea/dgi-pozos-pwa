@@ -30,7 +30,7 @@ describe('index.html', () => {
 
   test('el visor solo tiene capas y cierre: NO hay botones de validar ni de descartar fuentes', () => {
     // las acciones de decision aparecen en el popup de cada marcador (mismo dialogo que las tarjetas), no como botones fijos del visor
-    const visor = html.slice(html.indexOf('id="ucon-overlay"'), html.indexOf('<!-- Confirmacion de una decision'));
+    const visor = html.slice(html.indexOf('id="ucon-overlay"'), html.indexOf('<!-- Cola de REVISION de sugerencias'));
     expect(visor).not.toMatch(/Validar|Descartar|Aceptar|Rechazar|Ignorar/);
     expect((visor.match(/<button/g) || []).length).toBe(4);               // x, Mapa, Satelite y Cerrar
   });

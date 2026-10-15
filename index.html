@@ -73,6 +73,8 @@
     <!-- Indicador discreto (y boton que abre la bandeja de validacion) SOLO para quien valida correcciones de ubicacion (ubicacion + ubicacion_validar): "Correcciones pendientes: N". Oculto con 0, sin
          permiso o ante un error. Ver js/ubicacionPendientes.js. -->
     <button type="button" id="ucorr-pendientes" class="ucorr-pendientes" aria-haspopup="dialog" title="Ver las correcciones pendientes" hidden><span class="ucorr-pendientes-punto" aria-hidden="true"></span><span id="ucorr-pendientes-texto"></span><span class="ucorr-pendientes-ir" aria-hidden="true">›</span></button>
+    <!-- Idem para las SUGERENCIAS sobre fuentes de ubicacion (solo ubicacion + ubicacion_validar): "Sugerencias de ubicación: N" (solo las aplicables). Abre la cola de revision. Ver js/ubicacionSugerencias.js. -->
+    <button type="button" id="usug-pendientes" class="ucorr-pendientes usug-pendientes" aria-haspopup="dialog" title="Revisar las sugerencias de ubicación" hidden><span class="ucorr-pendientes-punto" aria-hidden="true"></span><span id="usug-pendientes-texto"></span><span class="ucorr-pendientes-ir" aria-hidden="true">›</span></button>
 
     <p class="search-label">Número de pozo</p>
     <form id="search-form">
@@ -1482,6 +1484,27 @@
     </div>
   </div>
 
+  <!-- Cola de REVISION de sugerencias sobre fuentes registrales (solo ubicacion + ubicacion_validar): desde el indicador del hub. Cada sugerencia se aprueba o se rechaza (motivo obligatorio)
+       por el endpoint de resolucion (js/api.js); la aprobacion produce la decision real en el backend. Ver js/ubicacionSugerencias.js y js/ubicacionSugerenciasLogic.js. -->
+  <div id="usug-overlay" class="ucorr-overlay usug-overlay" role="dialog" aria-modal="true" aria-labelledby="usug-titulo" hidden>
+    <div class="ucorr-panel usug-panel">
+      <div class="ucorr-cabecera">
+        <h2 id="usug-titulo" class="ucorr-titulo">Sugerencias de ubicación</h2>
+        <button type="button" id="btn-usug-cerrar" class="ucorr-cerrar" aria-label="Cerrar">&times;</button>
+      </div>
+      <div class="ucorr-vista">
+        <p id="usug-aviso" class="ufd-aviso" role="status" hidden></p>
+        <div id="usug-cargando" class="cargando cargando-md" data-cargando hidden>Cargando sugerencias…</div>
+        <p id="usug-error" class="error-message" role="alert" hidden></p>
+        <button type="button" id="btn-usug-reintentar" class="button button-secondary ucorr-opcion" hidden>Reintentar</button>
+        <p id="usug-vacio" class="ucorr-vacio" hidden>No hay sugerencias pendientes.</p>
+        <p id="usug-resumen" class="ucorr-nota" hidden></p>
+        <ul id="usug-lista" class="usug-lista"></ul>
+        <button type="button" id="btn-usug-cerrar-abajo" class="button button-secondary ucorr-opcion">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Confirmacion de una decision sobre una fuente registral (Aceptar / Descartar / Quitar aceptacion / Restaurar). La abren las tarjetas de "Ubicaciones conocidas" Y el
        popup del visor "Ver todas en el mapa": el mismo dialogo para las dos. La coordenada original NUNCA se elimina. Ver js/ubicacionFuenteDecisionesUi.js. -->
   <div id="ufd-overlay" class="ucorr-overlay ufd-overlay" role="dialog" aria-modal="true" aria-labelledby="ufd-titulo" hidden>
@@ -1585,6 +1608,8 @@
   <script src="js/ubicacionCorreccion.js"></script>
   <script src="js/ubicacionValidacion.js"></script>
   <script src="js/ubicacionPendientes.js"></script>
+  <script src="js/ubicacionSugerenciasLogic.js"></script>
+  <script src="js/ubicacionSugerencias.js"></script>
   <script src="js/app.js"></script>
   <!-- Va DESPUES de app.js en el documento a proposito, para que
        onGsiLoaded/onGsiLoadError ya existan antes de que puedan

@@ -43,7 +43,7 @@ describe('index.html', () => {
   });
 
   test('el visor no tiene botones de decision propios: las acciones viven en el popup de cada marcador', () => {
-    const visor = html.slice(html.indexOf('id="ucon-overlay"'), html.indexOf('<!-- Confirmacion de una decision'));
+    const visor = html.slice(html.indexOf('id="ucon-overlay"'), html.indexOf('<!-- Cola de REVISION de sugerencias'));
     expect(visor).not.toMatch(/data-ufd-accion/);
   });
 });
@@ -130,9 +130,14 @@ describe('alcance de esta etapa: nada de mapas globales, Cerca Mio, seleccion ni
       expect(leer('js', f)).not.toMatch(/ufdui_|DecisionesFuentes|decidirFuente|ubicacionFuenteDecisiones/i);
     }
   });
-  test('sigue sin haber delta de decisiones ni estado R en el backend (Etapa 3), y la interfaz no usa los endpoints de sugerencias (la UI de sugerencias es posterior)', () => {
+  test('sigue sin haber delta de decisiones ni estado R en el backend (Etapa 3); las sugerencias se usan solo por los wrappers de api.js', () => {
     expect(leer('backend', 'src', 'Api.js')).not.toMatch(/getDecisionesFuentesDelta/);
-    expect(api).not.toMatch(/Sugerencia/);
-    expect(leer('js', 'ubicacionFuenteDecisionesUi.js') + leer('js', 'ubicacionFuenteDecisionesUiLogic.js') + leer('js', 'ubicacionesConocidas.js')).not.toMatch(/sugerirDecision|SugerenciasFuente|resolverSugerencia|cancelarSugerencia/);
+    // las sugerencias SI se usan (Etapa D), pero solo a traves de los wrappers de js/api.js: ningun otro archivo conoce el nombre de la accion del backend
+    ['sugerirDecisionFuente', 'getSugerenciasFuentesPozo', 'getSugerenciasFuentesPendientes', 'resolverSugerenciaFuente', 'cancelarSugerenciaFuente'].forEach((a) => {
+      expect(api).toContain("callBackend('" + a + "'");
+      ['ubicacionFuenteDecisionesUi.js', 'ubicacionFuenteDecisionesUiLogic.js', 'ubicacionesConocidas.js', 'ubicacionSugerencias.js', 'ubicacionSugerenciasLogic.js'].forEach((f) => {
+        expect(leer('js', f)).not.toContain("'" + a + "'");
+      });
+    });
   });
 });

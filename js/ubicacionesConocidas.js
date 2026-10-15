@@ -8,6 +8,9 @@
 // - Quien tiene ubicacion + ubicacion_validar ve las acciones Aceptar / Descartar / Quitar aceptacion / Restaurar en cada tarjeta Y en el popup del visor. Las dos
 //   superficies usan las mismas funciones (js/ubicacionFuenteDecisionesUiLogic.js) y el mismo dialogo (js/ubicacionFuenteDecisionesUi.js). "Validada en campo" nunca
 //   tiene acciones (es de UbicacionCorrecciones). Quien no valida solo ve el estado.
+// - SUGERENCIAS: quien tiene ubicacion pero NO ubicacion_validar ve, en lugar de las decisiones, los botones «Sugerir aceptar / descartar / restaurar» (segun el estado de la fuente), el
+//   estado de SUS sugerencias (pendiente, aprobada, rechazada con su motivo, cancelada, ya no aplicable) y «Cancelar sugerencia» mientras este pendiente. Una sugerencia no cambia nada:
+//   solo la aprueba un validador (cola de js/ubicacionSugerencias.js). El validador NUNCA ve botones «Sugerir»: decide directo y ve un aviso de las sugerencias pendientes.
 // - Tras decidir se pinta la vista actualizada que devuelve el backend; si otro usuario cambio algo, se relee y se avisa (no se repite la decision sola).
 // - app.js es el unico dueño de sessionToken/permisos: los pasa frescos con obtenerContexto().
 // - Los enlaces a Google Maps llevan solo latitud y longitud (ver ubicacionesConocidasLogic_urlGoogleMaps).
@@ -21,6 +24,7 @@
     iconoMaps: '',
     obtenerContexto: null,
     decisiones: null,    // ultima vista de getDecisionesFuentesPozo (o null si no se pudo leer: sin estados ni acciones)
+    sugerencias: null,   // data.sugerencias de getSugerenciasFuentesPozo (quien no valida: las suyas; el validador: las pendientes) o null si no se pudo leer
     aviso: null,         // {tipo:'ok'|'aviso', texto} sobre la ultima decision
     fuenteEnFoco: null,  // fuente cuyo popup se uso por ultima vez (se reabre despues de refrescar el visor)
     visorId: 0,
@@ -57,6 +61,9 @@
     if (typeof ufdui_aplicarDecisiones === 'function') {
       ufdui_aplicarDecisiones(estado.modelo, estado.decisiones, !!estado.vigente);
     }
+    if (typeof ufdui_aplicarSugerencias === 'function') {
+      ufdui_aplicarSugerencias(estado.modelo, estado.sugerencias);
+    }
   }
 
   function opcionesHtml() {
@@ -86,6 +93,32 @@
         repintar(true);
       }
     }, function () { /* sin red: la seccion queda sin estados ni acciones */ });
+  }
+
+  // Las sugerencias del pozo (solo con permiso de ubicacion; el backend lo vuelve a exigir). Si falla, la ficha queda como antes (sin estado de sugerencias).
+  function cargarSugerencias(ap) {
+    var ctx = contexto();
+    if (!ctx || !ctx.sessionToken || !ctx.permisos || ctx.permisos.ubicacion !== true || typeof apiGetSugerenciasFuentesPozo !== 'function' || !estado.wellId) {
+      return Promise.resolve();
+    }
+    var wellId = estado.wellId;
+    return Promise.resolve().then(function () { return apiGetSugerenciasFuentesPozo(ctx.sessionToken, wellId); }).then(function (r) {
+      if (ap !== estado.aperturaId) {
+        return;
+      }
+      if (r && r.status === 'ok' && r.data && r.data.wellId === wellId && Array.isArray(r.data.sugerencias)) {
+        estado.sugerencias = r.data.sugerencias;
+        repintar(true);
+      }
+    }, function () { /* sin red: la ficha queda sin el estado de las sugerencias */ });
+  }
+
+  // La cola de sugerencias (js/ubicacionSugerencias.js) resolvio algo de ESTE pozo: se relee todo (decisiones y sugerencias) para que tarjetas y popups queden al dia.
+  function ubicacionesConocidasController_refrescar(wellId) {
+    if (!estado.wellId || wellId !== estado.wellId) {
+      return Promise.resolve();
+    }
+    return Promise.all([cargarDecisiones(estado.aperturaId), cargarSugerencias(estado.aperturaId)]);
   }
 
   function repintar(mantenerVista) {
@@ -121,6 +154,7 @@
     estado.iconoMaps = ap && ap.iconoMaps ? ap.iconoMaps : '';
     estado.vigente = null;
     estado.decisiones = null;
+    estado.sugerencias = null;
     estado.aviso = null;
     estado.fuenteEnFoco = null;
     if (typeof ubicacionFuenteDecisionesUi_cancelar === 'function') {
@@ -128,6 +162,7 @@
     }
     pintarSeccion();
     cargarDecisiones(estado.aperturaId);
+    cargarSugerencias(estado.aperturaId);
   }
 
   // js/ubicacionCorreccion.js la llama cada vez que (re)lee las correcciones del pozo: vigente = vista VALIDADA o null. Si la ficha ya es otra, no hace nada.
@@ -159,10 +194,74 @@
     var fuenteId = btn.getAttribute('data-ufd-fuente');
     var f = estado.modelo ? estado.modelo.fuentes.filter(function (x) { return x.id === fuenteId; })[0] : null;
     // se vuelve a verificar con el estado ACTUAL: un boton viejo (popup abierto, pantalla desactualizada) no puede pedir una accion que ya no corresponde
-    if (!f || !estado.decisiones || ufdui_accionesDeFuente(f, estado.modelo, rol()).indexOf(accion) === -1) {
+    if (!f || ufdui_accionesDeFuente(f, estado.modelo, rol()).indexOf(accion) === -1) {
+      return;
+    }
+    if (accion === 'CANCELAR_SUGERENCIA') {
+      var id = btn.getAttribute('data-ufd-sugerencia');
+      var propia = f.sugerencias && f.sugerencias.pendientes.filter(function (i) { return i.sugerenciaId === id; })[0];
+      if (propia) {
+        cancelarSugerencia(f, propia, btn);
+      }
+      return;
+    }
+    if (!estado.decisiones) {
+      return;
+    }
+    if (typeof UFDUI_ACCION_SUGERIDA !== 'undefined' && UFDUI_ACCION_SUGERIDA[accion]) {
+      sugerir(f, accion, btn);
       return;
     }
     decidir(f, accion, btn);
+  }
+
+  function flujoSugerencias() {
+    return typeof ubicacionFuenteDecisionesUi_flujoSugerencias === 'function' ? ubicacionFuenteDecisionesUi_flujoSugerencias() : null;
+  }
+
+  // Resultado de una operacion de sugerencias (sugerir / cancelar): mensaje en la ficha y relectura. NUNCA se reintenta sola.
+  function alResultadoSugerencia(r, ap) {
+    if (ap !== estado.aperturaId || !r || r.tipo === 'cancelado') {
+      return;
+    }
+    if (r.tipo === 'ok') {
+      estado.aviso = { tipo: 'ok', texto: r.mensaje };
+    } else if (r.tipo === 'ya_pendiente' || r.tipo === 'desactualizado') {
+      estado.aviso = { tipo: 'aviso', texto: r.mensaje };
+    } else {
+      return;
+    }
+    pintarSeccion();
+    if (r.tipo === 'desactualizado') {
+      cargarDecisiones(ap);
+    }
+    cargarSugerencias(ap);
+  }
+
+  function sugerir(f, accion, abridor) {
+    var ap = estado.aperturaId;
+    var flujo = flujoSugerencias();
+    if (!flujo) {
+      return;
+    }
+    estado.fuenteEnFoco = f.id;
+    ubicacionFuenteDecisionesUi_pedir({
+      accion: accion, fuente: f, visorAbierto: !overlayEl.hidden, abridor: abridor,
+      ejecutar: function (motivo) { return flujo.sugerir({ wellId: estado.wellId, decision: f.decision, accion: accion, motivo: motivo, versionVista: estado.decisiones.version }); }
+    }).then(function (r) { alResultadoSugerencia(r, ap); });
+  }
+
+  function cancelarSugerencia(f, item, abridor) {
+    var ap = estado.aperturaId;
+    var flujo = flujoSugerencias();
+    if (!flujo) {
+      return;
+    }
+    estado.fuenteEnFoco = f.id;
+    ubicacionFuenteDecisionesUi_pedir({
+      accion: 'CANCELAR_SUGERENCIA', fuente: f, visorAbierto: !overlayEl.hidden, abridor: abridor,
+      ejecutar: function () { return flujo.cancelar({ sugerenciaId: item.sugerenciaId }); }
+    }).then(function (r) { alResultadoSugerencia(r, ap); });
   }
 
   function decidir(f, accion, abridor) {
@@ -360,4 +459,5 @@
   window.ubicacionesConocidasController_abrir = ubicacionesConocidasController_abrir;
   window.ubicacionesConocidasController_actualizarVigente = ubicacionesConocidasController_actualizarVigente;
   window.ubicacionesConocidasController_cerrar = ubicacionesConocidasController_cerrar;
+  window.ubicacionesConocidasController_refrescar = ubicacionesConocidasController_refrescar;
 })();

@@ -420,3 +420,29 @@ Reutiliza `UbicacionCorreccionNotificacion` (destinatarios activos con `ubicacio
 ### Setup (NO ejecutado)
 `setupUbicacionFuenteSugerenciasSheet()` (en `UbicacionFuenteSugerenciasRepository.js`): idempotente, crea la hoja si falta, si existe solo valida encabezados, no borra ni reordena ni toca filas, falla cerrado ante un esquema inesperado o una hoja vacía. Orden de producción: `gas:push` → setup manual → `gas:version` → `gas:deploy`. Sin la hoja, los endpoints de sugerencias devuelven `SERVICE_UNAVAILABLE` genérico y **las decisiones directas siguen funcionando**.
 
+---
+
+## Etapa D — UI de sugerencias, indicador del hub y cola de revisión (implementada, sin commit)
+
+Usa el backend de sugerencias ya desplegado (v42); **no cambia el backend**. No toca `mapaDataset`, el estado R, Cerca Mío, selección ni reemplazos.
+
+### Qué ve cada persona
+- **Usuario con `ubicacion` y sin `ubicacion_validar`** (en «Ubicaciones conocidas» y en el popup del visor «Ver todas en el mapa», con las mismas funciones y el mismo diálogo):
+  - Botones según el estado de cada fuente: SIN_REVISAR → *Sugerir aceptar*, *Sugerir descartar* · ACEPTADA → *Sugerir descartar* · DESCARTADA → *Sugerir restaurar*. **Nunca** «quitar aceptación» ni ninguna acción autoritativa; «Validada en campo» no tiene acciones de este dominio.
+  - Diálogos: «¿Sugerir aceptar esta fuente como referencia registral?» (motivo opcional), «¿Sugerir descartar esta fuente?» (motivo **obligatorio**, «La coordenada original no se eliminará.»), «¿Sugerir que esta fuente vuelva a participar del cálculo?» (opcional).
+  - Si ya tiene una equivalente pendiente y aplicable: «Sugerencia enviada · Pendiente de revisión» y **Cancelar sugerencia** («¿Cancelar esta sugerencia?», sin motivo; no modifica la fuente). Con `ALREADY_PENDING` la UI se actualiza con la existente y avisa «Ya enviaste esta sugerencia y está pendiente de revisión.».
+  - Estado humano de SU sugerencia: Pendiente de revisión · Aprobada · Rechazada (con el motivo) · Cancelada · Ya no aplicable («Esta sugerencia ya no puede aplicarse porque cambió la información de la fuente.»). Nunca códigos, emails, ids ni claves.
+- **Validador** (`ubicacion` + `ubicacion_validar`): sigue con *Aceptar / Descartar / Quitar aceptación / Restaurar* y **no ve nunca botones «Sugerir»**; en cada fuente ve un aviso de las sugerencias pendientes (cantidad y nombre de quien sugirió). Además:
+  - **Indicador del hub «Sugerencias de ubicación: N»** (solo las aplicables; oculto con 0, sin permiso o ante un error), con el mismo mecanismo y apariencia que «Correcciones pendientes» (`ubicacionCorreccionLogic_crearBadgePendientes`): se refresca al volver al hub con un intervalo mínimo y después de resolver.
+  - **Cola de revisión** (al tocar el indicador): pendientes **más antiguas primero** (las que ya no aplican, al final); cada tarjeta muestra pozo, fuente, estado ACTUAL de la fuente, acción sugerida, quién (nombre), fecha, motivo, coordenadas con «Abrir en Google Maps» (solo lat,lon) y «Ver ficha del pozo» (abre la ficha donde está el visor comparativo).
+  - **Aprobar** (`resolverSugerenciaFuente`, nunca `decidirFuenteUbicacion`; el backend reutiliza el núcleo autoritativo): diálogo «¿Aprobar esta sugerencia?» con lo que va a pasar; al terminar la sugerencia sale de la cola, baja el contador, se actualizan la ficha y el popup si están abiertos y se avisa «Sugerencia aprobada.». Si era ACEPTAR y hay una validada en campo vigente (se consulta, mejor esfuerzo): «Esta fuente quedó aceptada como referencia registral. La ubicación operativa actual sigue siendo la validada en campo.».
+  - **Rechazar**: motivo **obligatorio**; sale de la cola y el autor verá «Rechazada» + el motivo. Una no aplicable solo ofrece *Rechazar* (no *Aprobar*) para limpiarla.
+
+### Conflictos y errores (sin códigos técnicos, nunca se reintenta solo)
+`STALE_STATE` (y las transiciones inválidas) → «Esta información cambió mientras la estabas revisando.» y se refresca; `SUGGESTION_NOT_FOUND` / `ALREADY_RESOLVED` → «La sugerencia ya fue resuelta o dejó de estar disponible.» y se refresca la cola; corte de red → el diálogo queda abierto y el reintento reutiliza el mismo `clientRequestId`; sesión vencida → cierra sesión; límite de 10 → «Ya tenés 10 sugerencias pendientes de revisión. Esperá a que las revisen o cancelá alguna.».
+
+### Archivos
+Nuevos: `js/ubicacionSugerenciasLogic.js`, `js/ubicacionSugerencias.js` (cola e indicador). Extendidos: `js/ubicacionFuenteDecisionesUiLogic.js` (acciones de sugerir, estado de las sugerencias por fuente, flujo con `clientRequestId` estable, textos), `js/ubicacionFuenteDecisionesUi.js` (el diálogo ejecuta cualquier operación), `js/ubicacionesConocidas.js` y `js/ubicacionesConocidasLogic.js` (lectura y render), `js/api.js` (5 wrappers con lista blanca), `js/app.js`, `index.html`, `sw.js`, `css/styles.css`.
+
+### Límite conocido de la cola
+Aprobar no muestra el visor comparativo dentro de la cola (el visor vive en la ficha): se ofrece el enlace a Google Maps de la coordenada y «Ver ficha del pozo». «Ver ficha del pozo» reutiliza `buscarPozo`, que registra una consulta en el historial como cualquier otra búsqueda.

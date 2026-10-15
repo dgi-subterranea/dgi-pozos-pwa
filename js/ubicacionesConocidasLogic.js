@@ -205,10 +205,13 @@ function ubicacionesConocidasLogic_htmlFuente(f, opciones) {
   if (dec) {
     h += ufdui_htmlHistoria(f);
   }
+  if (ubicacionesConocidasLogic_hayDecisiones() && typeof ufdui_htmlSugerencias === 'function') {
+    h += ufdui_htmlSugerencias(f, o.modelo, o.rol);
+  }
   if (f.urlMaps) {
     h += '<a class="maps-btn ucon-maps" href="' + esc(f.urlMaps) + '" target="_blank" rel="noopener">' + (o.iconoMaps || '') + UCON_TEXTO_ABRIR_MAPS + '</a>';
   }
-  if (dec) {
+  if (dec || (f.sugerencias && ubicacionesConocidasLogic_hayDecisiones())) {
     h += ufdui_htmlAcciones(f, o.modelo, o.rol);
   }
   h += '</li>';
@@ -259,10 +262,13 @@ function ubicacionesConocidasLogic_htmlPopup(f, opciones) {
   if (dec) {
     h += ufdui_htmlHistoria(f);
   }
+  if (ubicacionesConocidasLogic_hayDecisiones() && typeof ufdui_htmlSugerencias === 'function') {
+    h += ufdui_htmlSugerencias(f, o.modelo, o.rol);
+  }
   if (f.urlMaps) {
     h += '<a class="ucon-popup-maps" href="' + esc(f.urlMaps) + '" target="_blank" rel="noopener">' + UCON_TEXTO_ABRIR_MAPS + '</a>';
   }
-  if (dec) {
+  if (dec || (f.sugerencias && ubicacionesConocidasLogic_hayDecisiones())) {
     h += ufdui_htmlAcciones(f, o.modelo, o.rol);
   }
   return h + '</div>';

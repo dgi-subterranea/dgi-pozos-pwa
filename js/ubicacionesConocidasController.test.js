@@ -436,7 +436,7 @@ describe('sin contexto de sesion no hay red; nunca se modifica una coordenada', 
   test('el codigo del controlador no hace fetch ni escribe nada por su cuenta: la unica API que llama es la lectura de decisiones; decidir va por el dialogo compartido', () => {
     const codigo = fuenteControlador.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
     expect(codigo).not.toMatch(/fetch\(|callBackend|XMLHttpRequest|localStorage|sessionStorage|apiProponer|apiValidar|apiRechazar|apiDecidirFuente|eliminar|borrar/i);
-    expect(codigo.match(/\bapi[A-Z]\w*\(/g)).toEqual(['apiGetDecisionesFuentesPozo(']);
+    expect(codigo.match(/\bapi[A-Z]\w*\(/g)).toEqual(['apiGetDecisionesFuentesPozo(', 'apiGetSugerenciasFuentesPozo(']);          // solo lecturas; escribir va por el dialogo compartido
   });
 });
 

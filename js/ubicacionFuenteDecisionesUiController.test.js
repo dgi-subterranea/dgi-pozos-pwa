@@ -253,12 +253,16 @@ describe('que acciones ve cada rol en las tarjetas', () => {
     expect(accionesDe(tarjeta(t, 'IRRIGACION_2'))).toEqual(['RESTAURAR']);
   });
 
-  test.each([['usuario que no valida', PERM_LECTOR], ['quien solo corrige (ubicacion_corregir no concede decidir)', PERM_CORREGIR]])('%s: ve los estados pero NINGUNA accion autoritativa', async (_n, permisos) => {
+  test.each([['usuario que no valida', PERM_LECTOR], ['quien solo corrige (ubicacion_corregir no concede decidir)', PERM_CORREGIR]])('%s: ve los estados y SOLO acciones de SUGERIR, ninguna autoritativa', async (_n, permisos) => {
     const t = cargar({ permisos });
     await abrir(t, ['ACEPTADA', 'SIN_REVISAR', 'DESCARTADA']);
-    expect(accionesEnHtml(t.el('ubic-conocidas').innerHTML)).toEqual([]);
+    const h = t.el('ubic-conocidas').innerHTML;
+    expect(accionesDe(tarjeta(t, 'REPORTE_POZOS'))).toEqual(['SUGERIR_DESCARTAR']);
+    expect(accionesDe(tarjeta(t, 'IRRIGACION_1'))).toEqual(['SUGERIR_ACEPTAR', 'SUGERIR_DESCARTAR']);
+    expect(accionesDe(tarjeta(t, 'IRRIGACION_2'))).toEqual(['SUGERIR_RESTAURAR']);
     expect(tarjeta(t, 'REPORTE_POZOS')).toContain('>Aceptada<');
-    expect(t.el('ubic-conocidas').innerHTML).not.toMatch(/Aceptar<|Descartar<|Restaurar<|Quitar aceptaci/);
+    expect(h).not.toMatch(/data-ufd-accion="(ACEPTAR|DESCARTAR|QUITAR_ACEPTACION|RESTAURAR)"/);
+    expect(h).not.toMatch(/>Aceptar<|>Descartar<|>Restaurar<|Quitar aceptaci/);
   });
 
   test('un clic forzado en un boton que NO existe para este usuario no hace nada (ni dialogo ni pedido)', async () => {
@@ -617,7 +621,9 @@ describe('visor "Ver todas en el mapa": las MISMAS acciones y el MISMO dialogo',
     const t = cargar({ permisos: PERM_LECTOR });
     await abrir(t, ['ACEPTADA', 'SIN_REVISAR', 'DESCARTADA']);
     await abrirVisor(t);
-    t.reg.marcadores.forEach((m) => expect(accionesEnHtml(m.popup.html)).toEqual([]));
+    // (en el popup tambien: solo sugerir, nunca una accion autoritativa)
+    t.reg.marcadores.forEach((m) => expect(m.popup.html).not.toMatch(/data-ufd-accion="(ACEPTAR|DESCARTAR|QUITAR_ACEPTACION|RESTAURAR)"/));
+    expect(accionesDe(marcador(t, 'Irrigación (1)').popup.html)).toEqual(['SUGERIR_ACEPTAR', 'SUGERIR_DESCARTAR']);
     expect(marcador(t, 'Irrigación (1)').popup.html).toContain('>Sin revisar<');
   });
 

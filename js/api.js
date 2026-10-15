@@ -294,3 +294,56 @@ function apiDecidirFuenteUbicacion(sessionToken, datos) {
     clientRequestId: d.clientRequestId
   });
 }
+
+// --- Sugerencias sobre las fuentes registrales (quien NO valida sugiere; un validador aprueba o rechaza) ---
+// Una sugerencia NO cambia nada por si sola: solo la aprobacion de un validador produce una decision real (en el backend, con la misma logica que decidirFuenteUbicacion).
+// Sugerir / leer las del pozo / cancelar la propia = permiso "ubicacion". La cola y resolver = "ubicacion" + "ubicacion_validar" (el BACKEND lo exige).
+// LISTA BLANCA de campos: wellId, fuenteTipo, x, y, accionSugerida (ACEPTAR | DESCARTAR | RESTAURAR), motivo, versionVista y clientRequestId. La identidad nunca viaja.
+function apiSugerirDecisionFuente(sessionToken, datos) {
+  var d = datos || {};
+  return callBackend('sugerirDecisionFuente', {
+    sessionToken: sessionToken,
+    wellId: d.wellId,
+    fuenteTipo: d.fuenteTipo,
+    x: d.x,
+    y: d.y,
+    accionSugerida: d.accionSugerida,
+    motivo: d.motivo,
+    versionVista: d.versionVista,
+    clientRequestId: d.clientRequestId
+  });
+}
+
+// Quien no valida: SUS sugerencias del pozo (todos los estados). Quien valida: las pendientes del pozo. Sin emails.
+function apiGetSugerenciasFuentesPozo(sessionToken, wellId) {
+  return callBackend('getSugerenciasFuentesPozo', { sessionToken: sessionToken, wellId: wellId });
+}
+
+// Cola de revision (solo ubicacion + ubicacion_validar): {total (aplicables, para el indicador del hub), noAplicables, pendientes[]}.
+function apiGetSugerenciasFuentesPendientes(sessionToken) {
+  return callBackend('getSugerenciasFuentesPendientes', { sessionToken: sessionToken });
+}
+
+// resolucion: APROBAR (con versionVista: la del pozo que vio quien aprueba) | RECHAZAR (motivo obligatorio). Lista blanca: sugerenciaId, resolucion, motivo, versionVista, clientRequestId.
+function apiResolverSugerenciaFuente(sessionToken, datos) {
+  var d = datos || {};
+  return callBackend('resolverSugerenciaFuente', {
+    sessionToken: sessionToken,
+    sugerenciaId: d.sugerenciaId,
+    resolucion: d.resolucion,
+    motivo: d.motivo,
+    versionVista: d.versionVista,
+    clientRequestId: d.clientRequestId
+  });
+}
+
+// Solo el autor y solo mientras siga pendiente. Lista blanca: sugerenciaId, motivo, clientRequestId.
+function apiCancelarSugerenciaFuente(sessionToken, datos) {
+  var d = datos || {};
+  return callBackend('cancelarSugerenciaFuente', {
+    sessionToken: sessionToken,
+    sugerenciaId: d.sugerenciaId,
+    motivo: d.motivo,
+    clientRequestId: d.clientRequestId
+  });
+}

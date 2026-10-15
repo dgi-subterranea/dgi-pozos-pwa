@@ -37,6 +37,10 @@
     if (name === 'main' && typeof ubicacionPendientesController_refrescar === 'function') {
       ubicacionPendientesController_refrescar();
     }
+    // Idem para "Sugerencias de ubicación: N" (solo ubicacion + ubicacion_validar; ver js/ubicacionSugerencias.js).
+    if (name === 'main' && typeof ubicacionSugerenciasController_refrescar === 'function') {
+      ubicacionSugerenciasController_refrescar();
+    }
     Object.keys(screens).forEach(function (key) {
       screens[key].hidden = key !== name;
     });
@@ -1280,6 +1284,7 @@
     ubicacionValidacionController_cerrar();
     // ni el indicador de correcciones pendientes
     ubicacionPendientesController_reset();
+    ubicacionSugerenciasController_reset();
     // el resumen de aptitud no sobrevive a la sesion
     reemplazoEstadosController_reset();
     // ni el resumen de fotos, la galeria abierta o la cola de subida
@@ -1931,6 +1936,15 @@
     };
   };
   ubicacionPendientesController_inicializar(contextoValidacion);
+  // Cola de revision de sugerencias sobre fuentes: mismo contexto fresco; ademas puede abrir la ficha de un pozo (como lo hace el mapa).
+  ubicacionSugerenciasController_inicializar(function () {
+    var ctx = contextoValidacion();
+    ctx.onAbrirPozo = function (wellId) {
+      showScreen('main');
+      buscarPozo(wellId);
+    };
+    return ctx;
+  });
   ubicacionValidacionController_inicializar(contextoValidacion);
 
   // Estado de aptitud de reemplazo compartido por mapa, Cerca Mio y Mi

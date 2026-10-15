@@ -1,6 +1,6 @@
-// Controlador DOM de la confirmacion de una decision sobre una fuente registral (Aceptar / Descartar / Quitar aceptacion / Restaurar). Es UN solo dialogo, compartido por
-// las tarjetas de "Ubicaciones conocidas" y por el popup del visor "Ver todas en el mapa" (js/ubicacionesConocidas.js lo invoca desde los dos lados): no hay logica de
-// decision duplicada. Toca DOM y red, asi que no se prueba directo con Jest: los tests lo ejecutan con un DOM simulado (js/ubicacionFuenteDecisionesUi.test.js); toda la
+// Controlador DOM de la confirmacion de una decision sobre una fuente registral (Aceptar / Descartar / Quitar aceptacion / Restaurar) y de las SUGERENCIAS (Sugerir aceptar /
+// descartar / restaurar, Cancelar sugerencia, y Aprobar / Rechazar en la cola de revision). Es UN solo dialogo, compartido por las tarjetas de "Ubicaciones conocidas", el popup del
+// visor "Ver todas en el mapa" (js/ubicacionesConocidas.js) y la cola de sugerencias (js/ubicacionSugerencias.js): no hay logica de decision duplicada. Toca DOM y red, asi que no se prueba directo con Jest: los tests lo ejecutan con un DOM simulado (js/ubicacionFuenteDecisionesUi.test.js); toda la
 // logica pura -acciones, textos de confirmacion, pedido, errores, clientRequestId, flujo- vive en js/ubicacionFuenteDecisionesUiLogic.js (con tests).
 //
 // - La coordenada original NUNCA se elimina: el dialogo dice "descartada", no "eliminada".
@@ -36,6 +36,17 @@
       leer: function (wellId) { return apiGetDecisionesFuentesPozo(contexto().sessionToken, wellId); },
       generarId: function () { return ufdui_nuevoClientRequestId(); }
     });
+    // UN solo flujo de sugerencias para toda la app (ficha, mapa y cola): asi un reintento tras un corte de red reutiliza el mismo clientRequestId desde donde se haga.
+    estado.flujoSugerencias = ufdui_crearFlujoSugerencias({
+      sugerir: function (pedido) { return apiSugerirDecisionFuente(contexto().sessionToken, pedido); },
+      cancelar: function (pedido) { return apiCancelarSugerenciaFuente(contexto().sessionToken, pedido); },
+      resolver: function (pedido) { return apiResolverSugerenciaFuente(contexto().sessionToken, pedido); },
+      generarId: function () { return ufdui_nuevoClientRequestId(); }
+    });
+  }
+
+  function ubicacionFuenteDecisionesUi_flujoSugerencias() {
+    return estado.flujoSugerencias;
   }
 
   function mostrarError(texto) {
@@ -75,13 +86,15 @@
     }
   }
 
-  // args: {wellId, fuente (fuente del modelo, con .decision), accion, version (versionVista que vio el usuario), hayValidadaVigente, visorAbierto, abridor}
-  // Resuelve cuando el dialogo se cierra: {tipo:'cancelado'} | {tipo:'ok'|'desactualizado'|'error', ...} (ver ufdui_crearFlujo). Los errores recuperables (red, rechazo) dejan
-  // el dialogo abierto con el mensaje para reintentar; la promesa sigue pendiente hasta que se confirma bien o se cancela.
+  // args: {wellId, fuente (fuente del modelo, con .decision; para operaciones con `ejecutar` basta {etiqueta}), accion, version (versionVista que vio el usuario),
+  //        hayValidadaVigente, accionSugerida (al aprobar), ejecutar(motivo) -> Promise<resultado> (operaciones de sugerencias), visorAbierto, abridor}
+  // Resuelve cuando el dialogo se cierra: {tipo:'cancelado'} | {tipo:'ok'|'desactualizado'|'ya_pendiente'|'error', ...} (ver ufdui_crearFlujo y ufdui_crearFlujoSugerencias). Los errores
+  // recuperables (red, rechazo) dejan el dialogo abierto con el mensaje para reintentar; la promesa sigue pendiente hasta que se confirma bien o se cancela.
   function ubicacionFuenteDecisionesUi_pedir(args) {
     var a = args || {};
-    var conf = ufdui_confirmacion(a.accion, a.fuente, { hayValidadaVigente: !!a.hayValidadaVigente });
-    if (!conf || !a.fuente || !a.fuente.decision || !estado.flujo) {
+    var conf = ufdui_confirmacion(a.accion, a.fuente, { hayValidadaVigente: !!a.hayValidadaVigente, accionSugerida: a.accionSugerida });
+    var propia = typeof a.ejecutar === 'function';
+    if (!conf || !a.fuente || (!propia && (!a.fuente.decision || !estado.flujo))) {
       return Promise.resolve({ tipo: 'cancelado' });
     }
     if (estado.abierto) {
@@ -93,7 +106,7 @@
     els.titulo.textContent = conf.titulo;
     els.fuente.textContent = conf.fuente;
     els.textos.innerHTML = conf.parrafos.map(function (t) { return '<p>' + ufdui_escapar(t) + '</p>'; }).join('');
-    els.motivoBloque.hidden = false;
+    els.motivoBloque.hidden = conf.motivo === 'ninguno';
     els.motivoLabel.textContent = conf.motivo === 'obligatorio' ? 'Motivo (obligatorio)' : 'Motivo (opcional)';
     els.motivo.value = '';
     els.errMotivo.hidden = true;
@@ -127,11 +140,15 @@
     els.errMotivo.hidden = true;
     mostrarError('');
     enviando(true);
-    estado.flujo.decidir({ wellId: e.wellId, decision: e.fuente.decision, accion: e.accion, motivo: els.motivo.value, versionVista: e.version }).then(function (r) {
+    var motivo = els.motivo.value;
+    var promesa = typeof e.ejecutar === 'function' ?
+      Promise.resolve().then(function () { return e.ejecutar(motivo); }) :
+      estado.flujo.decidir({ wellId: e.wellId, decision: e.fuente.decision, accion: e.accion, motivo: motivo, versionVista: e.version });
+    promesa.then(function (r) {
       if (!estado.abierto || estado.entrada !== e) {
         return;                                                  // se cerro/cambio la ficha mientras tanto
       }
-      if (r.tipo === 'ok' || r.tipo === 'desactualizado' || (r.tipo === 'error' && r.sesionVencida)) {
+      if (r.tipo === 'ok' || r.tipo === 'desactualizado' || r.tipo === 'ya_pendiente' || (r.tipo === 'error' && r.sesionVencida)) {
         terminar(r);
         if (r.tipo === 'error' && r.sesionVencida && contexto() && typeof contexto().onSessionExpired === 'function') {
           contexto().onSessionExpired();
@@ -173,6 +190,7 @@
   });
 
   window.ubicacionFuenteDecisionesUi_inicializar = ubicacionFuenteDecisionesUi_inicializar;
+  window.ubicacionFuenteDecisionesUi_flujoSugerencias = ubicacionFuenteDecisionesUi_flujoSugerencias;
   window.ubicacionFuenteDecisionesUi_pedir = ubicacionFuenteDecisionesUi_pedir;
   window.ubicacionFuenteDecisionesUi_cancelar = ubicacionFuenteDecisionesUi_cancelar;
 })();

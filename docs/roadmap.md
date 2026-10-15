@@ -85,3 +85,66 @@ Módulo nuevo e independiente del ITF (`RegistryRepository`/`RegistryService`), 
 ## V4+ (backlog, no comprometido)
 
 Ubicación/mapas, panel admin real, exportación PDF/CSV, comparación entre pozos, favoritos, búsqueda avanzada, etc.
+
+## Fase futura (SOLO documentada; sin código) — ITF colaborativos / carga validada de perfiles
+
+**Objetivo:** si un pozo **no** tiene ITF / perfil disponible y la persona tiene el permiso adecuado, poder **presentar un archivo** para que un validador lo revise y, si corresponde, lo publique como ITF del pozo.
+
+**Permisos tentativos, separados** (no se reutiliza el permiso `perfil` existente, que solo es de consulta): `perfil_subir` (presentar) y `perfil_validar` (revisar y publicar).
+
+**Flujo futuro:**
+1. **SUBIR** → queda **PENDIENTE** (nunca visible para consulta).
+2. **APROBAR / RECHAZAR** por quien tiene `perfil_validar` (rechazo con motivo obligatorio).
+3. **OPTIMIZAR / REDUCIR** el archivo (versión liviana para consulta).
+4. **PUBLICAR como ITF del pozo** y actualizar el índice / base de ITF.
+
+**Reglas:**
+- Nunca se publica directamente una subida.
+- Nunca se reemplaza en silencio un ITF existente (un reemplazo sería otra solicitud, con revisión).
+- Se conserva la **auditoría del original presentado** (quién, cuándo, hash) aunque se publique una versión optimizada.
+- Al aprobar se genera la versión optimizada para consulta y se actualiza el índice.
+- Reutilizar los patrones ya probados: indicador en el hub, cola de revisión, aviso por mail con reserva de cuota, auditoría en Historial, hoja append-only con eventos y estado derivado, idempotencia por `clientRequestId`, caché de lectura con invalidación.
+- Estudiar primero **JPG / PNG / WebP**; evaluar **PDF / HEIC** aparte (conversión y tamaño).
+- **Costo mensual $0 obligatorio** (sin servicios de pago): la optimización debe resolverse en el navegador o con las cuotas gratuitas ya usadas.
+
+Estado: **idea documentada, sin diseño técnico ni implementación.** Antes de empezar hay que definir almacenamiento, límites de tamaño, formato definitivo y quién valida.
+
+## Fase futura (SOLO documentada; sin código) — Fotos colaborativas / moderadas
+
+**Objetivo:** aplicar a las fotos de los pozos un patrón equivalente al de las ubicaciones (decisiones directas para quien valida, sugerencias para quien no, cola de revisión).
+
+- Una persona autorizada puede **retirar / descartar** una foto; quien no tiene permiso de validación puede **sugerir** retirarla o descartarla.
+- Quien tiene el permiso adecuado puede **proponer / subir una foto nueva**; la subida incluye **observación / contexto**.
+- La foto nueva queda **PENDIENTE**; un validador la **APRUEBA o RECHAZA**; recién al aprobar se **publica** en la ficha del pozo.
+
+**Principio:** nunca se borra físicamente ni se pierde en silencio una foto original. Estados conceptuales: **Publicada**, **Descartada / retirada de publicación** y **Pendiente**, siempre con auditoría. Para las fotos nuevas: se conserva el archivo presentado, se genera una **versión optimizada** para la app, se registran autor, fecha, observación y validador, y **no se reemplaza en silencio** una foto existente (un reemplazo es otra solicitud con revisión).
+
+**Permisos:** a definir más adelante, **después de auditar los permisos actuales de fotos** (no se inventan ahora).
+
+Estado: idea documentada, sin diseño técnico ni implementación.
+
+## Fase futura (SOLO documentada; sin código) — Observaciones generales del pozo
+
+**Objetivo:** una sección propia en la ficha, **«Observaciones del pozo»**, **separada** de «Evaluar para reemplazo», para comentarios generales sobre la perforación: acceso, estado físico, funcionamiento, surgencia, información informada por el propietario, anomalías observadas en campo y cualquier dato útil que no sea una evaluación de reemplazo.
+
+**Modelo deseado:** cronológico; cada observación con **autor**, **fecha / hora** y **texto**; **append-only / auditable**. No se editan en silencio las observaciones históricas: si hace falta corregir o retirar una, se hace con un **evento o estado auditable**.
+
+**A evaluar más adelante:** categorías, adjuntos / fotos (en relación con la fase de fotos), permisos para comentar y visibilidad interna / pública.
+
+Estado: idea documentada, sin diseño técnico ni implementación.
+
+## Fase futura (SOLO documentada; sin código) — QR + NFC por pozo
+
+**Idea:** cada perforación puede tener un sticker o cartel físico con **QR** y, opcionalmente, **NFC**. QR y NFC apuntan a **la misma URL estable**; al escanear o tocar se abre una ficha del pozo **preparada para ese acceso**.
+
+**Visibilidad:** solo se muestra información **expresamente habilitada como visible**; no se expone automáticamente la ficha interna. Se diseñará una **vista pública / compartible separada**.
+
+**Preferencias de arquitectura:**
+- **Token público opaco por pozo**: el `wellId` **no** es una credencial.
+- Token **revocable**, **URL estable y corta**; el **QR lo genera el sistema** y la **misma URL** se escribe en el NFC.
+- Un **NTAG213** debería alcanzar si la URL es corta.
+- **Controles por campo** (padrón visible, ubicación visible, foto, estado, profundidad, observaciones públicas, contacto / instrucciones, etc.) con configuración **fail-closed**: si un dato no está expresamente habilitado, no se publica.
+
+**A pensar:** regenerar / revocar el token, reimprimir el QR, NFC perdido o dañado, auditoría y un cartel resistente para el campo.
+
+Estado: idea documentada, sin diseño técnico ni implementación.

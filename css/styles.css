@@ -5189,3 +5189,91 @@ body.ucorr-abierto {
   display: block;
   margin-bottom: 6px;
 }
+
+/* Sugerencias sobre las fuentes registrales: estado de la sugerencia propia en cada tarjeta / popup, aviso para quien valida y la cola de revision (js/ubicacionSugerencias*.js). */
+.ufd-sug {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-soft);
+  font-size: 0.78rem;
+}
+.ufd-sug-chip {
+  display: inline-block;
+  max-width: 100%;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 800;
+  line-height: 1.25;
+}
+.ufd-sug-pendiente {
+  background: var(--color-warn-tint);
+  color: var(--color-warn);
+}
+.ufd-sug-aprobada {
+  background: #e3f3ea;
+  color: #17633d;
+}
+.ufd-sug-rechazada {
+  background: #fbe3e1;
+  color: var(--color-error);
+}
+.ufd-sug-cancelada,
+.ufd-sug-obsoleta {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-soft);
+}
+.ufd-sug-detalle,
+.ufd-sug-motivo {
+  margin-top: 4px;
+  color: var(--color-text-soft);
+  overflow-wrap: anywhere;
+}
+.usug-lista {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.usug-item {
+  padding: 11px 12px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 10px;
+  font-size: 0.8rem;
+}
+.usug-no-aplicable {
+  background: var(--color-bg);
+}
+.usug-cab {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.usug-pozo {
+  font-weight: 800;
+}
+.usug-fuente {
+  font-weight: 700;
+}
+.usug-accion {
+  margin-top: 6px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+.usug-meta {
+  margin-top: 2px;
+  color: var(--color-text-soft);
+}
+.usug-motivo {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+.usug-aviso-no-aplicable {
+  margin: 8px 0 0;
+}

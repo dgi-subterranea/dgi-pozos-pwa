@@ -318,7 +318,10 @@ describe('HTML compartido por tarjeta y popup', () => {
     expect(h(1)).toContain('data-ufd-fuente="IRRIGACION_1"');
     expect(h(1)).toContain('>Aceptar<');
     expect(U.ufdui_htmlAcciones(m.fuentes[3], m, 'VALIDADOR')).toBe('');            // validada en campo
-    expect(U.ufdui_htmlAcciones(m.fuentes[1], m, 'LECTOR')).toBe('');
+    // quien NO valida jamas ve una accion autoritativa: ve las de SUGERIR (y ninguna de decidir)
+    const lector = U.ufdui_htmlAcciones(m.fuentes[1], m, 'LECTOR');
+    expect(lector.match(/data-ufd-accion="(\w+)"/g)).toEqual(['data-ufd-accion="SUGERIR_ACEPTAR"', 'data-ufd-accion="SUGERIR_DESCARTAR"']);
+    expect(lector).not.toMatch(/data-ufd-accion="(ACEPTAR|DESCARTAR|QUITAR_ACEPTACION|RESTAURAR)"/);
     expect(U.ufdui_htmlAcciones(m.fuentes[1], m, null)).toBe('');
   });
 

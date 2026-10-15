@@ -10,20 +10,23 @@ const leer = (...p) => fs.readFileSync(path.join(raiz, ...p), 'utf8');
 const sinComentarios = (txt) => txt.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
 const NUEVOS = ['UbicacionFuenteSugerenciasRepository.js', 'UbicacionFuenteSugerenciasService.js', 'UbicacionFuenteSugerenciaNotificacion.js'];
 
-describe('el frontend no sabe nada de las sugerencias (la UI es la etapa D)', () => {
-  test('index.html, sw.js y ningun js/ (salvo tests) menciona los endpoints ni el modulo de sugerencias', () => {
-    const patron = /sugerirDecisionFuente|getSugerenciasFuentes|resolverSugerenciaFuente|cancelarSugerenciaFuente|UbicacionFuenteSugerencias|apiSugerir|apiResolverSugerencia|ufs_/;
-    expect(leer('index.html')).not.toMatch(patron);
-    expect(leer('sw.js')).not.toMatch(patron);
+describe('el frontend usa las sugerencias SOLO por js/api.js (Etapa D), sin conocer la hoja ni el dominio del backend', () => {
+  test('index.html, sw.js y ningun js/ (salvo tests) menciona la hoja, el dominio ufs_ ni los nombres de las acciones del backend, salvo api.js', () => {
+    expect(leer('index.html')).not.toMatch(/UbicacionFuenteSugerencias|sugerirDecisionFuente|resolverSugerenciaFuente|ufs_/);
+    expect(leer('sw.js')).not.toMatch(/UbicacionFuenteSugerencias|sugerirDecisionFuente|resolverSugerenciaFuente|ufs_/);
     fs.readdirSync(path.join(raiz, 'js')).filter((f) => f.endsWith('.js') && !f.endsWith('.test.js')).forEach((f) => {
-      expect(leer('js', f)).not.toMatch(patron);
+      const c = leer('js', f);
+      expect(c).not.toMatch(/UbicacionFuenteSugerencias|ufs_/);
+      if (f !== 'api.js') {
+        expect(c).not.toMatch(/'(sugerirDecisionFuente|getSugerenciasFuentesPozo|getSugerenciasFuentesPendientes|resolverSugerenciaFuente|cancelarSugerenciaFuente)'/);
+      }
     });
   });
 
-  test('ni el mapa, Cerca Mio, la seleccion, los reemplazos ni el overlay de ubicaciones conocen decisiones o sugerencias nuevas', () => {
-    ['mapa.js', 'mapaDataset.js', 'cercaMio.js', 'seleccion.js', 'reemplazo.js', 'ubicacionOperativaLogic.js', 'ubicacionesConocidas.js', 'ubicacionesConocidasLogic.js'].forEach((f) => {
+  test('ni el mapa, Cerca Mio, la seleccion, los reemplazos ni el resolver del punto operativo conocen las sugerencias', () => {
+    ['mapa.js', 'mapaDataset.js', 'cercaMio.js', 'seleccion.js', 'reemplazo.js', 'ubicacionOperativaLogic.js'].forEach((f) => {
       if (fs.existsSync(path.join(raiz, 'js', f))) {
-        expect(leer('js', f)).not.toMatch(/sugerirDecision|SugerenciasFuente|resolverSugerencia|cancelarSugerencia|UbicacionFuenteSugerencias|ufs_/);
+        expect(leer('js', f)).not.toMatch(/sugerirDecision|SugerenciasFuente|resolverSugerencia|cancelarSugerencia|UbicacionFuenteSugerencias|ufs_|ufdui_|usug_/);
       }
     });
   });
