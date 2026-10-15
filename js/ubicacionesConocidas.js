@@ -3,9 +3,13 @@
 // tests lo ejecutan con un DOM y un Leaflet simulados (js/ubicacionesConocidasController.test.js); toda la logica pura -fuentes, punto operativo, distancias,
 // enlaces y HTML- vive en js/ubicacionesConocidasLogic.js (con tests).
 //
-// - NO escribe nada: ni llama al backend ni modifica coordenadas. Lee lo que la ficha ya tiene (getWellLocation) y la correccion vigente que ya leyo
-//   js/ubicacionCorreccion.js (que la entrega con ubicacionesConocidasController_actualizarVigente).
-// - Las acciones "validar / descartar una fuente" NO existen todavia: antes hace falta definir el modelo (docs/ubicacion-correcciones.md).
+// - NUNCA modifica ni borra una coordenada. Lee lo que la ficha ya tiene (getWellLocation), la correccion vigente que ya leyo js/ubicacionCorreccion.js (que la entrega
+//   con ubicacionesConocidasController_actualizarVigente) y el estado de cada fuente registral (getDecisionesFuentesPozo: Sin revisar / Aceptada / Descartada).
+// - Quien tiene ubicacion + ubicacion_validar ve las acciones Aceptar / Descartar / Quitar aceptacion / Restaurar en cada tarjeta Y en el popup del visor. Las dos
+//   superficies usan las mismas funciones (js/ubicacionFuenteDecisionesUiLogic.js) y el mismo dialogo (js/ubicacionFuenteDecisionesUi.js). "Validada en campo" nunca
+//   tiene acciones (es de UbicacionCorrecciones). Quien no valida solo ve el estado.
+// - Tras decidir se pinta la vista actualizada que devuelve el backend; si otro usuario cambio algo, se relee y se avisa (no se repite la decision sola).
+// - app.js es el unico dueño de sessionToken/permisos: los pasa frescos con obtenerContexto().
 // - Los enlaces a Google Maps llevan solo latitud y longitud (ver ubicacionesConocidasLogic_urlGoogleMaps).
 (function () {
   var estado = {
@@ -15,6 +19,10 @@
     vigente: null,
     modelo: null,
     iconoMaps: '',
+    obtenerContexto: null,
+    decisiones: null,    // ultima vista de getDecisionesFuentesPozo (o null si no se pudo leer: sin estados ni acciones)
+    aviso: null,         // {tipo:'ok'|'aviso', texto} sobre la ultima decision
+    fuenteEnFoco: null,  // fuente cuyo popup se uso por ultima vez (se reabre despues de refrescar el visor)
     visorId: 0,
     mapa: { mapa: null, capasBase: null, capaBaseActual: null, capas: null, marcadores: {} }
   };
@@ -34,8 +42,57 @@
     return $('ubic-conocidas');
   }
 
+  function contexto() {
+    return estado.obtenerContexto ? estado.obtenerContexto() : null;
+  }
+
+  // Rol del usuario para las decisiones (null sin permiso de ubicacion). Siempre desde el contexto fresco de app.js.
+  function rol() {
+    var ctx = contexto();
+    return ctx && typeof ufdui_rol === 'function' ? ufdui_rol(ctx.permisos) : null;
+  }
+
   function recalcular() {
     estado.modelo = ubicacionesConocidasLogic_construir({ wellId: estado.wellId, location: estado.location, vigente: estado.vigente });
+    if (typeof ufdui_aplicarDecisiones === 'function') {
+      ufdui_aplicarDecisiones(estado.modelo, estado.decisiones, !!estado.vigente);
+    }
+  }
+
+  function opcionesHtml() {
+    return { iconoMaps: estado.iconoMaps, rol: rol(), aviso: estado.aviso };
+  }
+
+  function ubicacionesConocidasController_inicializar(obtenerContexto) {
+    estado.obtenerContexto = obtenerContexto;
+    if (typeof ubicacionFuenteDecisionesUi_inicializar === 'function') {
+      ubicacionFuenteDecisionesUi_inicializar(obtenerContexto);
+    }
+  }
+
+  // Lee el estado de las fuentes (solo con permiso de ubicacion; el backend lo vuelve a exigir). Si falla, la seccion sigue como antes: sin estados ni acciones.
+  function cargarDecisiones(ap) {
+    var ctx = contexto();
+    if (!ctx || !ctx.sessionToken || !ctx.permisos || ctx.permisos.ubicacion !== true || typeof apiGetDecisionesFuentesPozo !== 'function' || !estado.wellId) {
+      return Promise.resolve();
+    }
+    var wellId = estado.wellId;
+    return Promise.resolve().then(function () { return apiGetDecisionesFuentesPozo(ctx.sessionToken, wellId); }).then(function (r) {
+      if (ap !== estado.aperturaId) {
+        return;
+      }
+      if (r && r.status === 'ok' && ufdui_vistaValida(r.data, wellId)) {
+        estado.decisiones = r.data;
+        repintar(true);
+      }
+    }, function () { /* sin red: la seccion queda sin estados ni acciones */ });
+  }
+
+  function repintar(mantenerVista) {
+    pintarSeccion();
+    if (!overlayEl.hidden) {
+      dibujarVisor({ mantenerVista: mantenerVista !== false });
+    }
   }
 
   function pintarSeccion() {
@@ -44,7 +101,11 @@
       return;
     }
     recalcular();
-    cont.innerHTML = ubicacionesConocidasLogic_htmlSeccion(estado.modelo, { iconoMaps: estado.iconoMaps });
+    cont.innerHTML = ubicacionesConocidasLogic_htmlSeccion(estado.modelo, opcionesHtml());
+    if (!cont.__uconAcciones && typeof cont.addEventListener === 'function') {
+      cont.__uconAcciones = true;                   // un solo oyente delegado por contenedor (los botones se recrean con cada pintado)
+      cont.addEventListener('click', alClickAccion);
+    }
     var ver = $('btn-ucon-ver-todas');
     if (ver) {
       ver.addEventListener('click', function () { abrirVisor(ver); });
@@ -59,7 +120,14 @@
     estado.location = ap && ap.location ? ap.location : null;
     estado.iconoMaps = ap && ap.iconoMaps ? ap.iconoMaps : '';
     estado.vigente = null;
+    estado.decisiones = null;
+    estado.aviso = null;
+    estado.fuenteEnFoco = null;
+    if (typeof ubicacionFuenteDecisionesUi_cancelar === 'function') {
+      ubicacionFuenteDecisionesUi_cancelar();
+    }
     pintarSeccion();
+    cargarDecisiones(estado.aperturaId);
   }
 
   // js/ubicacionCorreccion.js la llama cada vez que (re)lee las correcciones del pozo: vigente = vista VALIDADA o null. Si la ficha ya es otra, no hace nada.
@@ -68,14 +136,71 @@
       return;
     }
     estado.vigente = vigente || null;
-    pintarSeccion();
-    if (!overlayEl.hidden) {
-      dibujarVisor();
-    }
+    repintar(true);
   }
 
   function ubicacionesConocidasController_cerrar() {
+    estado.aperturaId += 1;                        // descarta lecturas/decisiones que vuelvan tarde
+    if (typeof ubicacionFuenteDecisionesUi_cancelar === 'function') {
+      ubicacionFuenteDecisionesUi_cancelar();
+    }
     cerrarVisor();
+  }
+
+  // --- Decisiones (tarjeta y popup comparten TODO esto) ---
+
+  function alClickAccion(e) {
+    var t = e && e.target;
+    var btn = t && typeof t.closest === 'function' ? t.closest('[data-ufd-accion]') : null;
+    if (!btn || typeof ubicacionFuenteDecisionesUi_pedir !== 'function') {
+      return;
+    }
+    var accion = btn.getAttribute('data-ufd-accion');
+    var fuenteId = btn.getAttribute('data-ufd-fuente');
+    var f = estado.modelo ? estado.modelo.fuentes.filter(function (x) { return x.id === fuenteId; })[0] : null;
+    // se vuelve a verificar con el estado ACTUAL: un boton viejo (popup abierto, pantalla desactualizada) no puede pedir una accion que ya no corresponde
+    if (!f || !estado.decisiones || ufdui_accionesDeFuente(f, estado.modelo, rol()).indexOf(accion) === -1) {
+      return;
+    }
+    decidir(f, accion, btn);
+  }
+
+  function decidir(f, accion, abridor) {
+    var ap = estado.aperturaId;
+    estado.fuenteEnFoco = f.id;
+    ubicacionFuenteDecisionesUi_pedir({
+      wellId: estado.wellId, fuente: f, accion: accion, version: estado.decisiones.version, hayValidadaVigente: !!estado.vigente,
+      visorAbierto: !overlayEl.hidden, abridor: abridor
+    }).then(function (r) {
+      if (ap !== estado.aperturaId || !r || r.tipo === 'cancelado') {
+        return;
+      }
+      if (r.tipo === 'ok') {
+        estado.aviso = { tipo: 'ok', texto: r.mensaje };
+        if (r.vista) {
+          estado.decisiones = r.vista;
+          repintar(true);
+          reabrirPopup();
+        } else {
+          cargarDecisiones(ap);
+        }
+      } else if (r.tipo === 'desactualizado') {
+        estado.aviso = { tipo: 'aviso', texto: r.mensaje };
+        if (r.vista) {
+          estado.decisiones = r.vista;
+          repintar(true);
+        } else {
+          pintarSeccion();
+          cargarDecisiones(ap);
+        }
+      }
+    });
+  }
+
+  function reabrirPopup() {
+    if (!overlayEl.hidden && estado.fuenteEnFoco) {
+      enfocar(estado.fuenteEnFoco);
+    }
   }
 
   // --- Visor comparativo (solo lectura) ---
@@ -152,15 +277,17 @@
   }
 
   // Un marcador por fuente valida. El operativo va arriba de todo y con aro; el resto se distingue por color y por el texto de su etiqueta.
-  function dibujarVisor() {
+  function dibujarVisor(opciones) {
+    var mantenerVista = !!(opciones && opciones.mantenerVista);
     var mp = estado.mapa;
     if (!mp.mapa || !mp.capas || !estado.modelo) {
       return;
     }
     recalcular();
     mapaEls.leyenda.innerHTML = ubicacionesConocidasLogic_htmlLeyenda(estado.modelo);
-    mapaEls.nota.textContent = estado.modelo.sinOperativo ? UCON_NOTA_SIN_OPERATIVO : '';
-    mapaEls.nota.hidden = !estado.modelo.sinOperativo;
+    var textoNota = estado.aviso && estado.aviso.texto ? estado.aviso.texto : (estado.modelo.sinOperativo ? UCON_NOTA_SIN_OPERATIVO : '');
+    mapaEls.nota.textContent = textoNota;
+    mapaEls.nota.hidden = !textoNota;
     mp.capas.clearLayers();
     mp.marcadores = {};
     var pts = [];
@@ -175,12 +302,15 @@
       }
       var mk = L.marker([f.lat, f.lon], { icon: iconoDeFuente(f, arriba), keyboard: true, title: f.etiqueta, zIndexOffset: f.esOperativo ? 1000 : 300 });
       if (typeof mk.bindPopup === 'function') {
-        mk.bindPopup(ubicacionesConocidasLogic_htmlPopup(f), { maxWidth: 260 });
+        mk.bindPopup(ubicacionesConocidasLogic_htmlPopup(f, { modelo: estado.modelo, rol: rol() }), { maxWidth: 260 });
       }
       mk.addTo(mp.capas);
       mp.marcadores[f.id] = mk;
       pts.push([f.lat, f.lon]);
     });
+    if (mantenerVista) {
+      return;                                     // refresco tras una decision: no se mueve el mapa
+    }
     if (pts.length === 1) {
       mp.mapa.setView(pts[0], 17);
     } else if (pts.length > 1) {
@@ -202,6 +332,8 @@
     }
   }
 
+  // Los botones del popup viven dentro del contenedor del mapa: un oyente delegado alcanza (el popup se recrea con cada marcador).
+  mapaEls.contenedor.addEventListener('click', alClickAccion);
   mapaEls.leyenda.addEventListener('click', function (e) {
     var t = e && e.target;
     var fila = t && typeof t.closest === 'function' ? t.closest('[data-ucon-foco]') : null;
@@ -224,6 +356,7 @@
     }
   });
 
+  window.ubicacionesConocidasController_inicializar = ubicacionesConocidasController_inicializar;
   window.ubicacionesConocidasController_abrir = ubicacionesConocidasController_abrir;
   window.ubicacionesConocidasController_actualizarVigente = ubicacionesConocidasController_actualizarVigente;
   window.ubicacionesConocidasController_cerrar = ubicacionesConocidasController_cerrar;

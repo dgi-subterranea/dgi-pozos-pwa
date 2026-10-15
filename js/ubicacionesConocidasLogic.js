@@ -172,14 +172,24 @@ function ubicacionesConocidasLogic_textoCoordenada(f) {
   return f.invalida ? 'Coordenada no válida' : f.lat + ', ' + f.lon;
 }
 
-// Una fila de la seccion. opciones.iconoMaps: SVG confiable (de app.js) para el boton.
+// Estado y acciones de las decisiones (js/ubicacionFuenteDecisionesUiLogic.js): se usan SOLO si ese modulo esta cargado y la fuente trae `decision` (nunca la
+// "Validada en campo"). La tarjeta y el popup piden lo mismo a las mismas funciones: una sola fuente de verdad.
+function ubicacionesConocidasLogic_hayDecisiones() {
+  return typeof ufdui_htmlEstado === 'function' && typeof ufdui_htmlAcciones === 'function' && typeof ufdui_htmlHistoria === 'function';
+}
+
+// Una fila de la seccion. opciones: {iconoMaps (SVG confiable de app.js), modelo, rol (acciones de decision)}.
 function ubicacionesConocidasLogic_htmlFuente(f, opciones) {
   var esc = ubicacionesConocidasLogic_escapar;
   var o = opciones || {};
-  var h = '<li class="ucon-fuente' + (f.esOperativo ? ' ucon-operativa' : '') + '" data-ucon-id="' + esc(f.id) + '">';
+  var dec = ubicacionesConocidasLogic_hayDecisiones() && f.decision;
+  var h = '<li class="ucon-fuente' + (f.esOperativo ? ' ucon-operativa' : '') + (dec && f.decision.estado === 'DESCARTADA' ? ' ucon-descartada' : '') + '" data-ucon-id="' + esc(f.id) + '">';
   h += '<div class="ucon-cab"><span class="ucon-nombre">' + esc(f.etiqueta) + '</span>';
   if (f.esOperativo) {
     h += '<span class="ucon-chip-operativo">Punto operativo</span>';
+  }
+  if (dec) {
+    h += ufdui_htmlEstado(f);
   }
   h += '</div>';
   h += '<div class="ucon-coord mono' + (f.invalida ? ' ucon-coord-invalida' : '') + '">' + esc(ubicacionesConocidasLogic_textoCoordenada(f)) + '</div>';
@@ -192,8 +202,14 @@ function ubicacionesConocidasLogic_htmlFuente(f, opciones) {
     meta.push(dist);
   }
   h += '<div class="ucon-meta">' + meta.map(function (t) { return '<span>' + esc(t) + '</span>'; }).join('') + '</div>';
+  if (dec) {
+    h += ufdui_htmlHistoria(f);
+  }
   if (f.urlMaps) {
     h += '<a class="maps-btn ucon-maps" href="' + esc(f.urlMaps) + '" target="_blank" rel="noopener">' + (o.iconoMaps || '') + UCON_TEXTO_ABRIR_MAPS + '</a>';
+  }
+  if (dec) {
+    h += ufdui_htmlAcciones(f, o.modelo, o.rol);
   }
   h += '</li>';
   return h;
@@ -211,27 +227,43 @@ function ubicacionesConocidasLogic_htmlSeccion(modelo, opciones) {
   } else {
     h += '<p class="ucon-nota">' + esc(UCON_NOTA_CONSERVA) + '</p>';
   }
-  h += '<ul class="ucon-lista">' + modelo.fuentes.map(function (f) { return ubicacionesConocidasLogic_htmlFuente(f, opciones); }).join('') + '</ul>';
+  if (ubicacionesConocidasLogic_hayDecisiones() && typeof ufdui_htmlNotasSeccion === 'function') {
+    h += ufdui_htmlNotasSeccion(modelo, opciones && opciones.aviso);
+  }
+  var opcFuente = Object.assign({}, opciones || {}, { modelo: modelo });
+  h += '<ul class="ucon-lista">' + modelo.fuentes.map(function (f) { return ubicacionesConocidasLogic_htmlFuente(f, opcFuente); }).join('') + '</ul>';
   if (modelo.validas > 0) {
     h += '<button type="button" id="btn-ucon-ver-todas" class="button-secondary ucon-ver-todas">' + UCON_TEXTO_VER_TODAS + '</button>';
   }
   return h;
 }
 
-// Contenido del popup de un marcador (Leaflet). Solo fuente, coordenada, distancia y el enlace: nada personal.
-function ubicacionesConocidasLogic_htmlPopup(f) {
+// Contenido del popup de un marcador (Leaflet). Fuente, estado, coordenada, distancia, el enlace y las acciones de decision permitidas (las MISMAS que la tarjeta).
+// Nada personal salvo el nombre de quien decidio por ultima vez (igual que el historial). opciones: {modelo, rol}.
+function ubicacionesConocidasLogic_htmlPopup(f, opciones) {
   var esc = ubicacionesConocidasLogic_escapar;
+  var o = opciones || {};
+  var dec = ubicacionesConocidasLogic_hayDecisiones() && f.decision;
   var h = '<div class="ucon-popup"><strong>' + esc(f.etiqueta) + '</strong>';
   if (f.esOperativo) {
     h += ' <span class="ucon-chip-operativo">Punto operativo</span>';
+  }
+  if (dec) {
+    h += ' ' + ufdui_htmlEstado(f);
   }
   h += '<div class="ucon-popup-coord mono">' + esc(ubicacionesConocidasLogic_textoCoordenada(f)) + '</div>';
   var dist = ubicacionesConocidasLogic_textoDistancia(f.distanciaOperativoM);
   if (dist) {
     h += '<div class="ucon-popup-dist">' + esc(dist) + '</div>';
   }
+  if (dec) {
+    h += ufdui_htmlHistoria(f);
+  }
   if (f.urlMaps) {
     h += '<a class="ucon-popup-maps" href="' + esc(f.urlMaps) + '" target="_blank" rel="noopener">' + UCON_TEXTO_ABRIR_MAPS + '</a>';
+  }
+  if (dec) {
+    h += ufdui_htmlAcciones(f, o.modelo, o.rol);
   }
   return h + '</div>';
 }
@@ -242,6 +274,9 @@ function ubicacionesConocidasLogic_htmlLeyenda(modelo) {
   var validas = (modelo && Array.isArray(modelo.fuentes) ? modelo.fuentes : []).filter(function (f) { return !f.invalida; });
   return validas.map(function (f) {
     var dist = f.esOperativo ? 'Punto operativo' : ubicacionesConocidasLogic_textoDistancia(f.distanciaOperativoM);
+    if (ubicacionesConocidasLogic_hayDecisiones() && f.decision && typeof UFDUI_ETIQUETA_ESTADO !== 'undefined') {
+      dist = (dist ? dist + ' · ' : '') + UFDUI_ETIQUETA_ESTADO[f.decision.estado];
+    }
     return '<li><button type="button" class="ucon-leyenda-fila" data-ucon-foco="' + esc(f.id) + '">' +
       '<span class="ucon-leyenda-punto ' + ubicacionesConocidasLogic_claseMarcador(f) + '"></span>' +
       '<span class="ucon-leyenda-texto"><strong>' + esc(f.etiqueta) + '</strong>' + (dist ? '<span>' + esc(dist) + '</span>' : '') + '</span></button></li>';
@@ -265,6 +300,7 @@ if (typeof module !== 'undefined' && module.exports) {
     ubicacionesConocidasLogic_htmlSeccion,
     ubicacionesConocidasLogic_htmlPopup,
     ubicacionesConocidasLogic_htmlLeyenda,
-    ubicacionesConocidasLogic_claseMarcador
+    ubicacionesConocidasLogic_claseMarcador,
+    ubicacionesConocidasLogic_hayDecisiones
   };
 }

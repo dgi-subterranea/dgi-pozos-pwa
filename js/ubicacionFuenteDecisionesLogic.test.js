@@ -770,11 +770,11 @@ describe('el modulo es puro, esta aislado y no toca nada', () => {
     expect(JSON.stringify(fuentes)).toBe(copiaF);
   });
 
-  test('ninguna pantalla lo usa todavia (el backend si: su copia exacta + repositorio + servicio + Api, Etapa 2)', () => {
-    expect(fs.readFileSync(path.join(raiz, 'index.html'), 'utf8')).not.toMatch(/ubicacionFuenteDecisiones/);
-    expect(fs.readFileSync(path.join(raiz, 'sw.js'), 'utf8')).not.toMatch(/ubicacionFuenteDecisiones/);
+  test('ninguna pantalla carga ni usa este dominio (la interfaz solo habla con el backend por js/api.js, con sus propios modulos ubicacionFuenteDecisionesUi*; el backend tiene su copia exacta)', () => {
+    expect(fs.readFileSync(path.join(raiz, 'index.html'), 'utf8')).not.toMatch(/ubicacionFuenteDecisionesLogic\.js/);
+    expect(fs.readFileSync(path.join(raiz, 'sw.js'), 'utf8')).not.toMatch(/ubicacionFuenteDecisionesLogic\.js/);
     fs.readdirSync(path.join(raiz, 'js')).filter((f) => f.endsWith('.js') && !f.endsWith('.test.js') && f !== 'ubicacionFuenteDecisionesLogic.js').forEach((f) => {
-      expect(fs.readFileSync(path.join(raiz, 'js', f), 'utf8')).not.toMatch(/ufd_|ubicacionFuenteDecisiones/);
+      expect(fs.readFileSync(path.join(raiz, 'js', f), 'utf8')).not.toMatch(/\bufd_|ubicacionFuenteDecisionesLogic/);
     });
     const delModulo = ['UbicacionFuenteDecisionesLogic.js', 'UbicacionFuenteDecisionesRepository.js', 'UbicacionFuenteDecisionesService.js', 'Api.js'];
     fs.readdirSync(path.join(raiz, 'backend', 'src')).filter((f) => delModulo.indexOf(f) === -1).forEach((f) => {

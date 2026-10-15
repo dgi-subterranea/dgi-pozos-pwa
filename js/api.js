@@ -269,3 +269,28 @@ function apiProponerCorreccionUbicacion(sessionToken, datos) {
   });
 }
 
+
+// --- Decisiones sobre las fuentes registrales de ubicacion (Aceptar / Descartar / Quitar aceptacion / Restaurar) ---
+// La coordenada original de una fuente NUNCA se borra ni se modifica: una decision es otra fila append-only en el backend.
+// Leer = permiso "ubicacion". Decidir = "ubicacion" + "ubicacion_validar" (el BACKEND lo exige; "ubicacion_corregir" no alcanza).
+// Devuelve {wellId, version, integro, padronPeriodo, fuentes[], obsoletas[], historial[], resolucion}: sin emails (solo nombres).
+function apiGetDecisionesFuentesPozo(sessionToken, wellId) {
+  return callBackend('getDecisionesFuentesPozo', { sessionToken: sessionToken, wellId: wellId });
+}
+
+// LISTA BLANCA de campos: wellId, fuenteTipo, x, y, accion (ACEPTAR | DESCARTAR | QUITAR_ACEPTACION | RESTAURAR), motivo, versionVista y clientRequestId.
+// La identidad (email/nombre), la secuencia, la fecha y el estado NUNCA viajan: los pone el backend. Devuelve la vista actualizada + decision + duplicada.
+function apiDecidirFuenteUbicacion(sessionToken, datos) {
+  var d = datos || {};
+  return callBackend('decidirFuenteUbicacion', {
+    sessionToken: sessionToken,
+    wellId: d.wellId,
+    fuenteTipo: d.fuenteTipo,
+    x: d.x,
+    y: d.y,
+    accion: d.accion,
+    motivo: d.motivo,
+    versionVista: d.versionVista,
+    clientRequestId: d.clientRequestId
+  });
+}

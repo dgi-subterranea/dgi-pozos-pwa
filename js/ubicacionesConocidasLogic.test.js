@@ -354,8 +354,9 @@ describe('el modulo es puro y de solo lectura', () => {
   test('sin DOM, red, almacenamiento ni Leaflet', () => {
     expect(fuenteLogica).not.toMatch(/document\.|window\.|fetch\(|XMLHttpRequest|localStorage|sessionStorage|indexedDB|\bL\.|navigator\.|api[A-Z]\w+\(/);
   });
-  test('no hay acciones de validar/descartar fuentes (todavia no existe ese modelo)', () => {
-    expect(fuenteLogica).not.toMatch(/descartar|DESCARTADA|ACEPTADA|aceptarFuente|validarFuente/i);
+  test('no decide ni escribe nada de las decisiones: solo pide el HTML a las funciones ufdui_ compartidas (nunca el dominio ufd_, ni la API, ni "eliminar")', () => {
+    expect(fuenteLogica).not.toMatch(/\bufd_|aceptarFuente|validarFuente|eliminar|borrar|\bapi[A-Z]/i);
+    expect(fuenteLogica).not.toMatch(/ACEPTADA|SIN_REVISAR/);          // la maquina de estados no esta aca
   });
   test('la unica URL externa es la de Google Maps con api=1&query=', () => {
     const urls = fuenteLogica.match(/https?:\/\/[^'"\s)]+/g) || [];

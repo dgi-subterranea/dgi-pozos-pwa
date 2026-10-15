@@ -1482,6 +1482,30 @@
     </div>
   </div>
 
+  <!-- Confirmacion de una decision sobre una fuente registral (Aceptar / Descartar / Quitar aceptacion / Restaurar). La abren las tarjetas de "Ubicaciones conocidas" Y el
+       popup del visor "Ver todas en el mapa": el mismo dialogo para las dos. La coordenada original NUNCA se elimina. Ver js/ubicacionFuenteDecisionesUi.js. -->
+  <div id="ufd-overlay" class="ucorr-overlay ufd-overlay" role="dialog" aria-modal="true" aria-labelledby="ufd-titulo" hidden>
+    <div class="ucorr-panel ufd-panel">
+      <div class="ucorr-cabecera">
+        <h2 id="ufd-titulo" class="ucorr-titulo"></h2>
+        <button type="button" id="btn-ufd-cerrar" class="ucorr-cerrar" aria-label="Cerrar">&times;</button>
+      </div>
+      <div class="ucorr-vista">
+        <p id="ufd-fuente" class="ufd-fuente-nombre"></p>
+        <div id="ufd-textos" class="ufd-textos"></div>
+        <div id="ufd-motivo-bloque" class="ufd-motivo-bloque">
+          <label id="ufd-motivo-label" for="ufd-motivo" class="field-label">Motivo</label>
+          <textarea id="ufd-motivo" class="ucorr-observacion" rows="3" maxlength="300" placeholder="Ej.: la coordenada cae lejos de la boca del pozo"></textarea>
+          <p id="ufd-err-motivo" class="ucorr-err" role="alert" hidden></p>
+        </div>
+        <p id="ufd-error" class="error-message" role="alert" hidden></p>
+        <div id="ufd-guardando" class="cargando cargando-md" data-cargando hidden>Guardando…</div>
+        <button type="button" id="btn-ufd-confirmar" class="button ucorr-opcion">Confirmar</button>
+        <button type="button" id="btn-ufd-cancelar" class="button button-secondary ucorr-opcion">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Bandeja de seleccion (item D/I): persistente, fuera de cualquier
        .screen a proposito - sobrevive la navegacion SPA completa. Solo
        visible con seleccion.length > 0 (ver seleccionController en
@@ -1554,7 +1578,9 @@
   <script src="js/reemplazo.js"></script>
   <script src="js/coordenadasConversion.js"></script>
   <script src="js/ubicacionCorreccionLogic.js"></script>
+  <script src="js/ubicacionFuenteDecisionesUiLogic.js"></script>
   <script src="js/ubicacionesConocidasLogic.js"></script>
+  <script src="js/ubicacionFuenteDecisionesUi.js"></script>
   <script src="js/ubicacionesConocidas.js"></script>
   <script src="js/ubicacionCorreccion.js"></script>
   <script src="js/ubicacionValidacion.js"></script>

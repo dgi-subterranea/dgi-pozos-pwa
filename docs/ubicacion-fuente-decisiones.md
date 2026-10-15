@@ -267,3 +267,100 @@ Archivos: `backend/src/UbicacionFuenteDecisionesLogic.js` (copia **exacta** del 
 - **Privacidad:** las respuestas traen solo coordenadas, estados, motivos, `nombre` y fechas; nunca email, `decisionId`, `clientRequestId` ni datos del registro del padron (tests de forma exacta).
 - **Orden de produccion:** `gas:push` -> `setupUbicacionFuenteDecisionesSheet()` (manual, editor de Apps Script, idempotente) -> `gas:version` -> `gas:deploy`. Mientras el deploy apunte a la version anterior, el codigo nuevo no se sirve.
 
+---
+
+## Etapa A — UI de decisiones directas para validadores (implementada, sin commit)
+
+Backend usado tal cual esta desplegado en v41: `getDecisionesFuentesPozo` (lectura, permiso `ubicacion`) y `decidirFuenteUbicacion` (`ubicacion` + `ubicacion_validar`). **No se tocó el backend.** Para el validador no falta nada: la lectura trae por fuente `clave / fuenteTipo / x / y / estado / ultima` y la `version`; la escritura devuelve la vista actualizada completa (no hace falta releer).
+
+- **Archivos nuevos:** `js/ubicacionFuenteDecisionesUiLogic.js` (lógica pura: rol, acciones por estado, vínculo con las fuentes de la ficha, confirmaciones, pedido con lista blanca, flujo con `clientRequestId` estable, mensajes de error, HTML compartido) y `js/ubicacionFuenteDecisionesUi.js` (un único diálogo de confirmación, compartido por tarjeta y mapa). Modificados: `js/api.js` (2 wrappers con lista blanca), `js/ubicacionesConocidas.js` y `js/ubicacionesConocidasLogic.js` (estado, historia, acciones, popup), `js/app.js` (solo inicializa el controlador con el contexto fresco), `index.html` (diálogo y scripts), `sw.js`, `css/styles.css`.
+- **Quién ve qué:** `ubicacion` + `ubicacion_validar` exactos = VALIDADOR (ve acciones). `ubicacion` sin validar (o solo `ubicacion_corregir`) = LECTOR: ve el estado y la historia, **ninguna acción autoritativa** (las sugerencias son la Etapa B). Sin `ubicacion` no se lee nada. El rol se consulta fresco en cada clic.
+- **Acciones:** SIN_REVISAR → Aceptar, Descartar · ACEPTADA → Quitar aceptación, Descartar (un solo paso) · DESCARTADA → Restaurar. «Validada en campo» nunca tiene estado ni acciones. Historial inconsistente → sin acciones y con un aviso sin códigos técnicos.
+- **Confirmaciones:** Aceptar («¿Aceptar esta fuente como referencia registral?», más la aclaración de la validada en campo vigente), Descartar (motivo obligatorio, «La coordenada original no se eliminará…»), Quitar aceptación (simple), Restaurar («…No quedará aceptada automáticamente.»). Nunca se habla de «eliminar».
+- **Después de decidir:** se pinta la vista que devuelve el backend (tarjetas, popups, leyenda, chips), el visor no se mueve y se reabre el popup de esa fuente. `STALE_STATE` (y `ALREADY_IN_STATE`, `INVALID_TRANSITION`, `SOURCE_NOT_FOUND`): «Esta información cambió mientras la estabas revisando.», se relee y **no** se repite la decisión sola. Corte de red: el diálogo queda abierto y el reintento reutiliza el mismo `clientRequestId` (el backend lo deduplica). Sesión vencida: cierra sesión.
+- **Alcance:** los mapas globales, Cerca Mío, selección y reemplazos **no cambian**: el punto operativo que muestra la ficha sigue siendo el de hoy (la validada en campo gana; si no, el automático). Si las decisiones cambiarían el punto registral, la ficha lo avisa («Las decisiones tomadas todavía no cambian el punto que usan los mapas.»).
+
+### Qué falta para que Aceptada / descartes impacten mapas, Cerca Mío y selección (Etapa 3)
+1. Endpoint delta `getDecisionesFuentesDelta` (solo pozos cuyo punto registral cambia por decisiones; una fila por pozo con lat/lon o «sin ubicación operativa»), con caché e invalidación como `getUbicacionesValidadas`.
+2. Un único punto de integración en `mapaDataset_obtener` (`js/mapaDataset.js`): primero las decisiones registrales, después el overlay de la validada en campo (V gana siempre).
+3. Estado `R` = «Aceptada» en dataset, chips, filtros, estilos, leyenda y exportación.
+4. «Sin ubicación operativa» (todas descartadas): el pozo sale del mapa, de Cerca Mío y de la selección (REMOVE), con el texto ya definido.
+5. La ubicación principal de la ficha pasa a seguir `resolucion` del backend (hoy sigue al automático).
+6. Invalidar el dataset de los mapas SOLO cuando una decisión cambia el punto registral (`resolucion.cambiaRespectoDelOriginal`).
+
+---
+
+## Etapa B — propuesta de SUGERENCIAS para quien no valida (diseño, NO implementado)
+
+### Auditoría de lo existente (patrón real del proyecto)
+- Correcciones: hoja de estado + hoja `…Log` de eventos, `LockService`, `clientRequestId` por usuario, cola `getCorreccionesUbicacionPendientes` (`ubicacion` + `ubicacion_validar`) con `total` para el indicador del hub (refresco al entrar al hub, 15 s), validar/rechazar con motivo obligatorio al rechazar, Historial por intento, aviso interno + `MailApp` best-effort a usuarios activos con `ubicacion` y `ubicacion_validar` (sin el proponente, sin repetidos, un mail por destinatario, sin coordenadas ni emails en el cuerpo, respetando `getRemainingDailyQuota()`; cuota compartida: 100/día en Gmail personal, 1500 en Workspace).
+- Decisiones (v41): hoja append-only de eventos con `secuencia` global bajo lock; dominio puro `ufd_decidir` que valida la transición contra el estado vigente; idempotencia por `(usuario, clientRequestId)`.
+
+### Principio
+Una sugerencia **nunca** es una fila de `UbicacionFuenteDecisiones` ni entra al dominio de decisiones: es otra cosa (un pedido de una persona sin autoridad). Solo la **aprobación** de un validador produce una decisión real, y la produce **llamando a la misma función de servicio** que `decidirFuenteUbicacion` (misma validación de transición, misma secuencia, misma fila, misma auditoría, mismo dominio). No se duplica lógica: se extrae del servicio actual el núcleo `ubicacionFuenteDecisionesService_aplicarDecision(contexto, solicitud)` (sin cambiar su comportamiento ni sus tests) y lo usan los dos caminos.
+
+### Mínimo correcto: una sola hoja de EVENTOS `UbicacionFuenteSugerencias` (append-only)
+Mismo patrón que las decisiones (una fila = un evento, `secuencia` global `max + 1` bajo lock, estado derivado por reproducción, `setupUbicacionFuenteSugerenciasSheet()` idempotente y fail-closed, texto plano salvo números). No se copia el modelo tentativo de dos formas (fila mutable de estado) porque obligaría a editar filas; con eventos no se edita nada.
+
+| Columna | Qué guarda |
+|---|---|
+| `sugerenciaId` | UUID; es el mismo en todos los eventos de una sugerencia |
+| `secuencia` | entero global; define el orden |
+| `evento` | `PROPUESTA` · `APROBADA` · `RECHAZADA` · `CANCELADA` · `OBSOLETA` |
+| `wellId`, `fuenteTipo`, `x`, `y` | la fuente (identidad canónica de 3 decimales, igual que las decisiones) |
+| `accion` | lo que se sugiere: `ACEPTAR` · `DESCARTAR` · `RESTAURAR` (en los eventos de resolución se repite) |
+| `motivo` | de la propuesta (obligatorio si `DESCARTAR`) o de la resolución (obligatorio al `RECHAZAR`) |
+| `email`, `nombre` | de la sesión de quien genera ESE evento (proponente o validador) |
+| `timestampUtc` | ISO UTC como texto |
+| `clientRequestId` | idempotencia por usuario |
+| `versionVista` | versión del pozo que vio quien generó el evento |
+| `decisionId` | solo en `APROBADA`: la decisión real creada |
+| `padronPeriodo` | contexto para reindexados |
+
+Se descartan del modelo tentativo: `estado` y `resueltaPor/En/motivoResolucion` como columnas (se derivan del último evento), y `decisionIdGenerada` se llama `decisionId`.
+
+### Estado derivado
+`PENDIENTE` (hay `PROPUESTA` sin resolución) → `APROBADA` / `RECHAZADA` / `CANCELADA` / `OBSOLETA`. Además hay una **obsolescencia virtual** calculada al leer (sin escribir): la fuente ya no existe en el padrón, o la acción ya no corresponde al estado actual (p. ej. otro validador ya la descartó). Las obsoletas no cuentan en el indicador. El evento `OBSOLETA` solo se escribe cuando un validador intenta resolverla (queda auditado).
+
+### Aprobar (consistencia)
+1. Un solo `LockService` (el mismo script lock) toma: relee sugerencias y decisiones y el padrón.
+2. Verifica `versionVista` del validador contra la versión actual del pozo (`STALE_STATE` como en las decisiones: ve el estado nuevo y decide de nuevo).
+3. Llama al **mismo núcleo** de decisión con la fuente y la acción de la sugerencia (motivo = el de la sugerencia, más lo que agregue el validador). Si la transición ya no es válida o la fuente desapareció (`SOURCE_NOT_FOUND`): no se aplica, se escribe `OBSOLETA` y se informa.
+4. Escribe PRIMERO la decisión (autoritativa) y DESPUÉS el evento `APROBADA` con su `decisionId`. Sheets no es transaccional: la decisión lleva un `clientRequestId` **determinístico** `sug-<sugerenciaId>`; si el proceso se corta entre las dos escrituras, el reintento encuentra esa decisión (búsqueda por `clientRequestId` sin importar el usuario, solo para el prefijo `sug-` que genera el servidor) y solamente completa el evento faltante. Una sugerencia `PENDIENTE` cuya decisión `sug-…` ya existe se muestra como `APROBADA` (autocuración al leer).
+5. La decisión queda con el email/nombre del **validador** (la autoridad); la sugerencia guarda quién la propuso y el vínculo `decisionId`.
+
+### Endpoints propuestos
+| Endpoint | Permiso | Qué hace |
+|---|---|---|
+| `sugerirDecisionFuente` | `ubicacion` | crea una `PROPUESTA` (`wellId`, `fuenteTipo`, `x`, `y`, `accion`, `motivo`, `versionVista`, `clientRequestId`) |
+| `getSugerenciasFuentesPozo` | `ubicacion` | quien no valida: SUS sugerencias del pozo y su estado (con motivo de rechazo); quien valida: todas las pendientes del pozo |
+| `getSugerenciasFuentesPendientes` | `ubicacion` + `ubicacion_validar` | la cola: `{total, pendientes[]}` con el estado ACTUAL de cada fuente y la versión del pozo |
+| `resolverSugerenciaFuente` | `ubicacion` + `ubicacion_validar` | `{sugerenciaId, resolucion: APROBAR\|RECHAZAR, motivo, versionVista, clientRequestId}` |
+| `cancelarSugerenciaFuente` (opcional) | `ubicacion` (solo la propia) | el autor retira su pendiente; evita cola sucia |
+
+Los errores reutilizan los de decisiones (`STALE_STATE`, `SOURCE_NOT_FOUND`, `INVALID_TRANSITION`, `INVALID_MOTIVO`, `IDEMPOTENCY_CONFLICT`, `INCONSISTENT_STATE`, `SERVICE_UNAVAILABLE` genérico) más `DUPLICATE_PENDING` («Ya enviaste esta sugerencia y está pendiente de revisión.»), `TOO_MANY_PENDING` y `SUGGESTION_NOT_FOUND` / `ALREADY_RESOLVED`.
+
+### Duplicados y abuso
+- Idempotencia por `(usuario, clientRequestId)` (reintento = misma sugerencia).
+- Mientras haya una `PROPUESTA` pendiente del mismo `(usuario, wellId, fuente, accion)` → `DUPLICATE_PENDING` y no se escribe.
+- Tope de pendientes por usuario (propuesta: 10) → `TOO_MANY_PENDING`.
+- Dos personas distintas pueden sugerir lo mismo; al aprobar una, las demás quedan obsoletas (virtualmente) porque la acción ya no corresponde.
+
+### Privacidad
+Quien no valida ve solo las suyas (con su propio nombre y el motivo de la resolución); el validador ve el **nombre** del proponente y nunca emails. El `sugerenciaId` sí viaja (hace falta para resolver). No viajan `decisionId`, `clientRequestId` ajenos, `secuencia` ni diagnósticos.
+
+### Aviso (badge y mail)
+- **Badge** en el hub «Sugerencias de ubicación: N» (solo `ubicacion` + `ubicacion_validar` exactos; mismo mecanismo y refresco que «Correcciones pendientes: N»; cuenta solo las vigentes).
+- **Mail** best-effort con el mismo patrón (`UbicacionCorreccionNotificacion`): destinatarios = activos con ambos permisos, sin el proponente, sin repetidos; cuerpo con pozo, tipo de sugerencia, fuente («Irrigación (2)»), nombre del proponente y enlace a la PWA — **sin coordenadas ni emails**. No bloquea ni demora la sugerencia. La cuota diaria es la misma que usa Correcciones: se reserva un margen (propuesta: no enviar si quedan menos de 20) para no dejar sin aviso a las correcciones.
+
+### Cola para validadores (Etapa D)
+Lista con pozo, fuente, acción sugerida, quién, cuándo, motivo y **estado actual de la fuente**; el detalle abre el mismo visor comparativo con la fuente sugerida resaltada y las acciones `Aprobar` / `Rechazar` (rechazar con motivo **obligatorio**: la persona necesita saber por qué). El validador no está obligado a pasar por sugerencias: sigue decidiendo directo.
+
+### Decisiones que necesito confirmar antes de implementar (Etapa C)
+1. Acciones sugeribles en la primera versión: `ACEPTAR`, `DESCARTAR` y `RESTAURAR` (el modelo lo soporta limpio: la transición se valida al aprobar). `QUITAR_ACEPTACION` queda afuera (descartar la cubre). En la UI: SIN_REVISAR → Sugerir aceptar / descartar · ACEPTADA → Sugerir descartar · DESCARTADA → Sugerir restaurar.
+2. Motivo: obligatorio al sugerir descartar y al rechazar; opcional en el resto.
+3. ¿Un validador puede usar `sugerirDecisionFuente`? Propuesta: el backend lo permite (tiene `ubicacion`), la UI no se lo ofrece.
+4. Tope de pendientes por usuario (10) y reserva de cuota de mail (20).
+5. Incluir `cancelarSugerenciaFuente` en la primera versión (recomendado).
+6. Las sugerencias aprobadas con una validada en campo vigente: se aplican igual (como Aceptar directo), con el mismo aviso.
+

@@ -29,7 +29,8 @@ describe('index.html', () => {
   });
 
   test('el visor solo tiene capas y cierre: NO hay botones de validar ni de descartar fuentes', () => {
-    const visor = html.slice(html.indexOf('id="ucon-overlay"'), html.indexOf('<!-- Bandeja de seleccion'));
+    // las acciones de decision aparecen en el popup de cada marcador (mismo dialogo que las tarjetas), no como botones fijos del visor
+    const visor = html.slice(html.indexOf('id="ucon-overlay"'), html.indexOf('<!-- Confirmacion de una decision'));
     expect(visor).not.toMatch(/Validar|Descartar|Aceptar|Rechazar|Ignorar/);
     expect((visor.match(/<button/g) || []).length).toBe(4);               // x, Mapa, Satelite y Cerrar
   });
@@ -85,10 +86,14 @@ describe('app.js y controlador de correcciones', () => {
     expect(correccion).toMatch(/typeof ubicacionesConocidasController_actualizarVigente === 'function'/);
   });
 
-  test('"Ubicaciones conocidas" (solo lectura) no usa ninguna accion de decisiones: ni js/api.js ni los controladores las conocen', () => {
-    expect(leer('js', 'api.js')).not.toMatch(/UbicacionFuente|FuenteDecision|DecisionFuente|decidirFuente|getDecisionesFuentes/i);
-    expect(controlador).not.toMatch(/decidirFuente|getDecisionesFuentes|ubicacionFuenteDecisiones/i);
-    expect(leer('js', 'ubicacionesConocidasLogic.js')).not.toMatch(/decidirFuente|getDecisionesFuentes|ufd_/i);
+  test('las decisiones sobre fuentes: solo js/api.js conoce los nombres de las acciones del backend; los controladores y la logica usan los wrappers', () => {
+    const api = leer('js', 'api.js');
+    expect(api).toContain("callBackend('getDecisionesFuentesPozo'");
+    expect(api).toContain("callBackend('decidirFuenteUbicacion'");
+    [controlador, leer('js', 'ubicacionesConocidasLogic.js'), leer('js', 'ubicacionFuenteDecisionesUi.js'), leer('js', 'ubicacionFuenteDecisionesUiLogic.js')].forEach((src) => {
+      expect(src).not.toMatch(/'getDecisionesFuentesPozo'|'decidirFuenteUbicacion'|callBackend|fetch\(/);
+      expect(src).not.toMatch(/\bufd_/);                                  // nunca el dominio del backend
+    });
   });
 });
 

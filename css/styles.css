@@ -5095,3 +5095,97 @@ body.ucorr-abierto {
     to { transform: translateY(0); opacity: 1; }
   }
 }
+
+/* Decisiones sobre las fuentes registrales (Aceptar / Descartar / Quitar aceptacion / Restaurar): estado de cada fuente, historia, botones (tarjeta y popup del visor)
+   y el dialogo de confirmacion. La coordenada original nunca se elimina: una fuente descartada solo se atenua. Ver js/ubicacionFuenteDecisionesUi*.js. */
+.ufd-estado {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text-soft);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.ufd-estado-aceptada {
+  border-color: #8fcfaa;
+  background: #e3f3ea;
+  color: #17633d;
+}
+.ufd-estado-descartada {
+  border-color: #e3c6a4;
+  background: var(--color-warn-tint);
+  color: var(--color-warn);
+}
+.ucon-descartada .ucon-coord,
+.ucon-descartada .ucon-nombre {
+  opacity: 0.7;
+}
+.ufd-historia {
+  margin-top: 5px;
+  font-size: 0.76rem;
+  color: var(--color-text-soft);
+  overflow-wrap: anywhere;
+}
+.ufd-acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.ufd-btn {
+  flex: 1 1 104px;
+  min-height: 44px;
+  padding: 8px 12px;
+  font-size: 0.82rem;
+}
+.ufd-aviso {
+  margin: 0 0 8px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.ufd-aviso-ok {
+  background: #e3f3ea;
+  color: #17633d;
+}
+.ufd-aviso-aviso {
+  background: var(--color-warn-tint);
+  color: var(--color-warn);
+}
+.ucon-popup .ufd-acciones {
+  gap: 6px;
+  margin-top: 8px;
+}
+.ucon-popup .ufd-btn {
+  flex: 1 1 100%;
+  min-height: 44px;
+  font-size: 0.78rem;
+}
+/* El dialogo de confirmacion va por encima del visor del mapa (z-index 70). */
+.ufd-overlay {
+  z-index: 80;
+}
+.ufd-fuente-nombre {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--color-text);
+}
+.ufd-textos p {
+  margin: 0 0 8px;
+  font-size: 0.86rem;
+  line-height: 1.4;
+  color: var(--color-text);
+}
+.ufd-motivo-bloque {
+  margin: 10px 0 8px;
+}
+.ufd-motivo-bloque .field-label {
+  display: block;
+  margin-bottom: 6px;
+}

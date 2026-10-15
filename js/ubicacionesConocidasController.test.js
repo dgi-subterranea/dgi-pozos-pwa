@@ -420,8 +420,8 @@ describe('errores y cierre', () => {
   });
 });
 
-describe('solo lectura: nunca toca el backend', () => {
-  test('ver la seccion, abrir el visor, enfocar, cambiar capa y cerrar no hacen ninguna llamada a la API ni a la red', async () => {
+describe('sin contexto de sesion no hay red; nunca se modifica una coordenada', () => {
+  test('ver la seccion, abrir el visor, enfocar, cambiar capa y cerrar (sin contexto de sesion) no hacen ninguna llamada a la API ni a la red', async () => {
     const t = cargar();
     abrirFicha(t);
     t.ctx.ubicacionesConocidasController_actualizarVigente('14-0001', vigente());
@@ -433,9 +433,10 @@ describe('solo lectura: nunca toca el backend', () => {
     expect(t.llamadasApi).toEqual([]);
   });
 
-  test('el codigo del controlador no contiene llamadas a la API, fetch ni escritura de ningun tipo', () => {
+  test('el codigo del controlador no hace fetch ni escribe nada por su cuenta: la unica API que llama es la lectura de decisiones; decidir va por el dialogo compartido', () => {
     const codigo = fuenteControlador.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
-    expect(codigo).not.toMatch(/\bapi[A-Z]\w*\(|fetch\(|callBackend|XMLHttpRequest|localStorage|sessionStorage|descartar|validarFuente|aceptarFuente/);
+    expect(codigo).not.toMatch(/fetch\(|callBackend|XMLHttpRequest|localStorage|sessionStorage|apiProponer|apiValidar|apiRechazar|apiDecidirFuente|eliminar|borrar/i);
+    expect(codigo.match(/\bapi[A-Z]\w*\(/g)).toEqual(['apiGetDecisionesFuentesPozo(']);
   });
 });
 

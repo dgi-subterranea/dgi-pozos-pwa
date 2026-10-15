@@ -1903,6 +1903,18 @@
     };
   });
 
+  // "Ubicaciones conocidas" de la ficha: estado de cada fuente registral y, solo con ubicacion + ubicacion_validar, las decisiones (Aceptar / Descartar / Quitar
+  // aceptacion / Restaurar), tanto en las tarjetas como en el visor. sessionToken/permisos siempre frescos; si la sesion vence, se cierra sesion.
+  ubicacionesConocidasController_inicializar(function () {
+    return {
+      sessionToken: sessionToken,
+      permisos: permisosActuales,
+      onSessionExpired: function () {
+        logout();
+      }
+    };
+  });
+
   // Indicador "Correcciones pendientes: N" del hub (solo ubicacion + ubicacion_validar exactos) y la validacion que abre (bandeja + detalle): comparten el
   // contexto (token y permisos SIEMPRE frescos). Una sesion vencida cierra sesion; un usuario deshabilitado va a su pantalla, igual que en la busqueda.
   // La bandeja llama ubicacionPendientesController_alResolver() tras validar o rechazar.

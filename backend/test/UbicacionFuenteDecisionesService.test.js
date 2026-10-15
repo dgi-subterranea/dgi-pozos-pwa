@@ -894,11 +894,21 @@ describe('frontend / backend: el dominio NO deriva', () => {
 describe('aislamiento de la Etapa 2', () => {
   const raiz = path.join(__dirname, '..', '..');
 
-  test('el frontend (index.html, service worker, js/) NO usa nada de esto todavia: sin UI, sin mapa, sin api.js', () => {
-    expect(fs.readFileSync(path.join(raiz, 'index.html'), 'utf8')).not.toMatch(/ubicacionFuenteDecisiones|getDecisionesFuentesPozo|decidirFuenteUbicacion/);
-    expect(fs.readFileSync(path.join(raiz, 'sw.js'), 'utf8')).not.toMatch(/ubicacionFuenteDecisiones/);
+  test('el frontend usa los endpoints SOLO a traves de js/api.js; ni mapa, ni Cerca Mio, ni seleccion, ni reemplazos los conocen; el dominio y la hoja no llegan al navegador', () => {
+    expect(fs.readFileSync(path.join(raiz, 'index.html'), 'utf8')).not.toMatch(/ubicacionFuenteDecisionesLogic\.js|getDecisionesFuentesPozo|decidirFuenteUbicacion/);
+    expect(fs.readFileSync(path.join(raiz, 'sw.js'), 'utf8')).not.toMatch(/ubicacionFuenteDecisionesLogic\.js/);
     fs.readdirSync(path.join(raiz, 'js')).filter((f) => f.endsWith('.js') && !f.endsWith('.test.js') && f !== 'ubicacionFuenteDecisionesLogic.js').forEach((f) => {
-      expect(fs.readFileSync(path.join(raiz, 'js', f), 'utf8')).not.toMatch(/getDecisionesFuentesPozo|decidirFuenteUbicacion|ufd_|UbicacionFuenteDecisiones/);
+      const src = fs.readFileSync(path.join(raiz, 'js', f), 'utf8');
+      expect(src).not.toMatch(/\bufd_|UbicacionFuenteDecisiones['"\s]|getDecisionesFuentesDelta/);
+      if (f !== 'api.js') {
+        expect(src).not.toMatch(/'getDecisionesFuentesPozo'|'decidirFuenteUbicacion'/);          // el nombre de la accion solo vive en api.js
+      }
+    });
+    ['mapa.js', 'mapaDataset.js', 'cercaMio.js', 'seleccion.js', 'reemplazo.js'].forEach((f) => {
+      const ruta = path.join(raiz, 'js', f);
+      if (fs.existsSync(ruta)) {
+        expect(fs.readFileSync(ruta, 'utf8')).not.toMatch(/ufdui_|DecisionesFuentes|decidirFuente/i);
+      }
     });
   });
 
