@@ -121,6 +121,8 @@ Estado: **idea documentada, sin diseño técnico ni implementación.** Antes de 
 
 **Permisos:** a definir más adelante, **después de auditar los permisos actuales de fotos** (no se inventan ahora).
 
+**Relacionado:** «Fotos — guardado parcial cuando falta metadata» (más abajo, requiere aclaración funcional) y la miniatura en los resultados de Buscar reemplazo.
+
 Estado: idea documentada, sin diseño técnico ni implementación.
 
 ## Fase futura (SOLO documentada; sin código) — Observaciones generales del pozo
@@ -137,7 +139,7 @@ Estado: idea documentada, sin diseño técnico ni implementación.
 
 **Idea:** cada perforación puede tener un sticker o cartel físico con **QR** y, opcionalmente, **NFC**. QR y NFC apuntan a **la misma URL estable**; al escanear o tocar se abre una ficha del pozo **preparada para ese acceso**.
 
-**Visibilidad:** solo se muestra información **expresamente habilitada como visible**; no se expone automáticamente la ficha interna. Se diseñará una **vista pública / compartible separada**.
+**Visibilidad:** solo se muestra información **expresamente habilitada como visible**; no se expone automáticamente la ficha interna. Se diseñará una **vista pública / compartible separada**. Para la ubicación rige el principio «Visibilidad pública de la ubicación» (más abajo): se publica únicamente el punto operativo autorizado.
 
 **Preferencias de arquitectura:**
 - **Token público opaco por pozo**: el `wellId` **no** es una credencial.
@@ -148,3 +150,67 @@ Estado: idea documentada, sin diseño técnico ni implementación.
 **A pensar:** regenerar / revocar el token, reimprimir el QR, NFC perdido o dañado, auditoría y un cartel resistente para el campo.
 
 Estado: idea documentada, sin diseño técnico ni implementación.
+
+## Principio de diseño — Visibilidad pública de la ubicación
+
+Para toda futura vista pública o externa (incluida la de QR / NFC):
+
+> **La complejidad y la trazabilidad de las fuentes son internas; la vista pública expone únicamente la ubicación operativa autorizada.**
+
+- Una persona pública / externa **no ve** los estados ni la mecánica interna: validada, aceptada, coincidente, propuesta, descartada, sugerencias, fuentes, ni sus autores o motivos.
+- Ve **solamente el PUNTO OPERATIVO publicado**, y solo si está expresamente habilitado (fail-closed, igual que el resto de los campos públicos de «QR + NFC por pozo»).
+- Hoy todas las vistas de la app requieren sesión, así que esto **no cambia nada existente**: es una regla para cuando se diseñe la vista pública.
+
+**A definir en su momento:** qué se muestra si un pozo no tiene ubicación operativa autorizada (lo esperable: nada) y con qué precisión se publica el punto.
+
+Estado: principio registrado, sin diseño técnico ni implementación.
+
+## Fase futura (SOLO documentada; sin código) — Ubicación validada reemplazada por otra mejor
+
+**Caso:** «¿Qué pasa si después aparece una ubicación más correcta que la actualmente validada?»
+
+**Principio deseado:**
+- Ninguna validación borra a la anterior.
+- Una validación posterior puede pasar a ser la **vigente**.
+- Se conserva el historial completo; la anterior queda **superada / reemplazada** de forma auditable.
+
+**Ya contemplado (a revisar antes de crear nada nuevo):** `UbicacionCorrecciones` ya modela esto: una sola `VALIDADA` vigente por pozo, el evento `SUPERADA` se escribe automáticamente al validar otra del mismo pozo, el historial se conserva y revertir no revive a la superada (ver `docs/ubicacion-correcciones.md`, «Estado vigente»).
+
+**Por revisar en la futura fase:** si el flujo actual alcanza para este caso o solo falta experiencia de uso (por ejemplo, mostrar la vigente junto a la nueva para compararlas, avisar qué se va a superar y cómo se ve en ficha y mapa), y cómo se relaciona con lo que traiga la integración de decisiones de fuentes en el mapa (Etapa 3).
+
+Estado: idea documentada; probablemente ya soportada en el backend. Falta auditar.
+
+## Fase futura (SOLO documentada; sin código) — Buscar pozo para reemplazo: UX y performance
+
+Se registran **objetivos y problemas**; no se diseña ninguna solución todavía.
+
+- **Más filtros** en la búsqueda (cuáles: sin definir; ver «Filtros hidrogeológicos» y «Departamento vs Cuenca» más abajo).
+- **Foto / miniatura del pozo en los resultados**, cuando exista. Ya hay miniaturas y entrega por proxy (`docs/fotos-pozos.md`); el problema a resolver es no sumar una llamada por resultado.
+- **Motivo obligatorio al evaluar un pozo para reemplazo.** Ya existe un campo de motivo según el estado en `js/reemplazo.js`; falta auditar en qué estados hoy es obligatorio antes de cambiar la regla.
+- **Búsqueda más inteligente.** *Requiere aclaración funcional:* qué significa «inteligente» (tolerancia al escribir, orden por relevancia, sugerencias, etc.).
+- **Mejor diseño visual de los resultados.**
+- **Optimizar el tiempo de respuesta** de la búsqueda por área / radio. Primero medir con datos reales (mismo criterio que el particionado de la Ficha del Pozo); no optimizar a ciegas.
+- **Navegación clara «Ir a inicio»** desde esta pantalla. No se verificó la navegación actual en todas las pantallas.
+
+Estado: idea documentada, sin diseño técnico ni implementación.
+
+## Fase futura (SOLO documentada; sin código) — Fotos: guardado parcial cuando falta metadata
+
+**Idea:** poder guardar una foto aunque algún dato complementario asociado no esté disponible o no pueda obtenerse; que la falta de metadata **no esencial** no bloquee necesariamente la carga. En el futuro hay que definir qué metadata es **obligatoria** y cuál **opcional**.
+
+> **Requiere aclaración funcional antes de implementar.** No está claro a qué dato se refiere (fecha, GPS / EXIF, fuente, observación, vínculo con el pozo) ni si aplica a la carga desde la app o a importaciones. Hoy la importación ya tolera fechas parciales (`docs/fotos-pozos-importacion.md`), pero no se sabe si la idea apunta a eso.
+
+Relacionado con «Fotos colaborativas / moderadas». Estado: idea pendiente de aclarar.
+
+## Backlog de búsqueda, mapa y datos (por auditar; sin campos ni diseño definidos)
+
+- **Filtros hidrogeológicos** en la búsqueda y el mapa. **No se definen campos todavía:** primero auditar qué atributos reales existen en el padrón y los datasets. Lo que ya se conoce del dataset del mapa (cuenca, profundidad, tramos filtrantes, surgencia; ver `docs/ubicacion-correcciones.md`) es un punto de partida, no una decisión.
+- **Niveles del Atuel.** Incorporar y publicar los niveles disponibles correspondientes al Atuel. Antes de implementar: revisar **fuente, formato, periodicidad y permisos**. No figura hoy en la documentación del proyecto; se relaciona con V3 (Niveles estáticos).
+- **Departamento vs Cuenca (bug / mejora).** Revisar qué pasa cuando se elige Departamento y Cuenca a la vez (hay filtros de ambos en el mapa y en Buscar reemplazo). Evitar combinaciones incompatibles: idealmente se filtran dinámicamente las opciones válidas o se muestra un mensaje claro, y **nunca se devuelven resultados incoherentes en silencio**. *Falta reproducir con un caso concreto antes de decidir la solución.*
+- **Estado «Coincidente» en Monitoreo / Relevamiento.** Revisar los casos de monitoreo y relevamiento y cuándo deben considerarse «coincidentes». **No cambiar la semántica actual** (`C` = 2 o más fuentes del padrón coinciden; no es una validación humana, ver `docs/ubicacion-correcciones.md`) sin auditar antes los datasets y las reglas existentes. *Requiere revisión funcional.*
+
+Estado: ideas documentadas, sin diseño técnico ni implementación.
+
+## Relación entre estas ideas y las fases ya registradas
+
+No se duplica nada: ITF colaborativos, fotos colaborativas / moderadas, observaciones del pozo y QR + NFC público quedan como están. Las ideas nuevas se enlazan así: la visibilidad pública de la ubicación y el QR + NFC comparten la regla fail-closed; el guardado parcial de fotos y la miniatura en Buscar reemplazo dependen de la fase de fotos; la ubicación validada reemplazada se apoya en `UbicacionCorrecciones` y en las sugerencias / decisiones auditables de fuentes ya implementadas.
