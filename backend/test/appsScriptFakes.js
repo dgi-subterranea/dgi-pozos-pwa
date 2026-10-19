@@ -133,6 +133,7 @@ function installAppsScriptFakes() {
   global.ubicacionCorreccionService_validar = jest.fn();
   global.ubicacionCorreccionService_rechazar = jest.fn();
   global.ubicacionCorreccionService_revertir = jest.fn();
+  global.ubicacionFuenteDecisionesService_getDelta = jest.fn(() => ({ version: 0, periodo: '2026-09', parcial: 0, decisiones: [] }));
   global.ubicacionFuenteDecisionesService_getPorPozo = jest.fn(() => ({ ok: true, data: { wellId: '04-0263', version: 0, fuentes: [] } }));
   global.ubicacionFuenteDecisionesService_decidir = jest.fn();
   global.ubicacionFuenteSugerenciasService_sugerir = jest.fn();

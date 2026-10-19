@@ -141,7 +141,7 @@ Convenciones del proyecto: `POST {action, sessionToken, …}`, identidad **solo 
 |---|---|---|---|
 | `getDecisionesFuentesPozo` | `ubicacion` | `wellId` | `{wellId, version, fuentes[], historial[], obsoletas[], efectoRegistral, anomalias[]}` |
 | `decidirFuenteUbicacion` | `ubicacion` + `ubicacion_validar` | `wellId, fuenteTipo, x, y, decision, motivo?, clientRequestId, versionVista` | `{decision, fuentes[], version, efectoRegistral, supersedidas[], duplicada}` |
-| `getDecisionesFuentesDelta` | cualquier usuario **activo** (como `getUbicacionesValidadas`) | — | `{decisiones: [{wellId, lat, lon, estado, fuente, vts}], total}` |
+| `getDecisionesFuentesDelta` | cualquier usuario **activo** (como `getUbicacionesValidadas`) | — | `{version, periodo, parcial, decisiones: [{wellId, estado, lat, lon} \| {wellId, estado:'N'}]}` — **contrato final en «E3-1»** (más abajo; reemplaza al borrador `{…, fuente, vts}`) |
 
 Detalle:
 
@@ -281,7 +281,7 @@ Backend usado tal cual esta desplegado en v41: `getDecisionesFuentesPozo` (lectu
 - **Alcance:** los mapas globales, Cerca Mío, selección y reemplazos **no cambian**: el punto operativo que muestra la ficha sigue siendo el de hoy (la validada en campo gana; si no, el automático). Si las decisiones cambiarían el punto registral, la ficha lo avisa («Las decisiones tomadas todavía no cambian el punto que usan los mapas.»).
 
 ### Qué falta para que Aceptada / descartes impacten mapas, Cerca Mío y selección (Etapa 3)
-1. Endpoint delta `getDecisionesFuentesDelta` (solo pozos cuyo punto registral cambia por decisiones; una fila por pozo con lat/lon o «sin ubicación operativa»), con caché e invalidación como `getUbicacionesValidadas`.
+1. ~~Endpoint delta `getDecisionesFuentesDelta`~~ **HECHO en E3-1** (backend; ver la sección «E3-1» al final).
 2. Un único punto de integración en `mapaDataset_obtener` (`js/mapaDataset.js`): primero las decisiones registrales, después el overlay de la validada en campo (V gana siempre).
 3. Estado `R` = «Aceptada» en dataset, chips, filtros, estilos, leyenda y exportación.
 4. «Sin ubicación operativa» (todas descartadas): el pozo sale del mapa, de Cerca Mío y de la selección (REMOVE), con el texto ya definido.
@@ -446,3 +446,97 @@ Nuevos: `js/ubicacionSugerenciasLogic.js`, `js/ubicacionSugerencias.js` (cola e 
 
 ### Límite conocido de la cola
 Aprobar no muestra el visor comparativo dentro de la cola (el visor vive en la ficha): se ofrece el enlace a Google Maps de la coordenada y «Ver ficha del pozo». «Ver ficha del pozo» reutiliza `buscarPozo`, que registra una consulta en el historial como cualquier otra búsqueda.
+
+---
+
+## Etapa 3 · E3-1 — backend de `getDecisionesFuentesDelta` (implementado; sin commit, sin `gas:push`, sin frontend)
+
+Solo backend. **El frontend no lo consume todavía** (ni `js/api.js` ni `mapaDataset.js` lo nombran; un test lo exige). Nada se persiste: el resultado se **deriva** de la hoja `UbicacionFuenteDecisiones` y del padrón actual cada vez que hace falta (no hay hoja nueva ni setup).
+
+### Decisiones funcionales cerradas para la Etapa 3
+1. Si tras los descartes las fuentes restantes siguen en discrepancia → **sin ubicación operativa** (`N`).
+2. Un pozo que aparece por una decisión y no estaba en `pozos.json` entra con atributos «Sin dato» (cuenca, profundidad…); no se bloquea la ubicación por eso.
+3. «Corregir ubicación» conserva `irrLat/irrLon` como **snapshot histórico** (no se reescriben si cambia la resolución registral); más adelante la UI podrá mostrar además la resolución vigente.
+4. Un único aviso de degradación para el usuario («Algunas actualizaciones de ubicación no pudieron cargarse. Se muestra la información disponible.»); las causas se distinguen solo en los logs.
+5. Pozos sin punto: etiqueta «Sin ubicación operativa»; «Ver en mapa» debe mostrar un mensaje y no fallar en silencio.
+6. El estado `R` se distingue de `V` por color **y** símbolo/forma (la elección estética se hace en la fase de UI).
+7. El índice offline **no** se activa por una cantidad arbitraria de pozos: primero medir producción; se considera si el cálculo en frío supera de forma repetida ~2 s o se acerca a los límites de Apps Script / caché.
+8. En Buscar reemplazo, «padrón de Provincia» pasará a decir «Irrigación».
+
+### Orden de composición (la parte del frontend es futura)
+```
+BASE PADRÓN (pozos.json)
+ → DECISIONES REGISTRALES  (este endpoint)  → D | C | R | N
+ → VALIDADA EN CAMPO (V)   (getUbicacionesValidadas, ya existente; se compone DESPUÉS en el cliente)
+ → punto final o ninguno
+```
+**La validada en campo NO forma parte del delta registral**: el servicio del delta no lee las correcciones de campo (un test lo exige leyendo el código). NE queda totalmente fuera (capa y coordenadas propias). La decisión de quitar un punto («sin punto») debe resolverse recién **al final** de la composición, para que un pozo con V + todas las registrales descartadas conserve sus atributos.
+
+### Contrato
+`POST {action:'getDecisionesFuentesDelta', sessionToken}` → `{status:'ok', data:{version, periodo, parcial, decisiones}}`.
+- **Permiso:** cualquier usuario **activo** (sesión válida + usuario habilitado); **no** exige `ubicacion` ni `ubicacion_validar`. Es el mismo patrón de `getMapaPozos` y `getUbicacionesValidadas`: el dataset base que ya recibe todo usuario activo lleva el mismo tipo de dato (`wellId`, `lat`, `lon`, `estado`) y este endpoint solo cambia el punto de esos pozos; todo lo individual (fuentes, motivos, autores, historial) sigue exigiendo `ubicacion`. Sin sesión → `UNAUTHORIZED`; inactivo → `USER_DISABLED`. No recibe ningún campo (ignora cualquier extra) y una lectura correcta no se audita.
+- **Entradas** (ordenadas por `wellId`):
+  - con punto: `{wellId, estado:'R'|'C'|'D', lat, lon}` — `R` fuente aceptada, `C` coincidente, `D` disponible;
+  - sin punto: `{wellId, estado:'N'}`. **`N` significa «sin punto operativo registral» y SOLO eso**, por una resolución **válida** del dominio: todas las fuentes actuales descartadas, o las que quedan siguen en discrepancia, o el dominio determina `SIN_COORDENADAS` / no operativo.
+  - **Un dato corrupto NUNCA se convierte en `N`:** una coordenada inválida, `NaN`, fuera de Mendoza o imposible de normalizar (de la fuente del padrón o del resultado) es un **fallo de resolución**: el pozo **no se emite** (ni punto ni `N`), suma a `parcial` y el detalle técnico va a `Logger`. Así un dato corrupto no puede retirar un punto válido del mapa: el cliente conserva base + V para ese pozo.
+  - Nunca: email, nombre, motivo, historial, `decisionId`, `clientRequestId`, `x/y`, diagnósticos.
+- **Qué pozos entran:** solo los que tienen decisiones **y** cuyo punto operativo registral difiere del que da el padrón **sin** decisiones (`resolucion.original`, lo mismo que trae `pozos.json`). Se compara el resultado operativo (estado + coordenadas): un pozo que queda igual **no** entra; uno cuyo original ya era «sin punto» (discrepancia, sin coordenadas) y sigue sin punto, tampoco. Un pozo con historial **inconsistente** tiene decisiones que no se pueden interpretar: **no entra** (no se aplica ninguna, ni como punto ni como `N`) y **suma a `parcial`** (no se oculta; el base se conserva). Una decisión sobre una fuente **obsoleta** (el padrón cambió la coordenada) se ignora correctamente y **no** suma.
+- **Resolución:** exactamente el dominio de `getDecisionesFuentesPozo` (`ufd_derivar` + `ufd_resolverRegistral`; `UbicacionFuenteDecisionesLogic.js` no se tocó y sigue siendo copia exacta del frontend). Aceptada gana al automático; descartada no participa; restaurar y quitar aceptación vuelven a neutral. Una coordenada fuera de Mendoza **jamás** sale como punto **ni como `N`**: el dominio la «absorbe» como sin coordenadas con una anomalía (`COORDENADA_FUERA_DE_MENDOZA` / `ACEPTADA_FUERA_DE_MENDOZA`), y el delta la trata como fallo (ver `N` y `parcial`).
+- **`version`:** la secuencia máxima de **toda** la hoja entre las filas con secuencia válida (entero seguro ≥ 1); **0** si no hay filas válidas. Cambia con cualquier decisión, aunque no cambie ningún punto. Sirve para detectar cambios; con el delta completo cacheado puede ir hasta 120 s por detrás tras una decisión **sin** efecto operativo (no afecta a `decisiones`).
+- **`periodo`:** el período del padrón con que se calculó, de `registryService_getMetadata().metadata.periodo` (`metadata.fuente.periodo` del indexador; el mismo origen que `padronPeriodo` al escribir). **Es obligatorio:** si la metadata falta, está corrupta o no trae un período textual no vacío, **el endpoint FALLA** (`SERVICE_UNAVAILABLE` genérico; el detalle a `Logger`) en lugar de devolver `periodo:''`. Justificación: en una instalación sana la metadata siempre existe (la escribe el mismo indexador que genera la ficha), así que su ausencia es un fallo de instalación; y un delta cuyo padrón no se puede identificar no es verificable, y mezclar decisiones calculadas sobre otro padrón produciría coordenadas falsas. Tampoco se sirve un delta cacheado sin poder verificar el período. (Escribir una decisión **no** depende de esto: sigue guardando `padronPeriodo` vacío si no hay metadata, como antes.)
+- **Contra el desfase (E3-3):** `getMapaPozos` ahora expone también `metadata.periodo` (período del padrón con que se generó `pozos.json`, `null` si el archivo no lo trae). El cliente debe comparar: **si `delta.periodo !== mapaBase.periodo` → ignorar TODO el delta registral, conservar base + V, mostrar el aviso de degradación y jamás mezclar decisiones calculadas sobre otro padrón.**
+- **`parcial` = cantidad de `wellId` con decisiones que debían evaluarse pero cuyo resultado NO pudo calcularse de forma segura en esta ejecución.** Incluye:
+  - *transitorios* (se reintentan en la llamada siguiente): presupuesto agotado (15 s desde el inicio, `UFD_SVC_DELTA_PRESUPUESTO_MS`), archivo del padrón ilegible o con error de lectura, error inesperado del cálculo de ese pozo;
+  - *deterministas* (se repetirían igual hasta que cambie una fila o el padrón): fuente del padrón con coordenada inválida/imposible de normalizar, coordenada fuera de Mendoza, e **historial de decisiones inconsistente** (decisiones que no se pudieron interpretar).
+
+  No incluye lo que se ignora **correctamente** por dominio: una decisión **obsoleta** (la fuente cambió) y un `wellId` válido que **ya no existe** en el padrón. Las filas de la hoja sin `wellId` válido no pertenecen a ningún pozo: no suman (se registran en el log). **0 = completo.**
+- **`parcial > 0` NO invalida el resto del delta.** Con `{parcial: 3, decisiones: [97 entradas]}` las 97 son válidas y se aplican; los 3 pozos no resueltos **simplemente no aparecen** en `decisiones` (no se inventan ni se convierten en `N`). **Contrato para E3-3:** aplicar cada entrada válida recibida; para los pozos ausentes mantener base + V; mostrar **un único** aviso discreto de degradación si `parcial > 0`. **Se ignora TODO el delta únicamente ante un fallo estructural/global:** respuesta o contrato inválido (incluida una entrada mal formada: se descarta esa entrada), `periodo` incompatible con el dataset base, endpoint fallido, etc.
+
+### Lectura eficiente (lote)
+1. La hoja se lee **una** vez; se agrupan los eventos por `wellId` (las filas sin `wellId` válido se ignoran y se registran).
+2. Se consulta el cache por pozo (`getAll`, de a 100 claves).
+3. Los que faltan se piden **en lote**: `registryService_getWellLocations` → `registryRepository_getWellRecordsBatch` agrupa los pozos por **archivo** del padrón (17 departamentos + 2×10 particiones = como mucho 37 archivos) y abre cada uno **una sola vez**; los que ya están en el cache `registry_<wellId>` no abren nada. `getWellRecord` / `getWellLocation` no cambian y el lote no escribe en ese cache. Un pozo que no figura en su archivo es una respuesta (`null`); un archivo ilegible o sin tiempo deja a sus pozos en `noResueltos` (→ `parcial`).
+4. El dominio resuelve cada pozo desde esa lectura.
+
+### Caché
+| Qué | Clave | TTL | Detalle |
+|---|---|---|---|
+| Resultado por pozo | `ufd_res_v1_<wellId>_<filas>_<secuenciaMax>_<periodo>@<generadoEl>` | 6 h (máximo de CacheService) | Guarda la entrada, «sin efecto» o un **fallo determinista** (`{"e":"!","m":MOTIVO}`: se repetiría igual, así no se relee el padrón en cada llamada). **Los fallos transitorios NO se cachean.** La clave cambia sola con cada decisión del pozo (más filas / otra secuencia) y con cada corrida del indexador (`periodo` **y** `generadoEl`: un reindexado del mismo período también cambia las coordenadas). Un valor ilegible o con coordenadas inválidas se recalcula |
+| Delta completo | `ufd_delta_v1` (+ marcador `ufd_delta_v1_inval`) | 120 s | Guarda `{p: respuesta, g: versión del padrón}`; se compara `g` en cada lectura. Mismo diseño que `ubicaciones_validadas_v1`: marcador de invalidación con margen de 2 s contra la carrera lector/escritor. Solo se guarda si **no hubo fallos transitorios** (puede tener `parcial > 0` por fallos deterministas). **Tope 90.000 caracteres:** si lo supera **no se trunca ni se cachea completo** (queda el cache por pozo, que hace que la llamada siguiente no lea el padrón); queda un mensaje en el log |
+
+Cualquier falla de caché (lectura, escritura, borrado) se registra y el cálculo sigue sin él: nunca rompe la operación.
+
+### Invalidación
+`ubicacionFuenteDecisionesService_invalidarDelta()` (marca + borrado de `ufd_delta_v1`; nunca lanza). Se llama **después** de que la fila quedó escrita, en `ubicacionFuenteDecisionesService_aplicarDecision` (núcleo compartido por la decisión directa **y** por aprobar una sugerencia), y **solo si cambió el punto operativo registral del pozo** (se compara el resultado antes/después: estado + coordenadas). Aceptar, descartar, restaurar y quitar aceptación invalidan cuando cambian el punto; una decisión sin efecto (p. ej. descartar la fuente lejana de un pozo que sigue coincidente) invalida la vista del pozo pero **no** el delta. **No** invalidan: crear / rechazar / cancelar una sugerencia (no escriben decisiones), los rechazos de una decisión (`STALE_STATE`, transición inválida…), los reintentos idempotentes ni la aprobación que queda `OBSOLETA`. Si no se pudo comparar antes/después, se invalida por las dudas. La validada en campo (crear / revertir) invalida solo `ubicaciones_validadas_v1`; el delta registral no depende de ella.
+
+### Fail-safe
+| Situación | Resultado |
+|---|---|
+| Hoja inexistente / esquema distinto | El servicio lanza; el Api responde `{status:'error', code:'SERVICE_UNAVAILABLE', message:'servicio no disponible'}` (sin detalle interno; el detalle va a `Logger` y el fallo se audita en Historial) |
+| Fila corrupta / `wellId` inválido | Se ignora y se registra; el resto sigue |
+| Sin período confiable en la metadata del padrón | **El endpoint falla** (`SERVICE_UNAVAILABLE` genérico); no se devuelve `periodo:''` |
+| Historial inconsistente de un pozo | Sus decisiones no se aplican; no se emite ese pozo; **suma a `parcial`**; los demás pozos siguen |
+| Fuente obsoleta / pozo que ya no está en el padrón | Se ignora correctamente (no es `parcial`) |
+| Fuente del padrón corrupta / coordenada fuera de Mendoza o imposible de normalizar | No se emite ese pozo (ni punto ni `N`); suma a `parcial`; los demás siguen |
+| Archivo del padrón ilegible, sin tiempo o cálculo que falla | Ese pozo no se emite; suma a `parcial`; no se cachea el fallo ni el delta completo |
+| Falla de caché | Se calcula sin caché |
+
+**Regla para el cliente (E3-3):** ante `parcial > 0` aplicar igual las entradas recibidas (base + V para los ausentes) con un aviso único; ante un fallo global (endpoint fallido, respuesta/contrato inválido, `periodo` distinto del del dataset base) ignorar **todo** el delta registral, conservar base + V y avisar.
+
+### Una decisión nueva y el reindexado
+Tras un reindexado las claves por pozo cambian solas (`periodo`/`generadoEl`) y el delta se recalcula contra el padrón nuevo: una decisión cuya fuente cambió de coordenada queda obsoleta y no se aplica (el pozo sale del delta). `pozos.json` y el padrón se regeneran en la misma corrida del indexador; si se publicaran en momentos distintos, habría una ventana corta en que el delta se calcula contra un padrón distinto del base: por eso el delta informa su `periodo`, `getMapaPozos` expone el del base y el cliente ignora todo el delta si no coinciden (ver `periodo`). Limitación: `periodo` es mensual; un reindexado del **mismo** período no cambia `periodo` (sí `generadoEl`, que usa la clave de cache del servidor pero el contrato no expone).
+
+### Mediciones (datos locales reales; sin inventar tiempos de producción)
+Padrón local (`scripts/out/registro`, generado el 14 sep 2026): 24.180 pozos, 16.830 con al menos una fuente, 37 archivos. Medido en Node con los módulos reales, mitad aceptadas y mitad descartadas sobre la primera fuente de cada pozo; incluye lectura de disco + `JSON.parse` + dominio, **no** la latencia de Drive/Sheets de Apps Script.
+
+| Pozos con decisiones | Frío (lote) | Archivos abiertos | Referencia: una lectura por pozo | Entradas | JSON de la respuesta | Tibio / caliente |
+|---|---|---|---|---|---|---|
+| 10 (repartidos) | 205 ms | 10 (25,4 MB) | 204 ms · 10 lecturas | 10 | 589 B | 0 ms / 0 ms |
+| 100 (repartidos) | 379 ms | 23 (47,8 MB) | 1.938 ms · 100 lecturas (262 MB) | 100 | 5.462 B | 0 ms / 0,1 ms |
+| 1.000 (repartidos) | 421 ms | 25 (48,3 MB) | 18.667 ms · 1.000 lecturas (2,6 GB) | 999 | 54.030 B | 2 ms / 0,4 ms |
+| 100 en un departamento grande (07) | 53 ms | 4 (7,1 MB) | 1.305 ms · 100 lecturas | 100 | 5.049 B | 0 ms |
+
+- El lote evita N lecturas del mismo archivo: con 1.000 pozos lee 25 archivos en vez de 1.000. La hoja no cambió (el cálculo no escribe nada) y no existe ninguna hoja de resultados derivados: **aplicar el delta no requiere persistir nada en Sheets**.
+- Tamaño por entrada: ~67 B con punto y ~33 B sin punto (≈ 54 B promedio en la mezcla medida). El tope de 90.000 caracteres del delta completo se alcanza alrededor de **1.300 entradas con punto**; por encima de eso se usa solo el cache por pozo.
+- Aplicar el overlay en el cliente es barato: con el dataset real (13.804 puntos) `aplicarOverlay` tarda ~0,3 ms con 100 deltas y ~1 ms con 1.000 (Node, este equipo; el celular será más lento pero del mismo orden).
+- **Producción:** cada cálculo deja una línea de log `delta calculado en N ms: …` (pozos con decisiones, por cache, a calcular, archivos del padrón, entradas, parcial). Con eso se decide si hace falta el índice offline según el criterio 7 (sin umbral arbitrario). Referencia **documentada** (no medida hoy): abrir un archivo del padrón en frío en Drive tarda ~0,6–1,2 s; con presupuesto de 15 s una primera llamada en frío que toque muchos archivos podría quedar `parcial` y convergería con las llamadas siguientes (cada pozo resuelto queda cacheado).

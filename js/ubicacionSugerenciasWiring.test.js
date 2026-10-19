@@ -143,8 +143,8 @@ describe('alcance de esta etapa', () => {
       expect(leer('js', f)).not.toMatch(/ufdui_|usug_|SugerenciasFuente|sugerirDecision|resolverSugerencia|cancelarSugerencia/);
     }
   });
-  test('el backend no cambio en esta etapa (sin delta ni estado R) y la cola no usa decidirFuenteUbicacion', () => {
-    expect(leer('backend', 'src', 'Api.js')).not.toMatch(/getDecisionesFuentesDelta/);
+  test('el frontend todavia no consume el delta de decisiones (E3-1 es solo backend) y la cola no usa decidirFuenteUbicacion', () => {
+    expect(leer('js', 'api.js')).not.toMatch(/getDecisionesFuentesDelta/);
     expect(leer('js', 'ubicacionSugerencias.js')).not.toMatch(/decidirFuenteUbicacion|apiDecidirFuente/);
   });
   test('no hay nada de subida / validacion de ITF (es un roadmap documentado, sin codigo)', () => {

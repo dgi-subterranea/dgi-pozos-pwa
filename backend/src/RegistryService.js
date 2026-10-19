@@ -48,19 +48,38 @@ function registryService_getWellRecord(wellId) {
 // geografico, plano, sin el resto de la ficha registral. Un usuario con
 // datos=NO / ubicacion=SI nunca recibe titular/domicilio/tecnicas por
 // esta via.
+function registryService_locationDeRecord(record) {
+  var ubicacion = record.ubicacion || {};
+  var location = {
+    wellId: record.wellId,
+    coordenadas: ubicacion.coordenadas !== undefined ? ubicacion.coordenadas : null,
+    coordenadasProvincia: ubicacion.coordenadasProvincia !== undefined ? ubicacion.coordenadasProvincia : [],
+    ubicacionResuelta: ubicacion.ubicacionResuelta !== undefined ? ubicacion.ubicacionResuelta : null
+  };
+  return registryService_cleanRecord(location);
+}
+
 function registryService_getWellLocation(wellId) {
   var result = registryRepository_getWellRecord(wellId);
   if (!result.found) {
     return { found: false };
   }
-  var ubicacion = result.record.ubicacion || {};
-  var location = {
-    wellId: result.record.wellId,
-    coordenadas: ubicacion.coordenadas !== undefined ? ubicacion.coordenadas : null,
-    coordenadasProvincia: ubicacion.coordenadasProvincia !== undefined ? ubicacion.coordenadasProvincia : [],
-    ubicacionResuelta: ubicacion.ubicacionResuelta !== undefined ? ubicacion.ubicacionResuelta : null
-  };
-  return { found: true, location: registryService_cleanRecord(location) };
+  return { found: true, location: registryService_locationDeRecord(result.record) };
+}
+
+// La misma vista geografica de getWellLocation para VARIOS pozos con una lectura en lote (cada archivo de departamento se abre una sola vez: ver
+// registryRepository_getWellRecordsBatch). Uso interno del backend (el delta de decisiones registrales); no hay endpoint que lo exponga.
+//   opciones  {deadlineMs} (ver el repositorio)
+// salida: {locations: {wellId: location | null}, noResueltos: [wellId], archivosAbiertos, desdeCache, errores}
+//   locations[wellId] === null  -> el pozo no esta en el padron.   noResueltos -> no se pudo leer: no hay respuesta (distinto de "no esta").
+function registryService_getWellLocations(wellIds, opciones) {
+  var lote = registryRepository_getWellRecordsBatch(wellIds, opciones);
+  var locations = {};
+  Object.keys(lote.registros).forEach(function (id) {
+    var record = lote.registros[id];
+    locations[id] = record && typeof record === 'object' ? registryService_locationDeRecord(record) : null;
+  });
+  return { locations: locations, noResueltos: lote.noResueltos, archivosAbiertos: lote.archivosAbiertos, desdeCache: lote.desdeCache, errores: lote.errores };
 }
 
 // Popup liviano del Mapa de Pozos (getWellSummary): reutiliza el MISMO
@@ -136,6 +155,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     registryService_getWellRecord,
     registryService_getWellLocation,
+    registryService_getWellLocations,
     registryService_getWellSummary,
     registryService_cleanRecord,
     registryService_sanitizarUbicacionParaDatos,

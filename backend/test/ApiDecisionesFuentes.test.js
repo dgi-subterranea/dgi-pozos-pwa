@@ -24,7 +24,7 @@ describe('enrutado por doPost', () => {
   });
 
   test('una accion parecida pero inexistente sigue siendo "accion desconocida"', () => {
-    expect(post({ action: 'getDecisionesFuentesDelta', sessionToken: 'tok-val@x.com' })).toMatchObject({ status: 'error', code: 'SERVICE_UNAVAILABLE', message: expect.stringMatching(/accion desconocida/) });
+    expect(post({ action: 'getDecisionesFuentesDeltas', sessionToken: 'tok-val@x.com' })).toMatchObject({ status: 'error', code: 'SERVICE_UNAVAILABLE', message: expect.stringMatching(/accion desconocida/) });
     expect(post({ action: 'decidirFuente', sessionToken: 'tok-val@x.com' }).message).toMatch(/accion desconocida/);
   });
 

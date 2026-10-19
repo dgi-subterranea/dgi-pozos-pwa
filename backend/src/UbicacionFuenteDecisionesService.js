@@ -98,16 +98,29 @@ function ubicacionFuenteDecisionesService_padron(wellId) {
   if (!res || !res.found) {
     return ubicacionFuenteDecisionesService_error('WELL_NOT_FOUND');
   }
-  var periodo = '';
+  return { ok: true, fuentes: ufd_fuentesDePadron(wellId, res.location).fuentes, periodo: ubicacionFuenteDecisionesService_periodoActual() };
+}
+
+// Padron ACTUAL segun la metadata de la ficha registral (el mismo origen que usa la hoja al escribir `padronPeriodo`): {periodo, generadoEl}. '' en lo que no se pueda saber
+// (nunca lanza). `periodo` es lo que se informa; `generadoEl` (instante de la ultima corrida del indexador) solo se usa para versionar caches: un reindexado del MISMO periodo
+// tambien cambia las coordenadas y no debe servir resultados calculados con el padron anterior.
+function ubicacionFuenteDecisionesService_padronActual() {
   try {
     var meta = registryService_getMetadata();
-    if (meta && meta.found && meta.metadata && meta.metadata.periodo) {
-      periodo = String(meta.metadata.periodo);
+    if (meta && meta.found && meta.metadata) {
+      return {
+        periodo: meta.metadata.periodo ? String(meta.metadata.periodo) : '',
+        generadoEl: meta.metadata.generadoEl ? String(meta.metadata.generadoEl) : ''
+      };
     }
   } catch (err) {
-    periodo = '';
+    ubicacionFuenteDecisionesService_log('no se pudo leer la metadata del padron: ' + String(err));
   }
-  return { ok: true, fuentes: ufd_fuentesDePadron(wellId, res.location).fuentes, periodo: periodo };
+  return { periodo: '', generadoEl: '' };
+}
+
+function ubicacionFuenteDecisionesService_periodoActual() {
+  return ubicacionFuenteDecisionesService_padronActual().periodo;
 }
 
 // {estado, resolucion, filasDelPozo}. `filas` = TODAS las filas de la hoja (el filtro por pozo se hace aca).
@@ -249,6 +262,407 @@ function ubicacionFuenteDecisionesService_getPorPozo(wellId) {
   return { ok: true, data: vista };
 }
 
+// --- Lectura: getDecisionesFuentesDelta (efecto REGISTRAL de las decisiones sobre el padron actual) ---
+//
+// Para cada pozo con decisiones calcula el punto operativo REGISTRAL (con el MISMO dominio que getDecisionesFuentesPozo: ufd_derivar + ufd_resolverRegistral, sin una
+// segunda logica) y lo compara con el que daria el padron sin decisiones (`resolucion.original`, que es lo que trae pozos.json). Solo sale una entrada cuando el
+// resultado OPERATIVO difiere:  {wellId, estado:'R'|'C'|'D', lat, lon}  o  {wellId, estado:'N'}.
+//   R = fuente aceptada, C = coincidente, D = disponible. NO incluye la validada en campo (V): el cliente la compone DESPUES, encima de este resultado.
+//   N = "SIN PUNTO operativo registral" y SOLO eso: la resolucion VALIDA del dominio determino que no hay punto (todas las fuentes descartadas, o las que quedan siguen en
+//       discrepancia, o el dominio dice SIN_COORDENADAS). Un dato imposible de interpretar NUNCA se convierte en N: eso es un FALLO de resolucion (ver `parcial`).
+// Respuesta: {version, periodo, parcial, decisiones}.
+//   version  secuencia maxima de TODA la hoja entre las filas con secuencia valida (entero seguro >= 1); 0 si no hay filas validas. Cambia con cualquier escritura.
+//   periodo  periodo del padron con que se calculo (metadata del padron). OBLIGATORIO: si no se puede determinar de forma confiable el endpoint FALLA (SERVICE_UNAVAILABLE)
+//            en vez de devolver un delta no verificable. Un cliente que reciba un periodo distinto del de su dataset base debe IGNORAR todo el delta (otro padron).
+//   parcial  cantidad de wellIds con decisiones que debian evaluarse y cuyo resultado NO se pudo calcular de forma segura: presupuesto agotado, archivo del padron ilegible,
+//            fuente del padron con coordenada invalida, coordenada fuera de Mendoza o imposible de normalizar, historial de decisiones INCONSISTENTE, o un error de calculo.
+//            No cuenta lo que se ignora correctamente por dominio: decision obsoleta (la fuente cambio) y wellId que ya no esta en el padron. Las filas sin wellId valido no
+//            pertenecen a ningun pozo: no suman (se registran en el log).
+//   parcial > 0 NO invalida el resto: las entradas de `decisiones` son validas y se aplican; los pozos no resueltos simplemente no aparecen (el cliente conserva base + V
+//            para ellos y avisa). Solo un fallo GLOBAL (respuesta o contrato invalido, periodo incompatible, endpoint fallido) invalida TODO el delta.
+// Un pozo no resuelto NO se inventa ni se convierte en N: no sale en `decisiones`.
+// Costo: la hoja se lee UNA vez; el padron de los pozos que faltan en cache se lee en LOTE (cada archivo de departamento una sola vez); el resultado de cada pozo se
+// cachea con una clave que incluye su version (una decision nueva produce otra clave sin invalidar nada). Se cachean tambien los fallos DETERMINISTAS (dependen solo de
+// las filas y del padron: se repetirian igual), nunca los TRANSITORIOS (tiempo, lectura de archivo, error inesperado), que se reintentan en la llamada siguiente.
+var UFD_SVC_DELTA_CACHE_KEY = 'ufd_delta_v1';
+var UFD_SVC_DELTA_INVAL_KEY = 'ufd_delta_v1_inval';
+var UFD_SVC_DELTA_CACHE_SEGUNDOS = 120;
+var UFD_SVC_DELTA_INVAL_SEGUNDOS = 180;
+var UFD_SVC_DELTA_CACHE_MAX_CARACTERES = 90000;             // CacheService admite 100 KB por valor: pasado esto el delta completo no se cachea (nunca se trunca)
+var UFD_SVC_DELTA_POZO_PREFIJO = 'ufd_res_v1_';
+var UFD_SVC_DELTA_POZO_SEGUNDOS = 21600;                    // 6 h, el maximo de CacheService: la clave cambia sola con cada decision y con cada periodo
+var UFD_SVC_DELTA_PRESUPUESTO_MS = 15000;                   // conservador: el cliente espera esta respuesta y Apps Script corta mucho mas arriba
+var UFD_SVC_DELTA_LOTE_CACHE = 100;                         // getAll / putAll admiten 100 claves por llamada
+var UFD_SVC_DELTA_CODIGOS = { ACEPTADA: 'R', COINCIDENTE: 'C', DISPONIBLE: 'D' };
+var UFD_SVC_DELTA_ANOMALIAS_FATALES = ['COORDENADA_FUERA_DE_MENDOZA', 'ACEPTADA_FUERA_DE_MENDOZA'];       // el dominio las "absorbe" como sin punto: aca son fallo de resolucion
+
+function ubicacionFuenteDecisionesService_coordenadaOperativa(lat, lon) {
+  return typeof lat === 'number' && isFinite(lat) && typeof lon === 'number' && isFinite(lon) &&
+    lat >= UFD_MENDOZA_BBOX.latMin && lat <= UFD_MENDOZA_BBOX.latMax && lon >= UFD_MENDOZA_BBOX.lonMin && lon <= UFD_MENDOZA_BBOX.lonMax;
+}
+
+// Resultado registral (la salida de ufd_resolverRegistral o su `original`) -> UNA de tres cosas:
+//   {estado:'R'|'C'|'D', lat, lon}  punto operativo valido (coordenada numerica finita DENTRO de Mendoza)
+//   {estado:'N'}                    el dominio determino, de forma valida, que NO hay punto (SIN_COORDENADAS / DISCREPANCIA no operativos)
+//   {invalido: MOTIVO}              no se puede interpretar (ausente, estado desconocido, incoherente, coordenada invalida): NO es "sin punto", es un fallo
+function ubicacionFuenteDecisionesService_puntoOperativoRegistral(r) {
+  if (!r || typeof r !== 'object') {
+    return { invalido: 'RESOLUCION_AUSENTE' };
+  }
+  if (Object.prototype.hasOwnProperty.call(UFD_SVC_DELTA_CODIGOS, r.estado)) {
+    if (r.operativo !== true) {
+      return { invalido: 'ESTADO_INCOHERENTE' };
+    }
+    if (!ubicacionFuenteDecisionesService_coordenadaOperativa(r.lat, r.lon)) {
+      return { invalido: 'COORDENADA_INVALIDA' };
+    }
+    return { estado: UFD_SVC_DELTA_CODIGOS[r.estado], lat: r.lat, lon: r.lon };
+  }
+  if (r.estado === UFD_RESULTADO_ESTADOS.SIN_COORDENADAS || r.estado === UFD_RESULTADO_ESTADOS.DISCREPANCIA) {
+    return r.operativo === true ? { invalido: 'ESTADO_INCOHERENTE' } : { estado: 'N' };
+  }
+  return { invalido: 'ESTADO_DESCONOCIDO' };
+}
+
+// Dos clasificaciones validas y iguales. Si cualquiera es invalida NO se las considera iguales (ante la duda, se invalida el cache).
+function ubicacionFuenteDecisionesService_mismoPunto(a, b) {
+  if (!a || !b || a.invalido || b.invalido) {
+    return false;
+  }
+  return a.estado === b.estado && (a.estado === 'N' || (a.lat === b.lat && a.lon === b.lon));
+}
+
+function ubicacionFuenteDecisionesService_hayAnomaliaFatal(res) {
+  var lista = [].concat(Array.isArray(res.anomalias) ? res.anomalias : [], res.original && Array.isArray(res.original.anomalias) ? res.original.anomalias : []);
+  return lista.some(function (a) { return a && UFD_SVC_DELTA_ANOMALIAS_FATALES.indexOf(a.codigo) !== -1; });
+}
+
+// resolucion de un pozo -> {ok:true, entrada: {wellId, estado[, lat, lon]} | null}  (null = el resultado efectivo es el mismo que el original: no entra)
+//                        | {ok:false, motivo}  (la resolucion no se pudo interpretar: el pozo NO se emite, ni como punto ni como N)
+function ubicacionFuenteDecisionesService_entradaDelta(wellId, resolucion) {
+  if (!resolucion || typeof resolucion !== 'object') {
+    return { ok: false, motivo: 'RESOLUCION_AUSENTE' };
+  }
+  if (ubicacionFuenteDecisionesService_hayAnomaliaFatal(resolucion)) {
+    return { ok: false, motivo: 'COORDENADA_FUERA_DE_MENDOZA' };          // la coordenada se resolvio pero cae fuera de Mendoza: dato invalido, no "sin punto"
+  }
+  var final = ubicacionFuenteDecisionesService_puntoOperativoRegistral(resolucion);
+  if (final.invalido) {
+    return { ok: false, motivo: final.invalido };
+  }
+  var original = ubicacionFuenteDecisionesService_puntoOperativoRegistral(resolucion.original);
+  if (original.invalido) {
+    return { ok: false, motivo: original.invalido };
+  }
+  if (ubicacionFuenteDecisionesService_mismoPunto(final, original)) {
+    return { ok: true, entrada: null };
+  }
+  return { ok: true, entrada: final.estado === 'N' ? { wellId: wellId, estado: 'N' } : { wellId: wellId, estado: final.estado, lat: final.lat, lon: final.lon } };
+}
+
+// Evalua UN pozo con decisiones. Devuelve {ok:true, entrada|null} o {ok:false, tipo:'determinista'|'transitorio', motivo, detalle?}.
+//   determinista: depende solo de las filas del pozo y del padron (se repetiria igual): fuente del padron invalida, historial inconsistente, coordenada invalida/fuera de Mendoza.
+//   transitorio : un error inesperado del calculo (puede no repetirse).
+function ubicacionFuenteDecisionesService_evaluarPozoDelta(wellId, location, filasDelPozo) {
+  try {
+    var padron = ufd_fuentesDePadron(wellId, location);
+    if (padron.anomalias.length > 0) {
+      return { ok: false, tipo: 'determinista', motivo: 'FUENTE_PADRON_INVALIDA', detalle: JSON.stringify(padron.anomalias) };
+    }
+    var calculo = ubicacionFuenteDecisionesService_calcular(wellId, padron.fuentes, filasDelPozo);
+    if (!calculo.estado.integro) {
+      // hay decisiones pero no se pueden interpretar: se conserva el base, pero NO se oculta (suma a parcial)
+      return { ok: false, tipo: 'determinista', motivo: 'HISTORIAL_INCONSISTENTE', detalle: JSON.stringify(calculo.estado.anomalias) };
+    }
+    var r = ubicacionFuenteDecisionesService_entradaDelta(wellId, calculo.resolucion);
+    if (!r.ok) {
+      return { ok: false, tipo: 'determinista', motivo: r.motivo, detalle: JSON.stringify(calculo.resolucion.anomalias) };
+    }
+    return { ok: true, entrada: r.entrada };
+  } catch (err) {
+    return { ok: false, tipo: 'transitorio', motivo: 'CALCULO', detalle: String(err) };
+  }
+}
+
+// Secuencia valida: entero seguro >= 1 (la misma regla que siguienteSecuencia).
+function ubicacionFuenteDecisionesService_secuenciaValida(n) {
+  return typeof n === 'number' && isFinite(n) && Math.floor(n) === n && n >= 1 && n <= 9007199254740990;
+}
+
+function ubicacionFuenteDecisionesService_cacheLeerVarios(cache, claves) {
+  var out = {};
+  for (var i = 0; i < claves.length; i += UFD_SVC_DELTA_LOTE_CACHE) {
+    var lote = claves.slice(i, i + UFD_SVC_DELTA_LOTE_CACHE);
+    try {
+      var r = cache.getAll(lote) || {};
+      Object.keys(r).forEach(function (k) { out[k] = r[k]; });
+    } catch (err) {
+      ubicacionFuenteDecisionesService_log('delta: no se pudo leer el cache por pozo: ' + String(err));
+    }
+  }
+  return out;
+}
+
+function ubicacionFuenteDecisionesService_cacheGuardarVarios(cache, pares) {
+  var claves = Object.keys(pares);
+  for (var i = 0; i < claves.length; i += UFD_SVC_DELTA_LOTE_CACHE) {
+    var lote = {};
+    claves.slice(i, i + UFD_SVC_DELTA_LOTE_CACHE).forEach(function (k) { lote[k] = pares[k]; });
+    try {
+      cache.putAll(lote, UFD_SVC_DELTA_POZO_SEGUNDOS);
+    } catch (err) {
+      ubicacionFuenteDecisionesService_log('delta: no se pudo guardar el cache por pozo: ' + String(err));
+    }
+  }
+}
+
+// Lo que se guarda por pozo: '=' (sin efecto), una entrada, o '!' (fallo DETERMINISTA, con su motivo). undefined = no estaba / ilegible (se recalcula).
+//   devuelve {entrada} (puede ser null) o {falla: motivo}
+function ubicacionFuenteDecisionesService_leerResultadoCacheado(wellId, crudo) {
+  if (crudo === undefined || crudo === null) {
+    return undefined;
+  }
+  try {
+    var v = JSON.parse(crudo);
+    if (v && v.e === '=') {
+      return { entrada: null };
+    }
+    if (v && v.e === 'N') {
+      return { entrada: { wellId: wellId, estado: 'N' } };
+    }
+    if (v && v.e === '!' && typeof v.m === 'string' && /^[A-Z_]{1,40}$/.test(v.m)) {
+      return { falla: v.m };
+    }
+    if (v && (v.e === 'R' || v.e === 'C' || v.e === 'D') && ubicacionFuenteDecisionesService_coordenadaOperativa(v.lat, v.lon)) {
+      return { entrada: { wellId: wellId, estado: v.e, lat: v.lat, lon: v.lon } };
+    }
+  } catch (err) {
+    // ilegible: se recalcula
+  }
+  return undefined;
+}
+
+function ubicacionFuenteDecisionesService_serializarResultado(r) {
+  if (!r.ok) {
+    return JSON.stringify({ e: '!', m: r.motivo });
+  }
+  if (r.entrada === null) {
+    return '{"e":"="}';
+  }
+  return r.entrada.estado === 'N' ? '{"e":"N"}' : JSON.stringify({ e: r.entrada.estado, lat: r.entrada.lat, lon: r.entrada.lon });
+}
+
+// Invalida el delta completo. Se llama DESPUES de una escritura confirmada que cambio el punto operativo registral de un pozo. NUNCA lanza: si falla, la operacion
+// principal sigue y el TTL (120 s) acota el desfasaje. La marca con la hora evita que un lector que empezo ANTES guarde un resultado viejo.
+function ubicacionFuenteDecisionesService_invalidarDelta() {
+  var cache = ubicacionFuenteDecisionesService_cache();
+  if (!cache) {
+    return false;
+  }
+  var ok = true;
+  try {
+    cache.put(UFD_SVC_DELTA_INVAL_KEY, String(Date.now()), UFD_SVC_DELTA_INVAL_SEGUNDOS);
+  } catch (err) {
+    ok = false;
+    ubicacionFuenteDecisionesService_log('delta: no se pudo marcar la invalidacion: ' + String(err));
+  }
+  try {
+    cache.remove(UFD_SVC_DELTA_CACHE_KEY);
+  } catch (err) {
+    ok = false;
+    ubicacionFuenteDecisionesService_log('delta: no se pudo invalidar: ' + String(err));
+  }
+  return ok;
+}
+
+// Lo que se cachea es {p: la respuesta, g: version del padron con que se calculo}. `g` se compara en cada lectura: tras un reindexado un delta calculado con el padron
+// anterior no se sirve. Lo que se devuelve al cliente es solo `p` (version, periodo, parcial, decisiones). Solo se cachea si no hubo fallos TRANSITORIOS; `parcial` puede
+// ser > 0 por fallos deterministas (se repetirian igual hasta que cambie una fila o el padron, y eso cambia la clave / invalida).
+function ubicacionFuenteDecisionesService_leerDeltaCompleto(cache, versionPadron) {
+  try {
+    var crudo = cache.get(UFD_SVC_DELTA_CACHE_KEY);
+    if (crudo === null || crudo === undefined) {
+      return null;
+    }
+    var c = JSON.parse(crudo);
+    var d = c && c.p;
+    if (d && c.g === versionPadron && Array.isArray(d.decisiones) && typeof d.version === 'number' && typeof d.periodo === 'string' && d.periodo !== '' &&
+      typeof d.parcial === 'number' && d.parcial >= 0 && Math.floor(d.parcial) === d.parcial) {
+      return d;
+    }
+  } catch (err) {
+    ubicacionFuenteDecisionesService_log('delta: lectura de cache invalida, se recalcula: ' + String(err));
+  }
+  return null;
+}
+
+// Padron con que se va a calcular. El PERIODO es obligatorio: sin el, el cliente no puede verificar que el delta corresponde a su dataset base y mezclar decisiones
+// calculadas sobre otro padron daria coordenadas falsas. En una instalacion sana la metadata siempre existe (la escribe el mismo indexador que genera la ficha), asi que
+// su ausencia o corrupcion es un fallo de instalacion: el endpoint FALLA (el Api responde SERVICE_UNAVAILABLE generico) en lugar de devolver `periodo:''`.
+function ubicacionFuenteDecisionesService_padronParaDelta() {
+  var meta = registryService_getMetadata();
+  var periodo = meta && meta.found && meta.metadata && typeof meta.metadata.periodo === 'string' ? meta.metadata.periodo.trim() : '';
+  if (periodo === '') {
+    throw new Error('delta de decisiones: la metadata del padron no tiene un periodo valido (no se puede identificar con que padron se calcularia)');
+  }
+  return { periodo: periodo, generadoEl: meta.metadata.generadoEl ? String(meta.metadata.generadoEl) : '' };
+}
+
+// opciones (solo para pruebas): {presupuestoMs}
+function ubicacionFuenteDecisionesService_getDelta(opciones) {
+  var inicio = Date.now();
+  var presupuesto = opciones && typeof opciones.presupuestoMs === 'number' ? opciones.presupuestoMs : UFD_SVC_DELTA_PRESUPUESTO_MS;
+  var limite = inicio + presupuesto;
+  var padronAct = ubicacionFuenteDecisionesService_padronParaDelta();             // lanza si no hay periodo confiable
+  var periodo = padronAct.periodo;
+  var versionPadron = periodo + '@' + padronAct.generadoEl;                         // clave de cache: periodo + corrida del indexador
+  var cache = ubicacionFuenteDecisionesService_cache();
+
+  if (cache) {
+    var completo = ubicacionFuenteDecisionesService_leerDeltaCompleto(cache, versionPadron);
+    if (completo) {
+      return completo;
+    }
+  }
+
+  // La hoja se lee UNA vez. Si no existe o tiene otro esquema, lanza: el Api responde SERVICE_UNAVAILABLE generico.
+  var filas = ubicacionFuenteDecisionesRepository_listar();
+  var version = 0;
+  var porPozo = {};
+  var filasSinPozo = 0;
+  filas.forEach(function (f) {
+    if (ubicacionFuenteDecisionesService_secuenciaValida(f.secuencia) && f.secuencia > version) {
+      version = f.secuencia;
+    }
+    if (!ufd_wellIdValido(f.wellId)) {
+      filasSinPozo += 1;
+      return;
+    }
+    var g = porPozo[f.wellId] = porPozo[f.wellId] || { wellId: f.wellId, filas: [], maxSecuencia: 0 };
+    g.filas.push(f);
+    if (ubicacionFuenteDecisionesService_secuenciaValida(f.secuencia) && f.secuencia > g.maxSecuencia) {
+      g.maxSecuencia = f.secuencia;
+    }
+  });
+  if (filasSinPozo > 0) {
+    ubicacionFuenteDecisionesService_log('delta: ' + filasSinPozo + ' fila(s) sin wellId valido: no pertenecen a ningun pozo, se ignoran');
+  }
+  var pozos = Object.keys(porPozo).sort();
+  var resultados = {};            // wellId -> {entrada: obj|null} | {falla: motivo}   (los transitorios no se guardan: se cuentan aparte)
+  var parcial = 0;
+  var transitorios = 0;
+
+  // 1) cache por pozo (la clave incluye cantidad de filas, secuencia maxima del pozo y la version del padron)
+  var claveDe = {};
+  pozos.forEach(function (id) {
+    claveDe[id] = UFD_SVC_DELTA_POZO_PREFIJO + id + '_' + porPozo[id].filas.length + '_' + porPozo[id].maxSecuencia + '_' + versionPadron;
+  });
+  var faltan = pozos;
+  if (cache) {
+    var hallados = ubicacionFuenteDecisionesService_cacheLeerVarios(cache, pozos.map(function (id) { return claveDe[id]; }));
+    faltan = [];
+    pozos.forEach(function (id) {
+      var r = ubicacionFuenteDecisionesService_leerResultadoCacheado(id, hallados[claveDe[id]]);
+      if (r === undefined) {
+        faltan.push(id);
+      } else {
+        resultados[id] = r;
+      }
+    });
+  }
+
+  // 2) los que faltan: padron en lote + dominio
+  var paraCachear = {};
+  var archivosAbiertos = 0;
+  if (faltan.length > 0) {
+    var lote = registryService_getWellLocations(faltan, { deadlineMs: limite });
+    archivosAbiertos = lote.archivosAbiertos || 0;
+    lote.errores.forEach(function (e) {
+      ubicacionFuenteDecisionesService_log('delta: no se pudo leer el archivo ' + e.archivo + ' del padron: ' + e.detalle);
+    });
+    var sinPozoEnPadron = 0;
+    var noResueltos = {};
+    lote.noResueltos.forEach(function (id) { noResueltos[id] = true; });
+    faltan.forEach(function (id) {
+      if (noResueltos[id] === true) {
+        transitorios += 1;
+        return;
+      }
+      var location = lote.locations[id];
+      if (location === null || location === undefined) {
+        sinPozoEnPadron += 1;
+        resultados[id] = { entrada: null };                                   // el pozo ya no esta en el padron: sus decisiones no aplican (no es un fallo)
+        paraCachear[claveDe[id]] = ubicacionFuenteDecisionesService_serializarResultado({ ok: true, entrada: null });
+        return;
+      }
+      if (Date.now() >= limite) {
+        transitorios += 1;
+        return;
+      }
+      var ev = ubicacionFuenteDecisionesService_evaluarPozoDelta(id, location, porPozo[id].filas);
+      if (ev.ok) {
+        resultados[id] = { entrada: ev.entrada };
+        paraCachear[claveDe[id]] = ubicacionFuenteDecisionesService_serializarResultado(ev);
+        return;
+      }
+      ubicacionFuenteDecisionesService_log('delta: pozo ' + id + ' sin resolver (' + ev.tipo + ', ' + ev.motivo + ')' + (ev.detalle ? ': ' + ev.detalle : ''));
+      if (ev.tipo === 'determinista') {
+        resultados[id] = { falla: ev.motivo };
+        paraCachear[claveDe[id]] = ubicacionFuenteDecisionesService_serializarResultado(ev);
+      } else {
+        transitorios += 1;
+      }
+    });
+    if (sinPozoEnPadron > 0) {
+      ubicacionFuenteDecisionesService_log('delta: ' + sinPozoEnPadron + ' pozo(s) con decisiones que no estan en el padron actual: se ignoran');
+    }
+    if (cache) {
+      ubicacionFuenteDecisionesService_cacheGuardarVarios(cache, paraCachear);
+    }
+  }
+
+  var decisiones = [];
+  var fallasDeterministas = 0;
+  pozos.forEach(function (id) {
+    var r = resultados[id];
+    if (!r) {
+      return;                                                                 // transitorio: ya contado
+    }
+    if (r.falla) {
+      fallasDeterministas += 1;
+    } else if (r.entrada) {
+      decisiones.push(r.entrada);
+    }
+  });
+  parcial = fallasDeterministas + transitorios;
+  var payload = { version: version, periodo: periodo, parcial: parcial, decisiones: decisiones };
+  // Una linea por calculo (no por acierto del delta completo): es el dato para MEDIR en produccion cuanto cuesta el calculo en frio (decidir si hace falta otra estrategia).
+  ubicacionFuenteDecisionesService_log('delta calculado en ' + (Date.now() - inicio) + ' ms: ' + pozos.length + ' pozo(s) con decisiones, ' + (pozos.length - faltan.length) +
+    ' por cache, ' + faltan.length + ' a calcular, ' + archivosAbiertos + ' archivo(s) del padron, ' + decisiones.length + ' entrada(s), parcial ' + parcial +
+    ' (' + fallasDeterministas + ' determinista(s), ' + transitorios + ' transitorio(s))');
+  if (transitorios > 0) {
+    ubicacionFuenteDecisionesService_log('delta con ' + transitorios + ' pozo(s) sin resolver por causas transitorias: no se cachea el delta completo');
+  }
+
+  if (cache && transitorios === 0) {
+    try {
+      var marca = cache.get(UFD_SVC_DELTA_INVAL_KEY);
+      var invalidadaDuranteElCalculo = marca !== null && marca !== undefined && Number(marca) >= inicio - UFD_SVC_CACHE_MARGEN_CARRERA_MS;
+      var json = JSON.stringify({ p: payload, g: versionPadron });
+      if (invalidadaDuranteElCalculo) {
+        ubicacionFuenteDecisionesService_log('delta: se invalido mientras se calculaba: no se guarda');
+      } else if (json.length > UFD_SVC_DELTA_CACHE_MAX_CARACTERES) {
+        ubicacionFuenteDecisionesService_log('delta de ' + json.length + ' caracteres: supera el limite de CacheService, no se cachea completo (sigue el cache por pozo)');
+      } else {
+        cache.put(UFD_SVC_DELTA_CACHE_KEY, json, UFD_SVC_DELTA_CACHE_SEGUNDOS);
+      }
+    } catch (err) {
+      ubicacionFuenteDecisionesService_log('delta: no se pudo guardar el delta completo: ' + String(err));
+    }
+  }
+  return payload;
+}
+
 // --- Escritura: decidirFuenteUbicacion ---
 
 // Siguiente secuencia = MAX(secuencia de TODAS las filas de la hoja, de cualquier pozo) + 1. Una secuencia valida es un entero seguro >= 1. Si ALGUNA fila (de
@@ -363,7 +777,19 @@ function ubicacionFuenteDecisionesService_aplicarDecision(emailN, nombre, s, fil
   };
   ubicacionFuenteDecisionesRepository_agregar(fila);
   ubicacionFuenteDecisionesService_invalidar(s.wellId);
-  var nuevo = ubicacionFuenteDecisionesService_calcular(s.wellId, padron.fuentes, filas.concat([fila]));
+  var nuevo;
+  try {
+    nuevo = ubicacionFuenteDecisionesService_calcular(s.wellId, padron.fuentes, filas.concat([fila]));
+  } catch (err) {
+    ubicacionFuenteDecisionesService_invalidarDelta();         // no se pudo comparar antes/despues: por las dudas el delta se recalcula
+    throw err;
+  }
+  // El delta registral solo cambia si cambio el punto operativo REGISTRAL de este pozo (mismo estado y mismas coordenadas = nada que invalidar). Aprobar una sugerencia
+  // llega por aca (aplicarDecision es el nucleo compartido); crear, rechazar o cancelar una sugerencia no escribe decisiones y nunca pasa por aca.
+  if (!ubicacionFuenteDecisionesService_mismoPunto(
+    ubicacionFuenteDecisionesService_puntoOperativoRegistral(calculo.resolucion), ubicacionFuenteDecisionesService_puntoOperativoRegistral(nuevo.resolucion))) {
+    ubicacionFuenteDecisionesService_invalidarDelta();
+  }
   return { ok: true, duplicada: false, decision: ubicacionFuenteDecisionesService_itemDecision(fila), evento: fila.evento, auditoria: UFD_SVC_AUDITORIA[fila.evento], data: ubicacionFuenteDecisionesService_vista(s.wellId, nuevo, padron.periodo) };
 }
 
@@ -428,6 +854,13 @@ if (typeof module !== 'undefined' && module.exports) {
     UFD_SVC_CACHE_INVAL_KEY,
     UFD_SVC_CACHE_SEGUNDOS,
     UFD_SVC_CACHE_MAX_CARACTERES,
+    UFD_SVC_DELTA_CACHE_KEY,
+    UFD_SVC_DELTA_INVAL_KEY,
+    UFD_SVC_DELTA_CACHE_SEGUNDOS,
+    UFD_SVC_DELTA_CACHE_MAX_CARACTERES,
+    UFD_SVC_DELTA_POZO_PREFIJO,
+    UFD_SVC_DELTA_POZO_SEGUNDOS,
+    UFD_SVC_DELTA_PRESUPUESTO_MS,
     UFD_SVC_PREFIJO_ID_SUGERENCIA,
     UFD_SVC_ACCIONES,
     UFD_SVC_ERRORES_DOMINIO,
@@ -440,6 +873,15 @@ if (typeof module !== 'undefined' && module.exports) {
     ubicacionFuenteDecisionesService_getPorPozo,
     ubicacionFuenteDecisionesService_decidir,
     ubicacionFuenteDecisionesService_invalidar,
+    ubicacionFuenteDecisionesService_invalidarDelta,
+    ubicacionFuenteDecisionesService_getDelta,
+    ubicacionFuenteDecisionesService_entradaDelta,
+    ubicacionFuenteDecisionesService_puntoOperativoRegistral,
+    ubicacionFuenteDecisionesService_periodoActual,
+    ubicacionFuenteDecisionesService_padronActual,
+    ubicacionFuenteDecisionesService_padronParaDelta,
+    ubicacionFuenteDecisionesService_evaluarPozoDelta,
+    ubicacionFuenteDecisionesService_mismoPunto,
     ubicacionFuenteDecisionesService_diagnosticar,
     diagnosticarUbicacionFuenteDecisiones
   };

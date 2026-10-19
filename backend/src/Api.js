@@ -39,6 +39,8 @@ function doPost(e) {
         response = handleGetMapaPozos(body.sessionToken);
       } else if (body.action === 'getUbicacionesValidadas') {
         response = handleGetUbicacionesValidadas(body.sessionToken);
+      } else if (body.action === 'getDecisionesFuentesDelta') {
+        response = handleGetDecisionesFuentesDelta(body.sessionToken);
       } else if (body.action === 'getWellSummary') {
         response = handleGetWellSummary(body.sessionToken, body.wellId);
       } else if (body.action === 'getMapaNE') {
@@ -1318,6 +1320,25 @@ function respuestaServicioNoDisponibleDecision(accion, email, wellId, err) {
   return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'servicio no disponible' };
 }
 
+// Efecto REGISTRAL de las decisiones sobre el padron actual (delta del punto operativo registral): {version, periodo, parcial, decisiones:[{wellId, estado:'R'|'C'|'D', lat,
+// lon} | {wellId, estado:'N'}]}. NO incluye la validada en campo (V): el cliente la compone despues. Mismo contrato de permisos que getMapaPozos y getUbicacionesValidadas:
+// CUALQUIER usuario activo, sin permiso de modulo. Es el patron real del mapa: el dataset base que ya recibe todo usuario activo lleva el mismo tipo de dato (wellId, lat, lon,
+// estado) y esto solo cambia el punto de ESOS pozos; nada individual (fuentes, motivos, autores, historial) sale por aca, y eso sigue gateado por `ubicacion`. Sesion invalida ->
+// UNAUTHORIZED; usuario inactivo -> USER_DISABLED. No recibe wellId ni se audita por pozo; un fallo se audita y responde SERVICE_UNAVAILABLE generico (el detalle va a Logger).
+function handleGetDecisionesFuentesDelta(sessionToken) {
+  var validation = validateSession(sessionToken, 'getDecisionesFuentesDelta');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var data;
+  try {
+    data = ubicacionFuenteDecisionesService_getDelta();
+  } catch (err) {
+    return respuestaServicioNoDisponibleDecision('getDecisionesFuentesDelta', validation.session.email, null, err);
+  }
+  return { status: 'ok', data: data };
+}
+
 function handleGetDecisionesFuentesPozo(sessionToken, wellId) {
   var validation = validateSessionAndWellId(sessionToken, wellId, 'getDecisionesFuentesPozo');
   if (!validation.ok) {
@@ -1595,6 +1616,7 @@ if (typeof module !== 'undefined' && module.exports) {
     handleResolverSugerenciaFuente,
     handleCancelarSugerenciaFuente,
     handleGetDecisionesFuentesPozo,
+    handleGetDecisionesFuentesDelta,
     handleDecidirFuenteUbicacion,
     handleProponerCorreccionUbicacion,
     handleGetCorreccionesUbicacionPozo,

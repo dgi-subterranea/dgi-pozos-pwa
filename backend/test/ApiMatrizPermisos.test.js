@@ -36,6 +36,7 @@ const W = '04-0263';
 const endpoints = {
   getMapaPozos: () => Api.handleGetMapaPozos('t'),
   getUbicacionesValidadas: () => Api.handleGetUbicacionesValidadas('t'),
+  getDecisionesFuentesDelta: () => Api.handleGetDecisionesFuentesDelta('t'),
   getDecisionesFuentesPozo: () => Api.handleGetDecisionesFuentesPozo('t', W),
   getSugerenciasFuentesPozo: () => Api.handleGetSugerenciasFuentesPozo('t', W),
   getSugerenciasFuentesPendientes: () => Api.handleGetSugerenciasFuentesPendientes('t'),
@@ -56,6 +57,7 @@ const endpoints = {
 const exige = {
   getMapaPozos: null,
   getUbicacionesValidadas: null,
+  getDecisionesFuentesDelta: null,
   getDecisionesFuentesPozo: 'ubicacion',
   getSugerenciasFuentesPozo: 'ubicacion',
   getSugerenciasFuentesPendientes: ['ubicacion', 'ubicacion_validar'],

@@ -919,8 +919,9 @@ describe('aislamiento de la Etapa 2', () => {
     expect(d).not.toMatch(/VALIDADA|campo|correccion/i);
   });
 
-  test('no hay delta (getDecisionesFuentesDelta): su contrato depende de decisiones de la Etapa 3', () => {
+  test('el delta (getDecisionesFuentesDelta, E3-1) existe SOLO en el backend: el frontend todavia no lo consume ni lo nombra', () => {
     const api = fs.readFileSync(path.join(raiz, 'backend', 'src', 'Api.js'), 'utf8');
-    expect(api).not.toMatch(/getDecisionesFuentesDelta/);
+    expect(api).toMatch(/getDecisionesFuentesDelta/);
+    expect(fs.readFileSync(path.join(raiz, 'js', 'api.js'), 'utf8')).not.toMatch(/getDecisionesFuentesDelta/);
   });
 });

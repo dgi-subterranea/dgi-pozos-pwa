@@ -130,8 +130,8 @@ describe('alcance de esta etapa: nada de mapas globales, Cerca Mio, seleccion ni
       expect(leer('js', f)).not.toMatch(/ufdui_|DecisionesFuentes|decidirFuente|ubicacionFuenteDecisiones/i);
     }
   });
-  test('sigue sin haber delta de decisiones ni estado R en el backend (Etapa 3); las sugerencias se usan solo por los wrappers de api.js', () => {
-    expect(leer('backend', 'src', 'Api.js')).not.toMatch(/getDecisionesFuentesDelta/);
+  test('el frontend todavia no consume el delta de decisiones (E3-1 es solo backend); las sugerencias se usan solo por los wrappers de api.js', () => {
+    expect(leer('js', 'api.js')).not.toMatch(/getDecisionesFuentesDelta/);
     // las sugerencias SI se usan (Etapa D), pero solo a traves de los wrappers de js/api.js: ningun otro archivo conoce el nombre de la accion del backend
     ['sugerirDecisionFuente', 'getSugerenciasFuentesPozo', 'getSugerenciasFuentesPendientes', 'resolverSugerenciaFuente', 'cancelarSugerenciaFuente'].forEach((a) => {
       expect(api).toContain("callBackend('" + a + "'");

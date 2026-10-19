@@ -31,10 +31,8 @@ describe('el frontend usa las sugerencias SOLO por js/api.js (Etapa D), sin cono
     });
   });
 
-  test('no hay estado R, ni delta de decisiones, ni cambios al dataset del mapa en el backend', () => {
-    const api = leer('backend', 'src', 'Api.js');
-    expect(api).not.toMatch(/getDecisionesFuentesDelta/);
-    NUEVOS.forEach((f) => expect(sinComentarios(leer('backend', 'src', f))).not.toMatch(/mapaService_|mapaNEService|getMapaPozos|estado\s*[:=]\s*'R'/));
+  test('las sugerencias no conocen el delta de decisiones (E3-1 vive en el servicio de decisiones) ni el dataset del mapa, ni el estado R', () => {
+    NUEVOS.forEach((f) => expect(sinComentarios(leer('backend', 'src', f))).not.toMatch(/getDecisionesFuentesDelta|ubicacionFuenteDecisionesService_getDelta|mapaService_|mapaNEService|getMapaPozos|estado\s*[:=]\s*'R'/));
   });
 });
 

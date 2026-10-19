@@ -30,10 +30,23 @@ function crearCache() {
   const c = {
     store: {},
     ttl: {},
-    falla: { get: false, put: false, remove: false },
+    falla: { get: false, put: false, remove: false, getAll: false, putAll: false },
     get: jest.fn((k) => { if (c.falla.get) { throw new Error('cache get caido'); } return Object.prototype.hasOwnProperty.call(c.store, k) ? c.store[k] : null; }),
     put: jest.fn((k, v, ttl) => { if (c.falla.put) { throw new Error('cache put caido'); } c.store[k] = v; c.ttl[k] = ttl; }),
-    remove: jest.fn((k) => { if (c.falla.remove) { throw new Error('cache remove caido'); } delete c.store[k]; })
+    remove: jest.fn((k) => { if (c.falla.remove) { throw new Error('cache remove caido'); } delete c.store[k]; }),
+    // como el real: hasta 100 claves por llamada; solo devuelve las que estan
+    getAll: jest.fn((keys) => {
+      if (c.falla.getAll) { throw new Error('cache getAll caido'); }
+      if (keys.length > 100) { throw new Error('getAll admite hasta 100 claves'); }
+      const r = {};
+      keys.forEach((k) => { if (Object.prototype.hasOwnProperty.call(c.store, k)) { r[k] = c.store[k]; } });
+      return r;
+    }),
+    putAll: jest.fn((obj, ttl) => {
+      if (c.falla.putAll) { throw new Error('cache putAll caido'); }
+      if (Object.keys(obj).length > 100) { throw new Error('putAll admite hasta 100 claves'); }
+      Object.keys(obj).forEach((k) => { c.store[k] = obj[k]; c.ttl[k] = ttl; });
+    })
   };
   return c;
 }
@@ -68,6 +81,21 @@ function armar(opciones) {
   ctx.metadata = { periodo: '2026-09' };
   global.registryService_getWellLocation = jest.fn((id) => (ctx.padron[id] ? { found: true, location: { wellId: id, ...JSON.parse(JSON.stringify(ctx.padron[id])), ubicacionResuelta: { estado: 'x' } } } : { found: false }));
   global.registryService_getMetadata = jest.fn(() => ({ found: true, metadata: ctx.metadata }));
+  // lectura en LOTE del padron (la usa el delta): mismo padron falso; `padronNoResuelto` simula pozos cuyo archivo no se pudo leer y `alLeerLotePadron` una lectura lenta
+  ctx.padronNoResuelto = new Set();
+  ctx.padronLotes = [];
+  ctx.alLeerLotePadron = null;
+  global.registryService_getWellLocations = jest.fn((ids, op) => {
+    ctx.padronLotes.push({ ids: ids.slice(), deadlineMs: op && op.deadlineMs });
+    if (ctx.alLeerLotePadron) { ctx.alLeerLotePadron(ids); }
+    const locations = {};
+    const noResueltos = [];
+    ids.forEach((id) => {
+      if (ctx.padronNoResuelto.has(id) || (op && typeof op.deadlineMs === 'number' && Date.now() >= op.deadlineMs)) { noResueltos.push(id); return; }
+      locations[id] = ctx.padron[id] ? { wellId: id, ...JSON.parse(JSON.stringify(ctx.padron[id])), ubicacionResuelta: { estado: 'x' } } : null;
+    });
+    return { locations, noResueltos, archivosAbiertos: 0, desdeCache: 0, errores: [] };
+  });
   global.logHistoryEvent = jest.fn();
   global.verifySessionToken.mockImplementation((t) => (String(t).startsWith('tok-') && USUARIOS[String(t).slice(4)] ? { valid: true, email: String(t).slice(4) } : { valid: false, reason: 'token' }));
   global.isUserActive.mockImplementation((e) => !!USUARIOS[e] && USUARIOS[e].inactivo !== true);

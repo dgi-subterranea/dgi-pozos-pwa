@@ -69,9 +69,12 @@ function mapaService_getPozos() {
   }
 
   var metadataCruda = mapaRepository_getMetadata();
+  // periodo = periodo del padron con que se genero pozos.json (metadata.fuente.periodo): el cliente lo compara con el `periodo` de getDecisionesFuentesDelta para no
+  // mezclar decisiones calculadas sobre OTRO padron. null si el archivo no lo trae (nunca se inventa).
   var metadata = metadataCruda ? {
     generadoEl: metadataCruda.generadoEl,
-    totalPuntos: metadataCruda.totalPuntos
+    totalPuntos: metadataCruda.totalPuntos,
+    periodo: metadataCruda.fuente && typeof metadataCruda.fuente.periodo === 'string' && metadataCruda.fuente.periodo !== '' ? metadataCruda.fuente.periodo : null
   } : null;
 
   return {

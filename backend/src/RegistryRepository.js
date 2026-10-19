@@ -59,6 +59,96 @@ function registryRepository_getWellRecord(wellId) {
   return record ? { found: true, record: record } : { found: false };
 }
 
+// Lectura en LOTE de varias fichas (la usa el delta de decisiones registrales, que necesita el padron de muchos pozos a la vez). registryRepository_getWellRecord
+// abre un archivo de departamento entero por cada pozo que no esta en cache; aca los pozos se agrupan por ARCHIVO y cada archivo se abre UNA sola vez por llamada
+// (como mucho 37 archivos: 17 departamentos simples + 2 x 10 particiones). No cambia getWellRecord ni escribe en su cache (el producto cacheable del lote es el
+// resultado ya resuelto, no la ficha entera).
+//   wellIds   lista de wellId (se ignoran los repetidos y los que no sean texto)
+//   opciones  {deadlineMs}: instante (Date.now()) a partir del cual no se abre ningun archivo nuevo; los pozos que quedan sin leer van a `noResueltos`
+// salida: {registros: {wellId: ficha | null}, noResueltos: [wellId], archivosAbiertos, desdeCache, errores: [{archivo, detalle}]}
+//   - registros[wellId] === null  -> el archivo se leyo (o no existe) y el pozo no esta: es una respuesta, NO un fallo.
+//   - noResueltos                 -> no se pudo saber (se acabo el tiempo o fallo la lectura/parseo del archivo): el que llama NO debe inventar nada.
+var REGISTRY_BATCH_CACHE_LOTE = 100;       // CacheService.getAll admite hasta 100 claves por llamada
+
+function registryRepository_getWellRecordsBatch(wellIds, opciones) {
+  var o = opciones || {};
+  var limite = typeof o.deadlineMs === 'number' && isFinite(o.deadlineMs) ? o.deadlineMs : null;
+  var salida = { registros: {}, noResueltos: [], archivosAbiertos: 0, desdeCache: 0, errores: [] };
+  var vistos = {};
+  var ids = [];
+  (Array.isArray(wellIds) ? wellIds : []).forEach(function (id) {
+    if (typeof id === 'string' && !Object.prototype.hasOwnProperty.call(vistos, id)) {
+      vistos[id] = true;
+      ids.push(id);
+    }
+  });
+
+  var cache = null;
+  try {
+    cache = CacheService.getScriptCache();
+  } catch (err) {
+    cache = null;
+  }
+  var pendientes = [];
+  for (var i = 0; i < ids.length; i += REGISTRY_BATCH_CACHE_LOTE) {
+    var lote = ids.slice(i, i + REGISTRY_BATCH_CACHE_LOTE);
+    var hallados = {};
+    if (cache) {
+      try {
+        hallados = cache.getAll(lote.map(function (id) { return 'registry_' + id; })) || {};
+      } catch (err) {
+        hallados = {};
+      }
+    }
+    lote.forEach(function (id) {
+      var crudo = hallados['registry_' + id];
+      if (crudo !== undefined && crudo !== null) {
+        try {
+          salida.registros[id] = crudo === 'null' ? null : JSON.parse(crudo);
+          salida.desdeCache += 1;
+          return;
+        } catch (err) {
+          // cache ilegible: se trata como si no estuviera
+        }
+      }
+      pendientes.push(id);
+    });
+  }
+
+  var porArchivo = {};
+  pendientes.forEach(function (id) {
+    var nombre = registryRepository_resolveFileName(id);
+    (porArchivo[nombre] = porArchivo[nombre] || []).push(id);
+  });
+  var folder = null;
+  Object.keys(porArchivo).sort().forEach(function (nombre) {
+    var delArchivo = porArchivo[nombre];
+    if (limite !== null && Date.now() >= limite) {
+      delArchivo.forEach(function (id) { salida.noResueltos.push(id); });
+      return;
+    }
+    try {
+      if (folder === null) {
+        folder = DriveApp.getFolderById(getRegistryFolderId());
+      }
+      var files = folder.getFilesByName(nombre);
+      if (!files.hasNext()) {
+        delArchivo.forEach(function (id) { salida.registros[id] = null; });
+        return;
+      }
+      var datos = JSON.parse(files.next().getBlob().getDataAsString('UTF-8'));
+      salida.archivosAbiertos += 1;
+      delArchivo.forEach(function (id) {
+        salida.registros[id] = Object.prototype.hasOwnProperty.call(datos, id) && datos[id] ? datos[id] : null;
+      });
+    } catch (err) {
+      salida.errores.push({ archivo: nombre, detalle: String(err) });
+      delArchivo.forEach(function (id) { salida.noResueltos.push(id); });
+    }
+  });
+  return salida;
+}
+
 // metadata.json es chico (fecha de generacion + conteos) y cambia solo
 // cuando se re-corre el indexador - se cachea entero, a diferencia de los
 // archivos de departamento.
@@ -100,6 +190,7 @@ function registryRepository_getMetadata() {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     registryRepository_getWellRecord,
+    registryRepository_getWellRecordsBatch,
     registryRepository_resolveFileName,
     registryRepository_getWellIdsDeArchivo,
     registryRepository_getMetadata

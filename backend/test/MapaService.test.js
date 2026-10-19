@@ -39,7 +39,7 @@ describe('mapaService_getPozos', () => {
       { wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C', cuenca: 'Río Mendoza', profundidad: 154, tramosFiltrantes: [{ desde: 80, hasta: 110 }], surgencia: 'Profundo' },
       { wellId: '05-0001', lat: -33.1, lon: -68.5, estado: 'D', cuenca: 'Río Tunuyán Inferior', profundidad: null, tramosFiltrantes: [], surgencia: null }
     ]);
-    expect(result.metadata).toEqual({ generadoEl: '2026-09-15T13:33:58-03:00', totalPuntos: 13804 });
+    expect(result.metadata).toEqual({ generadoEl: '2026-09-15T13:33:58-03:00', totalPuntos: 13804, periodo: null });
   });
 
   // Caso central de seguridad: aunque pozos.json (por edicion a mano, o
@@ -66,19 +66,27 @@ describe('mapaService_getPozos', () => {
     expect(Object.keys(result.pozos[0]).sort()).toEqual(['cuenca', 'estado', 'lat', 'lon', 'profundidad', 'surgencia', 'tramosFiltrantes', 'wellId']);
   });
 
-  test('metadata correcta - solo generadoEl y totalPuntos, aunque el archivo traiga mas campos', () => {
+  test('metadata correcta - solo generadoEl, totalPuntos y periodo del padron, aunque el archivo traiga mas campos', () => {
     global.mapaRepository_getPozos.mockReturnValue({ found: true, pozos: [] });
     global.mapaRepository_getMetadata.mockReturnValue({
       generadoEl: '2026-09-15T13:33:58-03:00',
       totalPuntos: 13804,
       distribucion: { confirmada: 1603, disponible: 12201 },
       excluidos: { sinCoordenadas: 7350 },
-      fuente: { periodo: '2026-09' }
+      fuente: { periodo: '2026-09', padronGeneradoEl: '2026-09-14T12:58:36-03:00', archivo: 'x.csv' }
     });
 
     const result = MapaService.mapaService_getPozos();
 
-    expect(result.metadata).toEqual({ generadoEl: '2026-09-15T13:33:58-03:00', totalPuntos: 13804 });
+    expect(result.metadata).toEqual({ generadoEl: '2026-09-15T13:33:58-03:00', totalPuntos: 13804, periodo: '2026-09' });
+  });
+
+  test('periodo ausente, vacio o no textual en la metadata -> null (nunca se inventa)', () => {
+    global.mapaRepository_getPozos.mockReturnValue({ found: true, pozos: [] });
+    [{ fuente: {} }, { fuente: { periodo: '' } }, { fuente: { periodo: 202609 } }, { fuente: null }, {}].forEach((extra) => {
+      global.mapaRepository_getMetadata.mockReturnValue(Object.assign({ generadoEl: 'x', totalPuntos: 1 }, extra));
+      expect(MapaService.mapaService_getPozos().metadata.periodo).toBeNull();
+    });
   });
 
   test('metadata ausente (no existe metadata.json) -> metadata:null, no rompe', () => {
