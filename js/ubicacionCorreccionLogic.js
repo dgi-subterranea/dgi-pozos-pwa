@@ -135,6 +135,24 @@ function ubicacionCorreccionLogic_irrigacionDeUbicacion(location) {
   return { lat: r.lat, lon: r.lon, estado: r.estado };
 }
 
+// Texto informativo del modal "Corregir ubicacion" cuando la ubicacion REGISTRAL vigente (con decisiones: Aceptada, o el automatico entre las fuentes no descartadas) CAMBIO
+// respecto de la del padron que se compara. info: {tipo: 'R'|'C'|'D', lat, lon} | {tipo: 'N'} | null. '' si no cambio. Solo informa: la comparacion y el dato historico que guarda
+// el backend (la Irrigacion del momento de proponer) siguen siendo los del padron; nunca se reescribe nada.
+var UCORR_ETIQUETA_REGISTRAL = { R: 'Aceptada', C: 'Coincidente', D: 'Disponible' };
+function ubicacionCorreccionLogic_textoRegistralVigente(info) {
+  if (!info || typeof info !== 'object') {
+    return '';
+  }
+  var comparacion = ' La comparación de tu corrección sigue usando la ubicación de Irrigación original.';
+  if (info.tipo === 'N') {
+    return 'Hoy no hay una ubicación registral vigente: las fuentes de Irrigación quedaron descartadas o sin coincidir.' + comparacion;
+  }
+  if (!Object.prototype.hasOwnProperty.call(UCORR_ETIQUETA_REGISTRAL, info.tipo) || !ubicacionCorreccionLogic_esNumero(info.lat) || !ubicacionCorreccionLogic_esNumero(info.lon)) {
+    return '';
+  }
+  return 'Ubicación registral vigente (' + UCORR_ETIQUETA_REGISTRAL[info.tipo] + '): ' + ubicacionCorreccionLogic_formatearCoordenadas(info.lat, info.lon) + '.' + comparacion;
+}
+
 // --- Visibilidad del modulo Ubicacion en el hub ---
 // El permiso de CORREGIR controla el boton "Corregir ubicacion"; el de VER ("ubicacion") controla la informacion. Un pozo sin coordenada oficial
 // igual muestra el modulo si hay algo para ver (una correccion registrada: vigente, pendiente o en el historial) o algo para hacer (corregir).
@@ -1189,6 +1207,7 @@ if (typeof module !== 'undefined' && module.exports) {
     UCORR_TEXTO_AYUDA_XY,
     UCORR_SISTEMAS_COORDENADAS, UCORR_ETIQUETAS_CRS, UCORR_TEXTO_PUNTO_MOVIDO, UCORR_TEXTO_RESTAURAR,
     ubicacionCorreccionLogic_irrigacionDeUbicacion,
+    ubicacionCorreccionLogic_textoRegistralVigente,
     ubicacionCorreccionLogic_evaluarGps,
     ubicacionCorreccionLogic_evaluarPropuesta,
     ubicacionCorreccionLogic_construirPayload,

@@ -7,14 +7,14 @@
 //   - Validada en campo       la correccion VIGENTE (estado VALIDADA) de UbicacionCorrecciones, si hay
 // El padron solo trae x/y: la latitud/longitud de cada fuente se calcula aca con js/coordenadasConversion.js (la misma conversion que valida pyproj, 0,03 mm).
 //
-// El punto operativo NO se decide aca: lo resuelve ubicacionOperativaLogic_resolver (R1 la validada en campo gana; R2 el punto del padron; R0 ninguno). Este
-// modulo solo identifica CUAL de las fuentes es ese punto. Si no hay punto operativo (sin coordenadas o discrepancia) ninguna fuente lo es y no se calculan
-// distancias.
+// El punto operativo NO se decide aca: lo resuelve ubicacionOperativaLogic_resolverFicha, con la MISMA composicion que el mapa (base -> decisiones registrales -> validada
+// en campo; V > R > C | D > ninguno). Este modulo solo identifica CUAL de las fuentes es ese punto y arma el bloque principal de la ficha. Si no hay punto operativo (sin
+// coordenadas, discrepancia o todas descartadas) ninguna fuente lo es y no se calculan distancias; las fuentes (tambien las descartadas) siguen visibles.
 //
 // Privacidad de los enlaces: Google Maps recibe SOLO latitud y longitud (ubicacionesConocidasLogic_urlGoogleMaps). Nunca el wellId, el titular, el autor, la
 // observacion, el email, el motivo ni el historial.
 //
-// Dependencias (globales en el navegador, cargadas antes): coordenadas_posgarAWgs84, ubicacionOperativaLogic_{resolver, distanciaMetros, coordenadaValida}.
+// Dependencias (globales en el navegador, cargadas antes): coordenadas_posgarAWgs84, ubicacionOperativaLogic_{resolverFicha, distanciaMetros, coordenadaValida, etiquetaCodigo}.
 var UCON_ETIQUETA_REPORTE = 'Reporte Pozos';
 var UCON_ETIQUETA_IRRIGACION = 'Irrigación';
 var UCON_ETIQUETA_CAMPO = 'Validada en campo';
@@ -25,6 +25,25 @@ var UCON_DECIMALES = 5;                       // ~1 m: igual que el padron (scri
 var UCON_TOLERANCIA_MATCH_M = 2;              // respaldo para reconocer la fuente del punto operativo cuando no coincide x/y exacto
 var UCON_URL_MAPS = 'https://www.google.com/maps/search/?api=1&query=';
 var UCON_NOTA_SIN_OPERATIVO = 'No hay punto operativo: las ubicaciones de las fuentes no coinciden entre sí y un técnico debe revisarlas.';
+var UCON_NOTA_SIN_OPERATIVO_DESCARTADAS = 'No hay punto operativo: todas las fuentes conocidas fueron descartadas. Siguen visibles para su análisis.';
+var UCON_NOTA_SIN_OPERATIVO_SIN_COORDENADAS = 'No hay punto operativo: ninguna fuente tiene una coordenada válida.';
+// Bloque principal de la ficha ("Ubicación de Irrigación"): lo que dice cuando no hay punto operativo y por que.
+var UCON_TITULO_SIN_OPERATIVO = 'Sin ubicación operativa de Irrigación';
+var UCON_DETALLE_SIN_OPERATIVO = {
+  DISCREPANCIA: 'Hay coordenadas de distintas fuentes que no coinciden entre sí. Un técnico debe revisarlas antes de habilitar el mapa.',
+  TODAS_DESCARTADAS: 'Todas las fuentes conocidas fueron descartadas. Siguen visibles más abajo, con su coordenada original.',
+  SIN_COORDENADAS: 'Este pozo no tiene una coordenada oficial cargada.'
+};
+// Debajo de una fuente ACEPTADA cuando por encima hay una validada en campo: sigue aceptada, pero no es el punto operativo mientras exista la V.
+var UCON_TEXTO_RESPALDO_REGISTRAL = 'Aceptada como referencia registral. La ubicación operativa actual es la validada en campo.';
+// Mismo texto que el aviso discreto del mapa (mapaDataset): una sola forma de decir "se muestra lo que hay".
+var UCON_AVISO_DEGRADADO = 'Algunas actualizaciones de ubicación no pudieron cargarse. Se muestra la información disponible.';
+var UCON_DETALLE_ESTADO = {
+  D: 'Sin corroborar por otra fuente.',
+  C: 'Dos o más fuentes independientes coinciden entre sí.',
+  R: 'Fuente registral elegida manualmente como referencia.',
+  V: 'Corrección validada por un usuario autorizado.'
+};
 var UCON_NOTA_CONSERVA = 'Cada fuente conserva su ubicación original. El punto operativo es el que usa la aplicación en los mapas.';
 var UCON_TEXTO_VER_TODAS = 'Ver todas en el mapa';
 var UCON_TEXTO_ABRIR_MAPS = 'Abrir en Google Maps';
@@ -88,9 +107,50 @@ function ubicacionesConocidasLogic_fuentePadron(id, tipo, etiqueta, c) {
   return f;
 }
 
-// entrada: {wellId, location (respuesta de getWellLocation: coordenadas, coordenadasProvincia, ubicacionResuelta), vigente (vista de correccion VALIDADA o null)}
-// salida: {wellId, fuentes: [...], validas, operativo: {lat, lon, fuenteId, estado, etiquetaEstado, regla} | null, sinOperativo}
-//   fuente: {id, tipo, etiqueta, x, y, lat, lon, invalida, esOperativo, distanciaOperativoM, urlMaps, detalle}
+// La fuente de la ficha que corresponde a una `clave` de la vista de decisiones (getDecisionesFuentesPozo): mismo tipo y mismas x/y (a 3 decimales, como la clave del backend).
+function ubicacionesConocidasLogic_fuentePorClave(fuentes, decisiones, clave) {
+  if (typeof clave !== 'string' || clave === '' || !decisiones || !Array.isArray(decisiones.fuentes)) {
+    return null;
+  }
+  var d = decisiones.fuentes.filter(function (x) { return x && x.clave === clave; })[0];
+  var dx = d ? ubicacionesConocidasLogic_numeroDeCampo(d.x) : null;
+  var dy = d ? ubicacionesConocidasLogic_numeroDeCampo(d.y) : null;
+  if (!d || dx === null || dy === null) {
+    return null;
+  }
+  return fuentes.filter(function (f) {
+    return f.tipo === d.fuenteTipo && !f.invalida && f.x !== null && f.y !== null && f.x.toFixed(3) === dx.toFixed(3) && f.y.toFixed(3) === dy.toFixed(3);
+  })[0] || null;
+}
+
+// La fuente registral (no la validada en campo) que esta en una coordenada: primero por clave del backend; sin clave, la que eligio el padron (x/y exactos); y como
+// respaldo la unica que queda a <= UCON_TOLERANCIA_MATCH_M de esa coordenada.
+function ubicacionesConocidasLogic_fuenteRegistral(fuentes, decisiones, clave, lat, lon, xyPadron) {
+  var porClave = ubicacionesConocidasLogic_fuentePorClave(fuentes, decisiones, clave);
+  if (porClave) {
+    return porClave;
+  }
+  if (typeof clave !== 'string' || clave === '') {
+    var r = xyPadron || {};
+    var exacta = fuentes.filter(function (f) { return f.tipo !== UCON_TIPOS.CAMPO_VALIDADA && !f.invalida && f.x === r.x && f.y === r.y; })[0];
+    if (exacta) {
+      return exacta;
+    }
+  }
+  var mejor = null;
+  fuentes.forEach(function (f) {
+    if (f.tipo === UCON_TIPOS.CAMPO_VALIDADA || f.invalida) { return; }
+    var d = ubicacionOperativaLogic_distanciaMetros(lat, lon, f.lat, f.lon);
+    if (d <= UCON_TOLERANCIA_MATCH_M && (mejor === null || d < mejor.d)) { mejor = { f: f, d: d }; }
+  });
+  return mejor ? mejor.f : null;
+}
+
+// entrada: {wellId, location (respuesta de getWellLocation: coordenadas, coordenadasProvincia, ubicacionResuelta), vigente (vista de correccion VALIDADA o null),
+//           decisiones (vista de getDecisionesFuentesPozo o null: sin ella, base + V), decisionesFallo (true si se pidieron y no se pudieron leer: aviso discreto)}
+// salida: {wellId, fuentes: [...], validas, operativo: {lat, lon, fuenteId, estado, etiquetaEstado, regla, codigo, etiquetaCorta} | null, sinOperativo, motivoSinOperativo,
+//          respaldoRegistral, registral, decisionesAplicadas, degradado, ubicacionResuelta}
+//   fuente: {id, tipo, etiqueta, x, y, lat, lon, invalida, esOperativo, respaldoRegistral, distanciaOperativoM, urlMaps, detalle}
 function ubicacionesConocidasLogic_construir(entrada) {
   var e = entrada && typeof entrada === 'object' ? entrada : {};
   var loc = e.location && typeof e.location === 'object' ? e.location : {};
@@ -111,27 +171,30 @@ function ubicacionesConocidasLogic_construir(entrada) {
     fuentes.push(campo);
   }
 
-  // Punto operativo: lo dice el resolvedor (nunca se recalcula la regla aca).
-  var res = ubicacionOperativaLogic_resolver({ wellId: e.wellId, ubicacionResuelta: loc.ubicacionResuelta || null, vigente: v });
+  // Punto operativo: lo dice la composicion compartida con el mapa (nunca se recalcula ninguna regla aca).
+  var decisiones = e.decisiones && typeof e.decisiones === 'object' ? e.decisiones : null;
+  var res = ubicacionOperativaLogic_resolverFicha({ wellId: e.wellId, ubicacionResuelta: loc.ubicacionResuelta || null, vigente: v, decisiones: decisiones });
   var operativo = null;
+  var respaldo = null;
   if (res && res.operativo && ubicacionOperativaLogic_coordenadaValida(res.lat, res.lon)) {
     var fuenteOp = null;
-    if (res.regla === 'R1_CAMPO_VALIDADA') {
+    if (res.codigo === 'V') {
       fuenteOp = fuentes.filter(function (f) { return f.id === UCON_ID_CAMPO; })[0] || null;
-    } else {
-      var r = loc.ubicacionResuelta || {};
-      fuenteOp = fuentes.filter(function (f) { return f.tipo !== UCON_TIPOS.CAMPO_VALIDADA && !f.invalida && f.x === r.x && f.y === r.y; })[0] || null;
-      if (!fuenteOp) {
-        var mejor = null;
-        fuentes.forEach(function (f) {
-          if (f.tipo === UCON_TIPOS.CAMPO_VALIDADA || f.invalida) { return; }
-          var d = ubicacionOperativaLogic_distanciaMetros(res.lat, res.lon, f.lat, f.lon);
-          if (d <= UCON_TOLERANCIA_MATCH_M && (mejor === null || d < mejor.d)) { mejor = { f: f, d: d }; }
-        });
-        fuenteOp = mejor ? mejor.f : null;
+      // una R que queda DEBAJO de la V sigue aceptada: su tarjeta lo aclara (no es el punto operativo mientras exista la V)
+      if (res.respaldoRegistral && res.respaldoRegistral.codigo === 'R') {
+        var fuenteR = ubicacionesConocidasLogic_fuenteRegistral(fuentes, decisiones, res.respaldoRegistral.fuenteClave, res.respaldoRegistral.lat, res.respaldoRegistral.lon, null);
+        if (fuenteR) {
+          fuenteR.respaldoRegistral = 'R';
+          respaldo = { codigo: 'R', fuenteId: fuenteR.id };
+        }
       }
+    } else {
+      fuenteOp = ubicacionesConocidasLogic_fuenteRegistral(fuentes, decisiones, res.fuenteClave, res.lat, res.lon, loc.ubicacionResuelta || null);
     }
-    operativo = { lat: res.lat, lon: res.lon, fuenteId: fuenteOp ? fuenteOp.id : null, estado: res.estado, etiquetaEstado: res.etiqueta, regla: res.regla };
+    operativo = {
+      lat: res.lat, lon: res.lon, fuenteId: fuenteOp ? fuenteOp.id : null, estado: res.estado, etiquetaEstado: res.etiqueta, regla: res.regla,
+      codigo: res.codigo, etiquetaCorta: ubicacionOperativaLogic_etiquetaCodigo(res.codigo, true)
+    };
     if (fuenteOp) {
       fuenteOp.esOperativo = true;
     }
@@ -147,7 +210,80 @@ function ubicacionesConocidasLogic_construir(entrada) {
   });
 
   var validas = fuentes.filter(function (f) { return !f.invalida; }).length;
-  return { wellId: typeof e.wellId === 'string' ? e.wellId : null, fuentes: fuentes, validas: validas, operativo: operativo, sinOperativo: operativo === null };
+  return {
+    wellId: typeof e.wellId === 'string' ? e.wellId : null, fuentes: fuentes, validas: validas, operativo: operativo, sinOperativo: operativo === null,
+    motivoSinOperativo: operativo === null ? res.motivoSinPunto : null, respaldoRegistral: respaldo, registral: res ? res.registral : null, decisionesAplicadas: !!(res && res.decisionesAplicadas),
+    degradado: e.decisionesFallo === true, ubicacionResuelta: loc.ubicacionResuelta || null
+  };
+}
+
+// La nota "no hay punto operativo", segun el motivo (descartadas, discrepancia o sin coordenadas). '' si hay punto operativo.
+function ubicacionesConocidasLogic_notaSinOperativo(modelo) {
+  if (!modelo || !modelo.sinOperativo) {
+    return '';
+  }
+  if (modelo.motivoSinOperativo === 'TODAS_DESCARTADAS') {
+    return UCON_NOTA_SIN_OPERATIVO_DESCARTADAS;
+  }
+  return modelo.motivoSinOperativo === 'SIN_COORDENADAS' ? UCON_NOTA_SIN_OPERATIVO_SIN_COORDENADAS : UCON_NOTA_SIN_OPERATIVO;
+}
+
+// La ubicacion REGISTRAL vigente cuando CAMBIO respecto de la automatica del padron (la que el backend guarda como Irrigacion al proponer una correccion; ese dato historico no
+// se reescribe nunca): {tipo: 'R' | 'C' | 'D', lat, lon} si es otro punto, {tipo: 'N'} si ya no hay punto registral. null si no cambio (o no hay nada con que comparar). Solo informativo:
+// la "Corregir ubicacion" sigue comparando contra el punto del padron, como el backend.
+function ubicacionesConocidasLogic_referenciaRegistral(modelo) {
+  var ur = modelo && modelo.ubicacionResuelta;
+  var hayBase = !!ur && (ur.estado === 'unica' || ur.estado === 'corroborada') && ubicacionOperativaLogic_coordenadaValida(ur.lat, ur.lon);
+  var reg = modelo && modelo.registral;
+  if (!reg || !ubicacionOperativaLogic_coordenadaValida(reg.lat, reg.lon)) {
+    return hayBase && modelo && modelo.decisionesAplicadas ? { tipo: 'N' } : null;
+  }
+  if (hayBase && ubicacionOperativaLogic_distanciaMetros(ur.lat, ur.lon, reg.lat, reg.lon) < 1) {
+    return null;
+  }
+  return { tipo: reg.codigo, lat: reg.lat, lon: reg.lon };
+}
+
+function ubicacionesConocidasLogic_nombreTipo(f) {
+  return f && f.tipo === UCON_TIPOS.REPORTE_POZOS ? UCON_ETIQUETA_REPORTE : UCON_ETIQUETA_IRRIGACION;
+}
+
+// BLOQUE PRINCIPAL de la ficha ("Ubicación de Irrigación"): la ubicacion OPERATIVA vigente (V > R > C | D) o "Sin ubicación operativa de Irrigación". Distinto de la lista de
+// "Ubicaciones conocidas" (todas las fuentes): aca va UNA sola cosa, la que usan el mapa, Cerca Mio, la seleccion y los reemplazos.
+// opciones: {iconoUbicacion, iconoUbicacionWarn, iconoMaps} (SVG confiables de app.js). El permiso de validar no cambia nada de esto: solo cambian las acciones.
+function ubicacionesConocidasLogic_htmlBloquePrincipal(modelo, opciones) {
+  var esc = ubicacionesConocidasLogic_escapar;
+  var o = opciones || {};
+  var op = modelo && modelo.operativo ? modelo.operativo : null;
+  var h = '';
+  if (op) {
+    var fuenteOp = modelo.fuentes.filter(function (f) { return f.esOperativo; })[0] || null;
+    var texto = UCON_DETALLE_ESTADO[op.codigo] || '';
+    if (op.codigo === 'D' && fuenteOp) {
+      texto = 'Fuente: ' + ubicacionesConocidasLogic_nombreTipo(fuenteOp) + ' · ' + texto.charAt(0).toLowerCase() + texto.slice(1);
+    } else if (op.codigo === 'C' && !modelo.decisionesAplicadas && modelo.ubicacionResuelta && modelo.ubicacionResuelta.estado === 'corroborada' &&
+      ubicacionesConocidasLogic_esNumero(modelo.ubicacionResuelta.distanciaCorroboracion)) {
+      texto = '2 o más fuentes independientes coinciden a ' + modelo.ubicacionResuelta.distanciaCorroboracion + ' m entre sí.';
+    } else if (op.codigo === 'R' && fuenteOp) {
+      texto = 'Fuente registral elegida manualmente como referencia: ' + ubicacionesConocidasLogic_nombreTipo(fuenteOp) + '.';
+    }
+    var coord = esc(op.lat + ', ' + op.lon);
+    if (fuenteOp && fuenteOp.x !== null && fuenteOp.y !== null) {
+      coord += '<br>x ' + esc(fuenteOp.x) + ' / y ' + esc(fuenteOp.y);
+    }
+    var url = ubicacionesConocidasLogic_urlGoogleMaps(op.lat, op.lon);
+    h += '<div class="ubic-row ubic-operativa-fila" data-ubic-estado="' + esc(op.codigo) + '"><span class="pin pin-ok">' + (o.iconoUbicacion || '') + '</span>' +
+      '<div class="ubic-text"><strong>' + esc(op.etiquetaCorta) + '</strong>' + esc(texto) + '<div class="coord-mono">' + coord + '</div>' +
+      (url ? '<a class="maps-btn" href="' + esc(url) + '" target="_blank" rel="noopener">' + (o.iconoMaps || '') + UCON_TEXTO_ABRIR_MAPS + '</a>' : '') + '</div></div>';
+  } else {
+    var motivo = modelo && modelo.motivoSinOperativo ? modelo.motivoSinOperativo : 'SIN_COORDENADAS';
+    h += '<div class="ubic-row ubic-operativa-fila" data-ubic-estado="N"><span class="pin pin-warn">' + (o.iconoUbicacionWarn || '') + '</span>' +
+      '<div class="ubic-text"><strong>' + esc(UCON_TITULO_SIN_OPERATIVO) + '</strong>' + esc(UCON_DETALLE_SIN_OPERATIVO[motivo] || UCON_DETALLE_SIN_OPERATIVO.SIN_COORDENADAS) + '</div></div>';
+  }
+  if (modelo && modelo.degradado) {
+    h += '<p class="ucon-nota ucon-aviso-degradado" role="status">' + esc(UCON_AVISO_DEGRADADO) + '</p>';
+  }
+  return h;
 }
 
 // "A 22 m del punto operativo" / "A menos de 1 m ..." / "A 1,2 km ...". null si no hay distancia (es el operativo o no hay operativo).
@@ -202,6 +338,9 @@ function ubicacionesConocidasLogic_htmlFuente(f, opciones) {
     meta.push(dist);
   }
   h += '<div class="ucon-meta">' + meta.map(function (t) { return '<span>' + esc(t) + '</span>'; }).join('') + '</div>';
+  if (f.respaldoRegistral === 'R') {
+    h += '<div class="ucon-respaldo">' + esc(UCON_TEXTO_RESPALDO_REGISTRAL) + '</div>';
+  }
   if (dec) {
     h += ufdui_htmlHistoria(f);
   }
@@ -226,7 +365,10 @@ function ubicacionesConocidasLogic_htmlSeccion(modelo, opciones) {
   }
   var h = '<p class="field-label">Ubicaciones conocidas</p>';
   if (modelo.sinOperativo) {
-    h += '<p class="ucon-nota ucon-nota-aviso" role="status">' + esc(UCON_NOTA_SIN_OPERATIVO) + '</p>';
+    // todas descartadas: el aviso de las decisiones (ufdui_htmlNotasSeccion) ya lo dice con el mismo sentido; no se repite
+    if (!(modelo.motivoSinOperativo === 'TODAS_DESCARTADAS' && ubicacionesConocidasLogic_hayDecisiones() && typeof ufdui_htmlNotasSeccion === 'function')) {
+      h += '<p class="ucon-nota ucon-nota-aviso" role="status">' + esc(ubicacionesConocidasLogic_notaSinOperativo(modelo)) + '</p>';
+    }
   } else {
     h += '<p class="ucon-nota">' + esc(UCON_NOTA_CONSERVA) + '</p>';
   }
@@ -258,6 +400,9 @@ function ubicacionesConocidasLogic_htmlPopup(f, opciones) {
   var dist = ubicacionesConocidasLogic_textoDistancia(f.distanciaOperativoM);
   if (dist) {
     h += '<div class="ucon-popup-dist">' + esc(dist) + '</div>';
+  }
+  if (f.respaldoRegistral === 'R') {
+    h += '<div class="ucon-popup-dist">' + esc(UCON_TEXTO_RESPALDO_REGISTRAL) + '</div>';
   }
   if (dec) {
     h += ufdui_htmlHistoria(f);
@@ -297,10 +442,14 @@ function ubicacionesConocidasLogic_claseMarcador(f) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     UCON_ETIQUETA_REPORTE, UCON_ETIQUETA_IRRIGACION, UCON_ETIQUETA_CAMPO, UCON_TIPOS, UCON_ID_CAMPO, UCON_ID_REPORTE, UCON_URL_MAPS,
-    UCON_NOTA_SIN_OPERATIVO, UCON_NOTA_CONSERVA, UCON_TEXTO_VER_TODAS, UCON_TEXTO_ABRIR_MAPS,
+    UCON_NOTA_SIN_OPERATIVO, UCON_NOTA_SIN_OPERATIVO_DESCARTADAS, UCON_NOTA_SIN_OPERATIVO_SIN_COORDENADAS, UCON_NOTA_CONSERVA, UCON_TEXTO_VER_TODAS, UCON_TEXTO_ABRIR_MAPS,
+    UCON_TITULO_SIN_OPERATIVO, UCON_DETALLE_SIN_OPERATIVO, UCON_TEXTO_RESPALDO_REGISTRAL, UCON_AVISO_DEGRADADO,
     ubicacionesConocidasLogic_escapar,
     ubicacionesConocidasLogic_urlGoogleMaps,
     ubicacionesConocidasLogic_construir,
+    ubicacionesConocidasLogic_notaSinOperativo,
+    ubicacionesConocidasLogic_referenciaRegistral,
+    ubicacionesConocidasLogic_htmlBloquePrincipal,
     ubicacionesConocidasLogic_textoDistancia,
     ubicacionesConocidasLogic_htmlFuente,
     ubicacionesConocidasLogic_htmlSeccion,

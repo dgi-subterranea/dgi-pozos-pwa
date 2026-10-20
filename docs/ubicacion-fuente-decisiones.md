@@ -595,3 +595,40 @@ Solo frontend (`js/mapaLogic.js`, `js/mapa.js`, `js/seleccion.js`, `js/buscarRee
 
 ### Pendiente para E3-5 / E3-6
 La ficha todavía no sigue la `resolucion` registral ni V (E3-5); decisiones directas y sugerencias todavía no invalidan el delta del mapa (E3-6).
+
+---
+
+## Etapa 3 · E3-5 — la ficha del pozo sigue la misma ubicación operativa (implementada; sin commit, sin push)
+
+Solo frontend (`js/ubicacionOperativaLogic.js`, `js/ubicacionesConocidasLogic.js`, `js/ubicacionesConocidas.js`, `js/ubicacionCorreccion.js`, `js/ubicacionCorreccionLogic.js`, `js/app.js`, `index.html`, `css/styles.css`). Sin backend, sin `gas:*`, sin cambios de NE, del dominio de decisiones ni de la invalidación (eso sigue siendo E3-6).
+
+### Qué cambió
+Antes, el bloque «Ubicación de Irrigación» de la ficha se armaba en `app.js` con el estado automático del padrón (`ubicacionResuelta`) y, por separado, «Ubicaciones conocidas» marcaba el punto operativo con «V + automático». Ahora los dos salen de **una sola resolución**, la misma composición que usa el mapa:
+
+`base (punto automático del padrón: D | C) → decisiones registrales (D | C | R | N) → validada en campo (V) → punto final o ninguno`
+
+Jerarquía: **V (Validada en campo) > R (Aceptada) > C | D (automático entre las fuentes no descartadas) > Sin ubicación operativa de Irrigación.**
+
+### Cómo la obtiene la ficha (sin duplicar reglas)
+- `ubicacionOperativaLogic_resolverFicha({wellId, ubicacionResuelta, vigente, decisiones})` (dominio puro) llama a `ubicacionOperativaLogic_componerPuntoDetallado`, **la misma función que `aplicarCapas` del mapa**. No hay otra implementación en `app.js`.
+- La vista de `getDecisionesFuentesPozo` (que la ficha ya leía para los estados y las acciones) se traduce a la entrada del delta registral con `ubicacionOperativaLogic_deltaDeVistaDecisiones`, con el **mismo contrato que `getDecisionesFuentesDelta`**: ACEPTADA → R, COINCIDENTE → C, DISPONIBLE → D, y SIN_COORDENADAS / DISCREPANCIA sin punto → N. Una vista inutilizable (otro pozo, historial inconsistente, resolución ausente, incoherente, estado desconocido o coordenada fuera de Mendoza) se **ignora**: nunca se convierte en R ni en N; se conservan base + V.
+- La V es la corrección validada vigente que `js/ubicacionCorreccion.js` ya entrega a `js/ubicacionesConocidas.js`.
+- Los permisos no cambian cuál es el punto operativo: validador y lector ven lo mismo; solo cambian las acciones (decidir / sugerir).
+
+### Bloque principal «Ubicación de Irrigación»
+Lo pinta `js/ubicacionesConocidas.js` en `#ubic-operativa` (síncrono al abrir con el padrón; se repinta cuando llegan las decisiones o la validada, o tras una decisión): D «Disponible», C «Coincidente», R «Aceptada», V «Validada en campo», o **«Sin ubicación operativa de Irrigación»** con el motivo (todas descartadas, fuentes en discrepancia, sin coordenadas) y sin coordenadas. Ya no queda ninguna coordenada anterior o descartada presentada como operativa.
+
+### «Ubicaciones conocidas» y visor «Ver todas en el mapa»
+- Se mantiene el listado (Reporte Pozos, Irrigación 1..N, Validada en campo) y sus estados. Solo cambia qué tarjeta lleva **PUNTO OPERATIVO**: R sin V → R; V + R → V; todas descartadas + V → V; todas descartadas o discrepancia sin V → ninguna. Una fuente descartada nunca se marca y sigue visible con su coordenada original.
+- **V + R:** la R sigue «Aceptada», sin el chip, con una línea breve: «Aceptada como referencia registral. La ubicación operativa actual es la validada en campo.» (tarjeta y popup). Si la V se revierte, al refrescar R pasa a ser el punto operativo (no vuelve al automático).
+- El visor usa el mismo modelo: estrella / zIndex del operativo, leyenda, popup y distancias son respecto del punto operativo (R o V). Sin punto operativo muestra todas las fuentes sin marcar ninguna y sin distancias; la nota explica el motivo (descartadas / discrepancia).
+
+### Falla de las decisiones
+Si `getDecisionesFuentesPozo` falla (red, error o respuesta inválida) la ficha no se bloquea: muestra base + V, lista las fuentes, y agrega el mismo aviso discreto del mapa («Algunas actualizaciones de ubicación no pudieron cargarse. Se muestra la información disponible.»). Nunca se inventa una R ni un «sin ubicación». Una relectura fallida conserva la última vista buena. Sin permiso de ubicación no se piden las decisiones y no hay aviso (no es una falla).
+
+### Corregir ubicación
+Los datos históricos no se tocan: `irrLat` / `irrLon` (snapshot del momento de proponer) los guarda el backend y el frontend nunca los manda. El modal sigue comparando contra el punto automático del padrón (lo mismo que hace el backend). **Nuevo, solo informativo:** si la ubicación registral vigente cambió respecto de la del padrón (una fuente aceptada, otro automático tras descartar, o ya no hay), el modal agrega una línea «Ubicación registral vigente (Aceptada): …» (`#ucorr-registral`) que aclara que la comparación sigue usando la ubicación de Irrigación original.
+
+### Pendiente
+- **Fase pequeña posterior (opcional):** usar la registral vigente también como marcador fijo y como referencia de distancia de «Corregir ubicación». Se dejó afuera porque exige que el backend compare contra la misma referencia (hoy snapshotea el automático) o que el frontend avise la diferencia entre ambas.
+- **E3-6:** la nota «Las decisiones tomadas todavía no cambian el punto que usan los mapas» (`UFDUI_TEXTO_SIN_EFECTO_MAPAS`) sigue vigente hasta cablear la invalidación; decidir, aprobar una sugerencia o revertir la V todavía no invalidan `mapaDataset`.

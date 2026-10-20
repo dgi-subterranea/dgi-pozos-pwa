@@ -15,6 +15,7 @@
     aperturaId: 0,           // descarta respuestas tardias de una apertura anterior
     wellId: null,
     irrigacion: null,        // {lat, lon} oficial (corroborada/unica) o null
+    registral: null,         // la ubicacion registral vigente SI cambio respecto de irrigacion ({tipo, lat, lon} | {tipo:'N'} | null); solo informativa (ver ubicacionesConocidas.js)
     lectura: null,           // ultima lectura de getCorreccionesUbicacionPozo {vigente, pendientes, historial}
     aviso: null,             // {tipo, texto, recargar?} sobre el ultimo guardado
     guardando: false,
@@ -26,6 +27,7 @@
   var $ = function (id) { return document.getElementById(id); };
   var overlayEl = $('ucorr-overlay');
   var irrigacionEl = $('ucorr-irrigacion');
+  var registralEl = $('ucorr-registral');
   var vistasEls = {
     opciones: $('ucorr-vista-opciones'), gps: $('ucorr-vista-gps'), mapa: $('ucorr-vista-mapa'), confirmar: $('ucorr-vista-confirmar')
   };
@@ -190,6 +192,7 @@
     estado.aperturaId += 1;
     estado.wellId = ap.wellId;
     estado.irrigacion = ubicacionCorreccionLogic_irrigacionDeUbicacion(ap.location);
+    estado.registral = null;
     estado.lectura = null;
     estado.aviso = null;
     cargarLectura(estado.aperturaId);
@@ -197,6 +200,24 @@
 
   function ubicacionCorreccionController_cerrar() {
     cerrarModal(true);
+  }
+
+  // "Ubicaciones conocidas" informa que la ubicacion registral vigente cambio (una fuente aceptada o descartada). Solo se MUESTRA como referencia actual en el modal: la comparacion
+  // de la correccion y el snapshot historico de Irrigacion (que guarda el backend) no se tocan. Una ficha que ya no es esta no hace nada.
+  function pintarRegistral() {
+    var texto = ubicacionCorreccionLogic_textoRegistralVigente(estado.registral);
+    registralEl.textContent = texto;
+    registralEl.hidden = texto === '';
+  }
+
+  function ubicacionCorreccionController_actualizarRegistral(wellId, info) {
+    if (!estado.wellId || wellId !== estado.wellId) {
+      return;
+    }
+    estado.registral = info || null;
+    if (overlayEl && !overlayEl.hidden) {
+      pintarRegistral();
+    }
   }
 
   // La validacion (bandeja o tarjeta) termino sobre un pozo: si es el de esta ficha, se vuelve a leer y se pinta (pendientes, historial y vigente) con el aviso del
@@ -232,6 +253,7 @@
     irrigacionEl.textContent = irr
       ? 'Ubicación de Irrigación (no se modifica): ' + ubicacionCorreccionLogic_formatearCoordenadas(irr.lat, irr.lon)
       : 'Este pozo no tiene una ubicación de Irrigación para comparar.';
+    pintarRegistral();
     confEls.obs.value = '';
     confEls.error.hidden = true;
     mostrarVista('opciones');
@@ -863,4 +885,5 @@
   window.ubicacionCorreccionController_abrir = ubicacionCorreccionController_abrir;
   window.ubicacionCorreccionController_cerrar = ubicacionCorreccionController_cerrar;
   window.ubicacionCorreccionController_alResolver = ubicacionCorreccionController_alResolver;
+  window.ubicacionCorreccionController_actualizarRegistral = ubicacionCorreccionController_actualizarRegistral;
 })();

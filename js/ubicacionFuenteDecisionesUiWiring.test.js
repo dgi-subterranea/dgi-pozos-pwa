@@ -125,10 +125,15 @@ describe('estilos', () => {
 });
 
 describe('alcance de esta etapa: nada de mapas globales, Cerca Mio, seleccion ni reemplazos', () => {
-  test.each(['mapa.js', 'cercaMio.js', 'seleccion.js', 'reemplazo.js', 'ubicacionOperativaLogic.js'])('js/%s no conoce las decisiones', (f) => {
+  test.each(['mapa.js', 'cercaMio.js', 'seleccion.js', 'reemplazo.js'])('js/%s no conoce las decisiones', (f) => {
     if (fs.existsSync(path.join(raiz, 'js', f))) {
       expect(leer('js', f)).not.toMatch(/ufdui_|DecisionesFuentes|decidirFuente|ubicacionFuenteDecisiones/i);
     }
+  });
+  // E3-5: el dominio puro del punto operativo SI interpreta la resolucion registral (la vista de decisiones de un pozo; es la misma composicion que el mapa), pero no conoce la UI de
+  // decisiones, ni los endpoints, ni la API: recibe la vista como dato.
+  test('js/ubicacionOperativaLogic.js interpreta la vista de decisiones como DATO: no conoce la UI, los endpoints ni la API', () => {
+    expect(leer('js', 'ubicacionOperativaLogic.js')).not.toMatch(/ufdui_|DecisionesFuentes|decidirFuente|ubicacionFuenteDecisiones|\bapi[A-Z]\w+\(|callBackend/i);
   });
   test('js/mapaDataset.js conoce SOLO el efecto registral (apiGetDecisionesFuentesDelta): nada de la UI de decisiones, de decidir ni de la lectura por pozo', () => {
     const src = leer('js', 'mapaDataset.js');

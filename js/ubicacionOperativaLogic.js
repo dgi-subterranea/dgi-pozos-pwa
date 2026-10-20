@@ -15,6 +15,9 @@
 //   es la resolucion registral EFECTIVA previa a ella (D | C | R, o null si el delta dijo N o no habia base): si la V desaparece, vuelve ese punto. Ver
 //   ubicacionOperativaLogic_componerPunto / _aplicarCapas. `R` es la letra de dataset de la fuente ACEPTADA: no tiene relacion con el estado de aptitud de reemplazo.
 //
+// FICHA (E3-5): ubicacionOperativaLogic_resolverFicha aplica ESTA MISMA composicion (ubicacionOperativaLogic_componerPuntoDetallado) a un solo pozo, con la vista de decisiones del
+// pozo como delta registral y la correccion validada vigente como V; asi la ficha y el mapa llegan al mismo estado operativo (V > R > C | D > ninguno).
+//
 // Reglas V1 (las aprobadas; NE, Relevamiento, "Confirmada en campo" y candidatos satelitales NO entran todavia):
 //   R1  hay una correccion VALIDADA vigente  -> su lat/lon, fuente CAMPO_CORREGIDA, estado VALIDADA_CAMPO, confianza A.
 //   R2  si no, y el padron tiene punto (DISPONIBLE o COINCIDENTE) -> ese punto, tal cual.
@@ -639,6 +642,121 @@
     return resultado;                                                                              // R0 si no hubo ninguno de los dos
   }
 
+  // --- Punto operativo de la FICHA (E3-5): la MISMA composicion que el mapa, sobre un solo pozo ---
+
+  // Estado de la resolucion registral del backend (vista de decisiones de un pozo -> resolucion.estado) -> letra del delta registral. Es el mismo mapeo que usa el delta registral
+  // que alimenta al mapa: ACEPTADA = R, COINCIDENTE = C, DISPONIBLE = D.
+  var UOP_RESOLUCION_A_CODIGO = { ACEPTADA: 'R', COINCIDENTE: 'C', DISPONIBLE: 'D' };
+  var UOP_REGLA_REGISTRAL_ACEPTADA = 'R1B_REGISTRAL_ACEPTADA';
+
+  // La vista de decisiones de UN pozo (lectura por pozo del backend) -> la entrada del delta registral de ese pozo, con el mismo contrato que el delta que consume el mapa:
+  //   {wellId, estado:'R'|'C'|'D', lat, lon}  punto registral operativo valido (coordenada numerica DENTRO de Mendoza)
+  //   {wellId, estado:'N'}                     el dominio determino de forma valida que NO hay punto registral (todas descartadas, discrepancia o sin coordenadas)
+  // salida: {entrada, fuenteClave, motivoN, motivo}. entrada null = la vista no se puede usar (ausente, de otro pozo, historial inconsistente o resolucion que no se puede interpretar):
+  // NUNCA se vuelve N (un dato imposible de interpretar no puede retirar el punto); se conservan base + V. motivo = por que se ignoro (solo diagnostico, nunca para el usuario).
+  function ubicacionOperativaLogic_deltaDeVistaDecisiones(wellId, vista) {
+    var ignorada = function (motivo) { return { entrada: null, fuenteClave: null, motivoN: null, motivo: motivo }; };
+    if (vista === null || vista === undefined) { return ignorada('SIN_VISTA'); }
+    if (!esObjeto(vista) || !wellIdValido(wellId) || vista.wellId !== wellId || !Array.isArray(vista.fuentes) || !esNumero(vista.version)) { return ignorada('VISTA_INVALIDA'); }
+    if (vista.integro !== true) { return ignorada('HISTORIAL_INCONSISTENTE'); }
+    var r = vista.resolucion;
+    if (!esObjeto(r) || typeof r.estado !== 'string') { return ignorada('RESOLUCION_AUSENTE'); }
+    if (Object.prototype.hasOwnProperty.call(UOP_RESOLUCION_A_CODIGO, r.estado)) {
+      if (r.operativo !== true || !ubicacionOperativaLogic_coordenadaValida(r.lat, r.lon)) { return ignorada('RESOLUCION_INVALIDA'); }
+      return {
+        entrada: { wellId: wellId, estado: UOP_RESOLUCION_A_CODIGO[r.estado], lat: r.lat, lon: r.lon },
+        fuenteClave: typeof r.fuenteClave === 'string' && r.fuenteClave !== '' ? r.fuenteClave : null, motivoN: null, motivo: null
+      };
+    }
+    if (r.estado === UOP_ESTADOS.SIN_COORDENADAS || r.estado === UOP_ESTADOS.DISCREPANCIA) {
+      if (r.operativo === true) { return ignorada('RESOLUCION_INCOHERENTE'); }
+      return {
+        entrada: { wellId: wellId, estado: 'N' }, fuenteClave: null, motivo: null,
+        motivoN: r.todasDescartadas === true ? 'TODAS_DESCARTADAS' : (r.estado === UOP_ESTADOS.DISCREPANCIA ? 'DISCREPANCIA' : 'SIN_COORDENADAS')
+      };
+    }
+    return ignorada('ESTADO_DESCONOCIDO');
+  }
+
+  // PUNTO OPERATIVO de un pozo para la FICHA. Reutiliza el dominio de composicion del mapa (ubicacionOperativaLogic_componerPuntoDetallado): BASE (el punto automatico del padron,
+  // D | C) -> decisiones registrales (D | C | R | N, de la vista de decisiones del pozo) -> V (la correccion VALIDADA vigente) -> punto final o NINGUNO. No hay una segunda logica.
+  // entrada: {wellId, ubicacionResuelta (la del padron, de getWellLocation), vigente (vista de correccion VALIDADA | null), decisiones (vista de decisiones del pozo | null)}
+  //   decisiones null (sin permiso, sin red o respuesta invalida) = comportamiento degradado seguro: base + V; nunca se inventa una R ni una N.
+  // salida:
+  //   {wellId, operativo, codigo ('D'|'C'|'R'|'V'|null), estado, etiqueta, confianza, fuente, regla, lat, lon, capa ('CAMPO'|'REGISTRAL'|'BASE'|'NINGUNA'),
+  //    fuenteClave (clave, segun el backend, de la fuente registral que es el punto; null si no se sabe: lo identifica quien llama por x/y),
+  //    registral ({codigo: D|C|R, lat, lon, fuenteClave} = la resolucion REGISTRAL efectiva, haya o no una V encima; null si no hay punto registral),
+  //    respaldoRegistral (la misma `registral`, pero SOLO cuando el punto operativo es una V: lo que queda DEBAJO de ella; si no, null),
+  //    motivoSinPunto (null | 'TODAS_DESCARTADAS' | 'DISCREPANCIA' | 'SIN_COORDENADAS'), decisionesAplicadas, base, anomalias, version}
+  // Jerarquia: V (validada en campo) > R (fuente aceptada) > C / D (automatico entre las fuentes NO descartadas) > ninguna. Revertir la V deja a R (o C / D) como punto operativo.
+  function ubicacionOperativaLogic_resolverFicha(entrada) {
+    var e = esObjeto(entrada) ? entrada : {};
+    var wellId = typeof e.wellId === 'string' ? e.wellId : null;
+    var baseInfo = ubicacionOperativaLogic_baseDeUbicacionResuelta(e.ubicacionResuelta);
+    var anomalias = baseInfo.anomalias.slice();
+    var valido = wellIdValido(wellId);
+    if (!valido) { anomalias.push('WELL_ID_INVALIDO'); }
+
+    var codigoBase = baseInfo.estado === UOP_ESTADOS.DISPONIBLE ? 'D' : (baseInfo.estado === UOP_ESTADOS.COINCIDENTE ? 'C' : null);
+    var base = valido && codigoBase !== null && baseInfo.lat !== null ? { wellId: wellId, lat: baseInfo.lat, lon: baseInfo.lon, estado: codigoBase } : null;
+
+    var dec = valido ? ubicacionOperativaLogic_deltaDeVistaDecisiones(wellId, e.decisiones) : { entrada: null, fuenteClave: null, motivoN: null, motivo: 'SIN_VISTA' };
+    if (dec.motivo && dec.motivo !== 'SIN_VISTA') { anomalias.push('DECISIONES_IGNORADAS_' + dec.motivo); }
+
+    var candidato = e.vigente !== undefined && e.vigente !== null ? e.vigente : null;
+    var ov = valido ? overrideValido(wellId, candidato) : null;
+    if (ov && ov.ignorado) {
+      anomalias.push(ov.ignorado);
+      ov = null;
+    }
+    var campo = ov ? { wellId: wellId, lat: ov.lat, lon: ov.lon, vts: ov.validadaEl } : null;
+
+    var det = ubicacionOperativaLogic_componerPuntoDetallado(base, dec.entrada, campo, null);
+    var p = det.punto;
+    var claveRegistral = dec.entrada && dec.entrada.estado !== 'N' ? dec.fuenteClave : null;
+    var reg = det.baseRegistral && esCodigoRegistral(det.baseRegistral.estado) ? { codigo: det.baseRegistral.estado, lat: det.baseRegistral.lat, lon: det.baseRegistral.lon, fuenteClave: claveRegistral } : null;
+    var salida = {
+      wellId: wellId, operativo: false, codigo: null, estado: null, etiqueta: '', confianza: null, fuente: null, regla: UOP_REGLAS.R0, lat: null, lon: null, capa: det.capa,
+      fuenteClave: null, registral: reg, respaldoRegistral: null, motivoSinPunto: null, decisionesAplicadas: dec.entrada !== null, base: baseInfo, anomalias: anomalias, version: UOP_VERSION
+    };
+
+    if (p) {
+      salida.operativo = true;
+      salida.codigo = p.estado;
+      salida.estado = ubicacionOperativaLogic_estadoDeCodigo(p.estado);
+      salida.etiqueta = UOP_ETIQUETAS_ESTADO[salida.estado];
+      salida.confianza = ubicacionOperativaLogic_confianzaDeEstado(salida.estado);
+      salida.lat = p.lat;
+      salida.lon = p.lon;
+      if (p.estado === 'V') {
+        salida.fuente = UOP_FUENTES.CAMPO_CORREGIDA;
+        salida.regla = UOP_REGLAS.R1;
+        salida.respaldoRegistral = reg;
+      } else {
+        salida.regla = p.estado === 'R' ? UOP_REGLA_REGISTRAL_ACEPTADA : UOP_REGLAS.R2;
+        salida.fuenteClave = claveRegistral;
+        var fuenteBackend = dec.entrada && esObjeto(e.decisiones) && esObjeto(e.decisiones.resolucion) ? e.decisiones.resolucion.fuente : null;
+        if (typeof fuenteBackend === 'string' && Object.prototype.hasOwnProperty.call(UOP_FUENTES, fuenteBackend) && fuenteBackend !== UOP_FUENTES.CAMPO_CORREGIDA) {
+          salida.fuente = fuenteBackend;
+        } else if (det.capa === 'BASE') {
+          salida.fuente = baseInfo.fuente;
+        }
+      }
+      return salida;
+    }
+
+    salida.estado = baseInfo.estado === UOP_ESTADOS.DISCREPANCIA ? UOP_ESTADOS.DISCREPANCIA : UOP_ESTADOS.SIN_COORDENADAS;
+    salida.etiqueta = UOP_ETIQUETAS_ESTADO[salida.estado];
+    if (dec.entrada && dec.entrada.estado === 'N') {
+      salida.motivoSinPunto = dec.motivoN;
+      salida.estado = dec.motivoN === 'DISCREPANCIA' ? UOP_ESTADOS.DISCREPANCIA : UOP_ESTADOS.SIN_COORDENADAS;
+      salida.etiqueta = UOP_ETIQUETAS_ESTADO[salida.estado];
+    } else {
+      salida.motivoSinPunto = salida.estado === UOP_ESTADOS.DISCREPANCIA ? 'DISCREPANCIA' : 'SIN_COORDENADAS';
+    }
+    return salida;
+  }
+
   var API = {
     UOP_VERSION: UOP_VERSION,
     UOP_MENDOZA_BBOX: UOP_MENDOZA_BBOX,
@@ -674,7 +792,11 @@
     ubicacionOperativaLogic_componerPunto: ubicacionOperativaLogic_componerPunto,
     ubicacionOperativaLogic_aplicarCapas: ubicacionOperativaLogic_aplicarCapas,
     ubicacionOperativaLogic_baseDeUbicacionResuelta: ubicacionOperativaLogic_baseDeUbicacionResuelta,
-    ubicacionOperativaLogic_resolver: ubicacionOperativaLogic_resolver
+    ubicacionOperativaLogic_resolver: ubicacionOperativaLogic_resolver,
+    UOP_RESOLUCION_A_CODIGO: UOP_RESOLUCION_A_CODIGO,
+    UOP_REGLA_REGISTRAL_ACEPTADA: UOP_REGLA_REGISTRAL_ACEPTADA,
+    ubicacionOperativaLogic_deltaDeVistaDecisiones: ubicacionOperativaLogic_deltaDeVistaDecisiones,
+    ubicacionOperativaLogic_resolverFicha: ubicacionOperativaLogic_resolverFicha
   };
 
   if (typeof module !== 'undefined' && module.exports) {

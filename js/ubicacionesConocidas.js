@@ -5,6 +5,9 @@
 //
 // - NUNCA modifica ni borra una coordenada. Lee lo que la ficha ya tiene (getWellLocation), la correccion vigente que ya leyo js/ubicacionCorreccion.js (que la entrega
 //   con ubicacionesConocidasController_actualizarVigente) y el estado de cada fuente registral (getDecisionesFuentesPozo: Sin revisar / Aceptada / Descartada).
+// - Es tambien el dueño del BLOQUE PRINCIPAL de la ficha ("Ubicación de Irrigación", #ubic-operativa): la ubicacion OPERATIVA vigente, compuesta como el mapa (decisiones
+//   registrales + validada en campo; ver ubicacionesConocidasLogic_construir). Se repinta cada vez que llega una decision o la correccion vigente; si las decisiones no se pueden
+//   leer queda base + validada en campo con un aviso discreto (nunca se inventa una Aceptada ni un "sin ubicacion").
 // - Quien tiene ubicacion + ubicacion_validar ve las acciones Aceptar / Descartar / Quitar aceptacion / Restaurar en cada tarjeta Y en el popup del visor. Las dos
 //   superficies usan las mismas funciones (js/ubicacionFuenteDecisionesUiLogic.js) y el mismo dialogo (js/ubicacionFuenteDecisionesUi.js). "Validada en campo" nunca
 //   tiene acciones (es de UbicacionCorrecciones). Quien no valida solo ve el estado.
@@ -22,6 +25,9 @@
     vigente: null,
     modelo: null,
     iconoMaps: '',
+    iconoUbicacion: '',
+    iconoUbicacionWarn: '',
+    decisionesFallo: false, // se pidieron las decisiones y no se pudieron leer: la ficha muestra base + V y un aviso discreto
     obtenerContexto: null,
     decisiones: null,    // ultima vista de getDecisionesFuentesPozo (o null si no se pudo leer: sin estados ni acciones)
     sugerencias: null,   // data.sugerencias de getSugerenciasFuentesPozo (quien no valida: las suyas; el validador: las pendientes) o null si no se pudo leer
@@ -46,6 +52,10 @@
     return $('ubic-conocidas');
   }
 
+  function bloquePrincipal() {
+    return $('ubic-operativa');
+  }
+
   function contexto() {
     return estado.obtenerContexto ? estado.obtenerContexto() : null;
   }
@@ -57,7 +67,9 @@
   }
 
   function recalcular() {
-    estado.modelo = ubicacionesConocidasLogic_construir({ wellId: estado.wellId, location: estado.location, vigente: estado.vigente });
+    estado.modelo = ubicacionesConocidasLogic_construir({
+      wellId: estado.wellId, location: estado.location, vigente: estado.vigente, decisiones: estado.decisiones, decisionesFallo: estado.decisionesFallo
+    });
     if (typeof ufdui_aplicarDecisiones === 'function') {
       ufdui_aplicarDecisiones(estado.modelo, estado.decisiones, !!estado.vigente);
     }
@@ -90,9 +102,23 @@
       }
       if (r && r.status === 'ok' && ufdui_vistaValida(r.data, wellId)) {
         estado.decisiones = r.data;
+        estado.decisionesFallo = false;
         repintar(true);
+      } else {
+        decisionesNoDisponibles();
       }
-    }, function () { /* sin red: la seccion queda sin estados ni acciones */ });
+    }, function () {
+      // sin red: la seccion queda sin estados ni acciones, la ficha con base + V y un aviso discreto
+      if (ap === estado.aperturaId) {
+        decisionesNoDisponibles();
+      }
+    });
+  }
+
+  // No se pudieron leer las decisiones: se conserva la ultima vista buena si hay una (una relectura fallida no borra lo que ya se sabe); sin ninguna, base + V. Aviso discreto.
+  function decisionesNoDisponibles() {
+    estado.decisionesFallo = true;
+    repintar(true);
   }
 
   // Las sugerencias del pozo (solo con permiso de ubicacion; el backend lo vuelve a exigir). Si falla, la ficha queda como antes (sin estado de sugerencias).
@@ -128,12 +154,25 @@
     }
   }
 
+  // El punto REGISTRAL vigente cambio respecto del automatico del padron: se lo cuenta al modulo de "Corregir ubicacion" (solo informativo; sigue comparando contra el padron).
+  function avisarReferenciaRegistral() {
+    var f = typeof window !== 'undefined' ? window.ubicacionCorreccionController_actualizarRegistral : null;
+    if (typeof f === 'function' && estado.wellId) {
+      f(estado.wellId, ubicacionesConocidasLogic_referenciaRegistral(estado.modelo));
+    }
+  }
+
   function pintarSeccion() {
     var cont = contenedor();
     if (!cont) {
       return;
     }
     recalcular();
+    var principal = bloquePrincipal();
+    if (principal) {
+      principal.innerHTML = ubicacionesConocidasLogic_htmlBloquePrincipal(estado.modelo, { iconoUbicacion: estado.iconoUbicacion, iconoUbicacionWarn: estado.iconoUbicacionWarn, iconoMaps: estado.iconoMaps });
+    }
+    avisarReferenciaRegistral();
     cont.innerHTML = ubicacionesConocidasLogic_htmlSeccion(estado.modelo, opcionesHtml());
     if (!cont.__uconAcciones && typeof cont.addEventListener === 'function') {
       cont.__uconAcciones = true;                   // un solo oyente delegado por contenedor (los botones se recrean con cada pintado)
@@ -152,8 +191,11 @@
     estado.wellId = ap && ap.wellId ? ap.wellId : null;
     estado.location = ap && ap.location ? ap.location : null;
     estado.iconoMaps = ap && ap.iconoMaps ? ap.iconoMaps : '';
+    estado.iconoUbicacion = ap && ap.iconoUbicacion ? ap.iconoUbicacion : '';
+    estado.iconoUbicacionWarn = ap && ap.iconoUbicacionWarn ? ap.iconoUbicacionWarn : '';
     estado.vigente = null;
     estado.decisiones = null;
+    estado.decisionesFallo = false;
     estado.sugerencias = null;
     estado.aviso = null;
     estado.fuenteEnFoco = null;
@@ -384,7 +426,7 @@
     }
     recalcular();
     mapaEls.leyenda.innerHTML = ubicacionesConocidasLogic_htmlLeyenda(estado.modelo);
-    var textoNota = estado.aviso && estado.aviso.texto ? estado.aviso.texto : (estado.modelo.sinOperativo ? UCON_NOTA_SIN_OPERATIVO : '');
+    var textoNota = estado.aviso && estado.aviso.texto ? estado.aviso.texto : ubicacionesConocidasLogic_notaSinOperativo(estado.modelo);
     mapaEls.nota.textContent = textoNota;
     mapaEls.nota.hidden = !textoNota;
     mp.capas.clearLayers();

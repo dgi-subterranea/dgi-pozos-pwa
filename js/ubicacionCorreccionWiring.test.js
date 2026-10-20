@@ -93,8 +93,11 @@ describe('integracion en app.js', () => {
     const render = app.slice(app.indexOf('function renderUbicacion'), app.indexOf('// --- Modulo Niveles Estaticos'));
     expect(render.indexOf('Ubicación de Irrigación')).toBeGreaterThan(-1);
     expect(render.indexOf('Ubicación de Irrigación')).toBeLessThan(render.indexOf('ubic-correcciones'));
-    expect(render).toContain('resuelta.lat');                                  // las coordenadas oficiales siguen pintandose
-    expect(render).toContain('Abrir en Google Maps');                            // y su enlace
+    // E3-5: el bloque principal ya no se arma aca con la ubicacion automatica del padron: lo pinta js/ubicacionesConocidas.js (con la ubicacion OPERATIVA: decisiones + validada)
+    expect(render).toContain('id="ubic-operativa"');
+    expect(render).not.toContain('resuelta.lat');
+    expect(render).not.toContain('ubicacionResuelta');
+    expect(render.indexOf('id="ubic-operativa"')).toBeLessThan(render.indexOf('id="ubic-conocidas"'));
     expect(render).toContain('id="ubic-conocidas"');                             // y las "Ubicaciones conocidas" (cada fuente por separado; reemplazan al detalle tecnico)
     expect(render).not.toContain('Fuentes (detalle técnico)');
   });
@@ -134,8 +137,10 @@ describe('integracion en app.js', () => {
   });
 
   test('sin coordenada oficial la ficha lo dice (no el texto de "fuentes que no coinciden")', () => {
-    expect(app).toContain("resuelta.estado === 'sinCoordenadas'");
-    expect(app).toContain('Sin ubicación de Irrigación');
+    const logica = fs.readFileSync(path.join(__dirname, 'ubicacionesConocidasLogic.js'), 'utf8');
+    expect(logica).toContain("var UCON_TITULO_SIN_OPERATIVO = 'Sin ubicación operativa de Irrigación';");
+    expect(logica).toContain("SIN_COORDENADAS: 'Este pozo no tiene una coordenada oficial cargada.'");
+    expect(app).not.toContain("resuelta.estado === 'sinCoordenadas'");
   });
 });
 

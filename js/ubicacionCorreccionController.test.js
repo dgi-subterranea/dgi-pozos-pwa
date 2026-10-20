@@ -331,6 +331,59 @@ describe('modal: abrir, Irrigacion visible y cierre', () => {
   });
 });
 
+describe('E3-5: ubicacion registral vigente en el modal (solo informativa)', () => {
+  const INFO_R = { tipo: 'R', lat: -33.3488, lon: -69.144 };
+
+  test('si cambio (una fuente aceptada), el modal la muestra ademas de la de Irrigacion, que no se modifica ni deja de ser la de la comparacion', async () => {
+    const t = cargar();
+    await abrirFicha(t);
+    t.ctx.ubicacionCorreccionController_actualizarRegistral(W, INFO_R);
+    t.el('btn-ubic-corr-abrir').click();
+    expect(t.el('ucorr-irrigacion').textContent).toBe('Ubicación de Irrigación (no se modifica): -33.34765, -69.14545');
+    expect(t.el('ucorr-registral').hidden).toBe(false);
+    expect(t.el('ucorr-registral').textContent).toBe(
+      'Ubicación registral vigente (Aceptada): -33.3488, -69.144. La comparación de tu corrección sigue usando la ubicación de Irrigación original.'
+    );
+  });
+
+  test('sin cambio (o sin informacion) el aviso queda oculto y vacio', async () => {
+    const t = cargar();
+    await abrirFicha(t);
+    t.el('btn-ubic-corr-abrir').click();
+    expect(t.el('ucorr-registral').hidden).toBe(true);
+    expect(t.el('ucorr-registral').textContent).toBe('');
+    t.ctx.ubicacionCorreccionController_actualizarRegistral(W, INFO_R);
+    expect(t.el('ucorr-registral').hidden).toBe(false);                    // con el modal abierto se actualiza
+    t.ctx.ubicacionCorreccionController_actualizarRegistral(W, null);
+    expect(t.el('ucorr-registral').hidden).toBe(true);
+  });
+
+  test('la informacion de OTRO pozo, o de una ficha anterior, se ignora; abrir otra ficha la limpia', async () => {
+    const t = cargar();
+    await abrirFicha(t);
+    t.ctx.ubicacionCorreccionController_actualizarRegistral('14-0002', INFO_R);
+    t.el('btn-ubic-corr-abrir').click();
+    expect(t.el('ucorr-registral').hidden).toBe(true);
+    t.ctx.ubicacionCorreccionController_actualizarRegistral(W, INFO_R);
+    expect(t.el('ucorr-registral').hidden).toBe(false);
+    t.ctx.ubicacionCorreccionController_cerrar();
+    await abrirFicha(t);
+    t.el('btn-ubic-corr-abrir').click();
+    expect(t.el('ucorr-registral').hidden).toBe(true);
+  });
+
+  test('no cambia el flujo de la correccion: el marcador fijo y la propuesta siguen usando la Irrigacion del padron', async () => {
+    const t = cargar();
+    await abrirFicha(t);
+    t.ctx.ubicacionCorreccionController_actualizarRegistral(W, INFO_R);
+    t.el('btn-ubic-corr-abrir').click();
+    const fuente = fuenteControlador.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+    expect(fuente).toMatch(/L\.marker\(\[estado\.irrigacion\.lat, estado\.irrigacion\.lon\]/);
+    expect(fuente).toMatch(/irrigacion: estado\.irrigacion\r?\n/);
+    expect(fuente).not.toMatch(/irrLat|irrLon/);
+  });
+});
+
 describe('A. GPS', () => {
   test('pide alta precision, sin cache, con timeout', async () => {
     const t = cargar();

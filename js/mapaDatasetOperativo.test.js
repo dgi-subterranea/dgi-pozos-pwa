@@ -445,10 +445,12 @@ describe('cableado visible: index.html, service worker, css, ficha', () => {
     expect(html).toMatch(/mapa-estado-chip mapa-estado-chip-validada/);
   });
 
-  test('la etiqueta de la ficha dice "Ubicación coincidente" (ya no "confirmada")', () => {
+  test('la ficha dice "Coincidente" (ya no "confirmada"): los textos de estado de la ficha salen de la misma tabla que el mapa', () => {
     const app = leer('js', 'app.js');
-    expect(app).toContain("corroborada: 'Ubicación coincidente'");
-    expect(app).not.toMatch(/Ubicación confirmada/);
+    const logica = leer('js', 'ubicacionOperativaLogic.js');
+    expect(logica).toContain("var UOP_ETIQUETAS_CODIGO_CORTAS = { D: 'Disponible', C: 'Coincidente', R: 'Aceptada', V: 'Validada en campo' };");
+    expect(app).not.toMatch(/Ubicación confirmada|corroborada: 'Ubicación/);
+    expect(leer('js', 'ubicacionesConocidasLogic.js')).toMatch(/etiquetaCorta: ubicacionOperativaLogic_etiquetaCodigo\(res\.codigo, true\)/);
   });
 
   test('aviso discreto: en el mapa y en Cerca Mio, oculto al inicio, con el texto aprobado y sin tecnicismos', () => {

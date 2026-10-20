@@ -932,65 +932,20 @@
   });
 
   // --- Modulo Ubicacion --------------------------------------------------
-  // Nombres de estado explicitos: una coordenada nunca se llama
-  // "confiable" solo por ser la unica disponible (decision explicita del
-  // usuario - puede ser la unica y estar mal). "corroborada" es la unica
-  // etiqueta que implica 2+ fuentes de acuerdo.
-  var UBICACION_ESTADO_LABEL = {
-    corroborada: 'Ubicación coincidente',
-    unica: 'Ubicación disponible'
-  };
-  // "Irrigación" (no "Provincia"): la capa coordProvincia sale de un
-  // archivo llamado pozos_provincia (cubre pozos de toda la provincia),
-  // pero las coordenadas en si son las que releva el Departamento
-  // General de Irrigacion - decision explicita del usuario de no llamar
-  // "provincia" a la fuente en la UI.
-  var FUENTE_LABEL = {
-    reportePozos: 'Reporte Pozos',
-    coordProvincia: 'Irrigación'
-  };
+  // Nombres de estado explicitos: una coordenada nunca se llama "confiable" solo por ser la unica disponible (decision explicita del usuario - puede ser la unica y estar
+  // mal). Los textos (Disponible / Coincidente / Aceptada / Validada en campo / Sin ubicación operativa de Irrigación) y la ubicacion operativa vigente los arma
+  // js/ubicacionesConocidasLogic.js con la MISMA composicion que el mapa (decisiones registrales + validada en campo); "Irrigación" (no "Provincia") es la fuente.
 
-  function formatXY(c) {
-    return 'x ' + c.x + ' / y ' + c.y;
-  }
-
-  // location: respuesta plana de getWellLocation - {wellId, coordenadas,
-  // coordenadasProvincia, ubicacionResuelta}. Independiente del registro
-  // de Datos (puede haber Ubicacion sin permiso "datos").
+  // location: respuesta plana de getWellLocation - {wellId, coordenadas, coordenadasProvincia, ubicacionResuelta}. Independiente del registro de Datos (puede haber Ubicacion sin
+  // permiso "datos").
   function renderUbicacion(location) {
-    var resuelta = location.ubicacionResuelta || { estado: 'sinCoordenadas' };
-
     var html = '<div class="modulo-id-line"><span class="modulo-id mono">' + escapeHtml(location.wellId) + '</span></div>';
     html += '<p class="modulo-subline">Ubicación</p>';
 
-    // La ubicacion de Irrigacion (la oficial) va SIEMPRE primero, rotulada y separada de las correcciones, que se agregan abajo
-    // (js/ubicacionCorreccion.js) y nunca la reemplazan ni la alteran.
+    // La ubicacion de Irrigacion OPERATIVA (la que usan el mapa, Cerca Mio, la seleccion y los reemplazos) va SIEMPRE primero, rotulada y separada de las correcciones, que se
+    // agregan abajo (js/ubicacionCorreccion.js). La pinta js/ubicacionesConocidas.js en #ubic-operativa (y la repinta cuando llegan las decisiones o la validada en campo).
     html += '<p class="field-label ubic-oficial-titulo">Ubicación de Irrigación</p>';
-    html += '<div class="ubic-row">';
-    if (resuelta.estado === 'corroborada' || resuelta.estado === 'unica') {
-      html += '<span class="pin pin-ok">' + ICON_UBICACION + '</span>';
-      html += '<div class="ubic-text"><strong>' + UBICACION_ESTADO_LABEL[resuelta.estado] + '</strong>';
-      if (resuelta.estado === 'corroborada') {
-        html += '2 o más fuentes independientes coinciden a ' + resuelta.distanciaCorroboracion + ' m entre sí.';
-      } else {
-        html += 'Fuente: ' + escapeHtml(FUENTE_LABEL[resuelta.fuente] || resuelta.fuente) + ' · sin corroborar por otra fuente.';
-      }
-      html += '<div class="coord-mono">' + resuelta.lat + ', ' + resuelta.lon + '<br>' + formatXY(resuelta) + '</div>';
-      html += '<a class="maps-btn" href="https://www.google.com/maps?q=' + resuelta.lat + ',' + resuelta.lon + '" target="_blank" rel="noopener">' + ICON_MAPS + 'Abrir en Google Maps</a>';
-      html += '</div>';
-    } else if (resuelta.estado === 'sinCoordenadas') {
-      // Solo se llega aca con ubicacion_corregir=SI (ver el hub): el pozo no tiene coordenada oficial.
-      html += '<span class="pin pin-warn">' + ICON_UBICACION_WARN + '</span>';
-      html += '<div class="ubic-text"><strong>Sin ubicación de Irrigación</strong>';
-      html += 'Este pozo no tiene una coordenada oficial cargada.';
-      html += '</div>';
-    } else {
-      html += '<span class="pin pin-warn">' + ICON_UBICACION_WARN + '</span>';
-      html += '<div class="ubic-text"><strong>Ubicación a revisar</strong>';
-      html += 'Hay coordenadas de distintas fuentes que no coinciden entre sí. Un técnico debe revisarlas antes de habilitar el mapa.';
-      html += '</div>';
-    }
-    html += '</div>';
+    html += '<div id="ubic-operativa" class="ubic-operativa"></div>';
 
     // "Ubicaciones conocidas": cada fuente por separado (Reporte Pozos, Irrigacion 1..N y la validada en campo) con su enlace a Google Maps y el visor
     // comparativo. Reemplaza al antiguo detalle tecnico de fuentes (mismos x/y, ahora con lat/lon, distancia al punto operativo y mapa). Solo lectura.
@@ -1000,7 +955,7 @@
     html += '<div id="ubic-correcciones" class="ubic-correcciones"></div>';
 
     ubicacionContent.innerHTML = html;
-    ubicacionesConocidasController_abrir({ wellId: location.wellId, location: location, iconoMaps: ICON_MAPS });
+    ubicacionesConocidasController_abrir({ wellId: location.wellId, location: location, iconoMaps: ICON_MAPS, iconoUbicacion: ICON_UBICACION, iconoUbicacionWarn: ICON_UBICACION_WARN });
     ubicacionCorreccionController_abrir({ wellId: location.wellId, location: location });
   }
 

@@ -4408,6 +4408,17 @@ body.ucorr-abierto {
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
+/* Ubicacion registral vigente cuando cambio por una decision (Aceptada / descartadas): informativa, mas discreta que la de Irrigacion. */
+.ucorr-registral {
+  margin: 0 0 8px;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--color-text-soft);
+  overflow-wrap: anywhere;
+}
+.ucorr-registral[hidden] {
+  display: none;
+}
 .ucorr-nota-oficial {
   margin: 0 0 14px;
   font-size: 0.76rem;
@@ -4945,6 +4956,16 @@ body.ucorr-abierto {
   font-size: 0.76rem;
   line-height: 1.45;
   color: var(--color-text-soft);
+}
+/* Una fuente Aceptada que queda DEBAJO de una validada en campo: sigue aceptada, no es el punto operativo mientras exista la V. */
+.ucon-respaldo {
+  margin-top: 4px;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--color-text-soft);
+}
+.ubic-operativa .ucon-aviso-degradado {
+  margin: 8px 0 0;
 }
 .ucon-nota-aviso {
   padding: 9px 11px;

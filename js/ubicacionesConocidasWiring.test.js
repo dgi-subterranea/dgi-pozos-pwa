@@ -15,7 +15,7 @@ describe('index.html', () => {
   test('todos los ids que usa el controlador existen (el boton "Ver todas" lo pinta la seccion)', () => {
     const ids = new Set();
     controlador.replace(/\$\('([^']+)'\)/g, (_, id) => { ids.add(id); return ''; });
-    const dinamicos = ['ubic-conocidas', 'btn-ucon-ver-todas'];
+    const dinamicos = ['ubic-conocidas', 'ubic-operativa', 'btn-ucon-ver-todas'];                // los pinta app.js / la seccion (ubic-operativa: el bloque principal de la ficha)
     const faltan = [...ids].filter((id) => dinamicos.indexOf(id) === -1 && !new RegExp('id="' + id + '"').test(html));
     expect(ids.size).toBeGreaterThan(8);
     expect(faltan).toEqual([]);
@@ -65,7 +65,8 @@ describe('app.js y controlador de correcciones', () => {
 
   test('la ficha trae el contenedor y abre el controlador con wellId, location e icono de mapas, ANTES de las correcciones', () => {
     expect(render).toContain('<div id="ubic-conocidas" class="ubic-conocidas"></div>');
-    expect(render).toMatch(/ubicacionesConocidasController_abrir\(\{ wellId: location\.wellId, location: location, iconoMaps: ICON_MAPS \}\);/);
+    expect(render).toContain('<div id="ubic-operativa" class="ubic-operativa"></div>');
+    expect(render).toMatch(/ubicacionesConocidasController_abrir\(\{ wellId: location\.wellId, location: location, iconoMaps: ICON_MAPS, iconoUbicacion: ICON_UBICACION, iconoUbicacionWarn: ICON_UBICACION_WARN \}\);/);
     expect(render.indexOf('ubicacionesConocidasController_abrir({')).toBeLessThan(render.indexOf('ubicacionCorreccionController_abrir({'));
     expect(render.indexOf('id="ubic-conocidas"')).toBeLessThan(render.indexOf('id="ubic-correcciones"'));
     expect(render.indexOf('Ubicación de Irrigación')).toBeLessThan(render.indexOf('id="ubic-conocidas"'));
