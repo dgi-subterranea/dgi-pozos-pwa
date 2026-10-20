@@ -38,8 +38,8 @@ describe('tablas: estados, codigos, etiquetas y confianza', () => {
     ['DISCREPANCIA', 'SIN_COORDENADAS', 'toString', null].forEach((e) => expect(U.ubicacionOperativaLogic_codigoDeEstado(e)).toBeNull());
   });
 
-  test('confianza por TABLA: A validada, B coincidente, C disponible, D discrepancia, null sin coordenadas', () => {
-    expect(U.UOP_CONFIANZA_POR_ESTADO).toEqual({ VALIDADA_CAMPO: 'A', COINCIDENTE: 'B', DISPONIBLE: 'C', DISCREPANCIA: 'D', SIN_COORDENADAS: null });
+  test('confianza por TABLA: A validada, B coincidente y aceptada, C disponible, D discrepancia, null sin coordenadas', () => {
+    expect(U.UOP_CONFIANZA_POR_ESTADO).toEqual({ VALIDADA_CAMPO: 'A', COINCIDENTE: 'B', ACEPTADA: 'B', DISPONIBLE: 'C', DISCREPANCIA: 'D', SIN_COORDENADAS: null });
     expect(U.ubicacionOperativaLogic_confianzaDeEstado('VALIDADA_CAMPO')).toBe('A');
     expect(U.ubicacionOperativaLogic_confianzaDeEstado('inventado')).toBeNull();
     expect(U.ubicacionOperativaLogic_confianzaDeEstado('hasOwnProperty')).toBeNull();

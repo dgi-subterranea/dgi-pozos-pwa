@@ -1,4 +1,4 @@
-// PUNTO OPERATIVO del pozo (Etapa 1: modulo puro, sin DOM, sin red, sin Leaflet, sin backend; todavia NO lo usa ninguna pantalla).
+// PUNTO OPERATIVO del pozo (modulo puro, sin DOM, sin red, sin Leaflet, sin backend).
 //
 // Responde, para un wellId, "donde esta el pozo" con UNA regla central que despues deben heredar el Mapa de pozos, Cerca Mio, la seleccion y los reemplazos
 // (el punto de aplicacion sera mapaDataset_obtener, una sola vez). Ningun modulo debe re-implementar estas reglas.
@@ -7,6 +7,13 @@
 //   fuente     de donde sale la coordenada del punto operativo:  IRR_REPORTE | IRR_PROVINCIA | IRR_VARIAS | CAMPO_CORREGIDA
 //   estado     que se sabe de ese punto:                          SIN_COORDENADAS | DISPONIBLE | COINCIDENTE | VALIDADA_CAMPO | DISCREPANCIA
 //   confianza  nivel derivado por TABLA (sin IA, sin score):      A (validada en campo) | B (coincidente) | C (una sola fuente) | D (discrepancia) | null
+//
+// COMPOSICION POR CAPAS (E3-2; la usara mapaDataset_obtener en E3-3, todavia NO esta cableada):
+//   BASE (pozos.json: D | C)  ->  DELTA REGISTRAL (decisiones sobre las fuentes: D | C | R | N)  ->  VALIDADA EN CAMPO (V)  ->  punto final o NINGUNO
+//   D = disponible (automatico)   C = coincidente (automatico)   R = fuente registral ACEPTADA   V = validada en campo   N = SIN punto registral operativo.
+//   El orden es obligatorio y "sin punto" se decide recien al FINAL: un pozo con delta N y una V sigue teniendo punto (la V), con los atributos de su base. La `base` de una V
+//   es la resolucion registral EFECTIVA previa a ella (D | C | R, o null si el delta dijo N o no habia base): si la V desaparece, vuelve ese punto. Ver
+//   ubicacionOperativaLogic_componerPunto / _aplicarCapas. `R` es la letra de dataset de la fuente ACEPTADA: no tiene relacion con el estado de aptitud de reemplazo.
 //
 // Reglas V1 (las aprobadas; NE, Relevamiento, "Confirmada en campo" y candidatos satelitales NO entran todavia):
 //   R1  hay una correccion VALIDADA vigente  -> su lat/lon, fuente CAMPO_CORREGIDA, estado VALIDADA_CAMPO, confianza A.
@@ -29,29 +36,35 @@
   var UOP_MENDOZA_BBOX = { latMin: -37.65, latMax: -31.95, lonMin: -70.65, lonMax: -66.45 };
 
   var UOP_FUENTES = { IRR_REPORTE: 'IRR_REPORTE', IRR_PROVINCIA: 'IRR_PROVINCIA', IRR_VARIAS: 'IRR_VARIAS', CAMPO_CORREGIDA: 'CAMPO_CORREGIDA' };
-  var UOP_ESTADOS = { SIN_COORDENADAS: 'SIN_COORDENADAS', DISPONIBLE: 'DISPONIBLE', COINCIDENTE: 'COINCIDENTE', VALIDADA_CAMPO: 'VALIDADA_CAMPO', DISCREPANCIA: 'DISCREPANCIA' };
+  var UOP_ESTADOS = { SIN_COORDENADAS: 'SIN_COORDENADAS', DISPONIBLE: 'DISPONIBLE', COINCIDENTE: 'COINCIDENTE', ACEPTADA: 'ACEPTADA', VALIDADA_CAMPO: 'VALIDADA_CAMPO', DISCREPANCIA: 'DISCREPANCIA' };
   var UOP_REGLAS = { R1: 'R1_CAMPO_VALIDADA', R2: 'R2_BASE', R0: 'R0_NINGUNA' };
 
   // Camino caliente: el padron solo informa que es Irrigacion (pozos.json no distingue Reporte Pozos / Provincia); un override es CAMPO.
   var UOP_FUENTE_DATASET_BASE = 'IRR';
   var UOP_FUENTE_DATASET_CAMPO = 'CAMPO';
 
-  // Codigo de una letra del dataset <-> estado completo. D y C ya existen en pozos.json; V se suma por el overlay.
-  var UOP_CODIGO_A_ESTADO = { D: 'DISPONIBLE', C: 'COINCIDENTE', V: 'VALIDADA_CAMPO' };
-  var UOP_ESTADO_A_CODIGO = { DISPONIBLE: 'D', COINCIDENTE: 'C', VALIDADA_CAMPO: 'V' };
+  // Codigo de una letra del dataset <-> estado completo. D y C ya existen en pozos.json; R (fuente aceptada) la suma el delta registral y V el overlay de campo.
+  var UOP_CODIGO_A_ESTADO = { D: 'DISPONIBLE', C: 'COINCIDENTE', R: 'ACEPTADA', V: 'VALIDADA_CAMPO' };
+  var UOP_ESTADO_A_CODIGO = { DISPONIBLE: 'D', COINCIDENTE: 'C', ACEPTADA: 'R', VALIDADA_CAMPO: 'V' };
+  // Los codigos de la RESOLUCION REGISTRAL de un punto (lo que puede ser la `base` de una V): D | C | R.
+  var UOP_CODIGOS_REGISTRALES = ['D', 'C', 'R'];
+  // Estados que puede traer una entrada del delta registral (el endpoint de efecto registral de las decisiones sobre fuentes): D | C | R con coordenada, o N = sin punto registral operativo.
+  var UOP_DELTA_REGISTRAL_ESTADOS = { D: 'DISPONIBLE', C: 'COINCIDENTE', R: 'ACEPTADA', N: 'SIN_PUNTO' };
 
-  // Tabla inicial (no hay otra forma de llegar a una confianza): VALIDADA_CAMPO=A, COINCIDENTE=B, DISPONIBLE=C, DISCREPANCIA=D, SIN_COORDENADAS=null.
-  var UOP_CONFIANZA_POR_ESTADO = { VALIDADA_CAMPO: 'A', COINCIDENTE: 'B', DISPONIBLE: 'C', DISCREPANCIA: 'D', SIN_COORDENADAS: null };
+  // Tabla inicial (no hay otra forma de llegar a una confianza): VALIDADA_CAMPO=A, COINCIDENTE=B, ACEPTADA=B (eleccion humana explicita, R1b del diseno), DISPONIBLE=C, DISCREPANCIA=D,
+  // SIN_COORDENADAS=null.
+  var UOP_CONFIANZA_POR_ESTADO = { VALIDADA_CAMPO: 'A', COINCIDENTE: 'B', ACEPTADA: 'B', DISPONIBLE: 'C', DISCREPANCIA: 'D', SIN_COORDENADAS: null };
 
   // Etiquetas humanas. El rename "Ubicacion confirmada" -> "Ubicacion coincidente" se hace en las pantallas en la etapa de UI; aca solo quedan definidas.
   var UOP_ETIQUETAS_ESTADO = {
     DISPONIBLE: 'Ubicación disponible',
     COINCIDENTE: 'Ubicación coincidente',
+    ACEPTADA: 'Ubicación aceptada',
     VALIDADA_CAMPO: 'Validada en campo',
     DISCREPANCIA: 'Discrepancia',
     SIN_COORDENADAS: 'Sin coordenadas'
   };
-  var UOP_ETIQUETAS_CODIGO_CORTAS = { D: 'Disponible', C: 'Coincidente', V: 'Validada en campo' };
+  var UOP_ETIQUETAS_CODIGO_CORTAS = { D: 'Disponible', C: 'Coincidente', R: 'Aceptada', V: 'Validada en campo' };
 
   // Estado del padron (ubicacionResuelta.estado) -> estado humano. dudosoLeve / revisar / revisarGrave son los tres niveles de DISCREPANCIA.
   var UOP_ESTADO_PADRON = {
@@ -237,48 +250,235 @@
     return a.cuenca !== null || a.profundidad !== null || a.tramosFiltrantes.length > 0 || a.surgencia !== null;
   }
 
-  // La coordenada y el estado de la base de un punto del dataset (si ya lleva overlay, la base ORIGINAL guardada en `base`; asi aplicar dos veces no anida).
+  function esCodigoRegistral(c) {
+    return UOP_CODIGOS_REGISTRALES.indexOf(c) !== -1;
+  }
+
+  // La coordenada y el estado de la base de un punto del dataset (si ya lleva overlay, la base ORIGINAL guardada en `base`; asi aplicar dos veces no anida). El estado de la
+  // resolucion registral puede ser D | C | R; cualquier otro (o ausente) queda en null, nunca se inventa.
   function baseDePuntoDataset(punto) {
     if (punto.fuente === UOP_FUENTE_DATASET_CAMPO) {
       var b = punto.base;
       return esObjeto(b) && ubicacionOperativaLogic_coordenadaValida(b.lat, b.lon)
-        ? { lat: b.lat, lon: b.lon, estado: b.estado === 'C' || b.estado === 'D' ? b.estado : null } : null;
+        ? { lat: b.lat, lon: b.lon, estado: esCodigoRegistral(b.estado) ? b.estado : null } : null;
     }
     if (!ubicacionOperativaLogic_coordenadaValida(punto.lat, punto.lon)) { return null; }
-    return { lat: punto.lat, lon: punto.lon, estado: punto.estado === 'C' || punto.estado === 'D' ? punto.estado : null };
+    return { lat: punto.lat, lon: punto.lon, estado: esCodigoRegistral(punto.estado) ? punto.estado : null };
   }
 
-  // Resuelve UN punto del dataset. base: punto de pozos.json o null (pozo sin punto en el mapa). delta: override ya normalizado o null.
+  // Resuelve UN punto del dataset con SOLO la capa de campo (V). base: punto de pozos.json o null (pozo sin punto en el mapa). delta: override ya normalizado o null.
   // registral: atributos del padron del pozo (solo se usan si no hay base). NUNCA muta base ni delta; devuelve un objeto NUEVO cuando cambia algo y el MISMO
-  // objeto base cuando no hay override. Sin base y sin override -> null (R0).
+  // objeto base cuando no hay override. Sin base y sin override -> null (R0). Es la composicion con la capa registral vacia (ubicacionOperativaLogic_componerPunto).
   function ubicacionOperativaLogic_resolverPuntoDataset(base, delta, registral) {
-    var d = delta ? ubicacionOperativaLogic_normalizarDelta(delta) : null;
-    var tieneBase = esObjeto(base);
-    if (!d) {
-      return tieneBase ? base : null;
+    return ubicacionOperativaLogic_componerPunto(base, null, delta, registral);
+  }
+
+  // --- Delta REGISTRAL (efecto de las decisiones sobre las fuentes del padron) ---
+
+  // Una entrada del delta registral -> entrada limpia o null.
+  //   D | C | R : wellId valido + lat/lon numericas DENTRO de Mendoza.   N : wellId valido (no exige lat/lon; si vienen se descartan).
+  // Una entrada que no se puede interpretar (estado desconocido, coordenada invalida o fuera de Mendoza, wellId invalido) devuelve null: JAMAS se convierte en N, porque N
+  // retira el punto del mapa y un dato corrupto no puede hacerlo. Solo se copian wellId, estado, lat y lon.
+  function ubicacionOperativaLogic_normalizarDeltaRegistral(d) {
+    if (!esObjeto(d) || !wellIdValido(d.wellId)) { return null; }
+    if (typeof d.estado !== 'string' || !Object.prototype.hasOwnProperty.call(UOP_DELTA_REGISTRAL_ESTADOS, d.estado)) { return null; }
+    if (d.estado === 'N') { return { wellId: d.wellId, estado: 'N' }; }
+    if (!ubicacionOperativaLogic_coordenadaValida(d.lat, d.lon)) { return null; }
+    return { wellId: d.wellId, estado: d.estado, lat: d.lat, lon: d.lon };
+  }
+
+  function motivoDescarteRegistral(d) {
+    if (!esObjeto(d)) { return 'NO_ES_OBJETO'; }
+    if (!wellIdValido(d.wellId)) { return 'WELL_ID_INVALIDO'; }
+    if (typeof d.estado !== 'string' || !Object.prototype.hasOwnProperty.call(UOP_DELTA_REGISTRAL_ESTADOS, d.estado)) { return 'ESTADO_DESCONOCIDO'; }
+    return 'COORDENADA_INVALIDA';
+  }
+
+  function mismaEntradaRegistral(a, b) {
+    return a.estado === b.estado && (a.estado === 'N' || (a.lat === b.lat && a.lon === b.lon));
+  }
+
+  // deltas registrales (lista) -> {porWell: {wellId: entrada}, descartadas: [{wellId, motivo}], duplicadas: n}. Nunca lanza. El endpoint entrega UNA entrada por pozo: si un pozo
+  // viene repetido con el MISMO contenido se cuenta como duplicada y queda una; si viene repetido con contenido DISTINTO el contrato esta roto para ese pozo y se descartan TODAS
+  // sus entradas (motivo DUPLICADA_CONFLICTIVA): ante la duda se conserva base + V, no se elige una al azar.
+  function ubicacionOperativaLogic_indexarDeltasRegistrales(deltas) {
+    var porWell = Object.create(null);
+    var conflictivos = Object.create(null);
+    var descartadas = [];
+    var duplicadas = 0;
+    var lista = Array.isArray(deltas) ? deltas : [];
+    for (var i = 0; i < lista.length; i++) {
+      var d = ubicacionOperativaLogic_normalizarDeltaRegistral(lista[i]);
+      if (!d) {
+        descartadas.push({ wellId: esObjeto(lista[i]) && typeof lista[i].wellId === 'string' ? lista[i].wellId : null, motivo: motivoDescarteRegistral(lista[i]) });
+        continue;
+      }
+      if (conflictivos[d.wellId]) { duplicadas += 1; continue; }
+      var previo = porWell[d.wellId];
+      if (previo) {
+        duplicadas += 1;
+        if (!mismaEntradaRegistral(previo, d)) {
+          delete porWell[d.wellId];
+          conflictivos[d.wellId] = true;
+          descartadas.push({ wellId: d.wellId, motivo: 'DUPLICADA_CONFLICTIVA' });
+        }
+        continue;
+      }
+      porWell[d.wellId] = d;
     }
+    return { porWell: porWell, descartadas: descartadas, duplicadas: duplicadas };
+  }
+
+  // --- Composicion por capas ---
+
+  // Los campos que definen el PUNTO (y su procedencia). Todo lo demas del punto base (cuenca, profundidad, tramos, surgencia... y lo que se agregue en el futuro) son atributos
+  // auxiliares y se conservan tal cual; nunca se inventan campos nuevos.
+  var UOP_CLAVES_DE_PUNTO = ['lat', 'lon', 'estado', 'fuente', 'base', 'vts'];
+
+  // Punto nuevo: con base, copia sus atributos auxiliares; sin base, los del padron si se conocen (registral) y si no "Sin dato" (null / []), igual que antes.
+  function puntoConAtributos(base, wellId, registral) {
     var out = {};
-    if (tieneBase) {
-      Object.keys(base).forEach(function (k) { out[k] = base[k]; });      // copia superficial: cuenca, profundidad, tramos y surgencia se conservan tal cual
+    if (esObjeto(base)) {
+      Object.keys(base).forEach(function (k) { if (UOP_CLAVES_DE_PUNTO.indexOf(k) === -1) { out[k] = base[k]; } });
     } else {
       var a = atributosDeRegistral(registral);
-      out.wellId = d.wellId;
-      out.lat = d.lat;
-      out.lon = d.lon;
-      out.estado = 'V';
+      out.wellId = wellId;
       out.cuenca = a.cuenca;
       out.profundidad = a.profundidad;
       out.tramosFiltrantes = a.tramosFiltrantes;
       out.surgencia = a.surgencia;
     }
-    var b = tieneBase ? baseDePuntoDataset(base) : null;
-    out.lat = d.lat;
-    out.lon = d.lon;
-    out.estado = 'V';
-    out.fuente = UOP_FUENTE_DATASET_CAMPO;
-    out.base = b;
-    out.vts = d.vts;
     return out;
+  }
+
+  // COMPOSICION de UN pozo: base -> delta registral -> V -> punto final o ninguno. Funcion pura; NUNCA muta sus argumentos.
+  //   base            punto de pozos.json (o ya compuesto: se parte de su resolucion registral) | null (el pozo no tiene punto en el mapa)
+  //   deltaRegistral  entrada del delta registral {wellId, estado:'D'|'C'|'R'|'N', lat, lon} | null. Una entrada invalida se IGNORA (no retira nada).
+  //   validadaCampo   {wellId, lat, lon, vts} de getUbicacionesValidadas | null. Invalida -> se ignora.
+  //   registral       atributos del padron del pozo (profundidad, tramos, surgencia, cuenca), solo para un pozo SIN base; null -> "Sin dato"
+  // salida: {punto, capa, sinPuntoRegistral, baseRegistral}
+  //   punto              el punto final, o null = SIN ubicacion operativa (no se inventa ninguna coordenada)
+  //   capa               'CAMPO' (gana V) | 'REGISTRAL' (D | C | R del delta) | 'BASE' (sin cambios: el MISMO objeto base) | 'NINGUNA' (sin punto)
+  //   sinPuntoRegistral  true si el delta registral dijo N (aunque una V haya mantenido el punto)
+  //   baseRegistral      {lat, lon, estado: D|C|R|null} = la resolucion registral efectiva previa a V, o null si no hay (delta N, sin base o base invalida)
+  // Reglas: D/C/R del delta REEMPLAZAN la resolucion registral del base y conservan sus atributos; N la deja "sin punto" pero NO retira el pozo mientras haya V; V gana sobre
+  // todo y su `base` es la resolucion registral efectiva. Una capa de OTRO wellId se ignora (jamas se aplica la coordenada de un pozo a otro).
+  function ubicacionOperativaLogic_componerPuntoDetallado(base, deltaRegistral, validadaCampo, registral) {
+    var tieneBase = esObjeto(base);
+    var wellId = tieneBase && typeof base.wellId === 'string' ? base.wellId : null;
+    var dr = deltaRegistral ? ubicacionOperativaLogic_normalizarDeltaRegistral(deltaRegistral) : null;
+    if (dr && wellId === null) { wellId = dr.wellId; }
+    var dv = validadaCampo ? ubicacionOperativaLogic_normalizarDelta(validadaCampo) : null;
+    if (dv && wellId === null) { wellId = dv.wellId; }
+    if (dr && dr.wellId !== wellId) { dr = null; }
+    if (dv && dv.wellId !== wellId) { dv = null; }
+
+    var baseReg = tieneBase ? baseDePuntoDataset(base) : null;
+    var efectivo = baseReg;
+    var sinPuntoRegistral = false;
+    if (dr && dr.estado === 'N') {
+      efectivo = null;
+      sinPuntoRegistral = true;
+    } else if (dr) {
+      efectivo = { lat: dr.lat, lon: dr.lon, estado: dr.estado };
+    }
+
+    if (dv) {
+      var v = puntoConAtributos(base, wellId, registral);
+      v.lat = dv.lat;
+      v.lon = dv.lon;
+      v.estado = 'V';
+      v.fuente = UOP_FUENTE_DATASET_CAMPO;
+      v.base = efectivo ? { lat: efectivo.lat, lon: efectivo.lon, estado: efectivo.estado } : null;
+      v.vts = dv.vts;
+      return { punto: v, capa: 'CAMPO', sinPuntoRegistral: sinPuntoRegistral, baseRegistral: v.base };
+    }
+    if (dr) {
+      if (efectivo === null) {
+        return { punto: null, capa: 'NINGUNA', sinPuntoRegistral: true, baseRegistral: null };
+      }
+      if (baseReg && base.fuente !== UOP_FUENTE_DATASET_CAMPO && baseReg.estado === efectivo.estado && baseReg.lat === efectivo.lat && baseReg.lon === efectivo.lon) {
+        return { punto: base, capa: 'BASE', sinPuntoRegistral: false, baseRegistral: baseReg };       // el delta coincide con la base: nada cambia, mismo objeto
+      }
+      var r = puntoConAtributos(base, wellId, registral);
+      r.lat = efectivo.lat;
+      r.lon = efectivo.lon;
+      r.estado = efectivo.estado;
+      return { punto: r, capa: 'REGISTRAL', sinPuntoRegistral: false, baseRegistral: efectivo };
+    }
+    return tieneBase ? { punto: base, capa: 'BASE', sinPuntoRegistral: false, baseRegistral: baseReg } : { punto: null, capa: 'NINGUNA', sinPuntoRegistral: false, baseRegistral: null };
+  }
+
+  function ubicacionOperativaLogic_componerPunto(base, deltaRegistral, validadaCampo, registral) {
+    return ubicacionOperativaLogic_componerPuntoDetallado(base, deltaRegistral, validadaCampo, registral).punto;
+  }
+
+  function cantidad(lista) {
+    return Array.isArray(lista) ? lista.length : 0;
+  }
+
+  // Compone TODO el dataset: pozos (puntos de pozos.json) + deltas registrales + deltas de campo -> {pozos, resumen}. No muta nada.
+  //  - pozos: si ninguna capa cambia nada, la MISMA lista; si no, una lista NUEVA con el mismo orden; los puntos sin capas son los mismos objetos; un punto cuya composicion da
+  //    "sin punto" SALE de la lista; los pozos que solo existen por una capa (sin punto base) van al final ordenados por wellId.
+  //  - opciones.obtenerRegistral(wellId) -> atributos del padron del pozo o null; solo se llama para pozos SIN punto base. Si lanza, el pozo se agrega igual sin atributos.
+  //  - resumen: {registral: {recibidas, descartadas, duplicadas}, campo: {recibidas, descartadas, duplicadas}, aplicadas, nuevos, quitados, sinPunto}
+  //    aplicadas = puntos que cambiaron respecto de la base (incluye nuevos); quitados = puntos de la base que quedaron sin ubicacion; sinPunto = pozos sin base que tampoco
+  //    quedaron con punto (por ejemplo una entrada N o un delta que no alcanza para crearlo).
+  function ubicacionOperativaLogic_aplicarCapas(pozos, deltasRegistrales, deltasCampo, opciones) {
+    var base = Array.isArray(pozos) ? pozos : [];
+    var o = opciones || {};
+    var idxR = ubicacionOperativaLogic_indexarDeltasRegistrales(deltasRegistrales);
+    var idxC = ubicacionOperativaLogic_indexarDeltas(deltasCampo);
+    var resumen = {
+      registral: { recibidas: cantidad(deltasRegistrales), descartadas: idxR.descartadas, duplicadas: idxR.duplicadas },
+      campo: { recibidas: cantidad(deltasCampo), descartadas: idxC.descartadas, duplicadas: idxC.duplicadas },
+      aplicadas: 0, nuevos: 0, quitados: 0, sinPunto: 0
+    };
+    var ids = Object.create(null);
+    Object.keys(idxR.porWell).forEach(function (w) { ids[w] = true; });
+    Object.keys(idxC.porWell).forEach(function (w) { ids[w] = true; });
+    var wellIds = Object.keys(ids);
+    if (wellIds.length === 0) {
+      return { pozos: base, resumen: resumen };
+    }
+    var vistos = Object.create(null);
+    var salida = [];
+    var cambio = false;
+    for (var i = 0; i < base.length; i++) {
+      var p = base[i];
+      var w = esObjeto(p) ? p.wellId : undefined;
+      if (typeof w !== 'string' || !ids[w]) {
+        salida.push(p);
+        continue;
+      }
+      vistos[w] = true;
+      var r = ubicacionOperativaLogic_componerPuntoDetallado(p, idxR.porWell[w] || null, idxC.porWell[w] || null, null);
+      if (r.punto === null) {
+        resumen.quitados += 1;
+        cambio = true;
+      } else {
+        salida.push(r.punto);
+        if (r.punto !== p) { resumen.aplicadas += 1; cambio = true; }
+      }
+    }
+    wellIds.sort();
+    wellIds.forEach(function (w) {
+      if (vistos[w]) { return; }
+      var registral = null;
+      if (typeof o.obtenerRegistral === 'function') {
+        try { registral = o.obtenerRegistral(w); } catch (e) { registral = null; }
+      }
+      var r = ubicacionOperativaLogic_componerPuntoDetallado(null, idxR.porWell[w] || null, idxC.porWell[w] || null, registral);
+      if (r.punto === null) {
+        resumen.sinPunto += 1;
+        return;
+      }
+      salida.push(r.punto);
+      resumen.nuevos += 1;
+      resumen.aplicadas += 1;
+      cambio = true;
+    });
+    return { pozos: cambio ? salida : base, resumen: resumen };
   }
 
   // Aplica TODOS los overrides a la lista de puntos de pozos.json (el punto unico donde lo hara mapaDataset_obtener). Devuelve {pozos, resumen}.
@@ -449,6 +649,8 @@
     UOP_FUENTE_DATASET_CAMPO: UOP_FUENTE_DATASET_CAMPO,
     UOP_CODIGO_A_ESTADO: UOP_CODIGO_A_ESTADO,
     UOP_ESTADO_A_CODIGO: UOP_ESTADO_A_CODIGO,
+    UOP_CODIGOS_REGISTRALES: UOP_CODIGOS_REGISTRALES,
+    UOP_DELTA_REGISTRAL_ESTADOS: UOP_DELTA_REGISTRAL_ESTADOS,
     UOP_CONFIANZA_POR_ESTADO: UOP_CONFIANZA_POR_ESTADO,
     UOP_ETIQUETAS_ESTADO: UOP_ETIQUETAS_ESTADO,
     UOP_ETIQUETAS_CODIGO_CORTAS: UOP_ETIQUETAS_CODIGO_CORTAS,
@@ -466,6 +668,11 @@
     ubicacionOperativaLogic_vigenteDeCorrecciones: ubicacionOperativaLogic_vigenteDeCorrecciones,
     ubicacionOperativaLogic_resolverPuntoDataset: ubicacionOperativaLogic_resolverPuntoDataset,
     ubicacionOperativaLogic_aplicarOverlay: ubicacionOperativaLogic_aplicarOverlay,
+    ubicacionOperativaLogic_normalizarDeltaRegistral: ubicacionOperativaLogic_normalizarDeltaRegistral,
+    ubicacionOperativaLogic_indexarDeltasRegistrales: ubicacionOperativaLogic_indexarDeltasRegistrales,
+    ubicacionOperativaLogic_componerPuntoDetallado: ubicacionOperativaLogic_componerPuntoDetallado,
+    ubicacionOperativaLogic_componerPunto: ubicacionOperativaLogic_componerPunto,
+    ubicacionOperativaLogic_aplicarCapas: ubicacionOperativaLogic_aplicarCapas,
     ubicacionOperativaLogic_baseDeUbicacionResuelta: ubicacionOperativaLogic_baseDeUbicacionResuelta,
     ubicacionOperativaLogic_resolver: ubicacionOperativaLogic_resolver
   };
