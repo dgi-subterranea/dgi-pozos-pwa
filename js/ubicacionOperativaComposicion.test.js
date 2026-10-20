@@ -577,14 +577,23 @@ describe('los consumidores heredan el resultado sin cambios (logica pura existen
   });
 });
 
-describe('aislamiento: E3-2 es solo logica pura (nada cableado)', () => {
+describe('aislamiento: la composicion es logica pura y solo la cablea mapaDataset', () => {
   const raiz = path.join(__dirname, '..');
   const leer = (...p) => fs.readFileSync(path.join(raiz, ...p), 'utf8');
   const sinComentarios = (t) => t.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
 
-  test('mapaDataset, api y el resto de los modulos del frontend NO usan todavia la composicion ni el delta registral', () => {
+  test('SOLO js/mapaDataset.js usa la composicion (aplicarCapas, nada mas) y SOLO js/api.js nombra el endpoint del delta; el resto del frontend no conoce ninguno', () => {
     fs.readdirSync(path.join(raiz, 'js')).filter((f) => f.endsWith('.js') && !f.endsWith('.test.js') && f !== 'ubicacionOperativaLogic.js').forEach((f) => {
-      expect(sinComentarios(leer('js', f))).not.toMatch(/componerPunto|aplicarCapas|DeltasRegistrales|normalizarDeltaRegistral|getDecisionesFuentesDelta|UOP_DELTA_REGISTRAL/);
+      const codigo = sinComentarios(leer('js', f));
+      if (f === 'mapaDataset.js') {
+        expect(codigo).toMatch(/ubicacionOperativaLogic_aplicarCapas/);
+        expect(codigo).not.toMatch(/componerPunto|DeltasRegistrales|normalizarDeltaRegistral|UOP_DELTA_REGISTRAL|ubicacionOperativaLogic_aplicarOverlay|resolverPuntoDataset/);
+      } else {
+        expect(codigo).not.toMatch(/componerPunto|aplicarCapas|DeltasRegistrales|normalizarDeltaRegistral|UOP_DELTA_REGISTRAL/);
+      }
+      if (f !== 'api.js') {
+        expect(codigo).not.toMatch(/getDecisionesFuentesDelta/);
+      }
     });
   });
 

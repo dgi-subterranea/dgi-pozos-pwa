@@ -540,3 +540,33 @@ Padrón local (`scripts/out/registro`, generado el 14 sep 2026): 24.180 pozos, 1
 - Tamaño por entrada: ~67 B con punto y ~33 B sin punto (≈ 54 B promedio en la mezcla medida). El tope de 90.000 caracteres del delta completo se alcanza alrededor de **1.300 entradas con punto**; por encima de eso se usa solo el cache por pozo.
 - Aplicar el overlay en el cliente es barato: con el dataset real (13.804 puntos) `aplicarOverlay` tarda ~0,3 ms con 100 deltas y ~1 ms con 1.000 (Node, este equipo; el celular será más lento pero del mismo orden).
 - **Producción:** cada cálculo deja una línea de log `delta calculado en N ms: …` (pozos con decisiones, por cache, a calcular, archivos del padrón, entradas, parcial). Con eso se decide si hace falta el índice offline según el criterio 7 (sin umbral arbitrario). Referencia **documentada** (no medida hoy): abrir un archivo del padrón en frío en Drive tarda ~0,6–1,2 s; con presupuesto de 15 s una primera llamada en frío que toque muchos archivos podría quedar `parcial` y convergería con las llamadas siguientes (cada pozo resuelto queda cacheado).
+
+---
+
+## Etapa 3 · E3-2 y E3-3 — composición por capas en el frontend (implementadas; sin commit de E3-3, sin UI de R)
+
+**E3-2 (commit `0aa9fe6`, lógica pura en `js/ubicacionOperativaLogic.js`):** `ubicacionOperativaLogic_componerPunto` / `_aplicarCapas` componen `base → delta registral (D | C | R | N) → V → punto final o ninguno`; el «sin punto» se decide al final (N + V = V); la `base` de una V es la resolución registral efectiva (D | C | R, o `null`); una entrada inválida nunca se convierte en N; un pozo repetido con contenido distinto se ignora (conserva base + V).
+
+**E3-3 (`js/mapaDataset.js`, `js/api.js`):** `mapaDataset_obtener` es el ÚNICO punto que compone y lo hace solo con `ubicacionOperativaLogic_aplicarCapas` (sin reglas propias). Todo consumidor (mapa, Cerca Mío, selección, Buscar reemplazo) sigue recibiendo UN dataset operativo.
+
+### Flujo
+1. Base (`getMapaPozos`) una vez por sesión; su `metadata.periodo` es el del padrón con que se generó `pozos.json`. Si falla, se devuelve ese error y no se pide ningún delta.
+2. **En paralelo**, y solo después del base: `apiGetDecisionesFuentesDelta` (nuevo wrapper; solo la sesión, sin parámetros) y `apiGetUbicacionesValidadas`. Cada capa comparte su pedido en vuelo, tiene su propio caché de 60 s y nunca obliga a bajar de nuevo el base.
+3. Composición: `aplicarCapas(base, decisiones, ubicacionesDeCampo)`; el resultado se memoiza por (base, lo que aplica cada capa): mismas capas = mismo arreglo y mismo objeto de respuesta.
+
+### Período (estricto)
+El delta registral se aplica **solo** si `delta.periodo === base.metadata.periodo` (comparación exacta). Si el base no trae período (el delta ni se pide), si el delta no lo trae o es vacío/no textual, o si difieren: se ignora **todo** el delta registral, se conserva base + V y se marca degradación. Nunca se mezclan decisiones calculadas sobre otro padrón. (Un cambio de padrón a mitad de sesión deja el base en memoria viejo: el delta nuevo no coincide y se ignora hasta recargar la página.)
+
+### `parcial` y validación
+- `parcial > 0` **no** descarta el delta: se aplican todas las entradas válidas; los pozos no resueltos conservan base + V; se marca degradación.
+- Forma global exigida: `periodo` string no vacío, `version` entero ≥ 0, `parcial` entero ≥ 0, `decisiones` lista. Otra cosa = respuesta inválida: se ignora todo el delta.
+- Cada entrada pasa por la normalización pura; las inválidas se ignoran (el pozo conserva base/V; jamás N) y cuentan como degradación; un pozo repetido con contenido distinto se ignora.
+
+### Fallas y aviso único
+Si un endpoint falla, devuelve error, rechaza, lanza o responde mal: esa capa no se aplica, el mapa sigue con lo que hay (base + la otra capa) y **no se cachea como éxito** (la próxima llamada reintenta). Un único `data.degradado` (booleano) enciende un único aviso por pantalla (mapa y Cerca Mío), con el texto «Algunas actualizaciones de ubicación no pudieron cargarse. Se muestra la información disponible.», ante cualquiera de: endpoint caído o respuesta inválida, período faltante/incompatible, `parcial > 0`, entradas inválidas (de cualquier capa). El detalle por capa queda en `data.degradacion` (`{degradado, registral: {estado, aplicado, parcial, entradasInvalidas}, campo: {estado, aplicado, entradasInvalidas}}`; estados registrales `OK | OMITIDA | FALLA | RESPUESTA_INVALIDA | PERIODO_FALTANTE_BASE | PERIODO_FALTANTE_DELTA | PERIODO_INCOMPATIBLE`) y nunca se muestra al usuario. `data.operativo` conserva `{aplicadas, nuevos, descartadas}` y suma `quitados`, `sinPunto` y el detalle `registral` / `campo`.
+
+### Caché e invalidación (cliente)
+Base una vez por sesión; cada delta 60 s (`MAPA_DATASET_DELTAS_TTL_MS`). `mapaDataset_invalidarDeltaRegistral()` y `mapaDataset_invalidarDeltaCampo()` invalidan una sola capa; `mapaDataset_invalidarDeltas()` (la que ya usan validar, revertir y la corrección directa) invalida las dos; ninguna toca el base. Las decisiones directas y las sugerencias **todavía no invalidan** (E3-6).
+
+### Consumidores y pendientes de UI (E3-4)
+Los consumidores heredan el dataset sin cambios de código. Un punto con estado `R` no rompe a nadie, pero hasta E3-4 no tiene chip, color, leyenda ni filtro propios: el mapa lo pinta como Disponible, `mapaLogic_estadoLabel('R')` devuelve la letra cruda, no entra en los conteos y desaparece si hay algún chip de estado activo. Un pozo sin punto sale del dataset (mapa, Cerca Mío, selección espacial, candidatos de reemplazo). La selección, para un pozo sin punto, mostrará «—» en cuenca / profundidad / estado hasta que E3-4 agregue «Sin ubicación operativa».

@@ -699,7 +699,7 @@ describe('aislamiento: solo lo consumen mapaDataset_obtener (overlay de los mapa
     expect(leer('sw.js')).toContain("'./js/ubicacionOperativaLogic.js'");
     fs.readdirSync(path.join(raiz, 'js')).filter((f) => f.endsWith('.js') && !f.endsWith('.test.js') && f !== 'ubicacionOperativaLogic.js').forEach((f) => {
       if (f === 'mapaDataset.js') {
-        expect(leer('js', f)).toMatch(/ubicacionOperativaLogic_aplicarOverlay/);
+        expect(leer('js', f)).toMatch(/ubicacionOperativaLogic_aplicarCapas/);
       } else if (f === 'ubicacionesConocidasLogic.js') {
         expect(leer('js', f)).toMatch(/ubicacionOperativaLogic_resolver/);
       } else {

@@ -138,13 +138,14 @@ describe('estilos y tactilidad', () => {
 });
 
 describe('alcance de esta etapa', () => {
-  test.each(['mapa.js', 'mapaDataset.js', 'cercaMio.js', 'seleccion.js', 'reemplazo.js', 'ubicacionOperativaLogic.js'])('js/%s no conoce las sugerencias ni las decisiones', (f) => {
+  test.each(['mapa.js', 'mapaDataset.js', 'cercaMio.js', 'seleccion.js', 'reemplazo.js', 'ubicacionOperativaLogic.js'])('js/%s no conoce las sugerencias ni la UI de decisiones', (f) => {
     if (fs.existsSync(path.join(raiz, 'js', f))) {
       expect(leer('js', f)).not.toMatch(/ufdui_|usug_|SugerenciasFuente|sugerirDecision|resolverSugerencia|cancelarSugerencia/);
     }
   });
-  test('el frontend todavia no consume el delta de decisiones (E3-1 es solo backend) y la cola no usa decidirFuenteUbicacion', () => {
-    expect(leer('js', 'api.js')).not.toMatch(/getDecisionesFuentesDelta/);
+  test('la cola de sugerencias no consume el delta registral (solo mapaDataset lo hace, por el wrapper de api.js) y no usa decidirFuenteUbicacion', () => {
+    expect(leer('js', 'ubicacionSugerencias.js')).not.toMatch(/DecisionesFuentesDelta/);
+    expect(leer('js', 'ubicacionSugerenciasLogic.js')).not.toMatch(/DecisionesFuentesDelta/);
     expect(leer('js', 'ubicacionSugerencias.js')).not.toMatch(/decidirFuenteUbicacion|apiDecidirFuente/);
   });
   test('no hay nada de subida / validacion de ITF (es un roadmap documentado, sin codigo)', () => {

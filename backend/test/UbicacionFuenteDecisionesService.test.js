@@ -899,12 +899,12 @@ describe('aislamiento de la Etapa 2', () => {
     expect(fs.readFileSync(path.join(raiz, 'sw.js'), 'utf8')).not.toMatch(/ubicacionFuenteDecisionesLogic\.js/);
     fs.readdirSync(path.join(raiz, 'js')).filter((f) => f.endsWith('.js') && !f.endsWith('.test.js') && f !== 'ubicacionFuenteDecisionesLogic.js').forEach((f) => {
       const src = fs.readFileSync(path.join(raiz, 'js', f), 'utf8');
-      expect(src).not.toMatch(/\bufd_|UbicacionFuenteDecisiones['"\s]|getDecisionesFuentesDelta/);
+      expect(src).not.toMatch(/\bufd_|UbicacionFuenteDecisiones['"\s]/);
       if (f !== 'api.js') {
-        expect(src).not.toMatch(/'getDecisionesFuentesPozo'|'decidirFuenteUbicacion'/);          // el nombre de la accion solo vive en api.js
+        expect(src).not.toMatch(/'getDecisionesFuentesPozo'|'decidirFuenteUbicacion'|getDecisionesFuentesDelta/);          // el nombre de la accion solo vive en api.js
       }
     });
-    ['mapa.js', 'mapaDataset.js', 'cercaMio.js', 'seleccion.js', 'reemplazo.js'].forEach((f) => {
+    ['mapa.js', 'cercaMio.js', 'seleccion.js', 'reemplazo.js'].forEach((f) => {
       const ruta = path.join(raiz, 'js', f);
       if (fs.existsSync(ruta)) {
         expect(fs.readFileSync(ruta, 'utf8')).not.toMatch(/ufdui_|DecisionesFuentes|decidirFuente/i);
@@ -919,9 +919,10 @@ describe('aislamiento de la Etapa 2', () => {
     expect(d).not.toMatch(/VALIDADA|campo|correccion/i);
   });
 
-  test('el delta (getDecisionesFuentesDelta, E3-1) existe SOLO en el backend: el frontend todavia no lo consume ni lo nombra', () => {
+  test('el delta (getDecisionesFuentesDelta) lo consume el frontend SOLO por el wrapper de js/api.js desde js/mapaDataset.js (E3-3)', () => {
     const api = fs.readFileSync(path.join(raiz, 'backend', 'src', 'Api.js'), 'utf8');
     expect(api).toMatch(/getDecisionesFuentesDelta/);
-    expect(fs.readFileSync(path.join(raiz, 'js', 'api.js'), 'utf8')).not.toMatch(/getDecisionesFuentesDelta/);
+    expect(fs.readFileSync(path.join(raiz, 'js', 'api.js'), 'utf8')).toMatch(/callBackend\('getDecisionesFuentesDelta'/);
+    expect(fs.readFileSync(path.join(raiz, 'js', 'mapaDataset.js'), 'utf8')).toMatch(/apiGetDecisionesFuentesDelta/);
   });
 });

@@ -1,4 +1,5 @@
-// ETAPA 3: el punto operativo en el dataset del mapa. mapaDataset_obtener = dataset base (pozos.json, intacto) + getUbicacionesValidadas + el overlay puro; el mapa,
+// ETAPA 3 (capa de CAMPO): el punto operativo en el dataset del mapa. mapaDataset_obtener = dataset base (pozos.json, intacto) + getUbicacionesValidadas + la composicion pura
+// (aplicarCapas, con la capa registral AUSENTE en este archivo: la cubre js/mapaDatasetCapas.test.js); el mapa,
 // Cerca Mio, la seleccion y Buscar reemplazo lo heredan sin reglas propias. Cubre: casos reales (01-0012, 14-0001), pozos nuevos, fallback si el endpoint falla,
 // cache de 60 s e invalidacion, estados D / C / V, Cerca Mio, seleccion, reemplazos, etiquetas visibles, cableado (index.html, sw, css) y rendimiento.
 const fs = require('fs');
@@ -53,10 +54,11 @@ function instalar(opciones) {
   jest.resetModules();
   global.apiGetMapaPozos = jest.fn(() => (o.base ? o.base() : Promise.resolve({ status: 'ok', data: { pozos: baseDataset(), metadata: { totalPuntos: 4 } } })));
   global.apiGetUbicacionesValidadas = jest.fn(() => (o.deltas ? o.deltas() : Promise.resolve({ status: 'ok', data: { ubicaciones: deltasReales() } })));
+  delete global.apiGetDecisionesFuentesDelta;                  // la capa registral no existe en estas pruebas: se comporta exactamente como antes de E3-3
   if (o.sinOverlay) {
-    delete global.ubicacionOperativaLogic_aplicarOverlay;
+    delete global.ubicacionOperativaLogic_aplicarCapas;
   } else {
-    global.ubicacionOperativaLogic_aplicarOverlay = OP.ubicacionOperativaLogic_aplicarOverlay;
+    global.ubicacionOperativaLogic_aplicarCapas = OP.ubicacionOperativaLogic_aplicarCapas;
   }
   reloj = Date.now();
   jest.spyOn(Date, 'now').mockImplementation(() => reloj);
@@ -449,7 +451,7 @@ describe('cableado visible: index.html, service worker, css, ficha', () => {
   });
 
   test('aviso discreto: en el mapa y en Cerca Mio, oculto al inicio, con el texto aprobado y sin tecnicismos', () => {
-    const texto = 'No se pudieron actualizar las ubicaciones validadas. Se muestran las ubicaciones base.';
+    const texto = 'Algunas actualizaciones de ubicación no pudieron cargarse. Se muestra la información disponible.';
     ['mapa-aviso-ubicaciones', 'cercamio-aviso-ubicaciones'].forEach((id) => {
       expect(html).toMatch(new RegExp('<p id="' + id + '" class="aviso-ubicaciones" role="status" hidden>' + texto.replace(/\./g, '\\.') + '</p>'));
     });

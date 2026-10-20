@@ -125,13 +125,21 @@ describe('estilos', () => {
 });
 
 describe('alcance de esta etapa: nada de mapas globales, Cerca Mio, seleccion ni reemplazos', () => {
-  test.each(['mapa.js', 'mapaDataset.js', 'cercaMio.js', 'seleccion.js', 'reemplazo.js', 'ubicacionOperativaLogic.js'])('js/%s no conoce las decisiones', (f) => {
+  test.each(['mapa.js', 'cercaMio.js', 'seleccion.js', 'reemplazo.js', 'ubicacionOperativaLogic.js'])('js/%s no conoce las decisiones', (f) => {
     if (fs.existsSync(path.join(raiz, 'js', f))) {
       expect(leer('js', f)).not.toMatch(/ufdui_|DecisionesFuentes|decidirFuente|ubicacionFuenteDecisiones/i);
     }
   });
-  test('el frontend todavia no consume el delta de decisiones (E3-1 es solo backend); las sugerencias se usan solo por los wrappers de api.js', () => {
-    expect(leer('js', 'api.js')).not.toMatch(/getDecisionesFuentesDelta/);
+  test('js/mapaDataset.js conoce SOLO el efecto registral (apiGetDecisionesFuentesDelta): nada de la UI de decisiones, de decidir ni de la lectura por pozo', () => {
+    const src = leer('js', 'mapaDataset.js');
+    expect(src).toMatch(/apiGetDecisionesFuentesDelta/);
+    expect(src).not.toMatch(/ufdui_|decidirFuente|apiDecidir|ubicacionFuenteDecisiones|getDecisionesFuentesPozo|apiGetDecisionesFuentesPozo|Sugerencia/);
+  });
+  test('el delta registral se consume SOLO a traves del wrapper de js/api.js y de js/mapaDataset.js; las sugerencias, solo por los wrappers de api.js', () => {
+    expect(leer('js', 'api.js')).toMatch(/callBackend\('getDecisionesFuentesDelta'/);
+    fs.readdirSync(path.join(raiz, 'js')).filter((f) => f.endsWith('.js') && !f.endsWith('.test.js') && f !== 'api.js' && f !== 'mapaDataset.js').forEach((f) => {
+      expect(leer('js', f)).not.toMatch(/getDecisionesFuentesDelta|apiGetDecisionesFuentesDelta/);
+    });
     // las sugerencias SI se usan (Etapa D), pero solo a traves de los wrappers de js/api.js: ningun otro archivo conoce el nombre de la accion del backend
     ['sugerirDecisionFuente', 'getSugerenciasFuentesPozo', 'getSugerenciasFuentesPendientes', 'resolverSugerenciaFuente', 'cancelarSugerenciaFuente'].forEach((a) => {
       expect(api).toContain("callBackend('" + a + "'");

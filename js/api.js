@@ -53,9 +53,16 @@ function apiGetMapaPozos(sessionToken) {
 }
 
 // Ubicaciones VALIDADAS vigentes (delta del punto operativo): [{wellId, lat, lon, vts}], sin autor ni datos internos. Cualquier usuario activo, igual que
-// getMapaPozos. TODAVIA no la llama nadie (el overlay en mapaDataset_obtener es una etapa posterior); queda lista para probar el contrato frontend/backend.
+// getMapaPozos. La consume SOLO js/mapaDataset.js (capa de campo del dataset operativo).
 function apiGetUbicacionesValidadas(sessionToken) {
   return callBackend('getUbicacionesValidadas', { sessionToken: sessionToken });
+}
+
+// Efecto REGISTRAL de las decisiones sobre las fuentes del padron: {version, periodo, parcial, decisiones: [{wellId, estado:'D'|'C'|'R', lat, lon} | {wellId, estado:'N'}]}.
+// Cualquier usuario activo, igual que getMapaPozos y getUbicacionesValidadas; sin parametros (solo la sesion). La consume SOLO js/mapaDataset.js (capa registral del
+// dataset operativo); el contrato completo esta en docs/ubicacion-fuente-decisiones.md («E3-1»).
+function apiGetDecisionesFuentesDelta(sessionToken) {
+  return callBackend('getDecisionesFuentesDelta', { sessionToken: sessionToken });
 }
 
 // Popup liviano del mapa: solo se llama si datos=SI (ver
