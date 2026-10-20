@@ -673,14 +673,14 @@ describe('los consumidores heredan el dataset operativo SIN reglas propias', () 
     expect(leer('js', 'mapaDataset.js').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')).not.toMatch(/MapaNE|mapaNE|nivelesEstaticos|monitoringId/);
   });
 
-  test('un estado R no rompe a los consumidores actuales (todavia sin chip / color / filtro: eso es E3-4)', async () => {
+  test('R llega a los consumidores con su nombre humano, se cuenta aparte y entra en los filtros (E3-4)', async () => {
     instalar(dsReg([dR('14-0002', 'R')]));
     const r = await obtener();
     const pozos = r.data.pozos;
-    expect(() => MapaLogic.mapaLogic_estadoLabel('R')).not.toThrow();
-    expect(MapaLogic.mapaLogic_estadoLabel('R')).toBe('R');                     // aun sin etiqueta propia
+    expect(MapaLogic.mapaLogic_estadoLabel('R')).toBe('Aceptada');
     expect(MapaLogic.mapaLogic_filtrarPorEstado(pozos, {})).toHaveLength(pozos.length);
-    expect(MapaLogic.mapaLogic_contarPorEstado(pozos)).toEqual({ C: 2, D: 1, V: 0 });      // R todavia no se cuenta
+    expect(MapaLogic.mapaLogic_filtrarPorEstado(pozos, { R: true }).map((p) => p.wellId)).toEqual(['14-0002']);
+    expect(MapaLogic.mapaLogic_contarPorEstado(pozos)).toEqual({ C: 2, D: 1, R: 1, V: 0 });
     expect(() => Cerca.cercaMioLogic_buscarCercanos(pozos, ACEP.lat, ACEP.lon, 1000, 10)).not.toThrow();
   });
 });

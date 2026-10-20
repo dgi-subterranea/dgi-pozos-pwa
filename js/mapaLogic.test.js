@@ -190,8 +190,8 @@ describe('mapaLogic_filtrarPorEstado con Validada en campo (V)', () => {
   });
 
   test('conteo: C, D y V; ignora otros valores', () => {
-    expect(mapaLogic_contarPorEstado(pozos)).toEqual({ C: 2, D: 1, V: 2 });
-    expect(mapaLogic_contarPorEstado([{ estado: 'V' }, { estado: 'x' }, {}])).toEqual({ C: 0, D: 0, V: 1 });
+    expect(mapaLogic_contarPorEstado(pozos)).toEqual({ C: 2, D: 1, R: 0, V: 2 });
+    expect(mapaLogic_contarPorEstado([{ estado: 'V' }, { estado: 'x' }, {}])).toEqual({ C: 0, D: 0, R: 0, V: 1 });
   });
 });
 
@@ -1066,9 +1066,9 @@ describe('conteos contextuales de los chips', () => {
     expect(globales[0].cantidad).toBe(6739);
   });
 
-  test('mapaLogic_contarPorEstado cuenta C, D y V e ignora otros valores', () => {
-    expect(mapaLogic_contarPorEstado([{ estado: 'C' }, { estado: 'D' }, { estado: 'D' }, { estado: 'X' }, {}])).toEqual({ C: 1, D: 2, V: 0 });
-    expect(mapaLogic_contarPorEstado([])).toEqual({ C: 0, D: 0, V: 0 });
+  test('mapaLogic_contarPorEstado cuenta C, D, R y V e ignora otros valores', () => {
+    expect(mapaLogic_contarPorEstado([{ estado: 'C' }, { estado: 'D' }, { estado: 'D' }, { estado: 'X' }, {}])).toEqual({ C: 1, D: 2, R: 0, V: 0 });
+    expect(mapaLogic_contarPorEstado([])).toEqual({ C: 0, D: 0, R: 0, V: 0 });
   });
 
   test('mapaLogic_contarEnSetNE cuenta la interseccion; sin Set devuelve null', () => {

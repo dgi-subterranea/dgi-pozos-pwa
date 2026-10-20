@@ -324,7 +324,7 @@ describe('estados D / C / V en el dataset operativo', () => {
     expect(ids({ C: true })).toEqual(['01-0013']);
     expect(ids({ D: true })).toEqual(['14-0002']);
     expect(ids({ C: true, V: true })).toEqual(['01-0012', '01-0013', '14-0001']);
-    expect(MapaLogic.mapaLogic_contarPorEstado(r.data.pozos)).toEqual({ C: 1, D: 1, V: 2 });
+    expect(MapaLogic.mapaLogic_contarPorEstado(r.data.pozos)).toEqual({ C: 1, D: 1, R: 0, V: 2 });
   });
 });
 
@@ -378,10 +378,10 @@ describe('Seleccion hereda el punto operativo', () => {
 
   test('exportacion / tabla: la etiqueta sale con texto, nunca la letra cruda (V -> Validada en campo)', () => {
     const fuente = leer('js', 'seleccion.js');
-    expect(fuente).toContain('campoTexto(mapaLogic_estadoLabel(p.estado))');
+    expect(fuente).toContain('mapaLogic_textoEstadoUbicacion(');
     expect(fuente).not.toMatch(/'Confirmada'/);
-    ['D', 'C', 'V'].forEach((c) => expect(MapaLogic.mapaLogic_estadoLabel(c)).not.toBe(c));
-    expect(['D', 'C', 'V'].map(MapaLogic.mapaLogic_estadoLabel)).toEqual(['Disponible', 'Coincidente', 'Validada en campo']);
+    ['D', 'C', 'R', 'V'].forEach((c) => expect(MapaLogic.mapaLogic_estadoLabel(c)).not.toBe(c));
+    expect(['D', 'C', 'R', 'V'].map(MapaLogic.mapaLogic_estadoLabel)).toEqual(['Disponible', 'Coincidente', 'Aceptada', 'Validada en campo']);
   });
 });
 
@@ -398,7 +398,8 @@ describe('Buscar reemplazo hereda el punto operativo y compara contra la BASE de
     expect(ref.coordenadaProvincia.lon).toBe(IRR_14.lon);
     expect(ref.coordenadaProvincia.distanciaMetros).toBeGreaterThan(500);
     expect(ref.coordenadaProvincia.discrepante).toBe(true);
-    expect(Reemp.buscarReemplazoLogic_textoAdvertenciaCoordenada(ref)).toMatch(/padrón de Provincia/);
+    expect(Reemp.buscarReemplazoLogic_textoAdvertenciaCoordenada(ref)).toMatch(/en Irrigación está a/);
+    expect(Reemp.buscarReemplazoLogic_textoAdvertenciaCoordenada(ref)).not.toMatch(/padrón de Provincia/);
     // si se hubiera comparado contra la validada, la distancia seria 0 y no habria aviso
     expect(OP.ubicacionOperativaLogic_distanciaMetros(porId(r, '14-0001').lat, porId(r, '14-0001').lon, NE.lat, NE.lon)).toBe(0);
   });
@@ -436,10 +437,10 @@ describe('cableado visible: index.html, service worker, css, ficha', () => {
   const html = leer('index.html');
   const css = leer('css', 'styles.css');
 
-  test('chips de ubicacion: Todos, Coincidente (C), Disponible (D) y Validada en campo (V); "Confirmada" ya no existe', () => {
+  test('chips de ubicacion: Todos, Coincidente (C), Disponible (D), Aceptada (R) y Validada en campo (V); "Confirmada" ya no existe', () => {
     const chips = html.match(/<button[^>]*class="mapa-estado-chip[^"]*"[^>]*data-estado="[^"]+"[^>]*>[^<]*<\/button>/g) || [];
     const lista = chips.map((c) => [c.match(/data-estado="([^"]+)"/)[1], c.replace(/<[^>]+>/g, '')]);
-    expect(lista).toEqual([['todos', 'Todos'], ['C', 'Coincidente'], ['D', 'Disponible'], ['V', 'Validada en campo']]);
+    expect(lista).toEqual([['todos', 'Todos'], ['C', 'Coincidente'], ['D', 'Disponible'], ['R', 'Aceptada'], ['V', 'Validada en campo']]);
     expect(html).not.toMatch(/>Confirmada</);
     expect(html).toMatch(/mapa-estado-chip mapa-estado-chip-validada/);
   });
@@ -468,14 +469,13 @@ describe('cableado visible: index.html, service worker, css, ficha', () => {
     expect((html.match(/js\/ubicacionOperativaLogic\.js/g) || []).length).toBe(1);
   });
 
-  test('estilo V: verde con borde oscuro y punto mas grande, mismos hex en css y en mapa.js; D y C sin cambios', () => {
-    const mapa = leer('js', 'mapa.js');
+  test('estilo V: verde con borde oscuro y punto mas grande, mismos hex en css y en mapaLogic (MAPA_ESTILO_PUNTO); D y C sin cambios', () => {
+    const E = MapaLogic.MAPA_ESTILO_PUNTO;
     expect(css).toMatch(/--color-mapa-validada: #43a047;/);
     expect(css).toMatch(/--color-mapa-validada-borde: #14532d;/);
-    expect(mapa).toMatch(/MAPA_COLOR_VALIDADA = '#43a047'/);
-    expect(mapa).toMatch(/MAPA_COLOR_VALIDADA_BORDE = '#14532d'/);
-    expect(mapa).toMatch(/MAPA_COLOR_CONFIRMADA = '#0b5a7a'/);
-    expect(mapa).toMatch(/MAPA_COLOR_DISPONIBLE = '#4fa3c4'/);
+    expect(E.V).toEqual({ relleno: '#43a047', borde: '#14532d', grosor: 2.5, radio: 8, punteado: null });
+    expect(E.C).toEqual({ relleno: '#0b5a7a', borde: '#ffffff', grosor: 1.5, radio: 7, punteado: null });
+    expect(E.D).toEqual({ relleno: '#4fa3c4', borde: '#ffffff', grosor: 1.5, radio: 7, punteado: null });
     expect(css).toMatch(/\.mapa-estado-chip-validada\.active \{[^}]*background: var\(--color-mapa-validada\)/);
     expect(css).toMatch(/\.aviso-ubicaciones\[hidden\] \{\s*display: none;/);
   });

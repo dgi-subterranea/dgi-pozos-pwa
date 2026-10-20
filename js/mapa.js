@@ -17,12 +17,7 @@
 //   {tipo: 'ubicacion', lat, lon, radioMetros}     - centra en esas coordenadas (la posicion GPS del usuario, que SOLO viaja de app.js a aca en memoria - nunca se manda a ningun backend) y agrega el marcador "Tu ubicacion"
 //   {tipo: 'puntoBusqueda', lat, lon, radioMetros} - idem, pero para un punto elegido a mano en el mapa (Etapa siguiente, item B/D) en vez de GPS: marcador y circulo de radio con otro color (mapaShared_iconoPuntoBusqueda), misma garantia de privacidad (solo memoria, nunca a ningun backend)
 (function () {
-  var MAPA_COLOR_CONFIRMADA = '#0b5a7a';
-  var MAPA_COLOR_DISPONIBLE = '#4fa3c4';
-  // Validada en campo (V): verde con borde oscuro y un punto algo mas grande (no depende solo del color: el chip "Validada en campo" es la leyenda). Mismo hex que
-  // --color-mapa-validada / --color-mapa-validada-borde en css/styles.css (Leaflet no lee variables CSS).
-  var MAPA_COLOR_VALIDADA = '#43a047';
-  var MAPA_COLOR_VALIDADA_BORDE = '#14532d';
+  // Colores y forma de cada estado (D / C / R / V): js/mapaLogic.js (MAPA_ESTILO_PUNTO, mismos hex que --color-mapa-* de css/styles.css; Leaflet no lee variables CSS).
   // Mismo valor que disableClusteringAtZoom del clusterGroup (ver
   // mapaController_crearMapaSiHaceFalta) - a este zoom un marker
   // individual deja de estar agrupado, sin importar cuantos vecinos
@@ -127,6 +122,7 @@
   var mapaEl = document.getElementById('mapa-leaflet');
   var contadorEl = document.getElementById('mapa-contador');
   var avisoUbicacionesEl = document.getElementById('mapa-aviso-ubicaciones');
+  var avisoSinPuntoEl = document.getElementById('mapa-aviso-sin-punto');
   var deptosChipsEl = document.getElementById('mapa-deptos-chips');
   var btnDeptosExpandirEl = document.getElementById('btn-mapa-deptos-expandir');
   var cuencaChipsEl = document.getElementById('mapa-cuenca-chips');
@@ -327,8 +323,7 @@
   // popup se queda con wellId + estado + Abrir pozo nada mas - nunca se
   // dispara el fetch (ver mapaLogic_debeConsultarSummary).
   function mapaController_crearMarker(punto, contexto) {
-    var color = punto.estado === 'V' ? MAPA_COLOR_VALIDADA : (punto.estado === 'C' ? MAPA_COLOR_CONFIRMADA : MAPA_COLOR_DISPONIBLE);
-    var esValidada = punto.estado === 'V';
+    var estilo = mapaLogic_estiloPunto(punto.estado);
     // Item J: un pozo del contexto geografico (seleccion confirmada o
     // vista previa de Cerca Mio) se distingue con un borde mas grueso en
     // MAPA_COLOR_SELECCION (el mismo magenta de poligono/circulo) - el
@@ -347,10 +342,12 @@
     var evaluado = estadoR === 'APTO' || estadoR === 'DUDOSO' || estadoR === 'NO_APTO';
     var conAnillo = evaluado && !seleccionado;
     var marker = L.circleMarker([punto.lat, punto.lon], {
-      radius: seleccionado ? 9 : (conAnillo ? 8 : (esValidada ? 8 : 7)),
-      color: seleccionado ? MAPA_COLOR_SELECCION : (conAnillo ? MAPA_COLOR_REEMPLAZO[estadoR] : (esValidada ? MAPA_COLOR_VALIDADA_BORDE : '#ffffff')),
-      weight: seleccionado ? 3 : (conAnillo ? 3 : (esValidada ? 2.5 : 1.5)),
-      fillColor: color,
+      radius: seleccionado ? 9 : (conAnillo ? 8 : estilo.radio),
+      color: seleccionado ? MAPA_COLOR_SELECCION : (conAnillo ? MAPA_COLOR_REEMPLAZO[estadoR] : estilo.borde),
+      weight: seleccionado ? 3 : (conAnillo ? 3 : estilo.grosor),
+      // R (Aceptada) lleva el borde punteado ademas de su color: se distingue de V (borde continuo) sin depender solo del color, tambien con el anillo de seleccion
+      dashArray: estilo.punteado,
+      fillColor: estilo.relleno,
       fillOpacity: 0.9,
       esSeleccionado: seleccionado, // lo lee iconCreateFunction del clusterGroup
       estadoReemplazo: evaluado ? estadoR : null // idem: cluster "con evaluados"
@@ -1262,7 +1259,22 @@
   // Ya no hay enfoques 'ubicacion'/'puntoBusqueda': el punto y el circulo
   // dejaron de ser un adorno efimero de UNA apertura (por eso se perdian
   // al navegar) y pasaron a ser parte del contexto persistente.
+  // "Ver en mapa" de un pozo que existe en el sistema pero no tiene ubicacion operativa (todas sus fuentes descartadas, discrepancia sin resolver o sin coordenadas): no hay
+  // punto que mostrar. No es un error: un aviso breve (el mismo estilo del aviso de ubicaciones) en vez de no hacer nada. Nunca se inventa una coordenada.
+  function mapaController_ocultarAvisoSinPunto() {
+    if (avisoSinPuntoEl) {
+      avisoSinPuntoEl.hidden = true;
+    }
+  }
+
+  function mapaController_mostrarAvisoSinPunto() {
+    if (avisoSinPuntoEl) {
+      avisoSinPuntoEl.hidden = false;
+    }
+  }
+
   function mapaController_aplicarEnfoque(enfoque) {
+    mapaController_ocultarAvisoSinPunto();
     if (!enfoque) {
       return;
     }
@@ -1301,6 +1313,8 @@
         if (punto) {
           mapaController_mostrarResultadoTemporalmente(punto, mapaEstado.contextoActual);
           contadorEl.textContent += ' · +1 pozo fuera de los filtros';
+        } else {
+          mapaController_mostrarAvisoSinPunto();
         }
       }
     } else if (enfoque.tipo === 'seleccion') {
@@ -1543,6 +1557,7 @@
     errorEl.hidden = true;
     mapaEl.hidden = true;
     contadorEl.hidden = true;
+    mapaController_ocultarAvisoSinPunto();
     mapaController_cerrarPanelBusqueda();
     mapaController_cerrarPanelFiltros();
     mapaController_limpiarMarcadorBusquedaTemporal();

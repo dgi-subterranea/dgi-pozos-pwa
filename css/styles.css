@@ -25,6 +25,10 @@
   /* Validada en campo (V): mismo hex que MAPA_COLOR_VALIDADA / MAPA_COLOR_VALIDADA_BORDE en js/mapa.js. */
   --color-mapa-validada: #43a047;
   --color-mapa-validada-borde: #14532d;
+  /* Aceptada (R): violeta con borde oscuro y PUNTEADO (se distingue de V por color y por forma del borde); mismo hex que MAPA_ESTILO_PUNTO.R en js/mapaLogic.js.
+     Blanco sobre el violeta: contraste 7:1. */
+  --color-mapa-aceptada: #6a3fb5;
+  --color-mapa-aceptada-borde: #2e1a5c;
   /* Geografia de seleccion (poligono, vertices, punto/circulo de radio,
      anillo de pozos seleccionados) - mismo hex que MAPA_COLOR_SELECCION en
      js/mapaShared.js (Leaflet no lee variables CSS: mantener en sync). */
@@ -1850,6 +1854,23 @@ table.ne-table tr:last-child td {
   background: var(--color-mapa-validada);
   color: #fff;
   border-color: var(--color-mapa-validada-borde);
+}
+/* Aceptada (R): el borde PUNTEADO del chip repite el del punto del mapa (el chip hace de leyenda), asi no depende solo del color. */
+.mapa-estado-chip-aceptada,
+.mapa-estado-chip-aceptada.active {
+  border-style: dashed;
+}
+.mapa-estado-chip-aceptada.active {
+  background: var(--color-mapa-aceptada);
+  color: #fff;
+  border-color: var(--color-mapa-aceptada-borde);
+}
+/* Explicacion breve de Aceptada, debajo de los chips de estado. */
+.mapa-estado-ayuda {
+  margin: 6px 0 0;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--color-text-soft);
 }
 /* Aviso discreto (ubicaciones validadas no disponibles): una linea de texto, sin alarma. */
 .aviso-ubicaciones {

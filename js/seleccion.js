@@ -358,7 +358,8 @@
       var busquedaResult = resultados[1];
       var neResult = resultados[2];
 
-      var indicePozos = pozosResult.status === 'ok' ? construirIndicePorWellId(pozosResult.data.pozos) : {};
+      // null = el dataset no se pudo traer (no se sabe nada de la ubicacion); distinto de {} o de un pozo ausente = existe el dataset y ese pozo NO tiene ubicacion operativa
+      var indicePozos = pozosResult.status === 'ok' ? construirIndicePorWellId(pozosResult.data.pozos) : null;
       var indiceBusqueda = busquedaResult.status === 'ok' ? construirIndicePorWellId(busquedaResult.data.pozos) : {};
       var neSet = new Set();
       if (neResult.status === 'ok') {
@@ -424,7 +425,7 @@
     var orden = tablaOrdenEl.value;
 
     var filas = estado.seleccion.map(function (wellId) {
-      var p = indicePozos[wellId] || {};
+      var p = (indicePozos && indicePozos[wellId]) || {};
       var b = indiceBusqueda[wellId] || {};
       var depto = mapaLogic_nombreDepartamento(wellId.substring(0, 2));
       return {
@@ -435,7 +436,8 @@
         cuenca: campoTexto(p.cuenca),
         profundidad: p.profundidad !== undefined && p.profundidad !== null ? p.profundidad + ' m' : '—',
         tipoPozo: p.surgencia ? (SELECCION_ETIQUETAS_TIPO_POZO[p.surgencia] || p.surgencia) : '—',
-        estadoUbicacion: permisos.ubicacion ? campoTexto(mapaLogic_estadoLabel(p.estado)) : '—',
+        // con el dataset operativo cargado, un pozo que no esta en el NO tiene ubicacion operativa: "Sin ubicación operativa" (no un "—" que esconda el motivo)
+        estadoUbicacion: permisos.ubicacion ? mapaLogic_textoEstadoUbicacion(indicePozos ? indicePozos[wellId] : undefined, indicePozos !== null) : '—',
         tieneItf: permisos.perfil ? (estado.disponibilidadItf[wellId] ? 'Sí' : 'No') : '—',
         tieneNe: permisos.ne ? (neSet.has(wellId) ? 'Sí' : 'No') : '—',
         profundidadNum: typeof p.profundidad === 'number' ? p.profundidad : -1,

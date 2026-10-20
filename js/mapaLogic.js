@@ -30,9 +30,32 @@ var MAPA_DEPARTAMENTOS = {
   '19': 'Malargüe'
 };
 
-// C = Ubicacion COINCIDENTE (2+ fuentes del padron coinciden; NO es una validacion humana), D = Ubicacion DISPONIBLE (una sola fuente), V = VALIDADA EN CAMPO
-// (una correccion validada por una persona; viene del overlay del punto operativo, ver js/mapaDataset.js).
-var MAPA_ESTADO_LABEL = { C: 'Coincidente', D: 'Disponible', V: 'Validada en campo' };
+// C = Ubicacion COINCIDENTE (2+ fuentes del padron coinciden; NO es una validacion humana), D = Ubicacion DISPONIBLE (una sola fuente), R = ACEPTADA (una fuente
+// registral elegida manualmente como referencia; NO es una validacion de campo ni tiene relacion con el estado de aptitud de reemplazo), V = VALIDADA EN CAMPO
+// (una correccion validada por una persona). R y V vienen de las capas del punto operativo, ver js/mapaDataset.js. Siempre se muestra el texto, nunca la letra.
+var MAPA_ESTADO_LABEL = { C: 'Coincidente', D: 'Disponible', R: 'Aceptada', V: 'Validada en campo' };
+
+// Textos para un pozo que existe pero NO tiene ubicacion operativa (todas sus fuentes descartadas, discrepancia sin resolver o sin coordenadas). Una sola fuente de verdad:
+// los usan la seleccion (lista de texto) y el "Ver en mapa" (que el index.html repite en su aviso; un test exige que coincidan).
+var MAPA_TEXTO_SIN_UBICACION = 'Sin ubicación operativa';
+var MAPA_TEXTO_SIN_PUNTO_EN_MAPA = 'Este pozo no tiene una ubicación operativa para mostrar en el mapa.';
+// Explicacion breve de R (leyenda de los chips de estado).
+var MAPA_TEXTO_AYUDA_ACEPTADA = 'Aceptada: fuente registral elegida manualmente como referencia.';
+
+// ESTILO de cada estado en el mapa. Leaflet no lee variables CSS: los hex viven aca y en css/styles.css (--color-mapa-*; un test compara ambos). R se distingue de V por
+// COLOR (violeta, fuera de la gama de los otros estados y de los anillos de reemplazo / seleccion) Y por FORMA del borde (punteado, mientras V lleva borde continuo): no
+// depende solo del color. D / C / V conservan exactamente su aspecto de siempre. Un estado desconocido se pinta como D (como antes).
+//   relleno / borde: colores; grosor: ancho del borde; radio: del punto; punteado: patron del borde (null = continuo)
+var MAPA_ESTILO_PUNTO = {
+  D: { relleno: '#4fa3c4', borde: '#ffffff', grosor: 1.5, radio: 7, punteado: null },
+  C: { relleno: '#0b5a7a', borde: '#ffffff', grosor: 1.5, radio: 7, punteado: null },
+  R: { relleno: '#6a3fb5', borde: '#2e1a5c', grosor: 2.5, radio: 8, punteado: '3 2' },
+  V: { relleno: '#43a047', borde: '#14532d', grosor: 2.5, radio: 8, punteado: null }
+};
+
+function mapaLogic_estiloPunto(estado) {
+  return Object.prototype.hasOwnProperty.call(MAPA_ESTILO_PUNTO, estado) ? MAPA_ESTILO_PUNTO[estado] : MAPA_ESTILO_PUNTO.D;
+}
 
 function mapaLogic_departamentoDeWellId(wellId) {
   return wellId.substring(0, 2);
@@ -43,7 +66,18 @@ function mapaLogic_nombreDepartamento(codigo) {
 }
 
 function mapaLogic_estadoLabel(estado) {
-  return MAPA_ESTADO_LABEL[estado] || estado;
+  return Object.prototype.hasOwnProperty.call(MAPA_ESTADO_LABEL, estado) ? MAPA_ESTADO_LABEL[estado] : estado;
+}
+
+// Texto del estado de ubicacion de un pozo en una lista de TEXTO (la seleccion), sobre el dataset operativo:
+//   - el pozo esta en el dataset -> su estado con nombre humano (Disponible / Coincidente / Aceptada / Validada en campo); sin estado -> '—'
+//   - el pozo NO esta y el dataset SI se cargo -> 'Sin ubicación operativa' (existe, pero no tiene punto para mostrar: sus fuentes se descartaron, hay discrepancia o no tiene coordenadas)
+//   - el dataset no se pudo cargar -> '—' (no se sabe nada: no se afirma que no tenga ubicacion)
+function mapaLogic_textoEstadoUbicacion(punto, datasetCargado) {
+  if (punto && typeof punto === 'object') {
+    return punto.estado === undefined || punto.estado === null || punto.estado === '' ? '—' : mapaLogic_estadoLabel(punto.estado);
+  }
+  return datasetCargado === true ? MAPA_TEXTO_SIN_UBICACION : '—';
 }
 
 // Opciones del filtro de departamento: SOLO los que realmente tienen
@@ -78,15 +112,16 @@ function mapaLogic_filtrarPorDepartamento(pozos, codigo) {
 // mapaController_toggleEstado - pero esta funcion no depende de eso para
 // ser correcta), se interpreta como "sin filtro de estado" y se
 // devuelve el dataset completo, nunca una lista vacia que parezca un
-// error. estadosActivos: {C: bool, D: bool, V: bool}. Varios chips = UNION de los estados elegidos; V nunca cae en un "else".
+// error. estadosActivos: {C: bool, D: bool, R: bool, V: bool}. Varios chips = UNION de los estados elegidos; V y R nunca caen en un "else".
 function mapaLogic_filtrarPorEstado(pozos, estadosActivos) {
   var c = !!(estadosActivos && estadosActivos.C);
   var d = !!(estadosActivos && estadosActivos.D);
+  var r = !!(estadosActivos && estadosActivos.R);
   var v = !!(estadosActivos && estadosActivos.V);
-  if (!c && !d && !v) {
+  if (!c && !d && !r && !v) {
     return pozos;
   }
-  return pozos.filter(function (p) { return (p.estado === 'C' && c) || (p.estado === 'D' && d) || (p.estado === 'V' && v); });
+  return pozos.filter(function (p) { return (p.estado === 'C' && c) || (p.estado === 'D' && d) || (p.estado === 'R' && r) || (p.estado === 'V' && v); });
 }
 
 // Divide las opciones de departamento en "visibles de entrada" y
@@ -567,11 +602,11 @@ function mapaLogic_aplicarConteosContextuales(globales, contextuales, clave, act
   return resultado;
 }
 
-// Conteo de Ubicacion: { C: n, D: n, V: n } sobre el universo.
+// Conteo de Ubicacion: { C: n, D: n, R: n, V: n } sobre el universo. Cuenta el estado FINAL del punto: un pozo con V cuya base es R cuenta como V (un solo punto por pozo).
 function mapaLogic_contarPorEstado(pozos) {
-  var conteo = { C: 0, D: 0, V: 0 };
+  var conteo = { C: 0, D: 0, R: 0, V: 0 };
   (pozos || []).forEach(function (p) {
-    if (p.estado === 'C' || p.estado === 'D' || p.estado === 'V') {
+    if (p.estado === 'C' || p.estado === 'D' || p.estado === 'R' || p.estado === 'V') {
       conteo[p.estado] += 1;
     }
   });
@@ -709,6 +744,12 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MAPA_DEPARTAMENTOS,
     MAPA_ESTADO_LABEL,
+    MAPA_ESTILO_PUNTO,
+    MAPA_TEXTO_SIN_UBICACION,
+    MAPA_TEXTO_SIN_PUNTO_EN_MAPA,
+    MAPA_TEXTO_AYUDA_ACEPTADA,
+    mapaLogic_estiloPunto,
+    mapaLogic_textoEstadoUbicacion,
     mapaLogic_departamentoDeWellId,
     mapaLogic_nombreDepartamento,
     mapaLogic_estadoLabel,

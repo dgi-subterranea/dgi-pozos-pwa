@@ -387,8 +387,10 @@
           <button type="button" class="mapa-estado-chip active" data-estado="todos" aria-pressed="true">Todos</button>
           <button type="button" class="mapa-estado-chip mapa-estado-chip-confirmada" data-estado="C" aria-pressed="false">Coincidente</button>
           <button type="button" class="mapa-estado-chip mapa-estado-chip-disponible" data-estado="D" aria-pressed="false">Disponible</button>
+          <button type="button" class="mapa-estado-chip mapa-estado-chip-aceptada" data-estado="R" aria-pressed="false" title="Fuente registral elegida manualmente como referencia">Aceptada</button>
           <button type="button" class="mapa-estado-chip mapa-estado-chip-validada" data-estado="V" aria-pressed="false">Validada en campo</button>
         </div>
+        <p id="mapa-estado-ayuda" class="mapa-estado-ayuda">Aceptada: fuente registral elegida manualmente como referencia.</p>
       </div>
 
       <!-- Aptitud para reemplazo (Reemplazos v3): SOLO con reemplazo=SI (el
@@ -500,6 +502,8 @@
     <div id="mapa-contador" class="mapa-contador" hidden></div>
     <!-- Aviso discreto si no se pudieron traer las ubicaciones validadas (mapa con las ubicaciones base). js/mapaDataset.js marca data.degradado. -->
     <p id="mapa-aviso-ubicaciones" class="aviso-ubicaciones" role="status" hidden>Algunas actualizaciones de ubicación no pudieron cargarse. Se muestra la información disponible.</p>
+    <!-- "Ver en mapa" de un pozo sin ubicacion operativa: js/mapa.js lo muestra en vez de no hacer nada (texto = MAPA_TEXTO_SIN_PUNTO_EN_MAPA de js/mapaLogic.js). -->
+    <p id="mapa-aviso-sin-punto" class="aviso-ubicaciones aviso-sin-punto" role="status" hidden>Este pozo no tiene una ubicación operativa para mostrar en el mapa.</p>
     <div class="mapa-viewport">
       <div id="mapa-loading" class="mapa-loading">
         <div class="cargando" data-cargando>Cargando mapa...</div>

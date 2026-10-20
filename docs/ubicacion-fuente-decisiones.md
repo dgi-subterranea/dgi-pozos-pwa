@@ -570,3 +570,28 @@ Base una vez por sesión; cada delta 60 s (`MAPA_DATASET_DELTAS_TTL_MS`). `mapaD
 
 ### Consumidores y pendientes de UI (E3-4)
 Los consumidores heredan el dataset sin cambios de código. Un punto con estado `R` no rompe a nadie, pero hasta E3-4 no tiene chip, color, leyenda ni filtro propios: el mapa lo pinta como Disponible, `mapaLogic_estadoLabel('R')` devuelve la letra cruda, no entra en los conteos y desaparece si hay algún chip de estado activo. Un pozo sin punto sale del dataset (mapa, Cerca Mío, selección espacial, candidatos de reemplazo). La selección, para un pozo sin punto, mostrará «—» en cuenca / profundidad / estado hasta que E3-4 agregue «Sin ubicación operativa».
+
+---
+
+## Etapa 3 · E3-4 — UI completa del estado R = «Aceptada» y pozos sin ubicación operativa (implementada; sin commit, sin push)
+
+Solo frontend (`js/mapaLogic.js`, `js/mapa.js`, `js/seleccion.js`, `js/buscarReemplazoLogic.js`, `index.html`, `css/styles.css`). Sin backend, sin `gas:*`, sin ficha, sin invalidación por decisiones/sugerencias (E3-6).
+
+### Nombre y representación
+- Textos: D «Disponible», C «Coincidente», **R «Aceptada»**, V «Validada en campo». Nunca se muestra la letra cruda. R no es «validada»: ningún texto suyo habla de campo.
+- Tabla central `MAPA_ESTILO_PUNTO` (`mapaLogic_estiloPunto`), usada por `mapa.js` (Leaflet no lee variables CSS; los hex de `styles.css` y de la tabla se verifican iguales en un test):
+  - D `#4fa3c4`, borde blanco · C `#0b5a7a`, borde blanco · V `#43a047`, borde `#14532d` continuo, radio 8 (los tres, sin cambios).
+  - **R `#6a3fb5` violeta, borde `#2e1a5c` PUNTEADO (`3 2`), grosor 2,5, radio 8.** Se distingue de V por color **y** por forma del borde. Sigue siendo un `circleMarker` (no un `divIcon`) para no tocar el clustering ni el orden de panes de los anillos de reemplazo. Selección y anillo de reemplazo conservan su prioridad visual.
+- Chip «Aceptada» entre «Disponible» y «Validada en campo», con borde punteado también inactivo (el chip hace de leyenda) y `title`/`aria-pressed` como los demás; activo: fondo violeta con texto blanco (contraste ≥ 4,5:1). Debajo de los chips, una línea: «Aceptada: fuente registral elegida manualmente como referencia.»
+
+### Filtro y conteos
+`mapaLogic_filtrarPorEstado` y `mapaLogic_contarPorEstado` incluyen R (unión con D / C / V; ninguno activo = sin filtro). R entra en el total operativo; un pozo con base R y V cuenta **solo como V**; un pozo sin punto no cuenta en ningún estado. Una sola pasada sobre el universo (sin recorridos extra sobre los 13.804 puntos).
+
+### Pozos sin ubicación operativa
+- Selección (lista de texto / exportación): `mapaLogic_textoEstadoUbicacion(punto, datasetCargado)` → nombre humano si el pozo está; «Sin ubicación operativa» si el dataset cargó y el pozo no está; «—» si el dataset no se pudo cargar (no se afirma nada). `indicePozos` pasa a ser `null` cuando el dataset falló, para distinguir ambos casos.
+- «Ver en mapa» de un pozo sin punto: aviso discreto (`#mapa-aviso-sin-punto`, `role="status"`, mismo estilo que el aviso de ubicaciones): «Este pozo no tiene una ubicación operativa para mostrar en el mapa.» No es un error, no inventa coordenada, no mueve el mapa; se oculta al enfocar otra cosa o al reabrir.
+- Cerca Mío: sin cambios de código; hereda R y no ve los pozos N (no están en el dataset).
+- Buscar reemplazo: R se explica como «Coordenada aceptada»; el aviso de discrepancia dice «en Irrigación» (antes «padrón de Provincia», ya inexacto porque una aceptada puede venir del Reporte de Pozos); un N no es candidato espacial.
+
+### Pendiente para E3-5 / E3-6
+La ficha todavía no sigue la `resolucion` registral ni V (E3-5); decisiones directas y sugerencias todavía no invalidan el delta del mapa (E3-6).

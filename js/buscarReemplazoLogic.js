@@ -154,7 +154,7 @@ function buscarReemplazoLogic_construirReferencia(puntoNE, pozosProvincia) {
   if (puntoNE.wellId && pozosProvincia) {
     for (var i = 0; i < pozosProvincia.length; i++) {
       if (pozosProvincia[i].wellId === puntoNE.wellId) {
-        // El texto del aviso dice "padron de Provincia": si el punto tiene una ubicacion VALIDADA (overlay del punto operativo, fuente 'CAMPO') se compara contra
+        // El texto del aviso dice "Irrigacion" (la fuente aceptada puede ser el Reporte de Pozos): si el punto tiene una ubicacion VALIDADA (overlay del punto operativo, fuente 'CAMPO') se compara contra
         // la base de Irrigacion (punto.base), nunca contra la validada; sin base (el pozo no estaba en el mapa) no se inventa ninguna comparacion.
         var ref = pozosProvincia[i].fuente === 'CAMPO' ? pozosProvincia[i].base : pozosProvincia[i];
         if (ref && buscarReemplazoLogic_esNumero(ref.lat) && buscarReemplazoLogic_esNumero(ref.lon)) {
@@ -193,7 +193,7 @@ function buscarReemplazoLogic_textoAdvertenciaCoordenada(ref) {
   if (!ref || !ref.coordenadaProvincia || !ref.coordenadaProvincia.discrepante) {
     return null;
   }
-  return 'La coordenada de este pozo en el padrón de Provincia está a ' +
+  return 'La coordenada de este pozo en Irrigación está a ' +
     buscarReemplazoLogic_formatearDistancia(ref.coordenadaProvincia.distanciaMetros) +
     ' de la del punto NE. La búsqueda usa la coordenada propia del punto NE.';
 }
@@ -470,7 +470,7 @@ function buscarReemplazoLogic_explicar(c, ref) {
     clave: 'coordenada',
     // "Disponible" (1 fuente) es lo normal (88 % de los pozos): se informa
     // como dato, no como alerta.
-    texto: c.estadoCoordenada === 'V' ? 'Coordenada validada en campo' : (c.estadoCoordenada === 'C' ? 'Coordenada coincidente' : 'Coordenada disponible (1 fuente)'),
+    texto: c.estadoCoordenada === 'V' ? 'Coordenada validada en campo' : (c.estadoCoordenada === 'R' ? 'Coordenada aceptada' : (c.estadoCoordenada === 'C' ? 'Coordenada coincidente' : 'Coordenada disponible (1 fuente)')),
     tipo: 'dato'
   });
 
