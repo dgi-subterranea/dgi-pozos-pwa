@@ -65,6 +65,9 @@ var UBICACION_CORR_MENDOZA_BBOX = { latMin: -37.65, latMax: -31.95, lonMin: -70.
 var UBICACION_CORR_CLIENT_REQUEST_ID_REGEX = /^[A-Za-z0-9_-]{8,64}$/;
 var UBICACION_CORR_UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 var UBICACION_CORR_ESTADOS_CON_COORDENADA = { corroborada: true, unica: true };
+// irrEstado de una correccion de un pozo que NO esta en el padron actual pero existe por otra fuente (ver ubicacionCorreccionService_snapshotIrrigacion). Columna de texto libre: sin migracion.
+var UBICACION_CORR_IRR_ESTADO_NO_EN_PADRON = 'noEnPadron';
+var UBICACION_CORR_IRR_ESTADOS_SIN_PUNTO = ['sinCoordenadas', UBICACION_CORR_IRR_ESTADO_NO_EN_PADRON];
 
 function ubicacionCorreccionService_error(code, message, extra) {
   var r = { ok: false, code: code, message: message };
@@ -320,25 +323,32 @@ function ubicacionCorreccionService_validarMotivo(motivo, obligatorio) {
 
 // Snapshot de la ubicacion de Irrigacion VIGENTE en el padron al momento de proponer. Solo hay coordenada oficial cuando el
 // padron la resolvio (corroborada / unica): con fuentes en desacuerdo (revisar*) o sin datos no hay "la" coordenada oficial y
-// irrLat / irrLon quedan nulos (el estado igual queda registrado). Si el pozo no existe en el padron no se propone (fail-closed).
+// irrLat / irrLon quedan nulos (el estado igual queda registrado).
+// Tres situaciones (la existencia la decide pozoExistenciaService_verificar, el UNICO lugar que lo hace):
+//   - en el padron              -> como siempre: el estado del padron (corroborada / unica con coordenada; sinCoordenadas / revisar* sin ella).
+//   - FUERA del padron pero conocido por otra fuente institucional (ITF, NE o una correccion previa) -> irrEstado 'noEnPadron', sin coordenada, irrFuente vacia. Es una situacion
+//     DISTINTA de sinCoordenadas y queda asi para siempre en la hoja (append-only): aunque despues el padron incorpore el pozo, esa fila sigue diciendo que en ese momento no estaba.
+//   - no existe en ninguna fuente -> WELL_NOT_FOUND; no se pudo verificar alguna y ninguna confirmo -> SERVICE_UNAVAILABLE (nunca se supone que existe ni que no).
 function ubicacionCorreccionService_snapshotIrrigacion(wellId) {
-  var res = registryService_getWellLocation(wellId);
-  if (!res || !res.found) {
-    return ubicacionCorreccionService_error('WELL_NOT_FOUND', 'no se encontro el pozo ' + wellId + ' en el padron');
+  var existencia = pozoExistenciaService_verificar(wellId);
+  if (!existencia.existe) {
+    if (existencia.indeterminado) {
+      return ubicacionCorreccionService_error('SERVICE_UNAVAILABLE', 'no se pudo verificar si el pozo ' + wellId + ' existe: intenta de nuevo en unos minutos');
+    }
+    return ubicacionCorreccionService_error('WELL_NOT_FOUND', 'no se encontro el pozo ' + wellId + ' en el padron ni en otra fuente');
   }
+  if (!existencia.enPadron) {
+    // la evidencia de que el pozo existe (que fuente lo conocia) queda en Logger, sin ningun dato personal; NO se guarda en irrFuente (esa columna es la fuente de la COORDENADA de Irrigacion)
+    if (typeof Logger !== 'undefined' && Logger && typeof Logger.log === 'function') {
+      Logger.log('Correcciones: el pozo ' + wellId + ' no figura en el padron; existe por ' + existencia.fuentes.join(', '));
+    }
+    return { ok: true, snapshot: { irrLat: null, irrLon: null, irrEstado: UBICACION_CORR_IRR_ESTADO_NO_EN_PADRON, irrFuente: '', padronPeriodo: ubicacionCorreccionService_periodoPadron() } };
+  }
+  var res = { found: true, location: existencia.location };
   var resuelta = (res.location && res.location.ubicacionResuelta) || { estado: 'sinCoordenadas' };
   var estado = typeof resuelta.estado === 'string' ? resuelta.estado : 'sinCoordenadas';
   var tieneCoordenada = UBICACION_CORR_ESTADOS_CON_COORDENADA[estado] === true &&
     ubicacionCorreccionService_esNumero(resuelta.lat) && ubicacionCorreccionService_esNumero(resuelta.lon);
-  var periodo = '';
-  try {
-    var meta = registryService_getMetadata();
-    if (meta && meta.found && meta.metadata && meta.metadata.periodo) {
-      periodo = String(meta.metadata.periodo);
-    }
-  } catch (err) {
-    periodo = '';
-  }
   return {
     ok: true,
     snapshot: {
@@ -346,9 +356,22 @@ function ubicacionCorreccionService_snapshotIrrigacion(wellId) {
       irrLon: tieneCoordenada ? ubicacionCorreccionService_redondear(resuelta.lon, 6) : null,
       irrEstado: estado,
       irrFuente: resuelta.fuente ? String(resuelta.fuente) : (estado === 'corroborada' ? 'VARIAS_FUENTES' : ''),
-      padronPeriodo: periodo
+      padronPeriodo: ubicacionCorreccionService_periodoPadron()
     }
   };
+}
+
+// Periodo del padron actual ('' si no se puede saber; nunca lanza).
+function ubicacionCorreccionService_periodoPadron() {
+  try {
+    var meta = registryService_getMetadata();
+    if (meta && meta.found && meta.metadata && meta.metadata.periodo) {
+      return String(meta.metadata.periodo);
+    }
+  } catch (err) {
+    return '';
+  }
+  return '';
 }
 
 // --- Estado derivado ---
@@ -395,8 +418,89 @@ function ubicacionCorreccionService_derivar(correcciones, eventos) {
   });
 }
 
-// Vista hacia el cliente: SIN emails. "propia" dice si la propuso quien consulta (para ocultar el boton de validar).
-function ubicacionCorreccionService_vista(c, emailSolicitante) {
+// PRIMERA UBICACION DE UN POZO: dos marcas DISTINTAS, ambas derivadas del log append-only (sin columna; jamas se modifica una fila).
+//
+//  primeraUbicacion          HECHO HISTORICO e inmutable: «esta correccion llego efectivamente a ser la primera ubicacion VALIDADA EN CAMPO del pozo». true solo si
+//                            (1) el padron no tenia ningun punto del pozo cuando se propuso (sin coordenada, snapshot `sinCoordenadas` o `noEnPadron`; con fuentes en desacuerdo
+//                                -revisar*- SI tenia ubicaciones, no es la primera),
+//                            (2) la correccion tiene un evento VALIDADA (tambien una autovalidada), y
+//                            (3) ninguna otra correccion del pozo fue VALIDADA antes que ella.
+//                            Pendiente o RECHAZADA -> false. Una vez validada sigue true aunque despues se REVIERTA o la SUPERE otra: es un hecho que ya ocurrio y la marca no vuelve
+//                            a quedar disponible. Toda V posterior es false.
+//  candidataPrimeraUbicacion  PARA LA UI DE PROPUESTAS: «si esta propuesta se validara AHORA seria la primera ubicacion validada del pozo». true solo si la correccion esta PROPUESTA
+//                            (pendiente: una rechazada, validada, superada o revertida ya no es candidata), cumple (1) y NINGUNA correccion del pozo llego jamas a VALIDADA (aunque esa V
+//                            ya este revertida o superada). Se evalua con el historial de hoy: si otra propuesta se valida primero, las demas dejan de ser candidatas.
+// Orden de las validaciones: por el instante del evento VALIDADA; si coinciden (mismo milisegundo) decide el orden en que se propusieron las correcciones (`orden`: la hoja es append-only).
+// FAIL-SAFE ante un log dudoso (nunca se afirma sin comprobar; ante la duda es false): una correccion propia INCONSISTENTE no es primera ni candidata; una correccion ajena INCONSISTENTE con
+// un evento VALIDADA cuenta igual (el hecho ocurrio aunque su cadena no sea valida); un VALIDADA sin instante legible tambien cuenta (y si es el de la propia correccion, no se afirma).
+// delPozo: las correcciones derivadas DE UN MISMO POZO.
+
+// El padron no tenia punto del pozo cuando se propuso: sin coordenada y snapshot `sinCoordenadas` / `noEnPadron`.
+function ubicacionCorreccionService_sinPuntoPrevio(c) {
+  return !!c && !ubicacionCorreccionService_esNumero(c.irrLat) && !ubicacionCorreccionService_esNumero(c.irrLon) && UBICACION_CORR_IRR_ESTADOS_SIN_PUNTO.indexOf(c.irrEstado) !== -1;
+}
+
+// Instantes (ISO; '' = ilegible) de los eventos VALIDADA de una correccion, sea cual sea su estado actual y la validez de su cadena.
+function ubicacionCorreccionService_instantesDeValidada(d) {
+  return ((d && d.eventos) || []).filter(function (e) { return !!e && e.evento === 'VALIDADA'; }).map(function (e) { return ubicacionCorreccionService_isoDe(e.timestamp); });
+}
+
+function ubicacionCorreccionService_esPrimeraUbicacion(c, delPozo) {
+  if (!c || c.estado === UBICACION_CORR_ESTADO_INCONSISTENTE || !ubicacionCorreccionService_sinPuntoPrevio(c)) {
+    return false;
+  }
+  var propios = ubicacionCorreccionService_instantesDeValidada(c);
+  if (propios.length === 0 || propios.indexOf('') !== -1) {
+    return false;                                           // nunca llego a VALIDADA (o su instante no se puede leer: no se afirma)
+  }
+  var tc = propios.slice().sort()[0];
+  return !(delPozo || []).some(function (d) {
+    if (!d || d.correccionId === c.correccionId) {
+      return false;
+    }
+    return ubicacionCorreccionService_instantesDeValidada(d).some(function (td) {
+      if (td === '' || td < tc) {
+        return true;                                        // validada antes (o sin poder probar que fuera despues)
+      }
+      if (td > tc) {
+        return false;
+      }
+      // mismo instante: decide el orden de propuesta; sin `orden` no se puede probar que fuera despues
+      return !(ubicacionCorreccionService_esNumero(d.orden) && ubicacionCorreccionService_esNumero(c.orden)) || d.orden < c.orden;
+    });
+  });
+}
+
+function ubicacionCorreccionService_esCandidataPrimeraUbicacion(c, delPozo) {
+  if (!c || c.estado !== 'PROPUESTA' || !ubicacionCorreccionService_sinPuntoPrevio(c)) {
+    return false;
+  }
+  return !(delPozo || []).some(function (d) {
+    return !!d && d.correccionId !== c.correccionId && ubicacionCorreccionService_instantesDeValidada(d).length > 0;
+  });
+}
+
+// derivadas (de cualquier cantidad de pozos) -> {primeras: {correccionId: true}, candidatas: {correccionId: true}}.
+function ubicacionCorreccionService_marcasPrimeraUbicacion(derivadas) {
+  var porPozo = {};
+  (derivadas || []).forEach(function (c) { (porPozo[c.wellId] = porPozo[c.wellId] || []).push(c); });
+  var marcas = { primeras: {}, candidatas: {} };
+  Object.keys(porPozo).forEach(function (w) {
+    porPozo[w].forEach(function (c) {
+      if (ubicacionCorreccionService_esPrimeraUbicacion(c, porPozo[w])) {
+        marcas.primeras[c.correccionId] = true;
+      }
+      if (ubicacionCorreccionService_esCandidataPrimeraUbicacion(c, porPozo[w])) {
+        marcas.candidatas[c.correccionId] = true;
+      }
+    });
+  });
+  return marcas;
+}
+
+// Vista hacia el cliente: SIN emails. "propia" dice si la propuso quien consulta (para ocultar el boton de validar). marcas: el resultado de
+// ubicacionCorreccionService_marcasPrimeraUbicacion sobre las correcciones del pozo (sin el, primeraUbicacion y candidataPrimeraUbicacion son false: nunca se afirma sin comprobar).
+function ubicacionCorreccionService_vista(c, emailSolicitante, marcas) {
   var u = c.ultimoEvento;
   var resuelta = u && u.evento !== 'PROPUESTA';
   return {
@@ -413,6 +517,8 @@ function ubicacionCorreccionService_vista(c, emailSolicitante) {
     timestamp: c.timestamp,
     distanciaM: c.distanciaM,
     advertenciaDistancia: c.advertenciaDistancia === true,
+    primeraUbicacion: !!(marcas && marcas.primeras && marcas.primeras[c.correccionId]),
+    candidataPrimeraUbicacion: !!(marcas && marcas.candidatas && marcas.candidatas[c.correccionId]),
     irrigacion: { lat: c.irrLat, lon: c.irrLon, estado: c.irrEstado, fuente: c.irrFuente, padronPeriodo: c.padronPeriodo },
     estado: c.estado,
     resolucion: resuelta ? { evento: u.evento, nombre: u.nombre, timestamp: u.timestamp, motivo: u.motivo } : null,
@@ -437,7 +543,8 @@ function ubicacionCorreccionService_leerDerivadas() {
 function ubicacionCorreccionService_getPorPozo(email, wellId) {
   var delPozo = ubicacionCorreccionService_leerDerivadas().filter(function (c) { return c.wellId === wellId; });
   delPozo.sort(ubicacionCorreccionService_masReciente);
-  function v(c) { return ubicacionCorreccionService_vista(c, email); }
+  var marcas = ubicacionCorreccionService_marcasPrimeraUbicacion(delPozo);
+  function v(c) { return ubicacionCorreccionService_vista(c, email, marcas); }
   var vigente = ubicacionCorreccionService_elegirVigente(delPozo);
   return {
     wellId: wellId,
@@ -452,10 +559,11 @@ function ubicacionCorreccionService_getPendientes(email) {
   var derivadas = ubicacionCorreccionService_leerDerivadas();
   var pendientes = derivadas.filter(function (c) { return c.estado === 'PROPUESTA'; });
   pendientes.sort(function (a, b) { return -ubicacionCorreccionService_masReciente(a, b); });
+  var marcas = ubicacionCorreccionService_marcasPrimeraUbicacion(derivadas);
   return {
     total: pendientes.length,
     inconsistentes: derivadas.filter(function (c) { return c.estado === UBICACION_CORR_ESTADO_INCONSISTENTE; }).length,
-    pendientes: pendientes.slice(0, UBICACION_CORR_PENDIENTES_MAX).map(function (c) { return ubicacionCorreccionService_vista(c, email); })
+    pendientes: pendientes.slice(0, UBICACION_CORR_PENDIENTES_MAX).map(function (c) { return ubicacionCorreccionService_vista(c, email, marcas); })
   };
 }
 
@@ -636,7 +744,7 @@ function ubicacionCorreccionService_buscarPorClientRequestId(derivadas, emailNor
 //    validar una PROPUESTA que ya estaba escrita (esa la valida quien corresponda con validar()).
 //  - autocurado + auto (quien reintenta tiene hoy ubicacion_validar): ademas del PROPUESTA faltante se escribe, en la MISMA escritura, la
 //    validacion (SUPERADA/VALIDADA): es completar la creacion directa que se habia cortado.
-function ubicacionCorreccionService_atenderExistente(existente, v, wellId, email, emailN, nombre, auto) {
+function ubicacionCorreccionService_atenderExistente(existente, v, wellId, email, emailN, nombre, auto, derivadasLeidas) {
   if (!ubicacionCorreccionService_mismaSolicitud(existente, v, wellId)) {
     return ubicacionCorreccionService_error('IDEMPOTENCY_CONFLICT', 'clientRequestId ya usado con otro contenido', { wellId: wellId });
   }
@@ -660,10 +768,12 @@ function ubicacionCorreccionService_atenderExistente(existente, v, wellId, email
     if (auto === true) {
       ubicacionCorreccionService_invalidarUbicacionesValidadas();       // la escritura ya incluye una VALIDADA: cambio la vigente
     }
-    existente = ubicacionCorreccionService_buscarPorClientRequestId(ubicacionCorreccionService_leerDerivadas(), emailN, v.clientRequestId);
+    derivadasLeidas = ubicacionCorreccionService_leerDerivadas();
+    existente = ubicacionCorreccionService_buscarPorClientRequestId(derivadasLeidas, emailN, v.clientRequestId);
     curada = true;
   }
-  var r = { ok: true, correccion: ubicacionCorreccionService_vista(existente, email), duplicada: true, curada: curada };
+  var delPozo = (derivadasLeidas || [existente]).filter(function (c) { return c.wellId === existente.wellId; });
+  var r = { ok: true, correccion: ubicacionCorreccionService_vista(existente, email, ubicacionCorreccionService_marcasPrimeraUbicacion(delPozo)), duplicada: true, curada: curada };
   if (supersedidas !== null) {
     r.autoValidada = true;
     r.supersedidas = supersedidas;
@@ -697,9 +807,10 @@ function ubicacionCorreccionService_proponer(email, nombre, wellId, datos, opcio
 
   // Camino rapido (sin lock): si la solicitud ya se proceso en forma consistente, se responde sin tocar el padron ni la hoja.
   // Una correccion SIN eventos pasa al camino con lock (autocurado). El snapshot solo hace falta para una correccion NUEVA.
-  var previa = ubicacionCorreccionService_buscarPorClientRequestId(ubicacionCorreccionService_leerDerivadas(), emailN, v.clientRequestId);
+  var derivadasIniciales = ubicacionCorreccionService_leerDerivadas();
+  var previa = ubicacionCorreccionService_buscarPorClientRequestId(derivadasIniciales, emailN, v.clientRequestId);
   if (previa && !(previa.estado === UBICACION_CORR_ESTADO_INCONSISTENTE && previa.eventos.length === 0)) {
-    return ubicacionCorreccionService_atenderExistente(previa, v, wellId, email, emailN, nombre);
+    return ubicacionCorreccionService_atenderExistente(previa, v, wellId, email, emailN, nombre, undefined, derivadasIniciales);
   }
 
   var s = null;
@@ -719,6 +830,12 @@ function ubicacionCorreccionService_proponer(email, nombre, wellId, datos, opcio
     if (s.irrLat !== null && s.irrLon !== null) {
       distanciaM = ubicacionCorreccionService_distanciaMetros(s.irrLat, s.irrLon, v.lat, v.lon);
     }
+    // Un pozo que NO figura en el padron actual: la observacion es OBLIGATORIA (no hay distancia contra la cual medir; el motivo es lo unico que justifica incorporarlo). Un pozo del
+    // padron sin coordenada (sinCoordenadas) sigue con observacion opcional, y no se aplica ninguna regla de distancia: no hay referencia.
+    if (s.irrEstado === UBICACION_CORR_IRR_ESTADO_NO_EN_PADRON && v.observacion === '') {
+      return ubicacionCorreccionService_error('OBSERVACION_REQUERIDA',
+        'Indicá por qué se incorpora una ubicación para un pozo que no figura en el padrón actual.');
+    }
     if (distanciaM !== null && distanciaM > UBICACION_CORR_OBSERVACION_DESDE_M && v.observacion === '') {
       return ubicacionCorreccionService_error('OBSERVACION_REQUERIDA',
         'La ubicacion propuesta esta a ' + Math.round(distanciaM) + ' m de la de Irrigacion: indicá el motivo en la observacion (obligatoria a mas de ' +
@@ -731,7 +848,7 @@ function ubicacionCorreccionService_proponer(email, nombre, wellId, datos, opcio
     var derivadasEnLock = ubicacionCorreccionService_leerDerivadas();
     var existente = ubicacionCorreccionService_buscarPorClientRequestId(derivadasEnLock, emailN, v.clientRequestId);
     if (existente) {
-      return ubicacionCorreccionService_atenderExistente(existente, v, wellId, email, emailN, nombre, auto);
+      return ubicacionCorreccionService_atenderExistente(existente, v, wellId, email, emailN, nombre, auto, derivadasEnLock);
     }
     if (s === null) {
       // la correccion que se iba a curar desaparecio entre lecturas (no deberia pasar en una hoja append-only): no se inventa nada
@@ -779,7 +896,10 @@ function ubicacionCorreccionService_proponer(email, nombre, wellId, datos, opcio
       [Object.assign({}, correccion, { timestamp: iso })],
       aEscribir.filter(function (e) { return e.correccionId === correccion.correccionId; }).map(function (e) { return Object.assign({}, e, { timestamp: iso }); })
     )[0];
-    var resp = { ok: true, correccion: ubicacionCorreccionService_vista(derivada, email), duplicada: false, curada: false };
+    derivada.orden = derivadasEnLock.length;                // la hoja es append-only: esta es la ultima
+    var marcasNueva = ubicacionCorreccionService_marcasPrimeraUbicacion(
+      derivadasEnLock.filter(function (c) { return c.wellId === wellId; }).concat([derivada]));
+    var resp = { ok: true, correccion: ubicacionCorreccionService_vista(derivada, email, marcasNueva), duplicada: false, curada: false };
     if (auto) {
       resp.autoValidada = true;
       resp.supersedidas = supersedidas;
@@ -855,7 +975,10 @@ function ubicacionCorreccionService_resolver(accion, email, nombre, correccionId
       estado: regla.hasta,
       ultimoEvento: { correccionId: objetivo.correccionId, timestamp: iso, evento: regla.hasta, email: emailN, nombre: nombre || '', motivo: m.motivo }
     });
-    return { ok: true, correccion: ubicacionCorreccionService_vista(vistaFinal, email), supersedidas: supersedidas };
+    vistaFinal.eventos = (objetivo.eventos || []).concat([vistaFinal.ultimoEvento]);          // las marcas se calculan DESPUES de la accion: el evento nuevo ya cuenta
+    var marcasPozo = ubicacionCorreccionService_marcasPrimeraUbicacion(
+      derivadas.filter(function (c) { return c.wellId === objetivo.wellId && c.correccionId !== objetivo.correccionId; }).concat([vistaFinal]));
+    return { ok: true, correccion: ubicacionCorreccionService_vista(vistaFinal, email, marcasPozo), supersedidas: supersedidas };
   });
 }
 
@@ -895,7 +1018,11 @@ if (typeof module !== 'undefined' && module.exports) {
     ubicacionCorreccionService_validarPropuesta,
     ubicacionCorreccionService_validarMotivo,
     ubicacionCorreccionService_normalizarEmail,
+    UBICACION_CORR_IRR_ESTADO_NO_EN_PADRON,
     ubicacionCorreccionService_snapshotIrrigacion,
+    ubicacionCorreccionService_esPrimeraUbicacion,
+    ubicacionCorreccionService_esCandidataPrimeraUbicacion,
+    ubicacionCorreccionService_marcasPrimeraUbicacion,
     ubicacionCorreccionService_derivar,
     ubicacionCorreccionService_vista,
     ubicacionCorreccionService_getPorPozo,

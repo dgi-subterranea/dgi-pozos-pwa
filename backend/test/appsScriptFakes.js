@@ -63,6 +63,8 @@ function installAppsScriptFakes() {
 
   // Modulo de conversion de coordenadas del backend (CoordenadasConversion.js): en Apps Script es un archivo mas del proyecto, o sea globales.
   Object.assign(global, require('../src/CoordenadasConversion'));
+  // Verificacion de existencia de un pozo (E4): tambien un archivo mas del proyecto. Sus fuentes se simulan abajo: por defecto NINGUNA confirma (ITF, NE y las correcciones previas dicen "no").
+  Object.assign(global, require('../src/PozoExistenciaService'));
 
   global.GOOGLE_CLIENT_ID = 'test-client-id.apps.googleusercontent.com';
   global.getSessionSecret = () => 'test-session-secret';
@@ -73,6 +75,8 @@ function installAppsScriptFakes() {
   global.sheetUserRepository_getUserStatus = jest.fn();
   global.logHistoryEvent = jest.fn();
   global.driveProfileRepository_getFile = jest.fn();
+  global.driveProfileRepository_existe = jest.fn(() => false);
+  global.ubicacionCorreccionRepository_listarCorrecciones = jest.fn(() => []);
   global.profileService_getProfile = jest.fn();
   global.registryRepository_getWellRecord = jest.fn();
   global.registryService_getWellRecord = jest.fn();

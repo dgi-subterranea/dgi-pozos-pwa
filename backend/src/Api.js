@@ -410,6 +410,24 @@ function handleGetWellLocation(sessionToken, wellId) {
   }
 
   if (!result.found) {
+    // Fuera del padron: si OTRA fuente institucional conoce el pozo (ITF, NE o una correccion previa; ver PozoExistenciaService.js, el unico lugar que lo decide) se devuelve una vista
+    // MINIMA, sin coordenadas ni ficha, con ubicacionResuelta.estado = 'noEnPadron': asi la tarjeta Ubicacion puede ofrecer agregar la primera ubicacion. getWellRecord NO cambia (sigue
+    // sin ficha registral). Sin ninguna evidencia: WELL_LOCATION_NOT_FOUND; si no se pudo verificar y nadie confirmo: SERVICE_UNAVAILABLE (un error de Drive no es "no existe").
+    var existencia;
+    try {
+      existencia = pozoExistenciaService_verificar(wellId, { padron: result });
+    } catch (err) {
+      logHistoryEvent(session.email, 'getWellLocation', wellId, 'SERVICE_UNAVAILABLE');
+      return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+    }
+    if (existencia.existe && !existencia.enPadron) {
+      logHistoryEvent(session.email, 'getWellLocation', wellId, 'OK_NO_EN_PADRON');
+      return { status: 'ok', data: pozoExistenciaService_ubicacionFueraDelPadron(wellId) };
+    }
+    if (existencia.indeterminado) {
+      logHistoryEvent(session.email, 'getWellLocation', wellId, 'SERVICE_UNAVAILABLE');
+      return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'no se pudo verificar el pozo ' + wellId };
+    }
     logHistoryEvent(session.email, 'getWellLocation', wellId, 'WELL_LOCATION_NOT_FOUND');
     return { status: 'error', code: 'WELL_LOCATION_NOT_FOUND', message: 'no se encontro ubicacion para ' + wellId };
   }

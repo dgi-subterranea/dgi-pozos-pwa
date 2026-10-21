@@ -26,7 +26,7 @@ const USUARIOS = {
 
 // Campos de la vista de correccion que el BACKEND entrega (congelados: si cambian, hay que revisar el frontend a proposito).
 // Etapa 2 (coordenadas ingresadas) suma coordenadaOriginalTexto y crsOriginal: vacios ('') en GPS_ACTUAL, PUNTO_EN_MAPA y filas historicas. El frontend actual NO los lee.
-const CAMPOS_VISTA = ['advertenciaDistancia', 'coordenadaOriginalTexto', 'correccionId', 'crsOriginal', 'distanciaM', 'estado', 'irrigacion', 'lat', 'lon', 'metodo', 'nombrePropone', 'observacion', 'precisionGpsM', 'propia', 'resolucion', 'timestamp', 'wellId'];
+const CAMPOS_VISTA = ['advertenciaDistancia', 'candidataPrimeraUbicacion', 'coordenadaOriginalTexto', 'correccionId', 'crsOriginal', 'distanciaM', 'estado', 'irrigacion', 'lat', 'lon', 'metodo', 'nombrePropone', 'observacion', 'precisionGpsM', 'primeraUbicacion', 'propia', 'resolucion', 'timestamp', 'wellId'];
 // (Desde la Etapa 4 el frontend conoce TODOS los metodos y errores del backend: ya no hay listas temporales de "solo backend".)
 const CAMPOS_RESOLUCION = ['evento', 'motivo', 'nombre', 'timestamp'];
 

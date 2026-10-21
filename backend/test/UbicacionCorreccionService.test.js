@@ -342,10 +342,11 @@ describe('proponer', () => {
     expect(eventos()).toHaveLength(0);
   });
 
-  test('si el padron no se puede leer, se propaga el error (fail-closed, no se guarda nada)', () => {
+  test('si el padron no se puede leer: SERVICE_UNAVAILABLE (fail-closed, no se guarda nada; sin el padron no se puede afirmar ni que el pozo existe ni que esta fuera de el)', () => {
     global.registryService_getWellLocation = jest.fn(() => { throw new Error('Drive caido'); });
-    expect(() => proponer()).toThrow('Drive caido');
+    expect(proponer()).toMatchObject({ ok: false, code: 'SERVICE_UNAVAILABLE' });
     expect(correcciones()).toHaveLength(0);
+    expect(global.driveProfileRepository_existe).not.toHaveBeenCalled();           // y tampoco se prueba otra fuente para inferir "fuera del padron"
   });
 
   test('varias propuestas pendientes para el mismo pozo pueden coexistir', () => {

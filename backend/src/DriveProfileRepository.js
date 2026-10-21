@@ -11,6 +11,13 @@ function driveProfileRepository_getFile(wellId) {
   return { found: true, blob: file.getBlob() };
 }
 
+// Solo EXISTENCIA del ITF de un pozo (E4): comprueba que este <wellId>.jpg en la carpeta institucional, sin descargar ni leer el archivo. No depende del indice de miniaturas
+// (puede estar incompleto o vencido). Lanza si Drive falla: quien llama lo trata como "no se pudo verificar", nunca como "no existe".
+function driveProfileRepository_existe(wellId) {
+  var folder = DriveApp.getFolderById(getFolderId());
+  return folder.getFilesByName(wellId + '.jpg').hasNext();
+}
+
 // Etapa "seleccion multiple + lote": getItfAvailability necesita saber,
 // para un lote de wellId, cuales tienen ITF SIN leer cada imagen. Unica
 // funcion que de verdad recorre la carpeta THUMB entera - la logica de
@@ -30,5 +37,5 @@ function driveProfileRepository_listarArchivosThumb() {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { driveProfileRepository_getFile, driveProfileRepository_listarArchivosThumb };
+  module.exports = { driveProfileRepository_getFile, driveProfileRepository_existe, driveProfileRepository_listarArchivosThumb };
 }

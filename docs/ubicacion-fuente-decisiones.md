@@ -676,3 +676,9 @@ Una decisión exitosa provoca una invalidación, **un** pedido nuevo del delta r
 
 ### Pendiente para publicar toda E3
 Nada del frontend. Operación (E3-7, no es código): publicar frontend, índice de pozos / procedimiento de reindexado y `auditarDecisionesFuentes`. El backend en producción (v43) ya incluye todo lo que E3 consume.
+
+---
+
+## E4 — primera ubicación de un pozo (referencia)
+
+Un pozo fuera del padrón actual pero conocido por otra fuente institucional (caso 14-0123) puede recibir una primera ubicación vía `UbicacionCorrecciones` (`irrEstado = noEnPadron`); al validarse pasa a V y entra al dataset **sin base registral** (`sin base + V → V`). Si un padrón posterior incorpora el pozo, la V sigue ganando, el historial no cambia y, si la V se revierte, el pozo vuelve a la nueva resolución registral. Las decisiones sobre fuentes registrales siguen exigiendo padrón. Detalle en `docs/ubicacion-correcciones.md` (E4-1).
