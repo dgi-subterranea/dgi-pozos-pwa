@@ -278,7 +278,7 @@ Backend usado tal cual esta desplegado en v41: `getDecisionesFuentesPozo` (lectu
 - **Acciones:** SIN_REVISAR → Aceptar, Descartar · ACEPTADA → Quitar aceptación, Descartar (un solo paso) · DESCARTADA → Restaurar. «Validada en campo» nunca tiene estado ni acciones. Historial inconsistente → sin acciones y con un aviso sin códigos técnicos.
 - **Confirmaciones:** Aceptar («¿Aceptar esta fuente como referencia registral?», más la aclaración de la validada en campo vigente), Descartar (motivo obligatorio, «La coordenada original no se eliminará…»), Quitar aceptación (simple), Restaurar («…No quedará aceptada automáticamente.»). Nunca se habla de «eliminar».
 - **Después de decidir:** se pinta la vista que devuelve el backend (tarjetas, popups, leyenda, chips), el visor no se mueve y se reabre el popup de esa fuente. `STALE_STATE` (y `ALREADY_IN_STATE`, `INVALID_TRANSITION`, `SOURCE_NOT_FOUND`): «Esta información cambió mientras la estabas revisando.», se relee y **no** se repite la decisión sola. Corte de red: el diálogo queda abierto y el reintento reutiliza el mismo `clientRequestId` (el backend lo deduplica). Sesión vencida: cierra sesión.
-- **Alcance:** los mapas globales, Cerca Mío, selección y reemplazos **no cambian**: el punto operativo que muestra la ficha sigue siendo el de hoy (la validada en campo gana; si no, el automático). Si las decisiones cambiarían el punto registral, la ficha lo avisa («Las decisiones tomadas todavía no cambian el punto que usan los mapas.»).
+- **Alcance:** los mapas globales, Cerca Mío, selección y reemplazos **no cambian**: el punto operativo que muestra la ficha sigue siendo el de hoy (la validada en campo gana; si no, el automático). Si las decisiones cambiarían el punto registral, la ficha lo avisaba con una nota breve (retirada en E3-6, cuando el mapa pasó a seguir a las decisiones).
 
 ### Qué falta para que Aceptada / descartes impacten mapas, Cerca Mío y selección (Etapa 3)
 1. ~~Endpoint delta `getDecisionesFuentesDelta`~~ **HECHO en E3-1** (backend; ver la sección «E3-1» al final).
@@ -631,4 +631,48 @@ Los datos históricos no se tocan: `irrLat` / `irrLon` (snapshot del momento de 
 
 ### Pendiente
 - **Fase pequeña posterior (opcional):** usar la registral vigente también como marcador fijo y como referencia de distancia de «Corregir ubicación». Se dejó afuera porque exige que el backend compare contra la misma referencia (hoy snapshotea el automático) o que el frontend avise la diferencia entre ambas.
-- **E3-6:** la nota «Las decisiones tomadas todavía no cambian el punto que usan los mapas» (`UFDUI_TEXTO_SIN_EFECTO_MAPAS`) sigue vigente hasta cablear la invalidación; decidir, aprobar una sugerencia o revertir la V todavía no invalidan `mapaDataset`.
+- **E3-6 (hecho, ver más abajo):** invalidación del cliente tras decisiones / aprobaciones, y retiro de la nota «sin efecto en los mapas» de la ficha.
+
+---
+
+## Etapa 3 · E3-6 — invalidación y refresco inmediato tras decisiones y sugerencias (implementada; sin commit, sin push)
+
+Solo frontend. Sin backend, sin `gas:*`, sin cambios de contratos de la API, de NE ni del dominio de decisiones. E3-1 ya invalida el cache **del servidor** del delta registral cuando cambia de verdad la resolución; E3-6 invalida el cache **del cliente** (`mapaDataset`). No se duplica ninguna regla del backend.
+
+### Qué invalida qué
+| Evento (éxito real confirmado por el backend) | Invalida |
+|---|---|
+| ACEPTAR, DESCARTAR, QUITAR_ACEPTACION, RESTAURAR (también un reintento deduplicado: la decisión existe) | `mapaDataset_invalidarDeltaRegistral()` |
+| APROBAR una sugerencia con resultado APROBADA | `mapaDataset_invalidarDeltaRegistral()` |
+| validar una corrección (cola o ficha), la corrección directa (auto-validada), «ya resuelta» por otra persona | `mapaDataset_invalidarDeltaCampo()` (antes la genérica, que invalidaba las dos capas) |
+| sugerir, cancelar, rechazar, aprobar con resultado OBSOLETA, STALE_STATE, ALREADY_IN_STATE, INVALID_TRANSITION, SOURCE_NOT_FOUND, error de backend, fallo de red, diálogo cancelado | nada |
+
+- **Un único lugar** decide si un resultado cambia la resolución: `ufdui_cambiaResolucion(r)` (lógica pura). Un único lugar lo ejecuta: el diálogo compartido (`js/ubicacionFuenteDecisionesUi.js`), por donde pasa **toda** decisión autoritativa (tarjeta, popup del visor y «Aprobar» de la cola). Invalida *antes* de mirar si el diálogo sigue abierto: la decisión ya está en el backend aunque la ficha se haya cerrado mientras volaba el pedido.
+- **No hay revertir validada en el frontend** (no existe esa acción en la UI): el caso conceptual V + R → R al refrescar queda cubierto porque la capa de campo se invalida con su invalidador propio y la composición hace el resto.
+- `mapaDataset_invalidarDeltas()` (las dos capas) se conserva exportada por compatibilidad; ningún flujo la usa.
+
+### mapaDataset: invalidar descarta lo que vuela
+Cada capa tiene una *generación*. Invalidar la sube y suelta el pedido en vuelo: la respuesta de un pedido anterior a la decisión (que puede ser vieja) se **descarta** (no pisa datos ni queda «fresca» por 60 s) y el siguiente `mapaDataset_obtener` pide otra vez, sin reutilizar el pedido viejo. Hasta que llega la respuesta nueva se sigue mostrando lo último conocido. El base (`pozos.json`) nunca se vuelve a pedir; varios consumidores simultáneos comparten **un** pedido nuevo.
+
+### Flujo de una decisión directa
+Tarjeta o popup → diálogo (motivo) → `decidirFuenteUbicacion` → éxito: el diálogo invalida el delta registral → la ficha pinta la vista nueva que devuelve el backend (bloque principal, tarjetas, visor abierto) → el próximo `mapaDataset_obtener` (mapa, Cerca Mío, selección, Buscar reemplazo) pide el delta de nuevo, recompone y entrega el dataset actualizado. El resultado (R, C, D, o sin ubicación) sale siempre de los datos refrescados; no hay nada escrito a mano.
+
+### Aprobar una sugerencia
+Cola → «Aprobar» → mismo diálogo → `resolverSugerenciaFuente` → APROBADA: invalida el delta registral, se relee la cola y el indicador toma el total nuevo, y la ficha de ese pozo, si está abierta, se relee (`ubicacionesConocidasController_refrescar`); si no está abierta, queda coherente la próxima vez que se abra. El resultado es el mismo que el de la decisión directa (hay un test que lo compara). **Rechazar** refresca cola e indicador y **no** invalida; **cancelar** y **sugerir** no invalidan.
+
+### STALE_STATE y concurrencia
+Si dos validadores actúan sobre la misma fuente, el segundo recibe STALE_STATE: el flujo relee las decisiones, la ficha muestra «Esta información cambió mientras la estabas revisando. Revisá el estado actual y volvé a decidir si corresponde.» y la acción propia **no** se aplica ni se muestra como éxito. STALE_STATE **no invalida como éxito**. Una sola excepción, por coherencia: si la relectura revela que **el punto registral cambió** por la acción de la otra persona (huella: resolución registral efectiva y si hay decisiones aplicadas), el delta cliente también estaba viejo y se invalida; si la acción ajena no cambió el punto, no se invalida nada. Lo mismo vale para cualquier relectura de la ficha con una vista ya conocida (por ejemplo, tras aprobar en la cola).
+
+### Mapa abierto y demás pantallas
+- **No existe una pantalla de mapa visible a la vez que un diálogo de decisión:** las decisiones se toman en la ficha, en su visor o en la cola del hub. El mapa provincial refresca **al abrirse**: `mapaController_abrir` pide `mapaDataset_obtener` en cada apertura (y también al volver de la ficha / ITF, que lo reabre), recompone y vuelve a pintar sin recrear la app; los filtros viven en `mapaEstado` y solo «Limpiar filtros» los borra, así que no se pierden; el zoom y la selección no se tocan.
+- **Cerca Mío y Buscar reemplazo con «Reanudar»** (volver del mapa o de Evaluar) conservan *a propósito* la búsqueda como se dejó (lista y conjunto de pozos de ese momento, «sin refetch masivo»): reciben el punto actualizado en la **próxima búsqueda o apertura**. **Selección** pide el dataset al abrir cada vista. Ninguna pantalla resuelve nada por su cuenta ni invalida.
+- No se agregó un refresco en caliente de pantallas ya abiertas: hoy no hay un mecanismo claro y seguro (cambiaría listas con las que el usuario está trabajando) y no hace falta, porque ninguna decisión se toma con esas pantallas visibles.
+
+### Copy
+Se **eliminó** la nota «sin efecto en los mapas» de la ficha (su constante y su uso): ya era falsa. No se agregó texto nuevo.
+
+### Performance
+Una decisión exitosa provoca una invalidación, **un** pedido nuevo del delta registral (el de campo y el base no se piden) y una recomposición con `aplicarCapas`. Tests: el base se pide una sola vez tras una secuencia de decisiones; el delta de campo no se pide por una decisión registral ni al revés.
+
+### Pendiente para publicar toda E3
+Nada del frontend. Operación (E3-7, no es código): publicar frontend, índice de pozos / procedimiento de reindexado y `auditarDecisionesFuentes`. El backend en producción (v43) ya incluye todo lo que E3 consume.

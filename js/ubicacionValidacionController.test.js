@@ -125,6 +125,8 @@ function cargar(opc) {
   ctx.ubicacionPendientesController_fijarTotal = jest.fn();
   ctx.ubicacionCorreccionController_alResolver = jest.fn();
   ctx.mapaDataset_invalidarDeltas = jest.fn();
+  ctx.mapaDataset_invalidarDeltaCampo = jest.fn();
+  ctx.mapaDataset_invalidarDeltaRegistral = jest.fn();
 
   vm.runInContext(fuenteConversion, ctx);
   vm.runInContext(fuenteLogica, ctx);
@@ -801,13 +803,15 @@ describe('desde la ficha del pozo: mismo detalle, misma confirmacion, mismo back
 });
 
 describe('el mapa vuelve a pedir las ubicaciones validadas cuando cambia la vigente', () => {
-  test('validar INVALIDA los deltas del mapa (bandeja y ficha); rechazar NO', async () => {
+  test('validar invalida SOLO la capa de campo del mapa (ni la registral ni la generica); rechazar NO', async () => {
     const t = cargar();
     await abrirDetalleDesdeLista(t, P1.correccionId);
     t.el('btn-uval-validar').click();
     t.el('btn-uval-validar-confirmar').click();
     await flush();
-    expect(t.ctx.mapaDataset_invalidarDeltas).toHaveBeenCalledTimes(1);
+    expect(t.ctx.mapaDataset_invalidarDeltaCampo).toHaveBeenCalledTimes(1);
+    expect(t.ctx.mapaDataset_invalidarDeltaRegistral).not.toHaveBeenCalled();
+    expect(t.ctx.mapaDataset_invalidarDeltas).not.toHaveBeenCalled();
 
     const r = cargar();
     await abrirDetalleDesdeLista(r, P1.correccionId);
@@ -815,6 +819,8 @@ describe('el mapa vuelve a pedir las ubicaciones validadas cuando cambia la vige
     r.el('uval-motivo').value = 'No coincide';
     r.el('btn-uval-rechazar-confirmar').click();
     await flush();
+    expect(r.ctx.mapaDataset_invalidarDeltaCampo).not.toHaveBeenCalled();
+    expect(r.ctx.mapaDataset_invalidarDeltaRegistral).not.toHaveBeenCalled();
     expect(r.ctx.mapaDataset_invalidarDeltas).not.toHaveBeenCalled();
   });
 
@@ -824,7 +830,8 @@ describe('el mapa vuelve a pedir las ubicaciones validadas cuando cambia la vige
     await flush();
     t.el('btn-uval-validar-confirmar').click();
     await flush();
-    expect(t.ctx.mapaDataset_invalidarDeltas).toHaveBeenCalledTimes(1);
+    expect(t.ctx.mapaDataset_invalidarDeltaCampo).toHaveBeenCalledTimes(1);
+    expect(t.ctx.mapaDataset_invalidarDeltaRegistral).not.toHaveBeenCalled();
   });
 
   test('un error del backend o de conexion NO invalida (no cambio nada); sin la funcion del mapa cargada no rompe', async () => {
@@ -833,9 +840,9 @@ describe('el mapa vuelve a pedir las ubicaciones validadas cuando cambia la vige
     t.el('btn-uval-validar').click();
     t.el('btn-uval-validar-confirmar').click();
     await flush();
-    expect(t.ctx.mapaDataset_invalidarDeltas).not.toHaveBeenCalled();
+    expect(t.ctx.mapaDataset_invalidarDeltaCampo).not.toHaveBeenCalled();
     const s = cargar();
-    delete s.ctx.mapaDataset_invalidarDeltas;
+    delete s.ctx.mapaDataset_invalidarDeltaCampo;
     await abrirDetalleDesdeLista(s, P1.correccionId);
     s.el('btn-uval-validar').click();
     s.el('btn-uval-validar-confirmar').click();

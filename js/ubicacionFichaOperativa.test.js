@@ -794,10 +794,12 @@ describe('controlador: refresco tras una decision (sin tocar la invalidacion del
     expect((t.el('ubic-conocidas').innerHTML.match(/data-ucon-id=/g) || []).length).toBe(2);
   });
 
-  test('no cablea la invalidacion del mapa (eso es E3-6): el controlador no llama a mapaDataset_invalidar*', () => {
-    ['ubicacionesConocidas.js', 'ubicacionFuenteDecisionesUi.js', 'ubicacionSugerencias.js'].forEach((f) => {
-      expect(leer(f)).not.toMatch(/mapaDataset_invalidar/);
-    });
+  test('la ficha no invalida el mapa por su cuenta tras una decision propia: lo hace el dialogo compartido (E3-6); la ficha solo lo hace al releer un cambio ajeno', () => {
+    const sinComentarios = (f) => leer(f).split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+    expect(sinComentarios('ubicacionSugerencias.js')).not.toMatch(/mapaDataset_invalidar/);
+    expect(sinComentarios('ubicacionFuenteDecisionesUi.js')).toMatch(/mapaDataset_invalidarDeltaRegistral/);
+    const ucon = sinComentarios('ubicacionesConocidas.js');
+    expect((ucon.match(/mapaDataset_invalidar\w+\(\)/g) || []).length).toBe(1);                // una sola llamada, dentro de la relectura
   });
 });
 

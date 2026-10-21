@@ -6,6 +6,8 @@
 // - La coordenada original NUNCA se elimina: el dialogo dice "descartada", no "eliminada".
 // - El estado y la version salen del backend (getDecisionesFuentesPozo); lo que se envia es la lista blanca de ufdui_construirPedido via apiDecidirFuenteUbicacion.
 // - app.js es el unico dueño de sessionToken/permisos: los pasa frescos con obtenerContexto() -> {sessionToken, permisos, onSessionExpired}.
+// - Es el unico punto por donde pasa TODA decision autoritativa (tarjeta, popup del visor y aprobar en la cola): cuando el backend confirma una (ufdui_cambiaResolucion) invalida en el
+//   acto el delta REGISTRAL del dataset del mapa, aunque la pantalla de origen ya se haya cerrado. Sugerir, cancelar, rechazar y los errores NO invalidan. No toca el delta de campo (V).
 (function () {
   var estado = {
     obtenerContexto: null,
@@ -145,6 +147,10 @@
       Promise.resolve().then(function () { return e.ejecutar(motivo); }) :
       estado.flujo.decidir({ wellId: e.wellId, decision: e.fuente.decision, accion: e.accion, motivo: motivo, versionVista: e.version });
     promesa.then(function (r) {
+      // ANTES de mirar si el dialogo sigue abierto: la decision ya esta en el backend aunque la ficha se haya cerrado, y el mapa no puede seguir con el delta viejo
+      if (ufdui_cambiaResolucion(r) && typeof mapaDataset_invalidarDeltaRegistral === 'function') {
+        mapaDataset_invalidarDeltaRegistral();
+      }
       if (!estado.abierto || estado.entrada !== e) {
         return;                                                  // se cerro/cambio la ficha mientras tanto
       }

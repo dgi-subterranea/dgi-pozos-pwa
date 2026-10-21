@@ -304,8 +304,8 @@ describe('cache frontend de los deltas (60 s) e invalidacion', () => {
 
   test('los puntos de la app que cambian la vigente invalidan: validar (cola y ficha), "ya resuelta" y la correccion directa; rechazar no', () => {
     const validacion = leer('js', 'ubicacionValidacion.js');
-    expect(validacion).toMatch(/r\.tipo === 'ok' && r\.accion === 'validar'\) \|\| r\.tipo === 'resuelta'[\s\S]{0,200}mapaDataset_invalidarDeltas\(\)/);
-    expect(leer('js', 'ubicacionCorreccion.js')).toMatch(/r\.resultado === 'validada'[\s\S]{0,120}mapaDataset_invalidarDeltas\(\)/);
+    expect(validacion).toMatch(/r\.tipo === 'ok' && r\.accion === 'validar'\) \|\| r\.tipo === 'resuelta'[\s\S]{0,260}mapaDataset_invalidarDeltaCampo\(\)/);
+    expect(leer('js', 'ubicacionCorreccion.js')).toMatch(/r\.resultado === 'validada'[\s\S]{0,200}mapaDataset_invalidarDeltaCampo\(\)/);
   });
 });
 

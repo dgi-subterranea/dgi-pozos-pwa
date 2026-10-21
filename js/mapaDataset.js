@@ -30,8 +30,8 @@ var MAPA_DATASET_DELTAS_TTL_MS = 60000;
 
 function mapaDataset_capaVacia() {
   // datos: lo que se aplica (null = nada); falla: codigo de la falla global (null = sin falla); firma: huella barata de lo que aplica (para la referencia estable);
-  // ts: instante del ultimo exito (0 = hay que pedirla); promise: pedido en vuelo
-  return { datos: null, falla: null, firma: 'sin-datos', ts: 0, promise: null };
+  // ts: instante del ultimo exito (0 = hay que pedirla); promise: pedido en vuelo; gen: generacion (cada invalidacion la sube: lo que vuela de una generacion vieja se descarta)
+  return { datos: null, falla: null, firma: 'sin-datos', ts: 0, promise: null, gen: 0 };
 }
 
 var mapaDatasetEstado = {
@@ -102,22 +102,41 @@ function mapaDataset_aceptarCapa(capa, datos, firma) {
 }
 
 // Pide una capa. Nunca rechaza: cualquier excepcion o respuesta mala es una falla global de ESA capa. Comparte el pedido en vuelo.
+// Si la capa se INVALIDA mientras su pedido vuela (una decision confirmada despues de pedirlo), esa respuesta puede ser vieja: se descarta (no pisa nada ni queda como "fresca") y el
+// proximo mapaDataset_obtener pide otra vez, sin reutilizar el pedido viejo.
 function mapaDataset_pedirCapa(capa, llamar, procesar) {
   if (capa.promise) {
     return capa.promise;
   }
-  capa.promise = Promise.resolve().then(llamar).then(function (r) {
+  var gen = capa.gen;
+  var pedido = Promise.resolve().then(llamar).then(function (r) {
+    if (capa.gen !== gen) {
+      return;
+    }
     try {
       procesar(r);
     } catch (err) {
       mapaDataset_fallarCapa(capa, 'FALLA');
     }
   }, function () {
-    mapaDataset_fallarCapa(capa, 'FALLA');
+    if (capa.gen === gen) {
+      mapaDataset_fallarCapa(capa, 'FALLA');
+    }
   }).then(function () {
-    capa.promise = null;
+    if (capa.promise === pedido) {
+      capa.promise = null;
+    }
   });
-  return capa.promise;
+  capa.promise = pedido;
+  return pedido;
+}
+
+// Invalida UNA capa: la proxima mapaDataset_obtener la vuelve a pedir de inmediato. Sube la generacion y suelta el pedido en vuelo (si lo hay). No toca los datos que ya aplica (hasta que
+// llegue la respuesta nueva se sigue mostrando lo ultimo conocido), ni el dataset base, ni la otra capa.
+function mapaDataset_invalidarCapa(capa) {
+  capa.ts = 0;
+  capa.gen += 1;
+  capa.promise = null;
 }
 
 // --- Capa de campo (V) ---
@@ -255,15 +274,17 @@ function mapaDataset_obtener(sessionToken) {
 }
 
 // Invalidacion por capa: la proxima mapaDataset_obtener vuelve a pedir ESA capa de inmediato. Nunca toca el dataset base ni la otra capa.
+// Registral: la usa el dialogo compartido tras una decision autoritativa (aceptar, descartar, quitar aceptacion, restaurar, aprobar una sugerencia).
 function mapaDataset_invalidarDeltaRegistral() {
-  mapaDatasetEstado.registral.ts = 0;
+  mapaDataset_invalidarCapa(mapaDatasetEstado.registral);
 }
 
+// Campo (V): la usan validar una correccion, la correccion directa (auto-validada) y que otra persona resuelva una correccion.
 function mapaDataset_invalidarDeltaCampo() {
-  mapaDatasetEstado.campo.ts = 0;
+  mapaDataset_invalidarCapa(mapaDatasetEstado.campo);
 }
 
-// Generica (la usan validar, revertir y la correccion directa): invalida las DOS capas; el dataset base no se toca.
+// Generica (compatibilidad; ya no la usa ningun flujo): invalida las DOS capas; el dataset base no se toca.
 function mapaDataset_invalidarDeltas() {
   mapaDataset_invalidarDeltaRegistral();
   mapaDataset_invalidarDeltaCampo();

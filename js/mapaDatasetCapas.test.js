@@ -508,14 +508,22 @@ describe('cache de 60 s por capa e invalidacion (sin tocar el base)', () => {
     expect(porId(await obtener(), '14-0002').estado).toBe('D');
   });
 
-  test('los callers existentes siguen funcionando: validar / revertir / correccion directa llaman a la generica', () => {
-    expect(leer('js', 'ubicacionValidacion.js')).toMatch(/mapaDataset_invalidarDeltas\(\)/);
-    expect(leer('js', 'ubicacionCorreccion.js')).toMatch(/mapaDataset_invalidarDeltas\(\)/);
+  test('E3-6: validar y la correccion directa invalidan SOLO la capa de campo (ya no la generica); la generica queda por compatibilidad', () => {
+    ['ubicacionValidacion.js', 'ubicacionCorreccion.js'].forEach((f) => {
+      const codigo = leer('js', f).split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+      expect(codigo).toMatch(/mapaDataset_invalidarDeltaCampo\(\)/);
+      expect(codigo).not.toMatch(/mapaDataset_invalidarDeltas\(\)|mapaDataset_invalidarDeltaRegistral/);
+    });
   });
 
-  test('las decisiones y sugerencias todavia NO invalidan (eso es E3-6)', () => {
-    ['ubicacionFuenteDecisionesUi.js', 'ubicacionFuenteDecisionesUiLogic.js', 'ubicacionSugerencias.js', 'ubicacionesConocidas.js'].forEach((f) => {
-      expect(leer('js', f)).not.toMatch(/mapaDataset_invalidar/);
+  test('E3-6: las decisiones autoritativas invalidan SOLO la capa registral, desde un unico lugar (el dialogo compartido) y la relectura de la ficha; nadie mas', () => {
+    const sinComentarios = (f) => leer('js', f).split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+    expect(sinComentarios('ubicacionFuenteDecisionesUi.js')).toMatch(/mapaDataset_invalidarDeltaRegistral\(\)/);
+    expect(sinComentarios('ubicacionFuenteDecisionesUi.js')).not.toMatch(/mapaDataset_invalidarDeltaCampo|mapaDataset_invalidarDeltas\(/);
+    expect(sinComentarios('ubicacionesConocidas.js')).toMatch(/mapaDataset_invalidarDeltaRegistral\(\)/);
+    expect(sinComentarios('ubicacionesConocidas.js')).not.toMatch(/mapaDataset_invalidarDeltaCampo|mapaDataset_invalidarDeltas\(/);
+    ['ubicacionFuenteDecisionesUiLogic.js', 'ubicacionSugerencias.js', 'ubicacionSugerenciasLogic.js', 'ubicacionesConocidasLogic.js', 'mapa.js', 'cercaMio.js', 'seleccion.js', 'buscarReemplazo.js'].forEach((f) => {
+      expect(sinComentarios(f)).not.toMatch(/mapaDataset_invalidar/);
     });
   });
 });

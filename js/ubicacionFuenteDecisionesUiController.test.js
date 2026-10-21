@@ -311,12 +311,12 @@ describe('que acciones ve cada rol en las tarjetas', () => {
     expect(h).not.toMatch(/INCONSISTENT|SECUENCIA_|anomal/i);
   });
 
-  test('todas descartadas: el aviso pedido, y los mapas todavia no cambian', async () => {
+  test('todas descartadas: el aviso pedido y NINGUNA nota de "los mapas todavia no cambian" (ya es falsa: el mapa sigue a las decisiones)', async () => {
     const t = cargar();
     await abrir(t, ['DESCARTADA', 'DESCARTADA', 'DESCARTADA'], { resolucion: { todasDescartadas: true, cambiaRespectoDelOriginal: true } });
     const h = t.el('ubic-conocidas').innerHTML;
     expect(h).toContain('Sin ubicación operativa de Irrigación. Todas las fuentes conocidas fueron descartadas.');
-    expect(h).toContain('Las decisiones tomadas todavía no cambian el punto que usan los mapas.');
+    expect(h).not.toMatch(/todavía no cambian|todavia no cambian|no cambian el punto/);
     expect(accionesDe(tarjeta(t, 'REPORTE_POZOS'))).toEqual(['RESTAURAR']);
   });
 });

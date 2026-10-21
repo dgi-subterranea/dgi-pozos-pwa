@@ -353,13 +353,14 @@ describe('HTML compartido por tarjeta y popup', () => {
     expect(h).not.toMatch(/@|secreto/);
   });
 
-  test('avisos de la seccion: inconsistente, todas descartadas, sin efecto en mapas y el aviso de la ultima decision', () => {
+  test('avisos de la seccion: inconsistente, todas descartadas y el aviso de la ultima decision (ya no hay nota de "sin efecto en los mapas")', () => {
     const inc = vinculado([], { integro: false });
     expect(U.ufdui_htmlNotasSeccion(inc, null)).toContain('necesita una revisión técnica');
     const todas = U.ufdui_aplicarDecisiones(modeloBase(), vista(['DESCARTADA', 'DESCARTADA', 'DESCARTADA'], { resolucion: { todasDescartadas: true, cambiaRespectoDelOriginal: true } }), false);
     const h = U.ufdui_htmlNotasSeccion(todas, { tipo: 'ok', texto: 'Fuente descartada.' });
     expect(h).toContain('Sin ubicación operativa de Irrigación. Todas las fuentes conocidas fueron descartadas.');
-    expect(h).toContain('Las decisiones tomadas todavía no cambian el punto que usan los mapas.');
+    expect(h).not.toMatch(/todavía no cambian|todavia no cambian|no cambian el punto|mapas/);
+    expect(U.UFDUI_TEXTO_SIN_EFECTO_MAPAS).toBeUndefined();
     expect(h).toContain('ufd-aviso-ok');
     expect(U.ufdui_htmlNotasSeccion(vinculado([]), null)).toBe('');
   });

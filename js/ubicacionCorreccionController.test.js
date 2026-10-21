@@ -2266,17 +2266,23 @@ describe('ficha: Validar / Rechazar en la tarjeta Pendiente (abre el detalle com
     });
   });
 
-  test('una correccion DIRECTA (corregir + validar) invalida los deltas del mapa; una propuesta pendiente (solo corregir) NO', async () => {
+  test('una correccion DIRECTA (corregir + validar) invalida SOLO la capa de campo del mapa; una propuesta pendiente (solo corregir) NO', async () => {
     const directa = cargar({ permisos: PERM_VALIDA });
+    directa.ctx.mapaDataset_invalidarDeltaCampo = jest.fn();
+    directa.ctx.mapaDataset_invalidarDeltaRegistral = jest.fn();
     directa.ctx.mapaDataset_invalidarDeltas = jest.fn();
     await abrirModalMapa(directa);
     tocarMapa(directa, PUNTO_REAL.lat, PUNTO_REAL.lon);
     directa.el('btn-ucorr-mapa-usar').click();
     directa.el('btn-ucorr-guardar').click();
     await flush();
-    expect(directa.ctx.mapaDataset_invalidarDeltas).toHaveBeenCalledTimes(1);
+    expect(directa.ctx.mapaDataset_invalidarDeltaCampo).toHaveBeenCalledTimes(1);
+    expect(directa.ctx.mapaDataset_invalidarDeltaRegistral).not.toHaveBeenCalled();
+    expect(directa.ctx.mapaDataset_invalidarDeltas).not.toHaveBeenCalled();
 
     const pendiente = cargar({ permisos: { ubicacion: true, ubicacion_corregir: true }, proponer: () => Promise.resolve({ status: 'ok', data: { correccion: Object.assign({}, PENDIENTE, { propia: true }), duplicada: false, curada: false } }) });
+    pendiente.ctx.mapaDataset_invalidarDeltaCampo = jest.fn();
+    pendiente.ctx.mapaDataset_invalidarDeltaRegistral = jest.fn();
     pendiente.ctx.mapaDataset_invalidarDeltas = jest.fn();
     await abrirModalMapa(pendiente);
     tocarMapa(pendiente, PUNTO_REAL.lat, PUNTO_REAL.lon);
@@ -2284,6 +2290,8 @@ describe('ficha: Validar / Rechazar en la tarjeta Pendiente (abre el detalle com
     pendiente.el('btn-ucorr-guardar').click();
     await flush();
     expect(pendiente.ctx.apiProponerCorreccionUbicacion).toHaveBeenCalledTimes(1);
+    expect(pendiente.ctx.mapaDataset_invalidarDeltaCampo).not.toHaveBeenCalled();
+    expect(pendiente.ctx.mapaDataset_invalidarDeltaRegistral).not.toHaveBeenCalled();
     expect(pendiente.ctx.mapaDataset_invalidarDeltas).not.toHaveBeenCalled();
   });
 

@@ -101,9 +101,7 @@
         return;
       }
       if (r && r.status === 'ok' && ufdui_vistaValida(r.data, wellId)) {
-        estado.decisiones = r.data;
-        estado.decisionesFallo = false;
-        repintar(true);
+        aplicarVistaReleida(r.data);
       } else {
         decisionesNoDisponibles();
       }
@@ -113,6 +111,28 @@
         decisionesNoDisponibles();
       }
     });
+  }
+
+  // Huella de lo REGISTRAL que muestra la ficha (la ubicacion registral efectiva y si hay decisiones aplicadas). Sirve para saber si una RELECTURA cambio el punto por la accion de otra
+  // persona; no mira la V (su capa tiene su propia invalidacion).
+  function huellaRegistral() {
+    var m = estado.modelo;
+    var r = m && m.registral;
+    return JSON.stringify([r ? [r.codigo, r.lat, r.lon] : null, !!(m && m.decisionesAplicadas)]);
+  }
+
+  // Aplica una vista de decisiones RELEIDA (no la que devuelve el backend tras una decision propia: esa ya invalido el mapa en el dialogo compartido). Si por la accion de otra persona
+  // el punto registral cambio respecto de lo que la ficha mostraba, el delta del mapa tambien esta viejo: se invalida. Una relectura sin cambios no invalida nada, y esto nunca se hace pasar
+  // por un exito de la accion propia.
+  function aplicarVistaReleida(vista) {
+    var habiaVista = estado.decisiones !== null;
+    var antes = huellaRegistral();
+    estado.decisiones = vista;
+    estado.decisionesFallo = false;
+    repintar(true);
+    if (habiaVista && huellaRegistral() !== antes && typeof mapaDataset_invalidarDeltaRegistral === 'function') {
+      mapaDataset_invalidarDeltaRegistral();
+    }
   }
 
   // No se pudieron leer las decisiones: se conserva la ultima vista buena si hay una (una relectura fallida no borra lo que ya se sabe); sin ninguna, base + V. Aviso discreto.
@@ -328,8 +348,7 @@
       } else if (r.tipo === 'desactualizado') {
         estado.aviso = { tipo: 'aviso', texto: r.mensaje };
         if (r.vista) {
-          estado.decisiones = r.vista;
-          repintar(true);
+          aplicarVistaReleida(r.vista);
         } else {
           pintarSeccion();
           cargarDecisiones(ap);

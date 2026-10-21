@@ -80,7 +80,6 @@ var UFDUI_TEXTO_RED = 'No se pudo guardar la decisión. Revisá tu conexión e i
 var UFDUI_TEXTO_RED_SUGERENCIA = 'No se pudo enviar. Revisá tu conexión e intentá de nuevo.';
 var UFDUI_TEXTO_INCONSISTENTE = 'El historial de decisiones de este pozo necesita una revisión técnica. Por ahora no se pueden tomar decisiones sobre sus fuentes.';
 var UFDUI_TEXTO_TODAS_DESCARTADAS = 'Sin ubicación operativa de Irrigación. Todas las fuentes conocidas fueron descartadas.';
-var UFDUI_TEXTO_SIN_EFECTO_MAPAS = 'Las decisiones tomadas todavía no cambian el punto que usan los mapas.';
 
 var UFDUI_MENSAJES_ERROR = {
   STALE_STATE: UFDUI_TEXTO_STALE_ACCION,
@@ -670,7 +669,7 @@ function ufdui_htmlAcciones(f, modelo, rol) {
   return '<div class="ufd-acciones" role="group" aria-label="' + (rol === UFDUI_ROL.VALIDADOR ? 'Decisiones sobre esta fuente' : 'Sugerencias sobre esta fuente') + '">' + botones.join('') + '</div>';
 }
 
-// Avisos de la seccion: historial inconsistente, todas descartadas, "todavia no cambia los mapas" y el aviso del ultimo intento ({tipo:'ok'|'aviso'|'error', texto}).
+// Avisos de la seccion: historial inconsistente, todas descartadas y el aviso del ultimo intento ({tipo:'ok'|'aviso'|'error', texto}).
 function ufdui_htmlNotasSeccion(modelo, aviso) {
   var h = '';
   var d = modelo && modelo.decisiones;
@@ -683,20 +682,37 @@ function ufdui_htmlNotasSeccion(modelo, aviso) {
   if (d && d.todasDescartadas) {
     h += '<p class="ucon-nota ucon-nota-aviso" role="status">' + ufdui_escapar(UFDUI_TEXTO_TODAS_DESCARTADAS) + '</p>';
   }
-  if (d && (d.todasDescartadas || d.cambiaPuntoRegistral)) {
-    h += '<p class="ucon-nota" role="status">' + ufdui_escapar(UFDUI_TEXTO_SIN_EFECTO_MAPAS) + '</p>';
-  }
   return h;
+}
+
+// --- Cuando un resultado cambia de verdad la resolucion (E3-6) ---
+
+// Las acciones que son una DECISION AUTORITATIVA sobre una fuente. Una sugerencia, su cancelacion o su rechazo no cambian nada: solo aprobarla (el backend crea ahi la decision real).
+var UFDUI_ACCIONES_AUTORITATIVAS = ['ACEPTAR', 'DESCARTAR', 'QUITAR_ACEPTACION', 'RESTAURAR'];
+
+// r: lo que resuelve ufdui_crearFlujo().decidir o ufdui_crearFlujoSugerencias().{sugerir, cancelar, resolver}. true SOLO si el backend confirmo una decision autoritativa:
+//   - decidir con exito (ACEPTAR / DESCARTAR / QUITAR_ACEPTACION / RESTAURAR), incluso si fue un reintento deduplicado (la decision existe igual);
+//   - resolver una sugerencia con resultado APROBADA.
+// Todo lo demas -sugerir, cancelar, rechazar, una sugerencia que quedo OBSOLETA, STALE_STATE, ya en ese estado, errores, red, un dialogo cancelado- es false: no hubo decision y el mapa no tiene
+// por que volver a pedir nada.
+function ufdui_cambiaResolucion(r) {
+  if (!r || typeof r !== 'object' || r.tipo !== 'ok') {
+    return false;
+  }
+  if (UFDUI_ACCIONES_AUTORITATIVAS.indexOf(r.accion) !== -1) {
+    return true;
+  }
+  return r.accion === 'APROBAR_SUGERENCIA' && r.resultado === 'APROBADA';
 }
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     UFDUI_ROL, UFDUI_ESTADOS, UFDUI_ETIQUETA_ESTADO, UFDUI_ACCIONES, UFDUI_MOTIVO_MAX, UFDUI_MENSAJES_ERROR, UFDUI_CODIGOS_DESACTUALIZADO,
-    UFDUI_TEXTO_STALE, UFDUI_TEXTO_STALE_ACCION, UFDUI_TEXTO_RED, UFDUI_TEXTO_INCONSISTENTE, UFDUI_TEXTO_TODAS_DESCARTADAS, UFDUI_TEXTO_SIN_EFECTO_MAPAS,
+    UFDUI_TEXTO_STALE, UFDUI_TEXTO_STALE_ACCION, UFDUI_TEXTO_RED, UFDUI_TEXTO_INCONSISTENTE, UFDUI_TEXTO_TODAS_DESCARTADAS,
     UFDUI_TEXTO_ACEPTAR_CON_CAMPO, UFDUI_TEXTO_DESCARTAR_ACEPTADA,
     ufdui_rol, ufdui_clave3, ufdui_vistaValida, ufdui_aplicarDecisiones, ufdui_accionesPara, ufdui_accionesDeFuente, ufdui_confirmacion, ufdui_validarMotivo,
     ufdui_nuevoClientRequestId, ufdui_construirPedido, ufdui_mensajeError, ufdui_crearFlujo, ufdui_fechaCorta, ufdui_textoUltima, ufdui_htmlEstado,
-    ufdui_htmlHistoria, ufdui_htmlAcciones, ufdui_htmlNotasSeccion,
+    ufdui_htmlHistoria, ufdui_htmlAcciones, ufdui_htmlNotasSeccion, UFDUI_ACCIONES_AUTORITATIVAS, ufdui_cambiaResolucion,
     UFDUI_ACCION_SUGERIDA, UFDUI_ETIQUETA_SUGERENCIA, UFDUI_TEXTO_ACEPTADA_CON_CAMPO, UFDUI_TEXTO_NO_APLICABLE, UFDUI_TEXTO_SUGERENCIA_RESUELTA, UFDUI_TEXTO_LIMITE_SUGERENCIAS,
     UFDUI_TEXTO_APROBADA_OBSOLETA, UFDUI_TEXTO_SIN_CAMBIOS, UFDUI_CODIGOS_SUGERENCIA_DESACTUALIZADA, UFDUI_TEXTO_ACCION_SUGERIDA, UFDUI_VERBO_SUGERIDO,
     ufdui_accionesSugerirPara, ufdui_hayPendienteEquivalente, ufdui_aplicarSugerencias, ufdui_textoSugerencia, ufdui_htmlSugerencias, ufdui_htmlSugerenciaPropia, ufdui_crearFlujoSugerencias,
