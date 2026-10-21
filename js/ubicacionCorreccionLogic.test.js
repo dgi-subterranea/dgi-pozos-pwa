@@ -636,13 +636,11 @@ describe('visibilidad del modulo Ubicacion: corregir controla el boton, no la in
     expect(L.ubicacionCorreccionLogic_oficialDisponible(null)).toBe(false);
   });
 
-  test('tieneCorrecciones: vigente, pendientes o historial; una lectura vacia o ausente no', () => {
-    expect(L.ubicacionCorreccionLogic_tieneCorrecciones(lectura({ vigente: vigenteReal() }))).toBe(true);
-    expect(L.ubicacionCorreccionLogic_tieneCorrecciones(lectura({ pendientes: [pendiente()] }))).toBe(true);
-    expect(L.ubicacionCorreccionLogic_tieneCorrecciones(lectura({ historial: [pendiente({ estado: 'RECHAZADA' })] }))).toBe(true);
-    expect(L.ubicacionCorreccionLogic_tieneCorrecciones(lectura())).toBe(false);
-    expect(L.ubicacionCorreccionLogic_tieneCorrecciones(null)).toBe(false);
-    expect(L.ubicacionCorreccionLogic_tieneCorrecciones({})).toBe(false);
+  test('oficialDisponible: noEnPadron es como sinCoordenadas (no hay ubicacion oficial); las fuentes en desacuerdo (revisar*) siguen siendo ubicaciones', () => {
+    expect(L.ubicacionCorreccionLogic_oficialDisponible({ wellId: W, ubicacionResuelta: { estado: 'noEnPadron' } })).toBe(false);
+    ['corroborada', 'unica', 'dudosoLeve', 'revisar', 'revisarGrave'].forEach((e) => {
+      expect(L.ubicacionCorreccionLogic_oficialDisponible({ wellId: W, ubicacionResuelta: { estado: e } })).toBe(true);
+    });
   });
 
   test('pozo CON coordenada oficial: el modulo se ofrece a cualquiera que pueda leer la ubicacion (sin cambios respecto de antes)', () => {
@@ -651,22 +649,18 @@ describe('visibilidad del modulo Ubicacion: corregir controla el boton, no la in
     expect(ofrecer({ ubicacionFound: true, location: REVISAR, permisos: LECTOR, correcciones: null })).toBe(true);
   });
 
-  test('pozo SIN coordenada oficial, lector (ubicacion=SI, corregir=NO): SOLO si hay una correccion registrada', () => {
-    expect(ofrecer({ ubicacionFound: true, location: SIN, permisos: LECTOR, correcciones: lectura({ vigente: vigenteReal(), historial: [vigenteReal()] }) })).toBe(true);
-    expect(ofrecer({ ubicacionFound: true, location: SIN, permisos: LECTOR, correcciones: lectura({ pendientes: [pendiente()] }) })).toBe(true);
-    expect(ofrecer({ ubicacionFound: true, location: SIN, permisos: LECTOR, correcciones: lectura({ historial: [pendiente({ estado: 'REVERTIDA' })] }) })).toBe(true);
-    expect(ofrecer({ ubicacionFound: true, location: SIN, permisos: LECTOR, correcciones: lectura() })).toBe(false);
-    expect(ofrecer({ ubicacionFound: true, location: SIN, permisos: LECTOR, correcciones: null })).toBe(false);
+  test('E4-2: pozo SIN coordenada (sinCoordenadas / noEnPadron), lector (ubicacion=SI, corregir=NO): la tarjeta se ofrece igual, haya o no correcciones', () => {
+    const NEP = { wellId: W, ubicacionResuelta: { estado: 'noEnPadron' } };
+    [SIN, NEP].forEach((loc) => {
+      expect(ofrecer({ ubicacionFound: true, location: loc, permisos: LECTOR, correcciones: null })).toBe(true);
+      expect(ofrecer({ ubicacionFound: true, location: loc, permisos: LECTOR, correcciones: lectura() })).toBe(true);
+      expect(ofrecer({ ubicacionFound: true, location: loc, permisos: LECTOR })).toBe(true);
+    });
   });
 
-  test('pozo SIN coordenada oficial, con permiso de corregir: se ofrece aunque no haya nada (para cargar la primera)', () => {
-    expect(ofrecer({ ubicacionFound: true, location: SIN, permisos: CORRECTOR, correcciones: null })).toBe(true);
-    expect(ofrecer({ ubicacionFound: true, location: SIN, permisos: CORRECTOR, correcciones: lectura() })).toBe(true);
-  });
-
-  test('sin permiso exacto de corregir (validar solo, "SI", 1, ausente) el permiso NO abre el modulo por si mismo', () => {
+  test('E4-2: la tarjeta NO depende de ubicacion_corregir ni de ubicacion_validar (ni de ninguna otra cosa que no sea la lectura)', () => {
     [{ ubicacion: true, ubicacion_validar: true }, { ubicacion: true, ubicacion_corregir: 'SI' }, { ubicacion: true, ubicacion_corregir: 1 }, { ubicacion_corregir: true }, {}, null].forEach((permisos) => {
-      expect(ofrecer({ ubicacionFound: true, location: SIN, permisos: permisos, correcciones: lectura() })).toBe(false);
+      expect(ofrecer({ ubicacionFound: true, location: SIN, permisos: permisos })).toBe(true);
     });
   });
 
@@ -676,17 +670,9 @@ describe('visibilidad del modulo Ubicacion: corregir controla el boton, no la in
     expect(ofrecer(undefined)).toBe(false);
   });
 
-  test('necesitaConsultarCorrecciones: solo pozo sin coordenada oficial + lector sin permiso de corregir', () => {
-    const necesita = (o) => L.ubicacionCorreccionLogic_necesitaConsultarCorrecciones(o);
-    expect(necesita({ ubicacionFound: true, location: SIN, permisos: LECTOR })).toBe(true);
-    expect(necesita({ ubicacionFound: true, location: { wellId: W }, permisos: LECTOR })).toBe(true);          // sin ubicacionResuelta = sin coordenada
-    expect(necesita({ ubicacionFound: true, location: CON, permisos: LECTOR })).toBe(false);                    // ya se ofrece
-    expect(necesita({ ubicacionFound: true, location: SIN, permisos: CORRECTOR })).toBe(false);                 // ya se ofrece
-    expect(necesita({ ubicacionFound: false, location: SIN, permisos: LECTOR })).toBe(false);
-    expect(necesita({ ubicacionFound: true, location: SIN, permisos: { ubicacion: 'SI' } })).toBe(false);       // permiso no exacto: no se pregunta nada
-    expect(necesita({ ubicacionFound: true, location: SIN, permisos: {} })).toBe(false);
-    expect(necesita({ ubicacionFound: true, location: SIN, permisos: null })).toBe(false);
-    expect(necesita(undefined)).toBe(false);
+  test('la consulta extra de correcciones para decidir la tarjeta ya no existe', () => {
+    expect(L.ubicacionCorreccionLogic_necesitaConsultarCorrecciones).toBeUndefined();
+    expect(L.ubicacionCorreccionLogic_tieneCorrecciones).toBeUndefined();
   });
 });
 

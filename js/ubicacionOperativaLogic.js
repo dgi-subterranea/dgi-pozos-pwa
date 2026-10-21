@@ -70,8 +70,11 @@
   var UOP_ETIQUETAS_CODIGO_CORTAS = { D: 'Disponible', C: 'Coincidente', R: 'Aceptada', V: 'Validada en campo' };
 
   // Estado del padron (ubicacionResuelta.estado) -> estado humano. dudosoLeve / revisar / revisarGrave son los tres niveles de DISCREPANCIA.
+  // `noEnPadron` (E4: el pozo NO figura en el padron actual pero otra fuente institucional lo conoce) es, para el punto, lo mismo que sinCoordenadas: no hay punto registral ni
+  // coordenadas de Irrigacion y puede recibir una primera ubicacion. NO es un estado desconocido (no genera anomalia) y se distingue de sinCoordenadas solo por el motivo.
   var UOP_ESTADO_PADRON = {
     sinCoordenadas: { estado: 'SIN_COORDENADAS' },
+    noEnPadron: { estado: 'SIN_COORDENADAS' },
     unica: { estado: 'DISPONIBLE' },
     corroborada: { estado: 'COINCIDENTE' },
     dudosoLeve: { estado: 'DISCREPANCIA', nivel: 'leve' },
@@ -687,7 +690,7 @@
   //    fuenteClave (clave, segun el backend, de la fuente registral que es el punto; null si no se sabe: lo identifica quien llama por x/y),
   //    registral ({codigo: D|C|R, lat, lon, fuenteClave} = la resolucion REGISTRAL efectiva, haya o no una V encima; null si no hay punto registral),
   //    respaldoRegistral (la misma `registral`, pero SOLO cuando el punto operativo es una V: lo que queda DEBAJO de ella; si no, null),
-  //    motivoSinPunto (null | 'TODAS_DESCARTADAS' | 'DISCREPANCIA' | 'SIN_COORDENADAS'), decisionesAplicadas, base, anomalias, version}
+  //    motivoSinPunto (null | 'TODAS_DESCARTADAS' | 'DISCREPANCIA' | 'SIN_COORDENADAS' | 'NO_EN_PADRON'), decisionesAplicadas, base, anomalias, version}
   // Jerarquia: V (validada en campo) > R (fuente aceptada) > C / D (automatico entre las fuentes NO descartadas) > ninguna. Revertir la V deja a R (o C / D) como punto operativo.
   function ubicacionOperativaLogic_resolverFicha(entrada) {
     var e = esObjeto(entrada) ? entrada : {};
@@ -752,7 +755,7 @@
       salida.estado = dec.motivoN === 'DISCREPANCIA' ? UOP_ESTADOS.DISCREPANCIA : UOP_ESTADOS.SIN_COORDENADAS;
       salida.etiqueta = UOP_ETIQUETAS_ESTADO[salida.estado];
     } else {
-      salida.motivoSinPunto = salida.estado === UOP_ESTADOS.DISCREPANCIA ? 'DISCREPANCIA' : 'SIN_COORDENADAS';
+      salida.motivoSinPunto = salida.estado === UOP_ESTADOS.DISCREPANCIA ? 'DISCREPANCIA' : (baseInfo.estadoPadron === 'noEnPadron' ? 'NO_EN_PADRON' : 'SIN_COORDENADAS');
     }
     return salida;
   }

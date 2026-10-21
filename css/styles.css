@@ -4555,6 +4555,17 @@ body.ucorr-abierto {
   font-weight: 700;
   color: var(--color-warn);
 }
+/* E4-2: la observacion es obligatoria por ser un pozo fuera del padron; se explica antes de que haya un error (no es un error todavia) */
+.ucorr-err.ucorr-obs-ayuda {
+  font-weight: 400;
+  color: var(--color-text-soft);
+}
+.hub-aviso {
+  margin: 12px 0 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--color-text-soft);
+}
 
 /* Validacion de correcciones pendientes: bandeja (renglones-boton), detalle con mapa y acciones. Mobile first: todo en una columna, botones de 44 px o mas. */
 .uval-lista {

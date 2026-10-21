@@ -90,9 +90,16 @@
   }
 
   // Lee el estado de las fuentes (solo con permiso de ubicacion; el backend lo vuelve a exigir). Si falla, la seccion sigue como antes: sin estados ni acciones.
+  // Un pozo que NO figura en el padron actual (ubicacionResuelta.estado = 'noEnPadron') no tiene fuentes registrales: no hay nada que decidir ni que sugerir sobre ellas, y las dos
+  // lecturas fallarian (el backend exige padron). No se piden (y por eso tampoco se avisa una "falla" que no es tal).
+  function sinFuentesRegistrales() {
+    var r = estado.location && estado.location.ubicacionResuelta;
+    return !!r && r.estado === 'noEnPadron';
+  }
+
   function cargarDecisiones(ap) {
     var ctx = contexto();
-    if (!ctx || !ctx.sessionToken || !ctx.permisos || ctx.permisos.ubicacion !== true || typeof apiGetDecisionesFuentesPozo !== 'function' || !estado.wellId) {
+    if (!ctx || !ctx.sessionToken || !ctx.permisos || ctx.permisos.ubicacion !== true || typeof apiGetDecisionesFuentesPozo !== 'function' || !estado.wellId || sinFuentesRegistrales()) {
       return Promise.resolve();
     }
     var wellId = estado.wellId;
@@ -144,7 +151,7 @@
   // Las sugerencias del pozo (solo con permiso de ubicacion; el backend lo vuelve a exigir). Si falla, la ficha queda como antes (sin estado de sugerencias).
   function cargarSugerencias(ap) {
     var ctx = contexto();
-    if (!ctx || !ctx.sessionToken || !ctx.permisos || ctx.permisos.ubicacion !== true || typeof apiGetSugerenciasFuentesPozo !== 'function' || !estado.wellId) {
+    if (!ctx || !ctx.sessionToken || !ctx.permisos || ctx.permisos.ubicacion !== true || typeof apiGetSugerenciasFuentesPozo !== 'function' || !estado.wellId || sinFuentesRegistrales()) {
       return Promise.resolve();
     }
     var wellId = estado.wellId;

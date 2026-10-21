@@ -7,7 +7,9 @@
 // - La coordenada de Irrigacion es inmutable: este modulo solo la MUESTRA (en la ficha, en el modal y como marcador fijo en el mapa).
 // - Del cliente solo salen los campos de ubicacionCorreccionLogic_construirPayload (via apiProponerCorreccionUbicacion). El estado final
 //   lo informa el backend (data.correccion.estado); despues de guardar SIEMPRE se relee getCorreccionesUbicacionPozo y se pinta desde esa lectura.
-// - El boton "Corregir ubicacion" solo existe con ubicacion=SI y ubicacion_corregir=SI exactamente verdaderos (el backend valida igual).
+// - El boton de ingreso solo existe con ubicacion=SI y ubicacion_corregir=SI exactamente verdaderos (el backend valida igual). Su texto y el titulo del modal dependen de si el pozo
+//   ya tiene ubicacion y de si quien lo usa tambien valida (ubicacionCorreccionLogic_modoDeIngreso): "Agregar ubicación" / "Sugerir ubicación" (pozo SIN ubicacion) o
+//   "Corregir ubicación" / "Sugerir corrección" (pozo con ubicacion). Un pozo que no figura en el padron actual exige observacion.
 // - app.js es el unico dueño de sessionToken/permisos: los pasa frescos con obtenerContexto() -> {sessionToken, permisos, onSessionExpired}.
 (function () {
   var estado = {
@@ -15,6 +17,7 @@
     aperturaId: 0,           // descarta respuestas tardias de una apertura anterior
     wellId: null,
     irrigacion: null,        // {lat, lon} oficial (corroborada/unica) o null
+    location: null,          // ultima respuesta de getWellLocation (E4-2: de ahi sale si el pozo esta sin ubicacion: sinCoordenadas / noEnPadron)
     registral: null,         // la ubicacion registral vigente SI cambio respecto de irrigacion ({tipo, lat, lon} | {tipo:'N'} | null); solo informativa (ver ubicacionesConocidas.js)
     lectura: null,           // ultima lectura de getCorreccionesUbicacionPozo {vigente, pendientes, historial}
     aviso: null,             // {tipo, texto, recargar?} sobre el ultimo guardado
@@ -27,6 +30,8 @@
   var $ = function (id) { return document.getElementById(id); };
   var overlayEl = $('ucorr-overlay');
   var irrigacionEl = $('ucorr-irrigacion');
+  var tituloEl = $('ucorr-titulo');
+  var notaOficialEl = $('ucorr-nota-oficial');
   var registralEl = $('ucorr-registral');
   var vistasEls = {
     opciones: $('ucorr-vista-opciones'), gps: $('ucorr-vista-gps'), mapa: $('ucorr-vista-mapa'), confirmar: $('ucorr-vista-confirmar')
@@ -97,6 +102,14 @@
     return !!ctx && ubicacionCorreccionLogic_puedeCorregir(ctx.permisos);
   }
 
+  // Que boton / titulo corresponde ahora (permisos frescos + la ubicacion del pozo + la correccion vigente leida). Sin contexto: nada se ofrece.
+  function modoActual() {
+    var ctx = contexto();
+    return ubicacionCorreccionLogic_modoDeIngreso({
+      permisos: ctx ? ctx.permisos : null, location: estado.location, vigente: estado.lectura ? estado.lectura.vigente : null
+    });
+  }
+
   // Quien valida (ubicacion + ubicacion_validar exactos, fail-closed): ve Validar / Rechazar en las tarjetas "Pendiente".
   function puedeValidarAhora() {
     var ctx = contexto();
@@ -133,7 +146,10 @@
       return;
     }
     enlazarAccionesDeValidacion(cont);
-    cont.innerHTML = ubicacionCorreccionLogic_htmlSeccion(estado.lectura, { puedeCorregir: puedeCorregir(), puedeValidar: puedeValidarAhora(), aviso: estado.aviso });
+    var modo = modoActual();
+    cont.innerHTML = ubicacionCorreccionLogic_htmlSeccion(estado.lectura, {
+      puedeCorregir: modo.puedeOriginar, textoBoton: modo.textoBoton, sinUbicacion: modo.sinUbicacion, puedeValidar: puedeValidarAhora(), aviso: estado.aviso
+    });
     // "Ubicaciones conocidas" suma la correccion vigente (validada en campo) apenas se la lee; si no se pudo leer, queda solo lo del padron.
     if (typeof ubicacionesConocidasController_actualizarVigente === 'function') {
       ubicacionesConocidasController_actualizarVigente(estado.wellId, (estado.lectura && estado.lectura.vigente) || null);
@@ -192,6 +208,7 @@
     estado.aperturaId += 1;
     estado.wellId = ap.wellId;
     estado.irrigacion = ubicacionCorreccionLogic_irrigacionDeUbicacion(ap.location);
+    estado.location = ap.location || null;
     estado.registral = null;
     estado.lectura = null;
     estado.aviso = null;
@@ -234,7 +251,7 @@
 
   function nuevoModal() {
     // modo: que se hace en la vista del mapa ('mapa' = elegir tocando; 'coordenadas' = escribir la coordenada). coord: estado de "Ingresar coordenadas".
-    return { vista: 'opciones', vistaPrevia: 'opciones', metodo: null, modo: 'mapa', coord: null, punto: null, gps: null, gpsId: 0, mapaId: 0 };
+    return { vista: 'opciones', vistaPrevia: 'opciones', metodo: null, modo: 'mapa', coord: null, punto: null, gps: null, gpsId: 0, mapaId: 0, ingreso: null };
   }
 
   function mostrarVista(nombre) {
@@ -249,10 +266,11 @@
     }
     abridorEl = opener || null;
     estado.modal = nuevoModal();
-    var irr = estado.irrigacion;
-    irrigacionEl.textContent = irr
-      ? 'Ubicación de Irrigación (no se modifica): ' + ubicacionCorreccionLogic_formatearCoordenadas(irr.lat, irr.lon)
-      : 'Este pozo no tiene una ubicación de Irrigación para comparar.';
+    // El modo se fija al abrir (titulo, texto de Irrigacion, observacion obligatoria): no cambia mientras el modal esta abierto.
+    estado.modal.ingreso = modoActual();
+    tituloEl.textContent = estado.modal.ingreso.tituloModal;
+    irrigacionEl.textContent = ubicacionCorreccionLogic_textoIrrigacionModal(estado.modal.ingreso.estadoPadron, estado.irrigacion);
+    notaOficialEl.hidden = estado.modal.ingreso.sinUbicacion;          // "La ubicación de Irrigación no se modifica..." no aplica si no hay ninguna
     pintarRegistral();
     confEls.obs.value = '';
     confEls.error.hidden = true;
@@ -716,7 +734,9 @@
       metodo: m.metodo,
       precisionGpsM: ev && ev.valido ? ev.precisionM : null,
       observacion: confEls.obs.value,
-      irrigacion: estado.irrigacion
+      irrigacion: estado.irrigacion,
+      fueraDelPadron: !!(m.ingreso && m.ingreso.fueraDelPadron),       // observacion obligatoria (el backend tambien la exige)
+      sinUbicacion: !!(m.ingreso && m.ingreso.sinUbicacion)             // solo para el mensaje de exito; no viaja
     };
     // Solo mientras el punto ES la conversion de lo ingresado viaja coordenadaOriginal; arrastrado = PUNTO_EN_MAPA y la coordenada ingresada se descarta.
     if (ubicacionCorreccionLogic_sistemaPorMetodo(m.metodo) && m.coord && m.coord.evaluacion.estado === 'valido') {
@@ -750,8 +770,11 @@
     confEls.advertencia.textContent = UCORR_TEXTO_ADVERTENCIA_1KM;
     confEls.advertencia.hidden = !ev.advertenciaFuerte;
     confEls.obsLabel.textContent = ev.observacionObligatoria ? 'Observación (obligatoria)' : 'Observación (opcional)';
-    confEls.errObs.textContent = ev.errores.observacion || '';
-    confEls.errObs.hidden = !ev.errores.observacion;
+    // Pozo fuera del padron: se dice por que la observacion es obligatoria (antes de tocar nada) y el texto no desaparece al escribir.
+    var fuera = !!(estado.modal.ingreso && estado.modal.ingreso.fueraDelPadron);
+    confEls.errObs.textContent = ev.errores.observacion || (fuera ? UCORR_TEXTO_OBSERVACION_NO_EN_PADRON : '');
+    confEls.errObs.hidden = !ev.errores.observacion && !fuera;
+    confEls.errObs.classList.toggle('ucorr-obs-ayuda', fuera && !ev.errores.observacion);
     confEls.guardar.disabled = !ev.ok || estado.guardando;
   }
 
@@ -795,6 +818,14 @@
         if (r.sesionVencida) {
           cerrarModal(true);
           if (ctx.onSessionExpired) { ctx.onSessionExpired(); }
+          return;
+        }
+        if (r.code === 'OBSERVACION_REQUERIDA') {
+          // el backend exige el motivo: se muestra junto al campo de la observacion (no como error generico) y se vuelve a ella
+          confEls.errObs.textContent = r.mensaje;
+          confEls.errObs.hidden = false;
+          confEls.errObs.classList.remove('ucorr-obs-ayuda');
+          confEls.obs.focus();
           return;
         }
         mostrarErrorGuardado(r.mensaje);

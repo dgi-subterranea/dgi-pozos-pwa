@@ -19,6 +19,21 @@ var UCORR_TEXTO_ADVERTENCIA_1KM = 'La ubicación propuesta está a más de 1 km 
 var UCORR_TEXTO_NO_REEMPLAZA = 'La corrección no reemplaza ni modifica la ubicación de Irrigación: son datos separados.';
 var UCORR_CODIGOS_SESION = ['UNAUTHORIZED', 'USER_DISABLED'];
 var UCORR_MENDOZA_CENTRO = { lat: -34.6, lon: -68.6, zoom: 7 };
+// E4-2: pozo SIN ubicacion. Lo dice el estado del padron (getWellLocation -> ubicacionResuelta.estado): `sinCoordenadas` (figura en el padron, sin coordenada) o `noEnPadron` (NO figura en el
+// padron actual pero otra fuente institucional lo conoce). Los dos pueden recibir una primera ubicacion; con fuentes en desacuerdo (revisar*) el pozo SI tiene ubicaciones y sigue como siempre.
+var UCORR_ESTADOS_SIN_UBICACION = ['sinCoordenadas', 'noEnPadron'];
+var UCORR_TEXTO_SIN_UBICACION = 'Sin ubicación registrada';
+var UCORR_DETALLE_SIN_COORDENADAS = 'Este pozo figura en el padrón, pero no tiene una coordenada cargada.';
+var UCORR_DETALLE_NO_EN_PADRON = 'Este pozo no figura en el padrón actual.';
+var UCORR_TEXTO_IRRIGACION_SIN_COORDENADAS = 'Este pozo figura en el padrón, pero no tiene una ubicación de Irrigación para comparar.';
+var UCORR_TEXTO_IRRIGACION_NO_EN_PADRON = 'Este pozo no figura en el padrón actual.';
+var UCORR_TEXTO_IRRIGACION_SIN_COMPARAR = 'Este pozo no tiene una ubicación de Irrigación para comparar.';
+var UCORR_TEXTO_OBSERVACION_NO_EN_PADRON = 'Indicá por qué se incorpora una ubicación para un pozo que no figura en el padrón actual.';
+var UCORR_TEXTO_VACIO_SIN_UBICACION = 'Todavía no hay una ubicación cargada para este pozo.';
+var UCORR_TEXTO_NOTA_SIN_UBICACION = 'Tu aporte queda registrado aparte, con tu nombre y la fecha.';
+var UCORR_BOTONES = {
+  agregar: 'Agregar ubicación', sugerirUbicacion: 'Sugerir ubicación', corregir: 'Corregir ubicación', sugerirCorreccion: 'Sugerir corrección'
+};
 
 var UCORR_ETIQUETAS_ESTADO = {
   PROPUESTA: 'Pendiente',
@@ -153,38 +168,76 @@ function ubicacionCorreccionLogic_textoRegistralVigente(info) {
   return 'Ubicación registral vigente (' + UCORR_ETIQUETA_REGISTRAL[info.tipo] + '): ' + ubicacionCorreccionLogic_formatearCoordenadas(info.lat, info.lon) + '.' + comparacion;
 }
 
-// --- Visibilidad del modulo Ubicacion en el hub ---
-// El permiso de CORREGIR controla el boton "Corregir ubicacion"; el de VER ("ubicacion") controla la informacion. Un pozo sin coordenada oficial
-// igual muestra el modulo si hay algo para ver (una correccion registrada: vigente, pendiente o en el historial) o algo para hacer (corregir).
+// Estado del padron de un pozo segun getWellLocation (ubicacionResuelta.estado): 'corroborada' | 'unica' | 'dudosoLeve' | 'revisar' | 'revisarGrave' | 'sinCoordenadas' | 'noEnPadron'.
+// Una ubicacion sin ubicacionResuelta es 'sinCoordenadas' (como siempre); sin ubicacion alguna (null / no objeto) no se sabe: null. Un backend viejo nunca manda 'noEnPadron'.
+function ubicacionCorreccionLogic_estadoPadron(location) {
+  if (!location || typeof location !== 'object') {
+    return null;
+  }
+  var r = location.ubicacionResuelta;
+  return r && typeof r.estado === 'string' && r.estado !== '' ? r.estado : 'sinCoordenadas';
+}
 
-// Hay coordenada oficial utilizable por el modulo (el padron la resolvio o hay fuentes en desacuerdo que un tecnico debe revisar).
+// --- Visibilidad del modulo Ubicacion en el hub ---
+// E4-2: si el backend dejo leer la ubicacion (getWellLocation ok, lo que implica el permiso de consulta "ubicacion"), la tarjeta EXISTE, tenga o no coordenadas, correcciones previas o
+// el permiso de corregir. El permiso de CORREGIR controla solo el boton (ver ubicacionCorreccionLogic_modoDeIngreso); sin "ubicacion" no hay lectura y no hay tarjeta.
+
+// Hay una ubicacion oficial utilizable por el modulo (el padron la resolvio o hay fuentes en desacuerdo que un tecnico debe revisar): ni sinCoordenadas ni noEnPadron.
 function ubicacionCorreccionLogic_oficialDisponible(location) {
   var r = location && location.ubicacionResuelta;
-  return !!r && r.estado !== 'sinCoordenadas';
+  return !!r && UCORR_ESTADOS_SIN_UBICACION.indexOf(r.estado) === -1;
 }
 
-// lectura: data de getCorreccionesUbicacionPozo ({vigente, pendientes, historial}) o null
-function ubicacionCorreccionLogic_tieneCorrecciones(lectura) {
-  return !!lectura && (!!lectura.vigente || (lectura.pendientes || []).length > 0 || (lectura.historial || []).length > 0);
-}
-
-// o: {ubicacionFound, location, permisos, correcciones}. ubicacionFound = el backend dejo leer la ubicacion (implica permiso "ubicacion").
+// o: {ubicacionFound}. ubicacionFound = el backend dejo leer la ubicacion (implica permiso "ubicacion").
 function ubicacionCorreccionLogic_ofrecerModulo(o) {
-  var d = o || {};
-  if (!d.ubicacionFound) {
-    return false;
-  }
-  return ubicacionCorreccionLogic_oficialDisponible(d.location) ||
-    ubicacionCorreccionLogic_puedeCorregir(d.permisos) ||
-    ubicacionCorreccionLogic_tieneCorrecciones(d.correcciones);
+  return !!o && o.ubicacionFound === true;
 }
 
-// ¿Hace falta preguntar por correcciones al buscar el pozo? Solo cuando el pozo NO tiene coordenada oficial y el modulo no se ofreceria igual
-// (quien puede corregir ya lo ve): es el unico caso en que "hay una correccion" cambia si la tarjeta aparece.
-function ubicacionCorreccionLogic_necesitaConsultarCorrecciones(o) {
+// Aviso del hub cuando la ubicacion NO se pudo comprobar (no es "no existe": no se inventa ningun estado). ubicacion: {found, code}; permisos: los de la sesion. '' si no hay que avisar.
+var UCORR_TEXTO_AVISO_HUB = 'No se pudo comprobar la ubicación de este pozo. Intentá de nuevo en unos minutos.';
+function ubicacionCorreccionLogic_avisoHubUbicacion(ubicacion, permisos) {
+  return !!ubicacion && ubicacion.found !== true && ubicacion.code === 'SERVICE_UNAVAILABLE' && !!permisos && permisos.ubicacion === true ? UCORR_TEXTO_AVISO_HUB : '';
+}
+
+// Modo de ingreso de una ubicacion: que boton y que titulo corresponden segun el permiso y si el pozo tiene o no ubicacion. El backend sigue siendo la autoridad de los permisos.
+//   o: {permisos, location (getWellLocation), vigente (correccion VALIDADA vigente o null)}
+//   sinUbicacion: no hay punto operativo actual por no tener NADA (sinCoordenadas / noEnPadron y sin V). Con una V vigente, con coordenada del padron o con fuentes en desacuerdo
+//                 (revisar*, que es otro caso y sigue como siempre) el pozo "tiene ubicacion".
+//   puedeOriginar: ubicacion + ubicacion_corregir exactos (fail-closed). autovalida: ademas ubicacion_validar. Quien solo valida o solo consulta NO origina: sin boton.
+//   textoBoton / tituloModal: 'Agregar ubicación' (sin ubicacion, autovalida) | 'Sugerir ubicación' (sin ubicacion, solo propone) | 'Corregir ubicación' (autovalida) |
+//                 'Sugerir corrección' (solo propone); '' sin boton.
+//   estadoPadron / fueraDelPadron: para el modal (texto de Irrigacion, observacion obligatoria).
+function ubicacionCorreccionLogic_modoDeIngreso(o) {
   var d = o || {};
-  return !!d.ubicacionFound && !ubicacionCorreccionLogic_oficialDisponible(d.location) && !!d.permisos && d.permisos.ubicacion === true &&
-    !ubicacionCorreccionLogic_puedeCorregir(d.permisos);
+  var permisos = d.permisos;
+  var v = d.vigente;
+  var tieneV = !!v && typeof v === 'object' && ubicacionCorreccionLogic_esNumero(v.lat) && ubicacionCorreccionLogic_esNumero(v.lon);
+  var estadoPadron = ubicacionCorreccionLogic_estadoPadron(d.location);
+  var sinUbicacion = !tieneV && UCORR_ESTADOS_SIN_UBICACION.indexOf(estadoPadron) !== -1;
+  var puedeOriginar = ubicacionCorreccionLogic_puedeCorregir(permisos);
+  var autovalida = puedeOriginar && permisos.ubicacion_validar === true;
+  var texto = '';
+  if (puedeOriginar) {
+    texto = sinUbicacion ? (autovalida ? UCORR_BOTONES.agregar : UCORR_BOTONES.sugerirUbicacion) : (autovalida ? UCORR_BOTONES.corregir : UCORR_BOTONES.sugerirCorreccion);
+  }
+  return {
+    sinUbicacion: sinUbicacion, puedeOriginar: puedeOriginar, autovalida: autovalida, textoBoton: texto, tituloModal: texto || UCORR_BOTONES.corregir,
+    estadoPadron: estadoPadron, fueraDelPadron: estadoPadron === 'noEnPadron'
+  };
+}
+
+// Texto de Irrigacion del modal segun el estado del padron. irrigacion: {lat, lon} (solo con coordenada oficial) o null.
+function ubicacionCorreccionLogic_textoIrrigacionModal(estadoPadron, irrigacion) {
+  if (irrigacion) {
+    return 'Ubicación de Irrigación (no se modifica): ' + ubicacionCorreccionLogic_formatearCoordenadas(irrigacion.lat, irrigacion.lon);
+  }
+  if (estadoPadron === 'noEnPadron') {
+    return UCORR_TEXTO_IRRIGACION_NO_EN_PADRON;
+  }
+  if (estadoPadron === 'sinCoordenadas') {
+    return UCORR_TEXTO_IRRIGACION_SIN_COORDENADAS;
+  }
+  return UCORR_TEXTO_IRRIGACION_SIN_COMPARAR;
 }
 
 // --- GPS ---
@@ -205,7 +258,7 @@ function ubicacionCorreccionLogic_evaluarGps(accuracy) {
 
 // --- Evaluacion de la propuesta (reglas de UX, el backend manda) ---
 
-// o: {lat, lon, metodo, precisionGpsM, observacion, irrigacion:{lat,lon}|null}
+// o: {lat, lon, metodo, precisionGpsM, observacion, irrigacion:{lat,lon}|null, fueraDelPadron (opcional: el pozo NO figura en el padron actual -> observacion obligatoria, sin distancia)}
 // Devuelve {ok, errores:{punto?, gps?, observacion?}, distanciaM|null, observacionObligatoria, advertenciaFuerte, observacion}
 function ubicacionCorreccionLogic_evaluarPropuesta(o) {
   var d = o || {};
@@ -246,6 +299,13 @@ function ubicacionCorreccionLogic_evaluarPropuesta(o) {
     if (res.observacionObligatoria && obs === '') {
       errores.observacion = 'La ubicación propuesta está a ' + ubicacionCorreccionLogic_formatearDistancia(res.distanciaM) +
         ' de la ubicación de Irrigación: indicá el motivo en la observación (obligatoria a más de ' + UCORR_OBSERVACION_DESDE_M + ' m).';
+    }
+  }
+  // Un pozo FUERA del padron: la observacion es obligatoria (no hay distancia contra la cual medir; el motivo es lo que justifica incorporarlo). El backend tambien la exige.
+  if (d.fueraDelPadron === true) {
+    res.observacionObligatoria = true;
+    if (obs === '' && !errores.observacion) {
+      errores.observacion = UCORR_TEXTO_OBSERVACION_NO_EN_PADRON;
     }
   }
   res.ok = Object.keys(errores).length === 0;
@@ -322,8 +382,11 @@ var UCORR_MENSAJES_ERROR = {
 
 function ubicacionCorreccionLogic_mensajeError(code, extra) {
   if (code === 'OBSERVACION_REQUERIDA') {
-    var d = extra && ubicacionCorreccionLogic_esNumero(extra.distanciaM) ? ' (a ' + ubicacionCorreccionLogic_formatearDistancia(extra.distanciaM) + ' de Irrigación)' : '';
-    return 'Indicá el motivo en la observación' + d + ': es obligatoria a más de ' + UCORR_OBSERVACION_DESDE_M + ' m de la ubicación de Irrigación.';
+    // sin distancia (no hay referencia contra la cual medir) solo puede ser un pozo que no figura en el padron actual
+    if (!extra || !ubicacionCorreccionLogic_esNumero(extra.distanciaM)) {
+      return UCORR_TEXTO_OBSERVACION_NO_EN_PADRON;
+    }
+    return 'Indicá el motivo en la observación (a ' + ubicacionCorreccionLogic_formatearDistancia(extra.distanciaM) + ' de Irrigación): es obligatoria a más de ' + UCORR_OBSERVACION_DESDE_M + ' m de la ubicación de Irrigación.';
   }
   return UCORR_MENSAJES_ERROR[code] || 'No se pudo guardar la corrección. Intentá nuevamente.';
 }
@@ -341,6 +404,8 @@ function ubicacionCorreccionLogic_mensajeErrorLectura(code) {
 
 var UCORR_MENSAJE_VALIDADA = 'Ubicación corregida y validada.';
 var UCORR_MENSAJE_PENDIENTE = 'Corrección enviada para validación.';
+var UCORR_MENSAJE_VALIDADA_PRIMERA = 'Ubicación agregada y validada.';
+var UCORR_MENSAJE_PENDIENTE_PRIMERA = 'Ubicación sugerida. Queda pendiente de validación.';
 var UCORR_MENSAJE_RED = 'No se pudo guardar. Revisá tu conexión e intentá de nuevo.';
 
 // La UI NO decide el estado final: lo lee de la respuesta del backend, y de UN solo lugar: data.correccion.estado (campo que SIEMPRE trae la vista
@@ -360,10 +425,24 @@ function ubicacionCorreccionLogic_resultadoDeRespuesta(resp) {
   return 'otro';
 }
 
-function ubicacionCorreccionLogic_mensajeResultado(resultado) {
-  if (resultado === 'validada') { return UCORR_MENSAJE_VALIDADA; }
-  if (resultado === 'pendiente') { return UCORR_MENSAJE_PENDIENTE; }
+// primera: true si lo que se guardo fue la PRIMERA ubicacion del pozo (el mensaje dice "agregada" / "sugerida" en vez de "corregida" / "enviada").
+function ubicacionCorreccionLogic_mensajeResultado(resultado, primera) {
+  if (resultado === 'validada') { return primera === true ? UCORR_MENSAJE_VALIDADA_PRIMERA : UCORR_MENSAJE_VALIDADA; }
+  if (resultado === 'pendiente') { return primera === true ? UCORR_MENSAJE_PENDIENTE_PRIMERA : UCORR_MENSAJE_PENDIENTE; }
   return 'Corrección registrada.';
+}
+
+// ¿Lo que se guardo fue la primera ubicacion? Manda el backend si ya informa su marca (primeraUbicacion de una correccion VALIDADA; candidataPrimeraUbicacion de una PENDIENTE) y, con un
+// backend que todavia no la manda, lo que la pantalla sabia al abrir el modal (el pozo no tenia ninguna ubicacion). Nunca se asume que el campo existe.
+function ubicacionCorreccionLogic_esPrimeraGuardada(resultado, correccion, sinUbicacionAlAbrir) {
+  var c = correccion && typeof correccion === 'object' ? correccion : {};
+  if (resultado === 'validada' && typeof c.primeraUbicacion === 'boolean') {
+    return c.primeraUbicacion;
+  }
+  if (resultado === 'pendiente' && typeof c.candidataPrimeraUbicacion === 'boolean') {
+    return c.candidataPrimeraUbicacion;
+  }
+  return sinUbicacionAlAbrir === true;
 }
 
 // --- Flujo de guardado: clientRequestId estable por intento + sin doble envio + refresco posterior ---
@@ -415,9 +494,10 @@ function ubicacionCorreccionLogic_crearFlujoGuardado(deps) {
         }
         var resultado = ubicacionCorreccionLogic_resultadoDeRespuesta(resp);
         intento = null;                                         // guardado: el proximo envio es otro intento
+        var correccionOk = resp.data ? resp.data.correccion : null;
         var base = {
-          tipo: 'ok', resultado: resultado, mensaje: ubicacionCorreccionLogic_mensajeResultado(resultado),
-          correccion: resp.data ? resp.data.correccion : null, duplicada: !!(resp.data && resp.data.duplicada)
+          tipo: 'ok', resultado: resultado, mensaje: ubicacionCorreccionLogic_mensajeResultado(resultado, ubicacionCorreccionLogic_esPrimeraGuardada(resultado, correccionOk, valores && valores.sinUbicacion)),
+          correccion: correccionOk, duplicada: !!(resp.data && resp.data.duplicada)
         };
         return Promise.resolve()
           .then(function () { return deps.leer(wellId); })
@@ -1121,7 +1201,8 @@ function ubicacionCorreccionLogic_ordenCronologico(historial) {
 }
 
 // data: respuesta de getCorreccionesUbicacionPozo {vigente, pendientes[], historial[]}
-// opc: {puedeCorregir, puedeValidar (botones Validar / Rechazar en las pendientes), aviso:{tipo:'ok'|'info', texto, recargar?}, enSesion}
+// opc: {puedeCorregir, textoBoton (E4-2: el texto del boton segun el modo de ingreso; sin el, 'Corregir ubicación'), sinUbicacion (el pozo no tiene ninguna ubicacion),
+//       puedeValidar (botones Validar / Rechazar en las pendientes), aviso:{tipo:'ok'|'info', texto, recargar?}, enSesion}
 function ubicacionCorreccionLogic_htmlSeccion(data, opc) {
   var o = opc || {};
   var d = data || {};
@@ -1130,7 +1211,7 @@ function ubicacionCorreccionLogic_htmlSeccion(data, opc) {
   var pendientes = d.pendientes || [];
   var historial = d.historial || [];
   var h = '<p class="field-label">Ubicación corregida</p>';
-  h += '<p class="ucorr-nota">' + esc(UCORR_TEXTO_NO_REEMPLAZA) + '</p>';
+  h += '<p class="ucorr-nota">' + esc(o.sinUbicacion === true ? UCORR_TEXTO_NOTA_SIN_UBICACION : UCORR_TEXTO_NO_REEMPLAZA) + '</p>';
 
   if (o.aviso && o.aviso.texto) {
     h += '<div class="ucorr-aviso ucorr-aviso-' + (o.aviso.tipo === 'ok' ? 'ok' : 'info') + '" role="status"><span>' + esc(o.aviso.texto) + '</span>';
@@ -1150,11 +1231,13 @@ function ubicacionCorreccionLogic_htmlSeccion(data, opc) {
   }
 
   if (!vigente && !pendientes.length) {
-    h += '<p class="ucorr-vacio">Todavía no hay correcciones de ubicación para este pozo. La ubicación vigente es la de Irrigación.</p>';
+    // con un pozo SIN ubicacion no se dice que "la vigente es la de Irrigación": no hay ninguna
+    h += '<p class="ucorr-vacio">' + (o.sinUbicacion === true ? esc(UCORR_TEXTO_VACIO_SIN_UBICACION) : 'Todavía no hay correcciones de ubicación para este pozo. La ubicación vigente es la de Irrigación.') + '</p>';
   }
 
-  if (o.puedeCorregir === true) {
-    h += '<button type="button" class="button ucorr-abrir" id="btn-ubic-corr-abrir">Corregir ubicación</button>';
+  var textoBoton = typeof o.textoBoton === 'string' ? o.textoBoton : (o.puedeCorregir === true ? UCORR_BOTONES.corregir : '');
+  if (textoBoton !== '') {
+    h += '<button type="button" class="button ucorr-abrir" id="btn-ubic-corr-abrir">' + esc(textoBoton) + '</button>';
   }
 
   if (historial.length) {
@@ -1175,10 +1258,16 @@ if (typeof module !== 'undefined' && module.exports) {
     ubicacionCorreccionLogic_totalDePendientes,
     ubicacionCorreccionLogic_crearBadgePendientes,
     UCORR_BADGE_INTERVALO_MS,
+    UCORR_ESTADOS_SIN_UBICACION, UCORR_TEXTO_SIN_UBICACION, UCORR_DETALLE_SIN_COORDENADAS, UCORR_DETALLE_NO_EN_PADRON, UCORR_TEXTO_IRRIGACION_SIN_COORDENADAS,
+    UCORR_TEXTO_IRRIGACION_NO_EN_PADRON, UCORR_TEXTO_IRRIGACION_SIN_COMPARAR, UCORR_TEXTO_OBSERVACION_NO_EN_PADRON, UCORR_TEXTO_VACIO_SIN_UBICACION, UCORR_TEXTO_NOTA_SIN_UBICACION,
+    UCORR_BOTONES, UCORR_MENSAJE_VALIDADA_PRIMERA, UCORR_MENSAJE_PENDIENTE_PRIMERA, UCORR_TEXTO_AVISO_HUB,
+    ubicacionCorreccionLogic_estadoPadron,
     ubicacionCorreccionLogic_oficialDisponible,
-    ubicacionCorreccionLogic_tieneCorrecciones,
     ubicacionCorreccionLogic_ofrecerModulo,
-    ubicacionCorreccionLogic_necesitaConsultarCorrecciones,
+    ubicacionCorreccionLogic_avisoHubUbicacion,
+    ubicacionCorreccionLogic_modoDeIngreso,
+    ubicacionCorreccionLogic_textoIrrigacionModal,
+    ubicacionCorreccionLogic_esPrimeraGuardada,
     ubicacionCorreccionLogic_distanciaMetros,
     ubicacionCorreccionLogic_formatearDistancia,
     ubicacionCorreccionLogic_formatearCoord,

@@ -507,8 +507,46 @@ Orden de las validaciones: por el instante del evento VALIDADA; si coinciden (mi
 ### Efecto operativo y reindexado
 Una primera ubicación **pendiente** no cambia nada operativo. Validada o autovalidada pasa a **V** y la compone el frontend sin base: `sin base + V → V`, aunque no exista D/C/R (el pozo entra al dataset con cuenca y profundidad «Sin dato»). Si más adelante un padrón nuevo **incorpora el pozo** con coordenadas registrales: la V **sigue ganando**; la fila histórica conserva `noEnPadron` y su `padronPeriodo` para siempre (la hoja es append-only y nada se reinterpreta); `getWellLocation` ya devuelve la ubicación real y las propuestas nuevas se miden contra ella (no son «primera»); si la V se revierte, el pozo vuelve a la nueva resolución registral (no a «sin ubicación»). No hay lógica especial: lo resuelve la composición de E3.
 
-### Pendiente (E4-2 y siguientes, frontend)
-Tarjeta Ubicación para pozo sin ubicación o fuera del padrón (hoy `noEnPadron` lo trata el dominio de la ficha como estado desconocido, sin punto), copy «Agregar / Sugerir / Corregir ubicación», «Primera ubicación conocida del pozo» (la bandeja lo usa con `candidataPrimeraUbicacion` sobre las pendientes; el historial y la auditoría con `primeraUbicacion`), observación obligatoria en el modal para `noEnPadron` (el backend ya la exige y responde `OBSERVACION_REQUERIDA`). **Orden de publicación:** primero el frontend, después el backend (un frontend viejo con el backend nuevo mostraría `noEnPadron` como «Ubicación a revisar»; un frontend nuevo con el backend viejo no rompe nada). Mejora futura: centro aproximado del departamento para el mapa de ingreso (GPS → departamento → Mendoza).
+## E4-2 — Frontend: tarjeta y flujo para un pozo sin ubicación
+Solo frontend (el backend de E4-1 no se toca). Tres situaciones de un pozo según `getWellLocation → ubicacionResuelta.estado`: **con ubicación** (`unica` / `corroborada` / fuentes en desacuerdo `dudosoLeve` · `revisar` · `revisarGrave`, que *sí* tienen ubicaciones y siguen como siempre), **sin coordenadas** (`sinCoordenadas`: figura en el padrón pero sin coordenada) y **fuera del padrón** (`noEnPadron`, E4-1). Un pozo está «sin ubicación» cuando es una de las dos últimas **y** no tiene una validada en campo vigente. Lo decide una sola función pura, `ubicacionCorreccionLogic_modoDeIngreso`.
+
+### Tarjeta del hub
+Si `getWellLocation` responde ok (lo que ya implica el permiso de consulta `ubicacion`), la tarjeta **Ubicación** existe para cualquier usuario con ese permiso: con o sin coordenadas, con o sin correcciones previas y con o sin `ubicacion_corregir` (este permiso controla solo el botón, dentro del módulo). Sin lectura no hay tarjeta; `WELL_LOCATION_NOT_FOUND` sigue como antes. Si el servicio no pudo comprobar la ubicación (`SERVICE_UNAVAILABLE` con permiso `ubicacion`) el hub muestra «No se pudo comprobar la ubicación de este pozo. Intentá de nuevo en unos minutos.» y no inventa ningún estado (ni dice «no se encontró» por eso). Se eliminó la consulta extra de correcciones que antes decidía la tarjeta (`necesitaConsultarCorrecciones`): ya no hace falta.
+
+### Botones y títulos del modal (los permisos no cambian; el backend es la autoridad)
+| Pozo | Permisos | Botón / título del modal |
+|---|---|---|
+| Sin ubicación | corregir + validar | **Agregar ubicación** |
+| Sin ubicación | corregir sin validar | **Sugerir ubicación** |
+| Sin ubicación | validar sin corregir · solo consulta | sin botón (no origina) |
+| Con ubicación | corregir + validar | **Corregir ubicación** |
+| Con ubicación | corregir sin validar | **Sugerir corrección** |
+| Con ubicación | validar sin corregir · solo consulta | sin botón |
+Permisos exactos (`=== true`, fail-closed). El mapa, Cerca Mío y reemplazos no tienen lógica especial.
+
+### Textos
+- Bloque principal de la ficha: título **«Sin ubicación registrada»** y detalle «Este pozo figura en el padrón, pero no tiene una coordenada cargada.» (`sinCoordenadas`) o «Este pozo no figura en el padrón actual.» (`noEnPadron`). **«Sin ubicación operativa de Irrigación»** queda reservado para fuentes en discrepancia / todas descartadas. Jerarquía de E3 intacta: V «Validada en campo» > R «Aceptada» > C «Coincidente» | D «Disponible».
+- Estado vacío de la sección de correcciones: «Todavía no hay una ubicación cargada para este pozo.» (nunca «La ubicación vigente es la de Irrigación» si no hay punto).
+- Modal: Irrigación = «Este pozo figura en el padrón, pero no tiene una ubicación de Irrigación para comparar.» / «Este pozo no figura en el padrón actual.»; sin distancia, sin advertencia de 1 km, sin marcador de Irrigación.
+- Éxito (primera ubicación): solo propone «Ubicación sugerida. Queda pendiente de validación.»; autovalida «Ubicación agregada y validada.». Corrección: los mensajes de siempre. Manda la marca del backend si ya viene (`candidataPrimeraUbicacion` para una PENDIENTE, `primeraUbicacion` para una VALIDADA); con un backend sin las marcas, lo que la pantalla sabía al abrir el modal. No hay copy histórico todavía (E4-3).
+
+### Observación
+Fuera del padrón la observación es **obligatoria** (etiqueta «Observación (obligatoria)», el motivo se explica antes de escribir: «Indicá por qué se incorpora una ubicación para un pozo que no figura en el padrón actual.», Guardar apagado hasta que haya texto). Es una comodidad: el backend la exige igual y, si responde `OBSERVACION_REQUERIDA`, el aviso se muestra junto al campo (con el foco ahí), con el texto del padrón si no hay distancia y con el de la distancia si la hay. Con `sinCoordenadas` es opcional. Ni `fueraDelPadron` ni `sinUbicacion` viajan en el payload (lista blanca intacta).
+
+### Mapa de ingreso
+Sin ubicación de Irrigación ni validada vigente: centro = GPS del dispositivo (sin bloquear) y, si no hay, Mendoza. Sin centrado por departamento (mejora futura).
+
+### Ficha y dominio
+`noEnPadron` se mapea en `ubicacionOperativaLogic` igual que `sinCoordenadas` (sin punto registral, sin anomalía técnica, motivo `NO_EN_PADRON`) y la ficha no pide decisiones ni sugerencias de fuentes registrales (no existen). La validada en campo sigue componiéndose sin base (`sin base + V → V`).
+
+### Invalidación (E3-6 intacto)
+Una propuesta pendiente **no** invalida la capa de campo; una validación o autovalidación sí (`mapaDataset_invalidarDeltaCampo`); un error o un rechazo no. No se toca el delta registral.
+
+### Compatibilidad y publicación
+El frontend nunca asume que el backend ya manda `noEnPadron` ni las marcas de primera ubicación: con el backend actual (solo `sinCoordenadas`) todo funciona. **Orden:** primero este frontend, después el backend de E4-1.
+
+### Pendiente (E4-3 y siguientes)
+Copy «Primera ubicación conocida del pozo» en la bandeja (con `candidataPrimeraUbicacion` sobre las pendientes), el historial y la auditoría (con `primeraUbicacion`); E4-4 (end-to-end y prueba real con el pozo 14-0123). Mejora futura: centro aproximado del departamento para el mapa de ingreso.
 
 ## Tests
 Punto operativo (etapa 1): `js/ubicacionOperativaLogic.test.js`. Etapa 2: `backend/test/UbicacionValidadasDelta.test.js`. Etapa 3: `js/mapaDatasetOperativo.test.js`, `js/mapaLogic.test.js` y `js/buscarReemplazoLogic.test.js`.

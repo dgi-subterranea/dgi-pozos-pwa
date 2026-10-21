@@ -196,7 +196,8 @@ describe('seccion de la ficha: lectura y boton segun permisos', () => {
     const t = cargar();
     await abrirFicha(t);
     expect(t.el('btn-ubic-corr-abrir')).not.toBeNull();
-    expect(t.contenedor.innerHTML).toContain('Corregir ubicación');
+    expect(t.contenedor.innerHTML).toContain('>Sugerir corrección</button>');          // E4-2: corregir SIN validar solo propone
+    expect(t.contenedor.innerHTML).not.toContain('>Corregir ubicación</button>');
   });
 
   test.each([
@@ -303,7 +304,7 @@ describe('modal: abrir, Irrigacion visible y cierre', () => {
     const t = cargar();
     await abrirFicha(t, LOCATION_SIN);
     t.el('btn-ubic-corr-abrir').click();
-    expect(t.el('ucorr-irrigacion').textContent).toBe('Este pozo no tiene una ubicación de Irrigación para comparar.');
+    expect(t.el('ucorr-irrigacion').textContent).toBe('Este pozo figura en el padrón, pero no tiene una ubicación de Irrigación para comparar.');
     expect(t.el('ucorr-overlay').hidden).toBe(false);
   });
 
@@ -379,7 +380,7 @@ describe('E3-5: ubicacion registral vigente en el modal (solo informativa)', () 
     t.el('btn-ubic-corr-abrir').click();
     const fuente = fuenteControlador.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
     expect(fuente).toMatch(/L\.marker\(\[estado\.irrigacion\.lat, estado\.irrigacion\.lon\]/);
-    expect(fuente).toMatch(/irrigacion: estado\.irrigacion\r?\n/);
+    expect(fuente).toMatch(/irrigacion: estado\.irrigacion,\r?\n/);
     expect(fuente).not.toMatch(/irrLat|irrLon/);
   });
 });
@@ -2306,5 +2307,358 @@ describe('ficha: Validar / Rechazar en la tarjeta Pendiente (abre el detalle com
     expect(t.ctx.apiProponerCorreccionUbicacion).toHaveBeenCalledTimes(1);
     expect(t.contenedor.innerHTML).toContain('Ubicación corregida y validada.');
     expect(t.ctx.ubicacionValidacionController_abrirDetalle).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------- E4-2: pozo SIN ubicacion
+// sinCoordenadas (figura en el padron, sin coordenada) y noEnPadron (NO figura en el padron actual, pero otra fuente lo conoce): la tarjeta existe, el boton y el titulo
+// dependen del permiso, el modal no compara contra una Irrigacion que no hay y, fuera del padron, la observacion es obligatoria. El backend sigue siendo la autoridad.
+describe('E4-2: pozo sin ubicacion (sinCoordenadas / noEnPadron)', () => {
+  const LOCATION_NEP = { wellId: W, ubicacionResuelta: { estado: 'noEnPadron' } };
+  const P_AMBOS = { ubicacion: true, ubicacion_corregir: true, ubicacion_validar: true };
+  const P_CORREGIR = { ubicacion: true, ubicacion_corregir: true };
+  const P_VALIDAR = { ubicacion: true, ubicacion_validar: true };
+  const P_LEER = { ubicacion: true };
+  const TEXTO_PADRON = 'Indicá por qué se incorpora una ubicación para un pozo que no figura en el padrón actual.';
+  const respuesta = (estado, extra) => () => Promise.resolve({
+    status: 'ok',
+    data: { correccion: Object.assign({}, VIGENTE, { estado: estado, resolucion: estado === 'VALIDADA' ? VIGENTE.resolucion : null }, extra || {}), duplicada: false }
+  });
+
+  describe('botones y titulos: la tabla', () => {
+    test.each([
+      ['sin ubicacion', LOCATION_SIN, P_AMBOS, 'Agregar ubicación'],
+      ['sin ubicacion', LOCATION_SIN, P_CORREGIR, 'Sugerir ubicación'],
+      ['fuera del padron', LOCATION_NEP, P_AMBOS, 'Agregar ubicación'],
+      ['fuera del padron', LOCATION_NEP, P_CORREGIR, 'Sugerir ubicación'],
+      ['con ubicacion', LOCATION, P_AMBOS, 'Corregir ubicación'],
+      ['con ubicacion', LOCATION, P_CORREGIR, 'Sugerir corrección']
+    ])('%s, permisos %j -> boton y titulo del modal "%s"', async (n, location, permisos, texto) => {
+      const t = cargar({ permisos });
+      await abrirFicha(t, location);
+      expect(t.contenedor.innerHTML).toContain('id="btn-ubic-corr-abrir">' + texto + '</button>');
+      t.el('btn-ubic-corr-abrir').click();
+      expect(t.el('ucorr-titulo').textContent).toBe(texto);
+    });
+
+    test.each([
+      ['sin ubicacion', LOCATION_SIN], ['fuera del padron', LOCATION_NEP], ['con ubicacion', LOCATION]
+    ])('%s: validar sin corregir, solo leer y sin permisos NO tienen boton para originar (la lectura se ve igual)', async (n, location) => {
+      const permisosSinBoton = [P_VALIDAR, P_LEER, { ubicacion: true, ubicacion_corregir: 'SI' }, {}];
+      for (const permisos of permisosSinBoton) {
+        const t = cargar({ permisos });
+        await abrirFicha(t, location);
+        expect(t.el('btn-ubic-corr-abrir')).toBeNull();
+        expect(t.contenedor.innerHTML).not.toContain('class="button ucorr-abrir"');
+        expect(t.contenedor.innerHTML).toContain('Ubicación corregida');
+      }
+    });
+
+    test('una validada en campo vigente en un pozo sin coordenada: el pozo YA tiene ubicacion -> "Corregir ubicación" / "Sugerir corrección"', async () => {
+      const t1 = cargar({ permisos: P_AMBOS, lectura: LECTURA_VIGENTE });
+      await abrirFicha(t1, LOCATION_NEP);
+      expect(t1.contenedor.innerHTML).toContain('id="btn-ubic-corr-abrir">Corregir ubicación</button>');
+      const t2 = cargar({ permisos: P_CORREGIR, lectura: LECTURA_VIGENTE });
+      await abrirFicha(t2, LOCATION_SIN);
+      expect(t2.contenedor.innerHTML).toContain('id="btn-ubic-corr-abrir">Sugerir corrección</button>');
+    });
+
+    test('fuentes en desacuerdo (revisar): el pozo TIENE ubicaciones -> el boton y el modal siguen siendo los de siempre', async () => {
+      const t = cargar({ permisos: P_AMBOS });
+      await abrirFicha(t, { wellId: W, ubicacionResuelta: { estado: 'revisar' } });
+      expect(t.contenedor.innerHTML).toContain('id="btn-ubic-corr-abrir">Corregir ubicación</button>');
+    });
+
+    test('estado vacio: sin ubicacion NO dice "La ubicación vigente es la de Irrigación"', async () => {
+      const t = cargar({ permisos: P_AMBOS });
+      await abrirFicha(t, LOCATION_NEP);
+      expect(t.contenedor.innerHTML).toContain('Todavía no hay una ubicación cargada para este pozo.');
+      expect(t.contenedor.innerHTML).not.toContain('La ubicación vigente es la de Irrigación');
+      const t2 = cargar({ permisos: P_AMBOS });
+      await abrirFicha(t2, LOCATION);
+      expect(t2.contenedor.innerHTML).toContain('La ubicación vigente es la de Irrigación');
+    });
+  });
+
+  describe('modal: texto de Irrigacion, sin distancia contra nada', () => {
+    test('sinCoordenadas: "Este pozo figura en el padrón, pero no tiene una ubicación de Irrigación para comparar."', async () => {
+      const t = cargar({ permisos: P_AMBOS });
+      await abrirFicha(t, LOCATION_SIN);
+      t.el('btn-ubic-corr-abrir').click();
+      expect(t.el('ucorr-irrigacion').textContent).toBe('Este pozo figura en el padrón, pero no tiene una ubicación de Irrigación para comparar.');
+      expect(t.el('ucorr-nota-oficial').hidden).toBe(true);
+    });
+
+    test('noEnPadron: "Este pozo no figura en el padrón actual."', async () => {
+      const t = cargar({ permisos: P_AMBOS });
+      await abrirFicha(t, LOCATION_NEP);
+      t.el('btn-ubic-corr-abrir').click();
+      expect(t.el('ucorr-irrigacion').textContent).toBe('Este pozo no figura en el padrón actual.');
+      expect(t.el('ucorr-nota-oficial').hidden).toBe(true);
+    });
+
+    test('con ubicacion de Irrigacion el modal no cambia (texto de la coordenada y nota oficial visibles)', async () => {
+      const t = cargar({ permisos: P_AMBOS });
+      await abrirFicha(t, LOCATION);
+      t.el('btn-ubic-corr-abrir').click();
+      expect(t.el('ucorr-irrigacion').textContent).toBe('Ubicación de Irrigación (no se modifica): -33.34765, -69.14545');
+      expect(t.el('ucorr-nota-oficial').hidden).toBe(false);
+    });
+
+    test.each([['sinCoordenadas', LOCATION_SIN], ['noEnPadron', LOCATION_NEP]])('%s: ni distancia ni advertencia de 1 km, ni marcador de Irrigacion en el mapa', async (n, location) => {
+      const t = cargar({ permisos: P_AMBOS });
+      await abrirModalMapa(t, location);
+      expect(marcadoresFijos(t)).toEqual([]);
+      tocarMapa(t, -34.0, -68.0);
+      expect(t.el('ucorr-mapa-distancia').textContent).toBe('');
+      t.el('btn-ucorr-mapa-usar').click();
+      expect(t.el('ucorr-distancia').hidden).toBe(true);
+      expect(t.el('ucorr-advertencia-1km').hidden).toBe(true);
+    });
+  });
+
+  describe('observacion: obligatoria SOLO fuera del padron', () => {
+    async function confirmarEn(location, permisos) {
+      const t = cargar({ permisos: permisos || P_AMBOS });
+      await abrirModalMapa(t, location);
+      tocarMapa(t, -33.9, -68.9);
+      t.el('btn-ucorr-mapa-usar').click();
+      return t;
+    }
+
+    test('noEnPadron: etiqueta obligatoria, el motivo se explica ANTES de escribir, Guardar apagado hasta que haya texto', async () => {
+      const t = await confirmarEn(LOCATION_NEP);
+      expect(t.el('ucorr-obs-label').textContent).toBe('Observación (obligatoria)');
+      expect(t.el('ucorr-err-observacion').hidden).toBe(false);
+      expect(t.el('ucorr-err-observacion').textContent).toBe(TEXTO_PADRON);
+      expect(t.el('btn-ucorr-guardar').disabled).toBe(true);
+      t.el('btn-ucorr-guardar').click();
+      expect(t.ctx.apiProponerCorreccionUbicacion).not.toHaveBeenCalled();
+      t.el('ucorr-observacion').value = '   ';
+      t.el('ucorr-observacion').emit('input');
+      expect(t.el('btn-ucorr-guardar').disabled).toBe(true);
+      t.el('ucorr-observacion').value = 'Pozo conocido por ITF, no está en el padrón';
+      t.el('ucorr-observacion').emit('input');
+      expect(t.el('btn-ucorr-guardar').disabled).toBe(false);
+      expect(t.el('ucorr-err-observacion').textContent).toBe(TEXTO_PADRON);
+      expect(t.el('ucorr-err-observacion').hidden).toBe(false);                       // la explicacion sigue visible aunque ya no sea un error
+    });
+
+    test('sinCoordenadas: la observacion es opcional (se puede guardar sin escribir nada)', async () => {
+      const t = await confirmarEn(LOCATION_SIN);
+      expect(t.el('ucorr-obs-label').textContent).toBe('Observación (opcional)');
+      expect(t.el('ucorr-err-observacion').hidden).toBe(true);
+      expect(t.el('btn-ucorr-guardar').disabled).toBe(false);
+    });
+
+    test('con ubicacion: la regla de siempre (opcional cerca de Irrigacion)', async () => {
+      const t = cargar({ permisos: P_AMBOS });
+      await abrirModalMapa(t, LOCATION);
+      tocarMapa(t, PUNTO_REAL.lat, PUNTO_REAL.lon);
+      t.el('btn-ucorr-mapa-usar').click();
+      expect(t.el('ucorr-obs-label').textContent).toBe('Observación (opcional)');
+      expect(t.el('ucorr-err-observacion').hidden).toBe(true);
+    });
+
+    test('el backend manda OBSERVACION_REQUERIDA: el aviso va junto al campo (no el error general ni una distancia), el foco vuelve a la observacion y se puede reintentar', async () => {
+      let n = 0;
+      const t = cargar({
+        permisos: P_AMBOS,
+        proponer: () => { n += 1; return Promise.resolve(n === 1 ? { status: 'error', code: 'OBSERVACION_REQUERIDA' } : { status: 'ok', data: { correccion: VIGENTE, duplicada: false } }); }
+      });
+      await abrirModalMapa(t, LOCATION_SIN);          // el frontend no la exigia (sinCoordenadas) pero el backend si: gana el backend
+      tocarMapa(t, -33.9, -68.9);
+      t.el('btn-ucorr-mapa-usar').click();
+      t.el('btn-ucorr-guardar').click();
+      await flush();
+      expect(t.el('ucorr-err-observacion').hidden).toBe(false);
+      expect(t.el('ucorr-err-observacion').textContent).toBe(TEXTO_PADRON);
+      expect(t.el('ucorr-err-observacion').textContent).not.toMatch(/250 m|de Irrigación\)/);
+      expect(t.el('ucorr-error').hidden).toBe(true);
+      expect(t.el('ucorr-observacion').enfocado).toBe(true);
+      expect(t.el('ucorr-overlay').hidden).toBe(false);
+      expect(t.el('btn-ucorr-guardar').disabled).toBe(false);
+      t.el('ucorr-observacion').value = 'motivo';
+      t.el('ucorr-observacion').emit('input');
+      t.el('btn-ucorr-guardar').click();
+      await flush();
+      expect(t.ctx.apiProponerCorreccionUbicacion).toHaveBeenCalledTimes(2);
+      expect(t.el('ucorr-overlay').hidden).toBe(true);
+    });
+
+    test('OBSERVACION_REQUERIDA CON distancia (pozo con ubicacion): conserva el mensaje de la distancia', async () => {
+      const t = cargar({ permisos: P_AMBOS, proponer: () => Promise.resolve({ status: 'error', code: 'OBSERVACION_REQUERIDA', distanciaM: 333 }) });
+      await abrirModalMapa(t, LOCATION);
+      tocarMapa(t, PUNTO_REAL.lat, PUNTO_REAL.lon);
+      t.el('btn-ucorr-mapa-usar').click();
+      t.el('btn-ucorr-guardar').click();
+      await flush();
+      expect(t.el('ucorr-err-observacion').hidden).toBe(false);
+      expect(t.el('ucorr-err-observacion').textContent).toMatch(/obligatoria a más de 250 m/);
+    });
+  });
+
+  describe('los cuatro metodos siguen funcionando sin Irrigacion (el payload es el mismo)', () => {
+    const CLAVES = ['clientRequestId', 'lat', 'lon', 'metodo', 'observacion', 'precisionGpsM', 'wellId'];
+
+    test('GPS actual', async () => {
+      const t = cargar({ permisos: P_AMBOS });
+      await abrirFicha(t, LOCATION_NEP);
+      t.el('btn-ubic-corr-abrir').click();
+      t.el('btn-ucorr-gps').click();
+      t.geo.llamadas[t.geo.llamadas.length - 1].ok(posicion(PUNTO_REAL.lat, PUNTO_REAL.lon, 12));
+      t.el('btn-ucorr-gps-continuar').click();
+      t.el('ucorr-observacion').value = 'motivo';
+      t.el('ucorr-observacion').emit('input');
+      t.el('btn-ucorr-guardar').click();
+      await flush();
+      const datos = t.ctx.apiProponerCorreccionUbicacion.mock.calls[0][1];
+      expect(Object.keys(datos).sort()).toEqual(CLAVES);
+      expect(datos).toMatchObject({ wellId: W, metodo: 'GPS_ACTUAL', precisionGpsM: 12, observacion: 'motivo' });
+    });
+
+    test('punto en el mapa', async () => {
+      const t = cargar({ permisos: P_AMBOS });
+      await abrirModalMapa(t, LOCATION_NEP);
+      tocarMapa(t, PUNTO_REAL.lat, PUNTO_REAL.lon);
+      t.el('btn-ucorr-mapa-usar').click();
+      t.el('ucorr-observacion').value = 'motivo';
+      t.el('ucorr-observacion').emit('input');
+      t.el('btn-ucorr-guardar').click();
+      await flush();
+      const datos = t.ctx.apiProponerCorreccionUbicacion.mock.calls[0][1];
+      expect(Object.keys(datos).sort()).toEqual(CLAVES);
+      expect(datos).toMatchObject({ metodo: 'PUNTO_EN_MAPA', lat: PUNTO_REAL.lat, lon: PUNTO_REAL.lon });
+    });
+
+    test('coordenadas GMS / WGS84', async () => {
+      const t = cargar({ permisos: P_AMBOS });
+      await abrirCoordenadas(t, LOCATION_NEP);
+      escribirIrr(t);
+      t.el('btn-ucorr-mapa-usar').click();
+      t.el('ucorr-observacion').value = 'motivo';
+      t.el('ucorr-observacion').emit('input');
+      t.el('btn-ucorr-guardar').click();
+      await flush();
+      const datos = t.ctx.apiProponerCorreccionUbicacion.mock.calls[0][1];
+      expect(Object.keys(datos).sort()).toEqual(['clientRequestId', 'coordenadaOriginal', 'lat', 'lon', 'metodo', 'observacion', 'precisionGpsM', 'wellId']);
+      expect(datos).toMatchObject({ metodo: 'COORDENADAS_GMS' });
+    });
+
+    test('coordenadas POSGAR 94 / Argentina 2 (y nada de las marcas internas en el payload)', async () => {
+      const t = cargar({ permisos: P_AMBOS });
+      await abrirPosgar(t, LOCATION_SIN);
+      escribirXY(t, POS_IRR.x, POS_IRR.y);
+      t.el('btn-ucorr-mapa-usar').click();
+      t.el('btn-ucorr-guardar').click();
+      await flush();
+      const datos = t.ctx.apiProponerCorreccionUbicacion.mock.calls[0][1];
+      expect(datos).toMatchObject({ metodo: 'COORDENADAS_POSGAR94_AR2' });
+      expect(datos.fueraDelPadron).toBeUndefined();
+      expect(datos.sinUbicacion).toBeUndefined();
+    });
+  });
+
+  describe('centrado del mapa: GPS del dispositivo y, sin el, Mendoza (nada de departamentos)', () => {
+    test.each([['sinCoordenadas', LOCATION_SIN], ['noEnPadron', LOCATION_NEP]])('%s: pide el GPS sin bloquear y deja la vista general de Mendoza hasta que responda', async (n, location) => {
+      const t = cargar({ permisos: P_AMBOS });
+      await abrirModalMapa(t, location);
+      const vistas = t.reg.vistas;
+      expect(vistas[0]).toEqual({ c: [-34.6, -68.6], z: 7 });
+      expect(t.geo.llamadas.length).toBe(1);
+      expect(t.geo.llamadas[0].opts.enableHighAccuracy).toBe(false);
+      t.geo.llamadas[0].ok(posicion(-33.1, -68.2, 30));
+      expect(vistas[vistas.length - 1]).toEqual({ c: [-33.1, -68.2], z: 16 });
+    });
+
+    test('sin permiso de GPS queda Mendoza', async () => {
+      const t = cargar({ permisos: P_AMBOS });
+      await abrirModalMapa(t, LOCATION_NEP);
+      t.geo.llamadas[0].err({ code: 1 });
+      expect(t.reg.vistas[t.reg.vistas.length - 1]).toEqual({ c: [-34.6, -68.6], z: 7 });
+    });
+  });
+
+  describe('mensaje de exito: primera ubicacion o correccion', () => {
+    async function guardarEn(location, permisos, proponer) {
+      const t = cargar({ permisos: permisos, proponer: proponer });
+      await abrirModalMapa(t, location);
+      tocarMapa(t, PUNTO_REAL.lat, PUNTO_REAL.lon);
+      t.el('btn-ucorr-mapa-usar').click();
+      t.el('ucorr-observacion').value = 'motivo';
+      t.el('ucorr-observacion').emit('input');
+      t.el('btn-ucorr-guardar').click();
+      await flush();
+      return t;
+    }
+
+    test.each([['sinCoordenadas', LOCATION_SIN], ['noEnPadron', LOCATION_NEP]])('%s: solo propone -> "Ubicación sugerida. Queda pendiente de validación."', async (n, location) => {
+      const t = await guardarEn(location, P_CORREGIR, respuesta('PROPUESTA'));
+      expect(t.contenedor.innerHTML).toContain('Ubicación sugerida. Queda pendiente de validación.');
+      expect(t.contenedor.innerHTML).not.toContain('Corrección enviada para validación.');
+    });
+
+    test.each([['sinCoordenadas', LOCATION_SIN], ['noEnPadron', LOCATION_NEP]])('%s: autovalida -> "Ubicación agregada y validada."', async (n, location) => {
+      const t = await guardarEn(location, P_AMBOS, respuesta('VALIDADA'));
+      expect(t.contenedor.innerHTML).toContain('Ubicación agregada y validada.');
+      expect(t.contenedor.innerHTML).not.toContain('Ubicación corregida y validada.');
+    });
+
+    test('pozo CON ubicacion: los mensajes de siempre', async () => {
+      const a = await guardarEn(LOCATION, P_CORREGIR, respuesta('PROPUESTA'));
+      expect(a.contenedor.innerHTML).toContain('Corrección enviada para validación.');
+      const b = await guardarEn(LOCATION, P_AMBOS, respuesta('VALIDADA'));
+      expect(b.contenedor.innerHTML).toContain('Ubicación corregida y validada.');
+    });
+
+    test('si el backend ya informa la marca, manda el backend (primeraUbicacion / candidataPrimeraUbicacion)', async () => {
+      const a = await guardarEn(LOCATION_NEP, P_CORREGIR, respuesta('PROPUESTA', { candidataPrimeraUbicacion: false }));
+      expect(a.contenedor.innerHTML).toContain('Corrección enviada para validación.');
+      const b = await guardarEn(LOCATION_SIN, P_AMBOS, respuesta('VALIDADA', { primeraUbicacion: false }));
+      expect(b.contenedor.innerHTML).toContain('Ubicación corregida y validada.');
+      const c = await guardarEn(LOCATION, P_AMBOS, respuesta('VALIDADA', { primeraUbicacion: true }));
+      expect(c.contenedor.innerHTML).toContain('Ubicación agregada y validada.');
+    });
+  });
+
+  describe('E3-6 intacto: invalidacion del mapa', () => {
+    async function guardarYContar(location, permisos, estado) {
+      const t = cargar({ permisos: permisos, proponer: respuesta(estado) });
+      t.ctx.mapaDataset_invalidarDeltaCampo = jest.fn();
+      t.ctx.mapaDataset_invalidarDeltaRegistral = jest.fn();
+      t.ctx.mapaDataset_invalidarDeltas = jest.fn();
+      await abrirModalMapa(t, location);
+      tocarMapa(t, PUNTO_REAL.lat, PUNTO_REAL.lon);
+      t.el('btn-ucorr-mapa-usar').click();
+      t.el('ucorr-observacion').value = 'motivo';
+      t.el('ucorr-observacion').emit('input');
+      t.el('btn-ucorr-guardar').click();
+      await flush();
+      return t;
+    }
+
+    test.each([['sinCoordenadas', LOCATION_SIN], ['noEnPadron', LOCATION_NEP]])('%s: una propuesta pendiente NO invalida nada; una autovalidada invalida SOLO la capa de campo', async (n, location) => {
+      const pend = await guardarYContar(location, P_CORREGIR, 'PROPUESTA');
+      expect(pend.ctx.mapaDataset_invalidarDeltaCampo).not.toHaveBeenCalled();
+      expect(pend.ctx.mapaDataset_invalidarDeltaRegistral).not.toHaveBeenCalled();
+      expect(pend.ctx.mapaDataset_invalidarDeltas).not.toHaveBeenCalled();
+      const val = await guardarYContar(location, P_AMBOS, 'VALIDADA');
+      expect(val.ctx.mapaDataset_invalidarDeltaCampo).toHaveBeenCalledTimes(1);
+      expect(val.ctx.mapaDataset_invalidarDeltaRegistral).not.toHaveBeenCalled();
+      expect(val.ctx.mapaDataset_invalidarDeltas).not.toHaveBeenCalled();
+    });
+
+    test('un error del backend no invalida nada', async () => {
+      const t = cargar({ permisos: P_AMBOS, proponer: () => Promise.resolve({ status: 'error', code: 'PERMISSION_DENIED' }) });
+      t.ctx.mapaDataset_invalidarDeltaCampo = jest.fn();
+      await abrirModalMapa(t, LOCATION_NEP);
+      tocarMapa(t, PUNTO_REAL.lat, PUNTO_REAL.lon);
+      t.el('btn-ucorr-mapa-usar').click();
+      t.el('ucorr-observacion').value = 'motivo';
+      t.el('ucorr-observacion').emit('input');
+      t.el('btn-ucorr-guardar').click();
+      await flush();
+      expect(t.ctx.mapaDataset_invalidarDeltaCampo).not.toHaveBeenCalled();
+    });
   });
 });

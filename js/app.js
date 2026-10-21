@@ -216,8 +216,14 @@
   }
 
   function renderHubResultado(pozo) {
+    // E4-2: si la ubicacion NO se pudo comprobar (SERVICE_UNAVAILABLE, no "no existe") se avisa; no se inventa ningun estado ni se dice que el pozo no se encontro por eso.
+    var avisoUbicacion = ubicacionCorreccionLogic_avisoHubUbicacion(pozo.ubicacion, permisosActuales);
     if (!pozo.itf.found && !pozo.registro.found && !pozo.ubicacion.found && !pozo.ne.found) {
-      renderHubNotFound(pozo.wellId);
+      if (avisoUbicacion !== '') {
+        renderHubError(avisoUbicacion);
+      } else {
+        renderHubNotFound(pozo.wellId);
+      }
       return;
     }
 
@@ -261,10 +267,9 @@
     if (pozo.registro.found) {
       modulos.push({ id: 'datos', titulo: 'Datos', desc: 'Ficha técnica y registral', icono: ICON_DATOS });
     }
-    // Con coordenada oficial el modulo se ofrece como siempre. SIN ella tambien se ofrece si el usuario puede corregir (para cargar la primera
-    // ubicacion) o si ya hay una correccion registrada que su permiso "ubicacion" le deja leer: el permiso de corregir controla el boton, no la
-    // visibilidad de lo que puede ver (ver ubicacionCorreccionLogic_ofrecerModulo y renderUbicacion).
-    if (ubicacionCorreccionLogic_ofrecerModulo({ ubicacionFound: pozo.ubicacion.found, location: pozo.ubicacion.data, permisos: permisosActuales, correcciones: pozo.correccionesUbicacion })) {
+    // E4-2: si el backend dejo leer la ubicacion (getWellLocation ok, lo que implica el permiso "ubicacion") la tarjeta SIEMPRE se ofrece: con o sin coordenadas, con o sin
+    // correcciones previas, con o sin ubicacion_corregir. El permiso de corregir controla solo el boton dentro del modulo (ver ubicacionCorreccionLogic_ofrecerModulo).
+    if (ubicacionCorreccionLogic_ofrecerModulo({ ubicacionFound: pozo.ubicacion.found })) {
       modulos.push({ id: 'ubicacion', titulo: 'Ubicación', desc: 'Mapa y coordenadas', icono: ICON_UBICACION });
     }
     if (pozo.ne.found) {
@@ -301,6 +306,10 @@
       html += '</button>';
     });
     html += '</div>';
+
+    if (avisoUbicacion !== '') {
+      html += '<p class="hub-aviso" role="status">' + escapeHtml(avisoUbicacion) + '</p>';
+    }
 
     hubArea.innerHTML = html;
 
@@ -1329,8 +1338,7 @@
       itf: { found: false },
       registro: { found: false },
       ubicacion: { found: false },
-      ne: { found: false },
-      correccionesUbicacion: null      // lectura de correcciones, solo si hizo falta para decidir el modulo Ubicacion (pozo sin coordenada oficial)
+      ne: { found: false }
     };
     renderHubSearching(wellId);
 
@@ -1369,33 +1377,13 @@
       var ubicacion = ubicacionResult.status === 'ok' ? { found: true, data: ubicacionResult.data } : { found: false, code: ubicacionResult.code };
       var ne = neResult.status === 'ok' ? { found: true, data: neResult.data } : { found: false, code: neResult.code };
 
-      function mostrarHub(correcciones) {
-        if (pozoActual && pozoActual.wellId === wellId) {
-          pozoActual.itf = itf;
-          pozoActual.registro = registro;
-          pozoActual.ubicacion = ubicacion;
-          pozoActual.ne = ne;
-          pozoActual.correccionesUbicacion = correcciones;
-          renderHubResultado(pozoActual);
-        }
-      }
-
-      // Pozo SIN coordenada oficial y usuario que solo puede leer (ubicacion=SI sin ubicacion_corregir): el modulo Ubicacion solo tiene sentido si ya
-      // existe una correccion registrada, asi que se la consulta (UNA llamada, solo en este caso). Si falla, el modulo simplemente no se ofrece.
-      if (ubicacionCorreccionLogic_necesitaConsultarCorrecciones({ ubicacionFound: ubicacion.found, location: ubicacion.data, permisos: permisosActuales })) {
-        fetchSinRechazo(apiGetCorreccionesUbicacionPozo(sessionToken, wellId)).then(function (corrResult) {
-          if (corrResult.code === 'USER_DISABLED') {
-            showScreen('disabled');
-            return;
-          }
-          if (corrResult.code === 'UNAUTHORIZED') {
-            logout();
-            return;
-          }
-          mostrarHub(corrResult.status === 'ok' ? corrResult.data : null);
-        });
-      } else {
-        mostrarHub(null);
+      // Esta busqueda puede haber quedado obsoleta: solo pinta si sigue siendo la del hub en pantalla.
+      if (pozoActual && pozoActual.wellId === wellId) {
+        pozoActual.itf = itf;
+        pozoActual.registro = registro;
+        pozoActual.ubicacion = ubicacion;
+        pozoActual.ne = ne;
+        renderHubResultado(pozoActual);
       }
 
       // Registro en la hoja Busquedas + aviso de Telegram: efectos del

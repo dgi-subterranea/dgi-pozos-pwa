@@ -73,9 +73,9 @@ describe('tablas: estados, codigos, etiquetas y confianza', () => {
     estados.forEach((e) => expect(confianzas).not.toContain(e));
   });
 
-  test('mapeo del padron: los 6 estados de ubicacionResuelta, con los tres niveles de DISCREPANCIA', () => {
+  test('mapeo del padron: los 6 estados de ubicacionResuelta + noEnPadron (E4: sin punto, como sinCoordenadas), con los tres niveles de DISCREPANCIA', () => {
     expect(U.UOP_ESTADO_PADRON).toEqual({
-      sinCoordenadas: { estado: 'SIN_COORDENADAS' }, unica: { estado: 'DISPONIBLE' }, corroborada: { estado: 'COINCIDENTE' },
+      sinCoordenadas: { estado: 'SIN_COORDENADAS' }, noEnPadron: { estado: 'SIN_COORDENADAS' }, unica: { estado: 'DISPONIBLE' }, corroborada: { estado: 'COINCIDENTE' },
       dudosoLeve: { estado: 'DISCREPANCIA', nivel: 'leve' }, revisar: { estado: 'DISCREPANCIA', nivel: 'revisar' }, revisarGrave: { estado: 'DISCREPANCIA', nivel: 'grave' }
     });
   });

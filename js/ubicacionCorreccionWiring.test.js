@@ -116,30 +116,37 @@ describe('integracion en app.js', () => {
     expect(logout).toContain('ubicacionCorreccionController_cerrar();');
   });
 
-  test('el hub decide la tarjeta Ubicacion con ubicacionCorreccionLogic_ofrecerModulo (coordenada oficial, permiso de corregir o correccion existente)', () => {
-    expect(app).toMatch(/ubicacionCorreccionLogic_ofrecerModulo\(\{ ubicacionFound: pozo\.ubicacion\.found, location: pozo\.ubicacion\.data, permisos: permisosActuales, correcciones: pozo\.correccionesUbicacion \}\)/);
+  test('E4-2: el hub decide la tarjeta Ubicacion SOLO por la lectura (getWellLocation ok): ni coordenadas, ni correcciones, ni permiso de corregir', () => {
+    expect(app).toMatch(/ubicacionCorreccionLogic_ofrecerModulo\(\{ ubicacionFound: pozo\.ubicacion\.found \}\)/);
     expect(app).toMatch(/function ubicacionModuloDisponible\(location\) \{\s*return ubicacionCorreccionLogic_oficialDisponible\(location\);/);
   });
 
-  test('al buscar un pozo SIN coordenada oficial y sin permiso de corregir, se consulta getCorreccionesUbicacionPozo (una sola llamada, solo en ese caso)', () => {
-    expect((app.match(/apiGetCorreccionesUbicacionPozo\(/g) || []).length).toBe(1);
+  test('E4-2: buscar un pozo ya NO consulta getCorreccionesUbicacionPozo para decidir la tarjeta (solo lo hace la ficha, ubicacionCorreccion.js)', () => {
+    expect((app.match(/apiGetCorreccionesUbicacionPozo\(/g) || []).length).toBe(0);
+    expect(app).not.toContain('correccionesUbicacion');
+    expect(app).not.toContain('necesitaConsultarCorrecciones');
     const busqueda = app.slice(app.indexOf('function buscarPozo'), app.indexOf("form.addEventListener('submit'"));
-    expect(busqueda).toMatch(/if \(ubicacionCorreccionLogic_necesitaConsultarCorrecciones\(\{ ubicacionFound: ubicacion\.found, location: ubicacion\.data, permisos: permisosActuales \}\)\) \{\s*fetchSinRechazo\(apiGetCorreccionesUbicacionPozo\(sessionToken, wellId\)\)/);
-    expect(busqueda).toMatch(/mostrarHub\(corrResult\.status === 'ok' \? corrResult\.data : null\)/);        // si falla: sin correcciones, el modulo no se ofrece
-    expect(busqueda).toMatch(/\} else \{\s*mostrarHub\(null\);/);
-    expect(busqueda).toContain("corrResult.code === 'UNAUTHORIZED'");
-    expect(busqueda).toContain("corrResult.code === 'USER_DISABLED'");
+    expect(busqueda).not.toContain('Correcciones');
   });
 
-  test('la busqueda obsoleta no pisa el hub vigente tampoco con la consulta extra', () => {
+  test('la busqueda obsoleta no pisa el hub vigente', () => {
     const busqueda = app.slice(app.indexOf('function buscarPozo'), app.indexOf("form.addEventListener('submit'"));
-    expect(busqueda).toMatch(/function mostrarHub\(correcciones\) \{\s*if \(pozoActual && pozoActual\.wellId === wellId\) \{/);
+    expect(busqueda).toMatch(/if \(pozoActual && pozoActual\.wellId === wellId\) \{\s*pozoActual\.itf = itf;/);
   });
 
-  test('sin coordenada oficial la ficha lo dice (no el texto de "fuentes que no coinciden")', () => {
+  test('E4-2: si la ubicacion no se pudo comprobar (SERVICE_UNAVAILABLE) el hub avisa; no inventa un estado ni dice que no se encontro por eso', () => {
+    const hub = app.slice(app.indexOf('function renderHubResultado'), app.indexOf('function puedeFotos'));
+    expect(hub).toMatch(/var avisoUbicacion = ubicacionCorreccionLogic_avisoHubUbicacion\(pozo\.ubicacion, permisosActuales\);/);
+    expect(hub).toMatch(/if \(avisoUbicacion !== ''\) \{\s*renderHubError\(avisoUbicacion\);\s*\} else \{\s*renderHubNotFound\(pozo\.wellId\);/);
+  });
+
+  test('sin ubicacion la ficha lo dice (no el texto de "fuentes que no coinciden"): "Sin ubicación registrada" + los dos detalles; el titulo viejo queda para discrepancia / descartadas', () => {
     const logica = fs.readFileSync(path.join(__dirname, 'ubicacionesConocidasLogic.js'), 'utf8');
     expect(logica).toContain("var UCON_TITULO_SIN_OPERATIVO = 'Sin ubicación operativa de Irrigación';");
-    expect(logica).toContain("SIN_COORDENADAS: 'Este pozo no tiene una coordenada oficial cargada.'");
+    expect(logica).toContain("var UCON_TITULO_SIN_REGISTRADA = 'Sin ubicación registrada';");
+    expect(logica).toContain("SIN_COORDENADAS: 'Este pozo figura en el padrón, pero no tiene una coordenada cargada.'");
+    expect(logica).toContain("NO_EN_PADRON: 'Este pozo no figura en el padrón actual.'");
+    expect(logica).not.toContain('Este pozo no tiene una coordenada oficial cargada.');
     expect(app).not.toContain("resuelta.estado === 'sinCoordenadas'");
   });
 });
@@ -180,7 +187,9 @@ describe('reglas del controlador', () => {
   test('el boton y el modal dependen de la logica de permisos estricta', () => {
     expect(controlador).toMatch(/ubicacionCorreccionLogic_puedeCorregir\(ctx\.permisos\)/);
     expect(controlador).toMatch(/function abrirModal\(opener\) \{\s*if \(!puedeCorregir\(\) \|\| estado\.guardando\) \{\s*return;/);
-    expect(controlador).toMatch(/puedeCorregir: puedeCorregir\(\)/);
+    // E4-2: el boton sale de la tabla de modos (permisos exactos, la misma logica); el modal solo abre con el permiso de originar
+    expect(controlador).toMatch(/function modoActual\(\) \{\s*var ctx = contexto\(\);\s*return ubicacionCorreccionLogic_modoDeIngreso\(/);
+    expect(controlador).toMatch(/puedeCorregir: modo\.puedeOriginar, textoBoton: modo\.textoBoton, sinUbicacion: modo\.sinUbicacion/);
   });
 
   test('el guardado pasa por el flujo (clientRequestId estable + sin doble envio) y corta el doble toque antes de cualquier cambio', () => {

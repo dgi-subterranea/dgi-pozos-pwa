@@ -28,12 +28,17 @@ var UCON_NOTA_SIN_OPERATIVO = 'No hay punto operativo: las ubicaciones de las fu
 var UCON_NOTA_SIN_OPERATIVO_DESCARTADAS = 'No hay punto operativo: todas las fuentes conocidas fueron descartadas. Siguen visibles para su análisis.';
 var UCON_NOTA_SIN_OPERATIVO_SIN_COORDENADAS = 'No hay punto operativo: ninguna fuente tiene una coordenada válida.';
 // Bloque principal de la ficha ("Ubicación de Irrigación"): lo que dice cuando no hay punto operativo y por que.
+//   - sin ningun punto registral (el pozo figura en el padron sin coordenada, o NO figura en el padron actual): "Sin ubicación registrada" (puede recibir una primera ubicacion);
+//   - hay fuentes registrales pero ninguna resulta operativa (discrepancia o todas descartadas): "Sin ubicación operativa de Irrigación".
 var UCON_TITULO_SIN_OPERATIVO = 'Sin ubicación operativa de Irrigación';
+var UCON_TITULO_SIN_REGISTRADA = 'Sin ubicación registrada';
 var UCON_DETALLE_SIN_OPERATIVO = {
   DISCREPANCIA: 'Hay coordenadas de distintas fuentes que no coinciden entre sí. Un técnico debe revisarlas antes de habilitar el mapa.',
   TODAS_DESCARTADAS: 'Todas las fuentes conocidas fueron descartadas. Siguen visibles más abajo, con su coordenada original.',
-  SIN_COORDENADAS: 'Este pozo no tiene una coordenada oficial cargada.'
+  SIN_COORDENADAS: 'Este pozo figura en el padrón, pero no tiene una coordenada cargada.',
+  NO_EN_PADRON: 'Este pozo no figura en el padrón actual.'
 };
+var UCON_MOTIVOS_SIN_REGISTRADA = ['SIN_COORDENADAS', 'NO_EN_PADRON'];
 // Debajo de una fuente ACEPTADA cuando por encima hay una validada en campo: sigue aceptada, pero no es el punto operativo mientras exista la V.
 var UCON_TEXTO_RESPALDO_REGISTRAL = 'Aceptada como referencia registral. La ubicación operativa actual es la validada en campo.';
 // Mismo texto que el aviso discreto del mapa (mapaDataset): una sola forma de decir "se muestra lo que hay".
@@ -225,6 +230,9 @@ function ubicacionesConocidasLogic_notaSinOperativo(modelo) {
   if (modelo.motivoSinOperativo === 'TODAS_DESCARTADAS') {
     return UCON_NOTA_SIN_OPERATIVO_DESCARTADAS;
   }
+  if (modelo.motivoSinOperativo === 'NO_EN_PADRON') {
+    return '';                                                  // no hay fuentes registrales que explicar: el bloque principal ya lo dice
+  }
   return modelo.motivoSinOperativo === 'SIN_COORDENADAS' ? UCON_NOTA_SIN_OPERATIVO_SIN_COORDENADAS : UCON_NOTA_SIN_OPERATIVO;
 }
 
@@ -278,7 +286,8 @@ function ubicacionesConocidasLogic_htmlBloquePrincipal(modelo, opciones) {
   } else {
     var motivo = modelo && modelo.motivoSinOperativo ? modelo.motivoSinOperativo : 'SIN_COORDENADAS';
     h += '<div class="ubic-row ubic-operativa-fila" data-ubic-estado="N"><span class="pin pin-warn">' + (o.iconoUbicacionWarn || '') + '</span>' +
-      '<div class="ubic-text"><strong>' + esc(UCON_TITULO_SIN_OPERATIVO) + '</strong>' + esc(UCON_DETALLE_SIN_OPERATIVO[motivo] || UCON_DETALLE_SIN_OPERATIVO.SIN_COORDENADAS) + '</div></div>';
+      '<div class="ubic-text"><strong>' + esc(UCON_MOTIVOS_SIN_REGISTRADA.indexOf(motivo) !== -1 ? UCON_TITULO_SIN_REGISTRADA : UCON_TITULO_SIN_OPERATIVO) + '</strong>' +
+      esc(UCON_DETALLE_SIN_OPERATIVO[motivo] || UCON_DETALLE_SIN_OPERATIVO.SIN_COORDENADAS) + '</div></div>';
   }
   if (modelo && modelo.degradado) {
     h += '<p class="ucon-nota ucon-aviso-degradado" role="status">' + esc(UCON_AVISO_DEGRADADO) + '</p>';
@@ -443,7 +452,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     UCON_ETIQUETA_REPORTE, UCON_ETIQUETA_IRRIGACION, UCON_ETIQUETA_CAMPO, UCON_TIPOS, UCON_ID_CAMPO, UCON_ID_REPORTE, UCON_URL_MAPS,
     UCON_NOTA_SIN_OPERATIVO, UCON_NOTA_SIN_OPERATIVO_DESCARTADAS, UCON_NOTA_SIN_OPERATIVO_SIN_COORDENADAS, UCON_NOTA_CONSERVA, UCON_TEXTO_VER_TODAS, UCON_TEXTO_ABRIR_MAPS,
-    UCON_TITULO_SIN_OPERATIVO, UCON_DETALLE_SIN_OPERATIVO, UCON_TEXTO_RESPALDO_REGISTRAL, UCON_AVISO_DEGRADADO,
+    UCON_TITULO_SIN_OPERATIVO, UCON_TITULO_SIN_REGISTRADA, UCON_DETALLE_SIN_OPERATIVO, UCON_TEXTO_RESPALDO_REGISTRAL, UCON_AVISO_DEGRADADO,
     ubicacionesConocidasLogic_escapar,
     ubicacionesConocidasLogic_urlGoogleMaps,
     ubicacionesConocidasLogic_construir,

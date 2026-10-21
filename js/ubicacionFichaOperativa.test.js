@@ -306,11 +306,27 @@ describe('bloque principal de la ficha ("Ubicación de Irrigación")', () => {
     expect(h).not.toMatch(/coord-mono|maps-btn|-33\.\d/);                  // ninguna coordenada falsa o anterior como si fuera operativa
   });
 
-  test('sin coordenadas en el padron: el texto de siempre ("no tiene una coordenada oficial"), con el titulo nuevo', () => {
+  test('E4-2: sin coordenadas en el padron: "Sin ubicación registrada" + "figura en el padrón, pero no tiene una coordenada cargada" (NO "operativa")', () => {
     const m = U.ubicacionesConocidasLogic_construir({ wellId: W, location: { wellId: W, ubicacionResuelta: { estado: 'sinCoordenadas' } }, vigente: null, decisiones: null });
     const h = bloque(m);
-    expect(h).toContain('<strong>Sin ubicación operativa de Irrigación</strong>');
-    expect(texto(h)).toContain('Este pozo no tiene una coordenada oficial cargada.');
+    expect(h).toContain('<strong>Sin ubicación registrada</strong>');
+    expect(h).not.toContain('Sin ubicación operativa de Irrigación');
+    expect(texto(h)).toContain('Este pozo figura en el padrón, pero no tiene una coordenada cargada.');
+    expect(texto(h)).not.toContain('La ubicación vigente es la de Irrigación');
+  });
+
+  test('E4-2: pozo que NO figura en el padron (noEnPadron): "Sin ubicación registrada" + "no figura en el padrón actual"; sin nota tecnica ni fuentes registrales inventadas', () => {
+    const m = U.ubicacionesConocidasLogic_construir({ wellId: W, location: { wellId: W, ubicacionResuelta: { estado: 'noEnPadron' } }, vigente: null, decisiones: null });
+    const h = bloque(m);
+    expect(m.operativo).toBeNull();
+    expect(m.motivoSinOperativo).toBe('NO_EN_PADRON');
+    expect(h).toContain('<strong>Sin ubicación registrada</strong>');
+    expect(h).not.toContain('Sin ubicación operativa de Irrigación');
+    expect(texto(h)).toContain('Este pozo no figura en el padrón actual.');
+    expect(m.fuentes).toEqual([]);                                           // ninguna fuente registral inventada
+    const f = uop.ubicacionOperativaLogic_resolverFicha({ wellId: W, ubicacionResuelta: { estado: 'noEnPadron' }, vigente: null, decisiones: null });
+    expect(f).toMatchObject({ operativo: false, lat: null, lon: null, motivoSinPunto: 'NO_EN_PADRON' });
+    expect(f.anomalias).toEqual([]);                                         // no es un estado desconocido ni una anomalia tecnica
   });
 
   test('V + R: el bloque principal dice Validada en campo (no Aceptada) y no menciona el punto de R', () => {
@@ -735,7 +751,8 @@ describe('controlador: el bloque principal sigue a las decisiones y a la validad
     t.ctx.ubicacionesConocidasController_abrir({ wellId: '14-0002', location: { wellId: '14-0002', ubicacionResuelta: { estado: 'sinCoordenadas' } }, iconoMaps: '', iconoUbicacion: '', iconoUbicacionWarn: '' });
     await flush();
     expect(estadoPrincipal(t)).toBe('N');
-    expect(principal(t)).toContain('Sin ubicación operativa de Irrigación');
+    expect(principal(t)).toContain('Sin ubicación registrada');
+    expect(principal(t)).not.toContain('Sin ubicación operativa de Irrigación');
   });
 
   test('Corregir ubicacion se entera de la registral vigente solo cuando cambio (R, descartadas) y no cuando es la del padron', async () => {
@@ -956,5 +973,62 @@ describe('responsive y accesibilidad del bloque (estructura)', () => {
       const t = texto(bloque(modelo(k)));
       expect(t).toMatch(/Disponible|Coincidente|Aceptada|Validada en campo|Sin ubicación operativa de Irrigación/);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------- E4-2: pozo fuera del padron en la ficha
+describe('E4-2: controlador con un pozo que NO figura en el padron (noEnPadron)', () => {
+  const LOC_NEP = { wellId: W, ubicacionResuelta: { estado: 'noEnPadron' } };
+  const LOC_SIN = { wellId: W, ubicacionResuelta: { estado: 'sinCoordenadas' } };
+  const V_CAMPO = { correccionId: '618615f2-3f2b-4a8d-ae3c-1ebd49041190', wellId: W, lat: CAMPO.lat, lon: CAMPO.lon, estado: 'VALIDADA', nombrePropone: 'Ana Pérez', timestamp: '2026-10-12T14:05:00.000Z', metodo: 'PUNTO_EN_MAPA' };
+
+  function cargarNep(opc) {
+    const t = cargar(opc);
+    t.ctx.apiGetSugerenciasFuentesPozo = jest.fn(() => Promise.resolve({ status: 'ok', data: { wellId: W, sugerencias: [] } }));
+    return t;
+  }
+
+  test('bloque principal: "Sin ubicación registrada" + "no figura en el padrón actual" y NO se piden decisiones ni sugerencias (no hay fuentes registrales)', async () => {
+    const t = cargarNep();
+    await abrir(t, 'D', { loc: LOC_NEP, vigente: false });
+    expect(estadoPrincipal(t)).toBe('N');
+    expect(principal(t)).toContain('Sin ubicación registrada');
+    expect(principal(t)).toContain('Este pozo no figura en el padrón actual.');
+    expect(principal(t)).not.toContain('Sin ubicación operativa de Irrigación');
+    expect(t.ctx.apiGetDecisionesFuentesPozo).not.toHaveBeenCalled();
+    expect(t.ctx.apiGetSugerenciasFuentesPozo).not.toHaveBeenCalled();
+    expect(t.el('ubic-conocidas').innerHTML).not.toContain('no pudieron cargarse');            // y no se avisa una "falla" que no lo es
+    expect(principal(t)).not.toContain('no pudieron cargarse');
+  });
+
+  test('sinCoordenadas (el pozo SI figura en el padron): se siguen pidiendo decisiones y sugerencias como antes', async () => {
+    const t = cargarNep();
+    await abrir(t, 'D', { loc: LOC_SIN, vigente: false });
+    expect(t.ctx.apiGetDecisionesFuentesPozo).toHaveBeenCalledTimes(1);
+    expect(t.ctx.apiGetSugerenciasFuentesPozo).toHaveBeenCalledTimes(1);
+    expect(principal(t)).toContain('Sin ubicación registrada');
+    expect(principal(t)).toContain('Este pozo figura en el padrón, pero no tiene una coordenada cargada.');
+  });
+
+  test('con una validada en campo: el punto operativo es el de campo ("Validada en campo")', async () => {
+    const t = cargarNep();
+    await abrir(t, 'D', { loc: LOC_NEP, vigente: false });
+    t.ctx.ubicacionesConocidasController_actualizarVigente(W, V_CAMPO);
+    await flush();
+    expect(estadoPrincipal(t)).toBe('V');
+    expect(principal(t)).toContain('Validada en campo');
+    expect(principal(t)).not.toContain('Sin ubicación registrada');
+    expect(t.ctx.apiGetDecisionesFuentesPozo).not.toHaveBeenCalled();
+  });
+
+  test('y si esa validada se revierte vuelve a "Sin ubicación registrada"', async () => {
+    const t = cargarNep();
+    await abrir(t, 'D', { loc: LOC_NEP, vigente: false });
+    t.ctx.ubicacionesConocidasController_actualizarVigente(W, V_CAMPO);
+    await flush();
+    t.ctx.ubicacionesConocidasController_actualizarVigente(W, null);
+    await flush();
+    expect(estadoPrincipal(t)).toBe('N');
+    expect(principal(t)).toContain('Sin ubicación registrada');
   });
 });

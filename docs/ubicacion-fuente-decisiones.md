@@ -616,7 +616,7 @@ Jerarquía: **V (Validada en campo) > R (Aceptada) > C | D (automático entre la
 - Los permisos no cambian cuál es el punto operativo: validador y lector ven lo mismo; solo cambian las acciones (decidir / sugerir).
 
 ### Bloque principal «Ubicación de Irrigación»
-Lo pinta `js/ubicacionesConocidas.js` en `#ubic-operativa` (síncrono al abrir con el padrón; se repinta cuando llegan las decisiones o la validada, o tras una decisión): D «Disponible», C «Coincidente», R «Aceptada», V «Validada en campo», o **«Sin ubicación operativa de Irrigación»** con el motivo (todas descartadas, fuentes en discrepancia, sin coordenadas) y sin coordenadas. Ya no queda ninguna coordenada anterior o descartada presentada como operativa.
+Lo pinta `js/ubicacionesConocidas.js` en `#ubic-operativa` (síncrono al abrir con el padrón; se repinta cuando llegan las decisiones o la validada, o tras una decisión): D «Disponible», C «Coincidente», R «Aceptada», V «Validada en campo», o, sin punto, **«Sin ubicación operativa de Irrigación»** (todas descartadas / fuentes en discrepancia) o **«Sin ubicación registrada»** (E4-2: el pozo figura en el padrón sin coordenada, o no figura en el padrón actual) y sin coordenadas. Ya no queda ninguna coordenada anterior o descartada presentada como operativa.
 
 ### «Ubicaciones conocidas» y visor «Ver todas en el mapa»
 - Se mantiene el listado (Reporte Pozos, Irrigación 1..N, Validada en campo) y sus estados. Solo cambia qué tarjeta lleva **PUNTO OPERATIVO**: R sin V → R; V + R → V; todas descartadas + V → V; todas descartadas o discrepancia sin V → ninguna. Una fuente descartada nunca se marca y sigue visible con su coordenada original.
