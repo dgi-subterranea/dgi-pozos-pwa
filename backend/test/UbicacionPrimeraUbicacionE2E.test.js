@@ -55,6 +55,18 @@ function crearDrive(archivos) {
   return { escrituras, consultas, archivos, DriveApp: estricto({ getFolderById: () => carpeta }, 'DriveApp') };
 }
 
+// RELOJ CONTROLADO. El backend toma el instante con `new Date()`; con el reloj real dos llamadas seguidas pueden recibir el MISMO milisegundo y entonces el desempate (orden de
+// propuesta) decide en vez del instante de la validacion: el resultado dependia de la velocidad de la maquina. Se falsea SOLO Date (ningun timer: nada de esperas) y cada llamada a la
+// API avanza el reloj un paso fijo, como pasa en la realidad (dos acciones nunca caen en el mismo instante). Un test que necesita un instante exacto lo fija con `enInstante`
+// y, si necesita que dos acciones compartan instante, congela el avance con `congelarReloj`.
+const RELOJ_INICIAL = Date.UTC(2026, 9, 21, 15, 0, 0);
+const PASO_RELOJ_MS = 1000;
+let relojAvanza = true;
+const enInstante = (ms) => jest.setSystemTime(new Date(ms));
+const congelarReloj = () => { relojAvanza = false; };
+const TIMERS_REALES = ['hrtime', 'nextTick', 'performance', 'queueMicrotask', 'requestAnimationFrame', 'cancelAnimationFrame', 'requestIdleCallback', 'cancelIdleCallback',
+  'setImmediate', 'clearImmediate', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'];
+
 let Api;
 let Repo;
 let hojas;
@@ -64,6 +76,8 @@ let ne;
 let lock;
 
 beforeEach(() => {
+  jest.useFakeTimers({ now: RELOJ_INICIAL, doNotFake: TIMERS_REALES });             // solo Date
+  relojAvanza = true;
   jest.resetModules();
   installAppsScriptFakes();
   global.Logger = { log: jest.fn() };
@@ -96,7 +110,11 @@ beforeEach(() => {
   global.hasPermission.mockImplementation((e, m) => !!USUARIOS[e] && USUARIOS[e].permisos[m] === true);
 });
 
-const post = (usuario, cuerpo) => JSON.parse(Api.doPost({ postData: { contents: JSON.stringify(Object.assign({ sessionToken: 'tok-' + usuario }, cuerpo)) } }).text);
+afterEach(() => {
+  jest.useRealTimers();
+});
+
+const post = (usuario, cuerpo) => (relojAvanza ? enInstante(Date.now() + PASO_RELOJ_MS) : null, JSON.parse(Api.doPost({ postData: { contents: JSON.stringify(Object.assign({ sessionToken: 'tok-' + usuario }, cuerpo)) } }).text));
 let n = 0;
 const rid = () => 'e4-req-' + String(++n).padStart(8, '0');
 const norte = (m) => Math.round((OFICIAL.lat + m / 111195) * 1e6) / 1e6;      // la hoja guarda 6 decimales
@@ -346,6 +364,14 @@ describe('PRIMERA UBICACION: dos marcas distintas, derivadas del log append-only
   const marcas = (wellId) => new Map(porPozo('lector@x.com', wellId).data.historial.map((c) => [c.correccionId, [c.primeraUbicacion, c.candidataPrimeraUbicacion]]));
   const flags = (c) => [c.primeraUbicacion, c.candidataPrimeraUbicacion];
   const SIN = [false, false];
+  // instante (ISO) del evento `evento` de una correccion, tal cual quedo en el log append-only
+  const celdaDeEvento = (correccionId, evento) => {
+    const log = hojas.UbicacionCorreccionesLog.filas;
+    const c = log[0];
+    const f = log.slice(1).filter((r) => r[c.indexOf('correccionId')] === correccionId && r[c.indexOf('evento')] === evento).pop();
+    const ts = f[c.indexOf('timestamp')];
+    return ts instanceof Date ? ts.toISOString() : String(ts);
+  };
 
   test('no hay columna nueva: el esquema de las hojas es el mismo', () => {
     expect(Repo.UBICACION_CORRECCIONES_COLUMNAS).not.toContain('primeraUbicacion');
@@ -375,15 +401,47 @@ describe('PRIMERA UBICACION: dos marcas distintas, derivadas del log append-only
     expect([...marcas(W_ITF).values()]).toEqual([[false, true], [false, true]]);
   });
 
-  test('si una de las pendientes se valida PRIMERO (aunque no sea la mas antigua), las demas dejan de ser candidatas y la validada es la primera', () => {
-    const p1 = proponer('ana@x.com', W_ITF, { observacion: OBS }).data.correccion.correccionId;
-    const p2 = proponer('ana@x.com', W_ITF, { observacion: 'otra', lat: norte(100) }).data.correccion.correccionId;
-    expect(flags(validar('valeria@x.com', p2).data.correccion)).toEqual([true, false]);
-    const m = marcas(W_ITF);
-    expect(m.get(p2)).toEqual([true, false]);
-    expect(m.get(p1)).toEqual([false, false]);                                         // pendiente pero ya hubo una V
-    expect(flags(validar('valeria@x.com', p1).data.correccion)).toEqual([false, false]);
-    expect(marcas(W_ITF).get(p2)).toEqual([true, false]);
+  // La regla (derivada del log): manda el INSTANTE del evento VALIDADA; solo si dos VALIDADA tienen exactamente el mismo instante desempata el orden de propuesta.
+  describe('que validacion es la primera: el instante manda; el orden de propuesta solo desempata un empate exacto', () => {
+    const propuestas = () => ({
+      viejo: proponer('ana@x.com', W_ITF, { observacion: OBS }).data.correccion.correccionId,
+      nuevo: proponer('ana@x.com', W_ITF, { observacion: 'otra', lat: norte(100) }).data.correccion.correccionId
+    });
+
+    test.each([
+      ['se valida PRIMERO la propuesta mas NUEVA', 'nuevo', 'viejo'],
+      ['se valida PRIMERO la propuesta mas ANTIGUA', 'viejo', 'nuevo']
+    ])('A. tiempos distintos (%s): la que recibio VALIDADA en T1 es la primera, la otra (T2 > T1) no; el orden de propuesta no altera nada', (n, primero, segundo) => {
+      const ids = propuestas();
+      const T1 = RELOJ_INICIAL + 60 * 60 * 1000;
+      const T2 = T1 + 5 * 60 * 1000;
+      congelarReloj();
+      enInstante(T1);
+      expect(flags(validar('valeria@x.com', ids[primero]).data.correccion)).toEqual([true, false]);
+      expect(celdaDeEvento(ids[primero], 'VALIDADA')).toBe(new Date(T1).toISOString());
+      let m = marcas(W_ITF);
+      expect(m.get(ids[primero])).toEqual([true, false]);
+      expect(m.get(ids[segundo])).toEqual(SIN);                                         // sigue pendiente, pero ya hubo una V: ni primera ni candidata
+      enInstante(T2);
+      expect(flags(validar('valeria@x.com', ids[segundo]).data.correccion)).toEqual(SIN);        // validada despues (T2 > T1): no es la primera
+      expect(celdaDeEvento(ids[segundo], 'VALIDADA')).toBe(new Date(T2).toISOString());
+      m = marcas(W_ITF);
+      expect(m.get(ids[primero])).toEqual([true, false]);                                // la primera conserva la marca (aunque la supere la otra)
+      expect(m.get(ids[segundo])).toEqual(SIN);
+    });
+
+    test('B. MISMO MILISEGUNDO: ambas VALIDADA con exactamente el mismo instante -> desempata el orden de propuesta y gana la propuesta MAS ANTIGUA (regla de desempate)', () => {
+      const ids = propuestas();
+      const T = RELOJ_INICIAL + 60 * 60 * 1000;
+      congelarReloj();
+      enInstante(T);
+      expect(flags(validar('valeria@x.com', ids.nuevo).data.correccion)).toEqual([true, false]);       // validada primero (sola, todavia es la primera)
+      expect(flags(validar('valeria@x.com', ids.viejo).data.correccion)).toEqual([true, false]);       // mismo instante exacto: la mas antigua pasa a ser la primera
+      expect(celdaDeEvento(ids.nuevo, 'VALIDADA')).toBe(celdaDeEvento(ids.viejo, 'VALIDADA'));          // el empate es real: el mismo instante
+      const m = marcas(W_ITF);
+      expect(m.get(ids.viejo)).toEqual([true, false]);
+      expect(m.get(ids.nuevo)).toEqual(SIN);                                                          // la mas nueva ya no lo es: ocurrio en el mismo instante, despues en el orden de propuesta
+    });
   });
 
   test('B. primera RECHAZADA: ni primera ni candidata (resuelta); no consume el concepto: la siguiente vuelve a ser candidata y, validada, la primera', () => {
