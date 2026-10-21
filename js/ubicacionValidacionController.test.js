@@ -861,3 +861,77 @@ describe('lo que el modulo NO toca', () => {
     expect(llamadas.sort()).toEqual(['apiGetCorreccionesUbicacionPendientes', 'apiGetCorreccionesUbicacionPozo', 'apiRechazarCorreccionUbicacion', 'apiValidarCorreccionUbicacion']);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------- E4-3: marca de primera ubicacion en la bandeja
+// candidataPrimeraUbicacion (solo pendientes) -> "Primera ubicación conocida del pozo". El frontend solo pinta lo que manda el backend: si una se valida, la cola refrescada trae la otra sin la marca.
+describe('E4-3: bandeja y detalle rotulan la primera ubicacion candidata', () => {
+  const CANDIDATA = 'Primera ubicación conocida del pozo';
+  const candidata = (id, extra) => propuesta(id, Object.assign({
+    wellId: '14-0123', distanciaM: null, irrigacion: { lat: null, lon: null, estado: 'noEnPadron' }, candidataPrimeraUbicacion: true, primeraUbicacion: false
+  }, extra || {}));
+  const A = candidata('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+  const B = candidata('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', { nombrePropone: 'Beto Gómez' });
+  const cola = (...items) => ({ status: 'ok', data: { total: items.length, inconsistentes: 0, pendientes: items } });
+  const cuenta = (h, texto) => h.split(texto).length - 1;
+
+  test('pendiente candidata=true: el renglon dice "Primera ubicación conocida del pozo"; una candidata=false mantiene el copy normal', async () => {
+    const t = cargar({ listar: cola(A, propuesta('cccccccc-cccc-4ccc-8ccc-cccccccccccc', { nombrePropone: 'Carla Díaz' })) });
+    await abrirBandeja(t);
+    const html = t.el('uval-lista').innerHTML;
+    expect(cuenta(html, CANDIDATA)).toBe(1);
+    const renglonA = html.split('<li').filter((x) => x.indexOf(A.correccionId) !== -1)[0];
+    const renglonC = html.split('<li').filter((x) => x.indexOf('Carla Díaz') !== -1)[0];
+    expect(renglonA).toContain(CANDIDATA);
+    expect(renglonA).not.toContain('Primera ubicación validada');
+    expect(renglonC).not.toContain('Primera ubicación');
+    expect(renglonC).toContain('A 22,2 m de la ubicación de Irrigación');
+  });
+
+  test('DOS pendientes candidatas a la vez: ambas marcadas', async () => {
+    const t = cargar({ listar: cola(A, B) });
+    await abrirBandeja(t);
+    expect(cuenta(t.el('uval-lista').innerHTML, CANDIDATA)).toBe(2);
+  });
+
+  test('la accion sigue siendo validar / rechazar segun permisos: el renglon abre el detalle, que repite el rotulo y explica por que no hay Irrigacion', async () => {
+    const t = cargar({ pendientes: [A, B], listar: cola(A, B) });
+    await abrirDetalleDesdeLista(t, A.correccionId);
+    const detalle = t.el('uval-detalle-datos').innerHTML;
+    expect(detalle).toContain(CANDIDATA);
+    expect(detalle).toContain('Este pozo no figura en el padrón actual.');
+    expect(detalle).not.toContain('para comparar');
+    expect(visible(t, 'uval-acciones')).toBe(true);
+    expect(t.el('btn-uval-validar').hidden).toBe(false);
+  });
+
+  test('si una se valida y la cola se refresca, la otra YA NO se muestra candidata (el frontend no resuelve la competencia: pinta lo que llega)', async () => {
+    let lecturas = 0;
+    const t = cargar({
+      pendientes: [A, B],
+      listar: () => {
+        lecturas += 1;
+        return Promise.resolve(lecturas === 1 ? cola(A, B) : cola(Object.assign({}, B, { candidataPrimeraUbicacion: false })));
+      }
+    });
+    await abrirDetalleDesdeLista(t, A.correccionId);
+    t.el('btn-uval-validar').click();
+    t.el('btn-uval-validar-confirmar').click();
+    await flush();
+    expect(t.ctx.apiValidarCorreccionUbicacion).toHaveBeenCalledWith('tok-real', A.correccionId);
+    expect(lecturas).toBeGreaterThanOrEqual(2);
+    const html = t.el('uval-lista').innerHTML;
+    expect(html).toContain('Beto Gómez');
+    expect(html).not.toContain(CANDIDATA);
+    expect(html).not.toContain('Primera ubicación');
+  });
+
+  test('backend sin las marcas: la bandeja se pinta como siempre, sin ninguna marca ni error', async () => {
+    const sinMarcas = (c) => { const x = Object.assign({}, c); delete x.candidataPrimeraUbicacion; delete x.primeraUbicacion; return x; };
+    const t = cargar({ listar: cola(sinMarcas(A), sinMarcas(B)) });
+    await abrirBandeja(t);
+    const html = t.el('uval-lista').innerHTML;
+    expect(html).not.toContain('Primera ubicación');
+    expect(html).toContain('Beto Gómez');
+    expect(html).toContain('Revisar ›');
+  });
+});

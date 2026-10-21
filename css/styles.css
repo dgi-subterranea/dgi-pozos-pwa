@@ -4286,6 +4286,19 @@ button.ucorr-pendientes[hidden] {
   font-weight: 700;
   color: var(--color-warn);
 }
+/* E4-3: marca de primera ubicacion. "candidata" (pendiente: podria ser la primera) y "historica" (ya fue la primera validada) son dos conceptos con dos frases. */
+.ucorr-tag-primera {
+  overflow-wrap: anywhere;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1.5px solid currentColor;
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: var(--color-primary);
+}
+.ucorr-tag-primera-historica {
+  color: var(--color-text-soft);
+}
 .ucorr-coord {
   font-size: 0.95rem;
   font-weight: 800;
@@ -4630,6 +4643,16 @@ body.ucorr-abierto {
 }
 .uval-adv-fuerte {
   color: var(--color-error);
+}
+/* E4-3: rotulo de primera ubicacion candidata en la bandeja y el detalle (texto; el color solo refuerza) */
+.uval-primera {
+  font-size: 0.85rem;
+  font-weight: 800;
+  color: var(--color-primary);
+  overflow-wrap: anywhere;
+}
+p.uval-primera {
+  margin: 0;
 }
 .uval-item-linea,
 .uval-item-obs {

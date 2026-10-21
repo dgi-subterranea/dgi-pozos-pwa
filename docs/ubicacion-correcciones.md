@@ -545,8 +545,25 @@ Una propuesta pendiente **no** invalida la capa de campo; una validación o auto
 ### Compatibilidad y publicación
 El frontend nunca asume que el backend ya manda `noEnPadron` ni las marcas de primera ubicación: con el backend actual (solo `sinCoordenadas`) todo funciona. **Orden:** primero este frontend, después el backend de E4-1.
 
-### Pendiente (E4-3 y siguientes)
-Copy «Primera ubicación conocida del pozo» en la bandeja (con `candidataPrimeraUbicacion` sobre las pendientes), el historial y la auditoría (con `primeraUbicacion`); E4-4 (end-to-end y prueba real con el pozo 14-0123). Mejora futura: centro aproximado del departamento para el mapa de ingreso.
+## E4-3 — Copy, bandeja e historial de la primera ubicación
+Solo frontend. La UI usa las dos marcas del backend **sin mezclarlas y sin volver a inferirlas** (nada de fechas, órdenes ni eventos en el cliente): `ubicacionCorreccionLogic_marcaPrimera(c)` decide qué se rotula.
+
+| Marca del backend | Dónde vale | Frase | Se ve en |
+|---|---|---|---|
+| `candidataPrimeraUbicacion === true` | solo una propuesta **PENDIENTE** | **Primera ubicación conocida del pozo** | renglón de la bandeja, detalle de validación y tarjeta pendiente de la ficha |
+| `primeraUbicacion === true` | **VALIDADA**, **REVERTIDA** o **SUPERADA** (hecho histórico) | **Primera ubicación validada del pozo** | validada vigente e historial de la ficha |
+
+- Una pendiente **solo** mira `candidataPrimeraUbicacion`; lo ya resuelto **solo** mira `primeraUbicacion`. Una validada con `candidata=true` o una pendiente con `primera=true` no muestran nada.
+- La marca histórica **se conserva** aunque esa validada se haya revertido o la haya superado otra (el estado actual no la oculta). Una **RECHAZADA** (o INCONSISTENTE) nunca se rotula; una propuesta nueva posterior sí puede ser candidata.
+- Solo cuenta `=== true`: un campo ausente (backend sin las marcas), `null` o no booleano es *false*.
+- **Dos pendientes candidatas** a la vez (ninguna validada todavía) se rotulan las dos. Al validar una, la cola refrescada trae la otra con `candidata=false` y deja de rotularse: la competencia la resuelve el backend, no el cliente.
+- Autovalidación: la vigente nueva dice «validada del pozo» y no hay ninguna «candidata»; una corrección posterior no es primera (la primera, superada, conserva su marca).
+- **Primera ubicación y «Sin ubicación de Irrigación para comparar»:** el renglón de la bandeja ya no repite esa línea (el rótulo lo dice) y el detalle sustituye la fila de distancia y el «No disponible» por la razón según el snapshot (`noEnPadron` → «Este pozo no figura en el padrón actual.»; `sinCoordenadas` → «Este pozo figura en el padrón, pero no tiene una coordenada cargada.»). Una pendiente común sin Irrigación conserva el copy anterior.
+- **Mensajes de éxito** (sin cambios respecto de E4-2, sin sobreexplicar): primera propuesta «Ubicación sugerida. Queda pendiente de validación.»; primera autovalidada «Ubicación agregada y validada.»; corrección propuesta «Corrección enviada para validación.»; corrección autovalidada «Ubicación corregida y validada.».
+- Permisos, composición E3, mapa, Cerca Mío, selección y reemplazo: sin cambios.
+
+### Pendiente (E4-4)
+Prueba de punta a punta (frontend real contra el backend real) y prueba real con el pozo 14-0123. **Orden de publicación:** primero el frontend, después el backend (gas:push → versión → deploy). Mejora futura: centro aproximado del departamento para el mapa de ingreso.
 
 ## Tests
 Punto operativo (etapa 1): `js/ubicacionOperativaLogic.test.js`. Etapa 2: `backend/test/UbicacionValidadasDelta.test.js`. Etapa 3: `js/mapaDatasetOperativo.test.js`, `js/mapaLogic.test.js` y `js/buscarReemplazoLogic.test.js`.

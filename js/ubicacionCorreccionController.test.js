@@ -2662,3 +2662,109 @@ describe('E4-2: pozo sin ubicacion (sinCoordenadas / noEnPadron)', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------- E4-3: marcas de primera ubicacion en la ficha (flujo completo)
+// Despues de guardar la ficha se pinta DESDE LA RELECTURA del backend: lo que dice el mensaje de exito y lo que muestran las tarjetas tienen que ser coherentes.
+describe('E4-3: ficha — primera ubicacion: exito inmediato y lectura posterior coherentes', () => {
+  const LOCATION_NEP = { wellId: W, ubicacionResuelta: { estado: 'noEnPadron' } };
+  const P_AMBOS = { ubicacion: true, ubicacion_corregir: true, ubicacion_validar: true };
+  const P_CORREGIR = { ubicacion: true, ubicacion_corregir: true };
+  const CANDIDATA = 'Primera ubicación conocida del pozo';
+  const VALIDADA_H = 'Primera ubicación validada del pozo';
+  const cuenta = (h, texto) => h.split(texto).length - 1;
+  const snap = { lat: null, lon: null, estado: 'noEnPadron', fuente: '', padronPeriodo: '2026-09' };
+  const vista = (id, estado, extra) => Object.assign({}, VIGENTE, {
+    correccionId: id, estado: estado, irrigacion: snap, distanciaM: null, resolucion: estado === 'PROPUESTA' ? null : VIGENTE.resolucion,
+    primeraUbicacion: false, candidataPrimeraUbicacion: false
+  }, extra || {});
+
+  // la lectura inicial es vacia; despues de guardar el "backend" devuelve `final`
+  async function guardar(permisos, location, respuestaGuardado, final) {
+    let lecturas = 0;
+    const t = cargar({
+      permisos: permisos,
+      proponer: () => Promise.resolve({ status: 'ok', data: { correccion: respuestaGuardado, duplicada: false } }),
+      leer: () => { lecturas += 1; return Promise.resolve({ status: 'ok', data: lecturas === 1 ? LECTURA_VACIA : final }); }
+    });
+    await abrirModalMapa(t, location);
+    tocarMapa(t, PUNTO_REAL.lat, PUNTO_REAL.lon);
+    t.el('btn-ucorr-mapa-usar').click();
+    t.el('ucorr-observacion').value = 'motivo';
+    t.el('ucorr-observacion').emit('input');
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    return t;
+  }
+
+  test('primera ubicacion PROPUESTA: mensaje "Ubicación sugerida…" y la tarjeta pendiente dice "Primera ubicación conocida del pozo" (nunca la frase historica)', async () => {
+    const p = vista('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'PROPUESTA', { candidataPrimeraUbicacion: true });
+    const t = await guardar(P_CORREGIR, LOCATION_NEP, p, { vigente: null, pendientes: [p], historial: [p] });
+    const h = t.contenedor.innerHTML;
+    expect(h).toContain('Ubicación sugerida. Queda pendiente de validación.');
+    expect(h).toContain(CANDIDATA);
+    expect(h).not.toContain(VALIDADA_H);
+  });
+
+  test('primera ubicacion AUTOVALIDADA: mensaje "Ubicación agregada y validada." y la vigente dice "validada del pozo"; ya no hay ninguna candidata', async () => {
+    const v = vista('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'VALIDADA', { primeraUbicacion: true });
+    const t = await guardar(P_AMBOS, LOCATION_NEP, v, { vigente: v, pendientes: [], historial: [v] });
+    const h = t.contenedor.innerHTML;
+    expect(h).toContain('Ubicación agregada y validada.');
+    expect(h).toContain(VALIDADA_H);
+    expect(h).not.toContain(CANDIDATA);
+  });
+
+  test('una correccion POSTERIOR autovalidada: mensaje de correccion y NO se marca como primera (la primera superada conserva su marca historica)', async () => {
+    const primera = vista('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'SUPERADA', { primeraUbicacion: true, resolucion: { evento: 'SUPERADA', nombre: '', timestamp: new Date(2026, 9, 15).toISOString(), motivo: '' } });
+    const nueva = vista('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 'VALIDADA', { primeraUbicacion: false, nombrePropone: 'Carla' });
+    // el pozo ya tenia una V: la pantalla sabia que NO estaba sin ubicacion
+    const t = cargar({
+      permisos: P_AMBOS, lectura: { vigente: primera, pendientes: [], historial: [primera] },
+      proponer: () => Promise.resolve({ status: 'ok', data: { correccion: nueva, duplicada: false } }),
+      leer: () => Promise.resolve({ status: 'ok', data: { vigente: nueva, pendientes: [], historial: [nueva, primera] } })
+    });
+    await abrirModalMapa(t, LOCATION_NEP);
+    tocarMapa(t, PUNTO_REAL.lat, PUNTO_REAL.lon);
+    t.el('btn-ucorr-mapa-usar').click();
+    t.el('ucorr-observacion').value = 'motivo';
+    t.el('ucorr-observacion').emit('input');
+    t.el('btn-ucorr-guardar').click();
+    await flush();
+    const h = t.contenedor.innerHTML;
+    expect(h).toContain('Ubicación corregida y validada.');
+    expect(h).not.toContain('Ubicación agregada y validada.');
+    expect(cuenta(h, VALIDADA_H)).toBe(1);                                                  // solo la historia de la primera
+    expect(h.slice(h.indexOf('ucorr-card-vigente'), h.indexOf('<details'))).not.toContain('Primera ubicación');
+  });
+
+  test('primera ubicacion REVERTIDA / SUPERADA en la ficha: la marca historica se conserva', async () => {
+    for (const estado of ['REVERTIDA', 'SUPERADA']) {
+      const h0 = vista('dddddddd-dddd-4ddd-8ddd-dddddddddddd', estado, { primeraUbicacion: true, resolucion: { evento: estado, nombre: 'Valeria', timestamp: new Date(2026, 9, 16).toISOString(), motivo: 'error' } });
+      const t = cargar({ permisos: P_AMBOS, lectura: { vigente: null, pendientes: [], historial: [h0] } });
+      await abrirFicha(t, LOCATION_NEP);
+      expect(t.contenedor.innerHTML).toContain(VALIDADA_H);
+      expect(t.contenedor.innerHTML).not.toContain(CANDIDATA);
+    }
+  });
+
+  test('rechazada: ninguna marca; la nueva propuesta candidata si la lleva', async () => {
+    const r = vista('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', 'RECHAZADA', { resolucion: { evento: 'RECHAZADA', nombre: 'Valeria', timestamp: new Date(2026, 9, 16).toISOString(), motivo: 'no coincide' } });
+    const n = vista('ffffffff-ffff-4fff-8fff-ffffffffffff', 'PROPUESTA', { candidataPrimeraUbicacion: true, nombrePropone: 'Beto' });
+    const t = cargar({ permisos: P_AMBOS, lectura: { vigente: null, pendientes: [n], historial: [n, r] } });
+    await abrirFicha(t, LOCATION_NEP);
+    const h = t.contenedor.innerHTML;
+    const tarjetaRechazada = h.split('<div class="ucorr-card').filter((x) => x.indexOf('Rechazada') !== -1)[0];
+    expect(tarjetaRechazada).not.toContain('Primera ubicación');
+    expect(cuenta(h, CANDIDATA)).toBe(2);                                                   // la pendiente y su entrada del historial (todavia PROPUESTA)
+  });
+
+  test('backend viejo (ni primeraUbicacion ni candidataPrimeraUbicacion): el mensaje usa lo que la pantalla sabia y las tarjetas no muestran ninguna marca ni se rompen', async () => {
+    const sin = (c) => { const x = Object.assign({}, c); delete x.primeraUbicacion; delete x.candidataPrimeraUbicacion; return x; };
+    const v = sin(vista('abababab-abab-4bab-8bab-abababababab', 'VALIDADA'));
+    const t = await guardar(P_AMBOS, LOCATION_NEP, v, { vigente: v, pendientes: [], historial: [v] });
+    const h = t.contenedor.innerHTML;
+    expect(h).toContain('Ubicación agregada y validada.');
+    expect(h).not.toContain('Primera ubicación');
+    expect(h).toContain('Validada en campo');
+  });
+});

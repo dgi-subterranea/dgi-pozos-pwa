@@ -34,6 +34,13 @@ var UCORR_TEXTO_NOTA_SIN_UBICACION = 'Tu aporte queda registrado aparte, con tu 
 var UCORR_BOTONES = {
   agregar: 'Agregar ubicación', sugerirUbicacion: 'Sugerir ubicación', corregir: 'Corregir ubicación', sugerirCorreccion: 'Sugerir corrección'
 };
+// E4-3: marcas de PRIMERA UBICACION. Dos conceptos distintos y dos frases distintas; el backend es la autoridad (el frontend NO los vuelve a inferir de fechas ni de eventos):
+//   - candidataPrimeraUbicacion (solo una propuesta PENDIENTE): "si se validara ahora, seria la primera ubicacion validada del pozo" -> "Primera ubicación conocida del pozo".
+//   - primeraUbicacion (hecho historico e inmutable): "esta correccion llego a ser la primera ubicacion VALIDADA del pozo" -> "Primera ubicación validada del pozo". Se conserva aunque
+//     esa validada se haya REVERTIDO o la haya SUPERADO otra; una RECHAZADA nunca la tiene.
+var UCORR_TEXTO_PRIMERA_CANDIDATA = 'Primera ubicación conocida del pozo';
+var UCORR_TEXTO_PRIMERA_VALIDADA = 'Primera ubicación validada del pozo';
+var UCORR_ESTADOS_CON_MARCA_HISTORICA = ['VALIDADA', 'REVERTIDA', 'SUPERADA'];
 
 var UCORR_ETIQUETAS_ESTADO = {
   PROPUESTA: 'Pendiente',
@@ -224,6 +231,22 @@ function ubicacionCorreccionLogic_modoDeIngreso(o) {
     sinUbicacion: sinUbicacion, puedeOriginar: puedeOriginar, autovalida: autovalida, textoBoton: texto, tituloModal: texto || UCORR_BOTONES.corregir,
     estadoPadron: estadoPadron, fueraDelPadron: estadoPadron === 'noEnPadron'
   };
+}
+
+// Marca de primera ubicacion de una correccion segun lo que informa el backend: null | {tipo: 'candidata' | 'historica', texto}.
+// Lo PENDIENTE solo mira candidataPrimeraUbicacion; lo ya resuelto (VALIDADA, REVERTIDA, SUPERADA) solo mira primeraUbicacion; RECHAZADA / INCONSISTENTE nunca. Solo `=== true` cuenta:
+// un campo ausente (backend sin las marcas) o no booleano es false. No se infiere nada.
+function ubicacionCorreccionLogic_marcaPrimera(c) {
+  if (!c || typeof c !== 'object') {
+    return null;
+  }
+  if (c.estado === 'PROPUESTA') {
+    return c.candidataPrimeraUbicacion === true ? { tipo: 'candidata', texto: UCORR_TEXTO_PRIMERA_CANDIDATA } : null;
+  }
+  if (UCORR_ESTADOS_CON_MARCA_HISTORICA.indexOf(c.estado) !== -1) {
+    return c.primeraUbicacion === true ? { tipo: 'historica', texto: UCORR_TEXTO_PRIMERA_VALIDADA } : null;
+  }
+  return null;
 }
 
 // Texto de Irrigacion del modal segun el estado del padron. irrigacion: {lat, lon} (solo con coordenada oficial) o null.
@@ -893,6 +916,10 @@ function ubicacionCorreccionLogic_htmlItemPendiente(c) {
     h += '<span class="uval-adv uval-adv-' + adv.nivel + '">' + esc(adv.corto) + '</span>';
   }
   h += '</span>';
+  var marca = ubicacionCorreccionLogic_marcaPrimera(c);
+  if (marca) {
+    h += '<span class="uval-primera uval-primera-' + marca.tipo + '">' + esc(marca.texto) + '</span>';
+  }
   h += '<span class="uval-item-linea">Propuesta por ' + esc(c.nombrePropone || '—') + (fecha ? ' · ' + esc(fecha) : '') + '</span>';
   h += '<span class="uval-item-linea">' + esc(ubicacionCorreccionLogic_textoMetodo(c)) + '</span>';
   h += '<span class="uval-item-coord mono">' + esc(ubicacionCorreccionLogic_formatearCoordenadas(c.lat, c.lon)) + '</span>';
@@ -901,7 +928,10 @@ function ubicacionCorreccionLogic_htmlItemPendiente(c) {
     var crs = ubicacionCorreccionLogic_etiquetaCrs(c.crsOriginal);
     h += '<span class="uval-item-linea uval-item-original">Ingresada: <span class="mono">' + esc(texto) + '</span>' + (crs ? ' · ' + esc(crs) : '') + '</span>';
   }
-  h += '<span class="uval-item-linea">' + esc(ubicacionCorreccionLogic_textoDistancia(c)) + '</span>';
+  // Una primera ubicacion no tiene con que compararse: el rotulo de arriba lo dice, no hace falta "Sin ubicación de Irrigación para comparar".
+  if (!marca || ubicacionCorreccionLogic_esNumero(c.distanciaM)) {
+    h += '<span class="uval-item-linea">' + esc(ubicacionCorreccionLogic_textoDistancia(c)) + '</span>';
+  }
   if (typeof c.observacion === 'string' && c.observacion.trim() !== '') {
     h += '<span class="uval-item-obs">Observación: ' + esc(c.observacion) + '</span>';
   }
@@ -934,6 +964,10 @@ function ubicacionCorreccionLogic_htmlDetalleValidacion(c, o) {
   var esc = ubicacionCorreccionLogic_escapar;
   var fila = ubicacionCorreccionLogic_filaDato;
   var h = '<p class="uval-pozo">Pozo <span class="mono">' + esc(c.wellId) + '</span></p>';
+  var marca = ubicacionCorreccionLogic_marcaPrimera(c);
+  if (marca) {
+    h += '<p class="uval-primera uval-primera-' + marca.tipo + '">' + esc(marca.texto) + '</p>';
+  }
   var adv = ubicacionCorreccionLogic_advertenciaDistancia(c.distanciaM, c.advertenciaDistancia);
   if (adv) {
     h += '<p class="' + (adv.nivel === 'fuerte' ? 'ucorr-advertencia' : 'ucorr-mensaje') + '" role="alert">' + esc(adv.texto) + '</p>';
@@ -947,10 +981,21 @@ function ubicacionCorreccionLogic_htmlDetalleValidacion(c, o) {
   }
   h += fila('Método', ubicacionCorreccionLogic_textoMetodo(c));
   h += ubicacionCorreccionLogic_filaOriginal(c);
-  h += fila('Distancia a Irrigación', ubicacionCorreccionLogic_esNumero(c.distanciaM) ? ubicacionCorreccionLogic_formatearDistancia(c.distanciaM) : 'Sin ubicación de Irrigación para comparar');
   var irr = c.irrigacion;
-  h += fila('Ubicación de Irrigación', irr && ubicacionCorreccionLogic_esNumero(irr.lat) && ubicacionCorreccionLogic_esNumero(irr.lon)
-    ? ubicacionCorreccionLogic_formatearCoordenadas(irr.lat, irr.lon) : 'No disponible');
+  var conIrr = !!irr && ubicacionCorreccionLogic_esNumero(irr.lat) && ubicacionCorreccionLogic_esNumero(irr.lon);
+  if (ubicacionCorreccionLogic_esNumero(c.distanciaM)) {
+    h += fila('Distancia a Irrigación', ubicacionCorreccionLogic_formatearDistancia(c.distanciaM));
+  } else if (!marca) {
+    h += fila('Distancia a Irrigación', 'Sin ubicación de Irrigación para comparar');
+  }
+  // Primera ubicacion: no hay distancia que mostrar; en vez de "No disponible" se dice por que no hay ubicacion de Irrigacion (segun el estado que guardo el backend).
+  var sinIrr = 'No disponible';
+  if (marca && irr && irr.estado === 'noEnPadron') {
+    sinIrr = UCORR_DETALLE_NO_EN_PADRON;
+  } else if (marca && irr && irr.estado === 'sinCoordenadas') {
+    sinIrr = UCORR_DETALLE_SIN_COORDENADAS;
+  }
+  h += fila('Ubicación de Irrigación', conIrr ? ubicacionCorreccionLogic_formatearCoordenadas(irr.lat, irr.lon) : sinIrr);
   var v = op.vigente;
   if (v) {
     h += fila('Validada vigente', ubicacionCorreccionLogic_formatearCoordenadas(v.lat, v.lon) + (v.nombrePropone ? ' (' + v.nombrePropone + ')' : ''));
@@ -1144,6 +1189,10 @@ function ubicacionCorreccionLogic_htmlTarjeta(c, opc) {
   var estado = c.estado;
   var h = '<div class="ucorr-card ucorr-card-' + modo + '">';
   h += '<div class="ucorr-card-top"><span class="ucorr-badge ucorr-badge-' + (UCORR_CLASE_ESTADO[estado] || 'inconsistente') + '">' + esc(ubicacionCorreccionLogic_etiquetaEstado(estado)) + '</span>';
+  var marca = ubicacionCorreccionLogic_marcaPrimera(c);
+  if (marca) {
+    h += '<span class="ucorr-tag-primera ucorr-tag-primera-' + marca.tipo + '">' + esc(marca.texto) + '</span>';
+  }
   if (c.advertenciaDistancia === true) {
     h += '<span class="ucorr-tag-adv">A más de 1 km de Irrigación</span>';
   }
@@ -1261,6 +1310,8 @@ if (typeof module !== 'undefined' && module.exports) {
     UCORR_ESTADOS_SIN_UBICACION, UCORR_TEXTO_SIN_UBICACION, UCORR_DETALLE_SIN_COORDENADAS, UCORR_DETALLE_NO_EN_PADRON, UCORR_TEXTO_IRRIGACION_SIN_COORDENADAS,
     UCORR_TEXTO_IRRIGACION_NO_EN_PADRON, UCORR_TEXTO_IRRIGACION_SIN_COMPARAR, UCORR_TEXTO_OBSERVACION_NO_EN_PADRON, UCORR_TEXTO_VACIO_SIN_UBICACION, UCORR_TEXTO_NOTA_SIN_UBICACION,
     UCORR_BOTONES, UCORR_MENSAJE_VALIDADA_PRIMERA, UCORR_MENSAJE_PENDIENTE_PRIMERA, UCORR_TEXTO_AVISO_HUB,
+    UCORR_TEXTO_PRIMERA_CANDIDATA, UCORR_TEXTO_PRIMERA_VALIDADA, UCORR_ESTADOS_CON_MARCA_HISTORICA,
+    ubicacionCorreccionLogic_marcaPrimera,
     ubicacionCorreccionLogic_estadoPadron,
     ubicacionCorreccionLogic_oficialDisponible,
     ubicacionCorreccionLogic_ofrecerModulo,
