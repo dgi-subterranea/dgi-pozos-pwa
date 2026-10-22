@@ -337,14 +337,14 @@ describe('lectura selectiva (hoja grande): pocas llamadas y las celdas minimas',
   });
 });
 
-describe('el repositorio de E5-1 no escribe', () => {
-  test('no expone ninguna funcion de escritura de eventos (solo el setup explicito y el lock reservado)', () => {
+describe('el repositorio solo agrega ALTAs (E5-2); no anula, edita ni borra', () => {
+  test('la unica escritura de eventos es agregarAlta (mas el setup explicito); no hay anular / actualizar / borrar', () => {
     const nombres = Object.keys(R).filter((k) => typeof R[k] === 'function');
-    expect(nombres.filter((n) => /agregar|escribir|anular|actualizar|borrar/i.test(n))).toEqual([]);
+    expect(nombres.filter((n) => /agregar|escribir|anular|actualizar|borrar|editar|eliminar/i.test(n))).toEqual(['observacionesPozoRepository_agregarAlta']);
     expect(nombres).toContain('setupObservacionesPozoSheet');
   });
 
-  test('el lock se toma y SIEMPRE se libera (reservado para E5-2 / E5-3)', () => {
+  test('el lock se toma y SIEMPRE se libera', () => {
     const lock = { waits: 0, releases: 0 };
     global.LockService = { getScriptLock: () => ({ waitLock: () => { lock.waits += 1; }, releaseLock: () => { lock.releases += 1; } }) };
     expect(R.observacionesPozoRepository_conLock(() => 7)).toBe(7);

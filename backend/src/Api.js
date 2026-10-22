@@ -165,6 +165,14 @@ function doPost(e) {
           motivo: body.motivo,
           clientRequestId: body.clientRequestId
         });
+      } else if (body.action === 'agregarObservacionPozo') {
+        // Solo estos 4 campos de contenido: cualquier otro (email, nombre, timestamp, observacionId, secuencia, estado...) que mande el cliente se ignora.
+        response = handleAgregarObservacionPozo(body.sessionToken, {
+          wellId: body.wellId,
+          texto: body.texto,
+          categoria: body.categoria,
+          clientRequestId: body.clientRequestId
+        });
       } else if (body.action === 'getObservacionesPozo') {
         // Solo estos 2 parametros de paginacion ademas del pozo: cualquier otro campo que mande el cliente se ignora.
         response = handleGetObservacionesPozo(body.sessionToken, body.wellId, body.limit, body.antesDeSecuencia);
@@ -1661,6 +1669,47 @@ function handleGetObservacionesPozo(sessionToken, wellId, limit, antesDeSecuenci
   return { status: 'ok', data: resultado.data };
 }
 
+// Agregar una observacion a un pozo (E5-2). Orden de chequeos, igual que el resto: sesion -> formato de wellId -> permisos (`observaciones` Y `observaciones_agregar`, ambos exactos:
+// ninguno sustituye al otro ni lo hace `observaciones_anular`) -> contenido -> existencia del pozo. email / nombre SIEMPRE de la sesion + hoja Usuarios, nunca del cliente.
+// Auditoria en Historial: UNA fila por observacion creada (OK), con accion + wellId + resultado: NUNCA el texto, el clientRequestId ni el id; los reenvios idempotentes (duplicada) no
+// escriben otra; permisos denegados y errores si, como siempre (por su codigo). La respuesta no trae email, clientRequestId ni secuencia. Los errores no repiten el contenido.
+function handleAgregarObservacionPozo(sessionToken, datos) {
+  var d = datos || {};
+  var validation = validateSessionAndWellId(sessionToken, d.wellId, 'agregarObservacionPozo');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var permisos = validarPermisosTodos(session, 'agregarObservacionPozo', d.wellId, ['observaciones', 'observaciones_agregar']);
+  if (!permisos.ok) {
+    return permisos.response;
+  }
+
+  var access = getUserAccess(session.email);
+  var resultado;
+  try {
+    resultado = observacionesPozoService_agregar(session.email, access.nombre, d.wellId, {
+      texto: d.texto,
+      categoria: d.categoria,
+      clientRequestId: d.clientRequestId
+    });
+  } catch (err) {
+    // mensaje fijo: el detalle tecnico va a Logger (recortado, sin URLs) y jamas lleva el texto de la observacion
+    Logger.log('agregarObservacionPozo: excepcion: ' + api_limpiarMensajeLog(err));
+    logHistoryEvent(session.email, 'agregarObservacionPozo', d.wellId, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'no se pudo guardar la observacion: intenta de nuevo en unos minutos' };
+  }
+  if (!resultado.ok) {
+    logHistoryEvent(session.email, 'agregarObservacionPozo', d.wellId, resultado.code);
+    return { status: 'error', code: resultado.code, message: resultado.message };
+  }
+  if (!resultado.duplicada) {
+    logHistoryEvent(session.email, 'agregarObservacionPozo', d.wellId, 'OK');
+  }
+  return { status: 'ok', data: { wellId: d.wellId, duplicada: resultado.duplicada === true, observacion: resultado.observacion } };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     doPost,
@@ -1670,6 +1719,7 @@ if (typeof module !== 'undefined' && module.exports) {
     handleResolverSugerenciaFuente,
     handleCancelarSugerenciaFuente,
     handleGetObservacionesPozo,
+    handleAgregarObservacionPozo,
     handleGetDecisionesFuentesPozo,
     handleGetDecisionesFuentesDelta,
     handleDecidirFuenteUbicacion,

@@ -1,6 +1,6 @@
-// ObservacionesPozoService: logica de las observaciones generales de un pozo (E5). No sabe nada de HTTP (Api.js) ni de Sheets (ObservacionesPozoRepository.js). En E5-1 solo LEE:
-// deriva el estado de cada observacion desde los eventos de la hoja, decide que se le muestra a quien consulta (privacidad de las anuladas) y pagina. La escritura (alta y anulacion)
-// llega en E5-2 / E5-3. Las observaciones son contexto humano y auditable: NO cambian la ubicacion, el estado registral, la evaluacion de reemplazo, las fotos, el ITF ni los NE.
+// ObservacionesPozoService: logica de las observaciones generales de un pozo (E5). No sabe nada de HTTP (Api.js) ni de Sheets (ObservacionesPozoRepository.js). LEE (E5-1): deriva el
+// estado de cada observacion desde los eventos de la hoja, decide que se le muestra a quien consulta (privacidad de las anuladas) y pagina. AGREGA (E5-2): valida y normaliza el texto,
+// verifica la existencia del pozo, es idempotente y escribe una fila ALTA bajo lock. La anulacion llega en E5-3. Las observaciones son contexto humano y auditable: NO cambian la ubicacion, el estado registral, la evaluacion de reemplazo, las fotos, el ITF ni los NE.
 //
 // Modelo (ver el repositorio para el esquema): una fila = un EVENTO inmutable.
 //   - ALTA     crea una observacion (observacionId, wellId, texto, secuencia...).
@@ -338,9 +338,180 @@ function observacionesPozoService_getObservaciones(wellId, parametros, opciones)
   };
 }
 
+// --- Alta (E5-2) ---
+//
+// agregarObservacionPozo. Orden: validar la entrada (texto, categoria, clientRequestId) -> camino rapido de idempotencia (sin lock) -> EXISTENCIA del pozo -> lock { volver a comprobar
+// la idempotencia -> secuencia -> escribir UNA fila ALTA }. email / nombre llegan de la SESION (Api.js); observacionId, timestampUtc y secuencia los genera el servidor: el cliente no
+// elige ninguno. Los errores y los logs nunca llevan el texto de la observacion.
+var OBSERVACIONES_POZO_TEXTO_MIN = 3;
+var OBSERVACIONES_POZO_TEXTO_MAX = 1000;
+var OBSERVACIONES_POZO_CLIENT_REQUEST_ID_REGEX = /^[A-Za-z0-9_-]{8,64}$/;
+
+// NORMALIZACION del texto (la regla exacta; todo lo demas se conserva tal cual: Unicode, emoji, acentos, espacios internos y lineas en blanco):
+//   1. Saltos de linea: CRLF, CR solo, NEL (U+0085), LS (U+2028) y PS (U+2029) pasan a "\n".
+//   2. El tabulador pasa a UN espacio (no se borra: no se pegan palabras).
+//   3. Se ELIMINAN los caracteres de control incompatibles con texto plano: los C0 salvo "\n" (U+0000-0008, 000B, 000C, 000E-001F), DEL y los C1 (U+007F-0084, 0086-009F), los controles
+//      direccionales explicitos que pueden alterar como se ve el texto (U+202A-202E, U+2066-2069) y el BOM / espacio de ancho cero sin separacion (U+FEFF), y los surrogates sueltos (UTF-16
+//      invalido). NO se tocan U+200D / U+200C (necesarios en emoji compuestos), los selectores de variacion, ni U+200E / U+200F (marcas de direccion de escrituras RTL).
+//   4. Se recortan los extremos (trim). NO se colapsan espacios internos ni saltos de linea.
+// El largo se cuenta en CARACTERES UNICOS (code points: un emoji es 1), DESPUES de normalizar. Devuelve el texto normalizado o null si no es un string.
+function observacionesPozoService_normalizarTexto(texto) {
+  if (typeof texto !== 'string') {
+    return null;
+  }
+  return texto
+    .replace(/\r\n|\r|\u0085|\u2028|\u2029/g, '\n')
+    .replace(/\t/g, ' ')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u0084\u0086-\u009F\u202A-\u202E\u2066-\u2069\uFEFF]/g, '')
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '')
+    .trim();
+}
+
+function observacionesPozoService_largoTexto(texto) {
+  return Array.from(texto).length;
+}
+
+// Valida y normaliza la entrada de un alta: {texto, categoria, clientRequestId}. {ok:true, valores:{texto, categoria, clientRequestId}} o {ok:false, code, message} (sin eco del contenido).
+//   - INVALID_TEXTO: ausente, null, no es un string, vacio, solo espacios / controles, menos de 3 o mas de 1000 caracteres (ya normalizado).
+//   - INVALID_CATEGORIA: la categoria esta RESERVADA (sin catalogo): solo se admite ausente, null, "" o solo espacios (se normaliza a vacio, igual que el trim del resto de los campos);
+//     cualquier otro valor (un texto, un numero, false, 0, un objeto, una lista) se RECHAZA: no se ignora en silencio ni se coacciona.
+//   - INVALID_CLIENT_REQUEST_ID: obligatorio, 8 a 64 caracteres: letras, numeros, guion y guion bajo (el mismo patron que correcciones y decisiones).
+function observacionesPozoService_validarAlta(datos) {
+  var d = datos || {};
+  var texto = observacionesPozoService_normalizarTexto(d.texto);
+  if (texto === null || texto === '') {
+    return observacionesPozoService_error('INVALID_TEXTO', 'el texto de la observacion es obligatorio');
+  }
+  var largo = observacionesPozoService_largoTexto(texto);
+  if (largo < OBSERVACIONES_POZO_TEXTO_MIN) {
+    return observacionesPozoService_error('INVALID_TEXTO', 'el texto debe tener al menos ' + OBSERVACIONES_POZO_TEXTO_MIN + ' caracteres');
+  }
+  if (largo > OBSERVACIONES_POZO_TEXTO_MAX) {
+    return observacionesPozoService_error('INVALID_TEXTO', 'el texto admite hasta ' + OBSERVACIONES_POZO_TEXTO_MAX + ' caracteres');
+  }
+  var c = d.categoria;
+  if (c !== undefined && c !== null && !(typeof c === 'string' && c.trim() === '')) {
+    return observacionesPozoService_error('INVALID_CATEGORIA', 'las observaciones todavia no admiten categorias');
+  }
+  if (typeof d.clientRequestId !== 'string' || !OBSERVACIONES_POZO_CLIENT_REQUEST_ID_REGEX.test(d.clientRequestId)) {
+    return observacionesPozoService_error('INVALID_CLIENT_REQUEST_ID', 'clientRequestId obligatorio (8 a 64 caracteres: letras, numeros, guion y guion bajo)');
+  }
+  return { ok: true, valores: { texto: texto, categoria: '', clientRequestId: d.clientRequestId } };
+}
+
+function observacionesPozoService_normalizarEmail(email) {
+  return String(email === null || email === undefined ? '' : email).trim().toLowerCase();
+}
+
+// Una observacion derivada -> la respuesta de un alta. Mismo contrato que la lectura (sin email, sin secuencia).
+function observacionesPozoService_vistaAlta(obs) {
+  return observacionesPozoService_vista(obs, { moderador: false });
+}
+
+// Ya hay un evento para (usuario, clientRequestId): decide que responder.
+//   - mas de una coincidencia, o una que no es una ALTA con un observacionId valido -> INCONSISTENT_STATE (no se elige, no se escribe nada);
+//   - un evento de OTRO tipo (p. ej. una anulacion) con ese id -> IDEMPOTENCY_CONFLICT (el id ya se uso para otra cosa);
+//   - con otro contenido (wellId, texto normalizado o categoria) -> IDEMPOTENCY_CONFLICT. El timestamp y la secuencia NO cuentan;
+//   - mismo contenido -> reenvio idempotente: se devuelve la observacion YA creada (duplicada:true), con su estado de hoy segun el modelo de lectura; NO se escribe otra fila, no se
+//     consume otra secuencia y Api.js no vuelve a escribir en Historial. Si el modelo de lectura no la devuelve (ambigua / oculta) -> INCONSISTENT_STATE.
+function observacionesPozoService_atenderExistente(busqueda, wellId, valores) {
+  if (busqueda.total !== 1 || busqueda.eventos.length !== 1) {
+    return observacionesPozoService_error('INCONSISTENT_STATE', 'el clientRequestId figura mas de una vez: requiere revision manual');
+  }
+  var e = busqueda.eventos[0];
+  if (e.evento !== 'ALTA') {
+    return observacionesPozoService_error('IDEMPOTENCY_CONFLICT', 'clientRequestId ya usado con otro contenido');
+  }
+  if (!OBSERVACIONES_POZO_UUID_REGEX.test(e.observacionId)) {
+    return observacionesPozoService_error('INCONSISTENT_STATE', 'la observacion existente no es valida: requiere revision manual');
+  }
+  if (e.wellId !== wellId || e.texto !== valores.texto || e.categoria !== valores.categoria) {
+    return observacionesPozoService_error('IDEMPOTENCY_CONFLICT', 'clientRequestId ya usado con otro contenido');
+  }
+  var derivado = observacionesPozoService_derivar(observacionesPozoRepository_listarEventosDelPozo(wellId).eventos);
+  var obs = null;
+  derivado.observaciones.forEach(function (o) { if (o.observacionId === e.observacionId) { obs = o; } });
+  if (obs === null) {
+    return observacionesPozoService_error('INCONSISTENT_STATE', 'la observacion existente no se puede determinar: requiere revision manual');
+  }
+  return { ok: true, duplicada: true, observacion: observacionesPozoService_vistaAlta(obs) };
+}
+
+// Agrega una observacion a un pozo. Devuelve {ok:true, duplicada, observacion} o {ok:false, code, message}. LANZA si la hoja no se puede leer / escribir, o si la secuencia no se puede
+// calcular con seguridad (Api.js lo traduce a SERVICE_UNAVAILABLE; en ese caso NO se escribio nada). `email` y `nombre` son los de la SESION.
+// EXISTENCIA: pozoExistenciaService_verificar (el UNICO lugar que lo decide; no se duplica su logica; las observaciones NO son una de sus fuentes). Solo se escribe si existe;
+// WELL_NOT_FOUND si ninguna fuente lo conoce; SERVICE_UNAVAILABLE si no se pudo verificar y ninguna lo confirmo. Un reenvio idempotente se resuelve ANTES: no vuelve a verificar.
+// ORDEN dentro del lock: 1) volver a comprobar la idempotencia: si el (usuario, clientRequestId) ya identifica INEQUIVOCAMENTE una ALTA con el mismo contenido, se devuelve (duplicada:true) y
+// NO se escribe ni se consume secuencia, aunque la hoja tenga una corrupcion no relacionada; 2) recien si hace falta una NUEVA escritura se valida la integridad GLOBAL de las secuencias
+// (ilegibles, <= 0, fraccionarias o repetidas -> SERVICE_UNAVAILABLE sin escribir); 3) max + 1; 4) una sola fila. Si el propio clientRequestId es ambiguo, INCONSISTENT_STATE.
+function observacionesPozoService_agregar(email, nombre, wellId, datos) {
+  var validacion = observacionesPozoService_validarAlta(datos);
+  if (!validacion.ok) {
+    return validacion;
+  }
+  var valores = validacion.valores;
+  var emailN = observacionesPozoService_normalizarEmail(email);
+
+  // camino rapido (sin lock): la solicitud ya se proceso
+  var previa = observacionesPozoRepository_buscarPorClientRequestId(emailN, valores.clientRequestId);
+  if (previa.total > 0) {
+    return observacionesPozoService_atenderExistente(previa, wellId, valores);
+  }
+
+  var existencia = pozoExistenciaService_verificar(wellId);
+  if (!existencia.existe) {
+    if (existencia.indeterminado) {
+      return observacionesPozoService_error('SERVICE_UNAVAILABLE', 'no se pudo verificar si el pozo existe: intenta de nuevo en unos minutos');
+    }
+    return observacionesPozoService_error('WELL_NOT_FOUND', 'no se encontro el pozo ' + wellId);
+  }
+
+  return observacionesPozoRepository_conLock(function () {
+    // dentro del lock se vuelve a comprobar: otra ejecucion pudo escribir mientras se esperaba
+    var enLock = observacionesPozoRepository_buscarPorClientRequestId(emailN, valores.clientRequestId);
+    if (enLock.total > 0) {
+      return observacionesPozoService_atenderExistente(enLock, wellId, valores);
+    }
+    var escrita = observacionesPozoRepository_agregarAlta({
+      observacionId: Utilities.getUuid(),
+      wellId: wellId,
+      texto: valores.texto,
+      email: emailN,
+      nombre: observacionesPozoService_texto(nombre),
+      timestampUtc: new Date().toISOString(),
+      clientRequestId: valores.clientRequestId
+    });
+    return {
+      ok: true,
+      duplicada: false,
+      observacion: observacionesPozoService_vistaAlta({
+        observacionId: escrita.observacionId,
+        wellId: escrita.wellId,
+        secuencia: escrita.secuencia,
+        texto: escrita.texto,
+        categoria: '',
+        email: escrita.email,
+        nombre: escrita.nombre,
+        timestamp: escrita.timestampUtc,
+        estado: OBSERVACIONES_POZO_ESTADOS.ACTIVA,
+        anulacion: null
+      })
+    };
+  });
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     OBSERVACIONES_POZO_ESTADOS,
+    OBSERVACIONES_POZO_TEXTO_MIN,
+    OBSERVACIONES_POZO_TEXTO_MAX,
+    OBSERVACIONES_POZO_CLIENT_REQUEST_ID_REGEX,
+    observacionesPozoService_normalizarTexto,
+    observacionesPozoService_largoTexto,
+    observacionesPozoService_validarAlta,
+    observacionesPozoService_normalizarEmail,
+    observacionesPozoService_atenderExistente,
+    observacionesPozoService_agregar,
     OBSERVACIONES_POZO_LIMITE_DEFECTO,
     OBSERVACIONES_POZO_LIMITE_MAX,
     OBSERVACIONES_POZO_NOMBRE_NEUTRO,

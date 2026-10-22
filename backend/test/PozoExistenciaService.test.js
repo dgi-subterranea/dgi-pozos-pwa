@@ -300,9 +300,19 @@ describe('vista sintetica de un pozo fuera del padron', () => {
 describe('el helper es el UNICO lugar: nadie mas consulta ITF por existencia', () => {
   const src = (f) => fs.readFileSync(path.join(__dirname, '..', 'src', f), 'utf8');
 
-  test('solo la correccion de ubicacion (snapshot) y el handler de getWellLocation lo llaman', () => {
+  test('solo lo llaman: la correccion de ubicacion (snapshot), el handler de getWellLocation y -desde E5-2- agregar una observacion', () => {
     const usuarios = fs.readdirSync(path.join(__dirname, '..', 'src')).filter((f) => f !== 'PozoExistenciaService.js' && /pozoExistenciaService_/.test(src(f)));
-    expect(usuarios.sort()).toEqual(['Api.js', 'UbicacionCorreccionService.js']);
+    expect(usuarios.sort()).toEqual(['Api.js', 'ObservacionesPozoService.js', 'UbicacionCorreccionService.js']);
+  });
+
+  test('Observaciones lo usa SOLO al escribir (agregar): la lectura no verifica existencia, y no es una de sus fuentes', () => {
+    const codigo = (f) => src(f).split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+    const servicio = codigo('ObservacionesPozoService.js');
+    const inicio = servicio.indexOf('function observacionesPozoService_agregar(');
+    const llamadasFuera = servicio.slice(0, inicio) + servicio.slice(servicio.indexOf('if (typeof module', inicio));
+    expect(servicio.slice(inicio)).toMatch(/pozoExistenciaService_verificar\(wellId\)/);
+    expect(llamadasFuera).not.toMatch(/pozoExistenciaService_/);
+    expect(codigo('PozoExistenciaService.js')).not.toMatch(/bservacion/);                    // ni como fuente ni de ninguna otra forma
   });
 
   test('driveProfileRepository_existe solo lo usa el helper (y se define en el repositorio de ITF)', () => {

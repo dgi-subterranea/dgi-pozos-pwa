@@ -60,8 +60,8 @@ describe('enrutado por doPost', () => {
   test('getObservacionesPozo existe y responde; una accion parecida sigue siendo "accion desconocida"', () => {
     expect(leer().status).toBe('ok');
     expect(post({ action: 'getObservacionPozo', sessionToken: 'tok-lector@x.com', wellId: W })).toMatchObject({ status: 'error', code: 'SERVICE_UNAVAILABLE', message: expect.stringMatching(/accion desconocida/) });
-    expect(post({ action: 'agregarObservacionPozo', sessionToken: 'tok-ana@x.com', wellId: W }).message).toMatch(/accion desconocida/);       // E5-1 no tiene alta
-    expect(post({ action: 'anularObservacionPozo', sessionToken: 'tok-ana@x.com' }).message).toMatch(/accion desconocida/);                     // ni anulacion
+    expect(post({ action: 'anularObservacionPozo', sessionToken: 'tok-ana@x.com' }).message).toMatch(/accion desconocida/);                     // la anulacion llega en E5-3
+    expect(post({ action: 'editarObservacionPozo', sessionToken: 'tok-ana@x.com' }).message).toMatch(/accion desconocida/);                     // y no hay edicion
   });
 
   test('las acciones de siempre no cambiaron', () => {

@@ -30,8 +30,13 @@
 //   - hoja grande: UNA lectura de las 3 columnas de IDENTIDAD (observacionId, evento, wellId) de todas las filas (sin los textos, que son lo pesado), se eligen las filas del pozo (y
 //     toda ANULADA que referencie una alta del pozo, aunque su wellId este roto) y se leen SOLO esas filas en a lo sumo OBSERVACIONES_POZO_MAX_RANGOS rangos.
 //
-// Concurrencia: las funciones de escritura (E5-2 / E5-3) NO tomaran el lock; el Service las llamara dentro de observacionesPozoRepository_conLock (mismo lock de script que usan las
-// correcciones y las decisiones). Este archivo, en E5-1, no escribe nada.
+// ESCRITURA (E5-2: solo la ALTA; la anulacion llega en E5-3). Una ALTA es UNA fila escrita de una sola vez (setValues de una fila), con el formato de texto plano ('@') puesto ANTES de los
+// valores en todas las columnas menos `secuencia` ('0'): un texto que empiece con "=", "+", "-" o "@" queda como texto, jamas se evalua como formula (mismo patron que el resto de las hojas).
+// La `secuencia` la calcula este archivo (max + 1) y es de FALLAR CERRADO: es un invariante estructural (orden global, cursor de paginacion: un entero unico y monotono), asi que si la hoja
+// ya esta corrupta (una secuencia ilegible, <= 0, fraccionaria o REPETIDA) no se escribe nada: ver calcularSiguienteSecuencia.
+//
+// Concurrencia: las funciones de escritura de este archivo NO toman el lock; el Service las llama dentro de observacionesPozoRepository_conLock (mismo lock de script que usan las
+// correcciones y las decisiones), que serializa buscar-por-clientRequestId -> secuencia -> escribir. LockService no es reentrante de forma confiable: el lock vive en un solo lugar.
 var OBSERVACIONES_POZO_HOJA = 'ObservacionesPozo';
 var OBSERVACIONES_POZO_COLUMNAS = [
   'observacionId', 'evento', 'wellId', 'texto', 'categoria', 'motivo', 'email', 'nombre', 'timestampUtc', 'secuencia', 'clientRequestId'
@@ -281,7 +286,147 @@ function observacionesPozoRepository_listarEventosDelPozo(wellId) {
   throw new Error('La hoja "' + OBSERVACIONES_POZO_HOJA + '" cambio mientras se leia (reintentar)');
 }
 
-// Serializa leer -> decidir -> escribir entre ejecuciones simultaneas (lock de script). Siempre se libera. La usaran las escrituras de E5-2 / E5-3; en E5-1 nadie la llama.
+// --- Escritura de la ALTA (E5-2) ---
+
+// Objeto -> fila respetando el orden REAL de las columnas de la hoja (las desconocidas quedan vacias).
+function observacionesPozoRepository_filaDesdeObjeto(objeto, indices, anchoHeader) {
+  var fila = [];
+  for (var i = 0; i < anchoHeader; i++) {
+    fila.push('');
+  }
+  OBSERVACIONES_POZO_COLUMNAS.forEach(function (nombre) {
+    var valor = objeto[nombre];
+    fila[indices[nombre]] = observacionesPozoRepository_esVacio(valor) ? '' : valor;
+  });
+  return fila;
+}
+
+// Formato de cada celda de la fila: TEXTO PLANO ('@') en todas (tambien en las columnas desconocidas) salvo `secuencia` ('0').
+function observacionesPozoRepository_formatosDeFila(indices, ancho) {
+  var formatos = [];
+  for (var c = 0; c < ancho; c++) {
+    formatos.push('@');
+  }
+  OBSERVACIONES_POZO_COLUMNAS.forEach(function (nombre) {
+    if (OBSERVACIONES_POZO_FORMATOS_NUMERICOS[nombre]) {
+      formatos[indices[nombre]] = OBSERVACIONES_POZO_FORMATOS_NUMERICOS[nombre];
+    }
+  });
+  return formatos;
+}
+
+// Todos los valores de UNA columna de datos (sin el encabezado), en una sola lectura. [] si la hoja no tiene filas de datos.
+function observacionesPozoRepository_leerColumna(hoja, nombre) {
+  var n = hoja.sheet.getLastRow() - 1;
+  if (n <= 0) {
+    return [];
+  }
+  return hoja.sheet.getRange(2, hoja.indices[nombre] + 1, n, 1).getValues().map(function (f) { return f[0]; });
+}
+
+// Siguiente secuencia (max + 1) a partir de las columnas observacionId y secuencia (en el orden de la hoja). PURA.
+// FALLA CERRADO: no se "arregla" nada en silencio (no se renumera, no se elige una de las repetidas, no se sigue escribiendo sobre una corrupcion estructural). Cada fila de datos tiene
+// que ser TOTALMENTE vacia en esas dos columnas (se salta) o tener un observacionId Y una secuencia entera >= 1 (un numero, o un texto de solo digitos), y NINGUNA secuencia puede
+// figurar en dos filas (dos eventos distintos con la misma secuencia, sean ALTA o ANULADA, son una hoja corrupta). Una secuencia vacia, de texto, cero, negativa, fraccionaria o repetida, o
+// una secuencia sin observacionId, hace imposible garantizar el invariante: {ok:false, motivo} (el motivo nombra solo numeros de fila y de secuencia, nunca contenido). Detectar repetidas no
+// cuesta otra lectura: ya se recorren todas las secuencias para calcular el maximo. Sin corrupcion: {ok:true, siguiente: max + 1}.
+function observacionesPozoRepository_calcularSiguienteSecuencia(ids, secuencias) {
+  var max = 0;
+  var filaDe = {};                                      // secuencia -> primera fila que la usa
+  var lista = secuencias || [];
+  for (var i = 0; i < lista.length; i++) {
+    var id = observacionesPozoRepository_esVacio((ids || [])[i]) ? '' : String(ids[i]).trim();
+    var crudo = lista[i];
+    var vacia = observacionesPozoRepository_esVacio(crudo) || String(crudo).trim() === '';
+    if (id === '' && vacia) {
+      continue;
+    }
+    if (vacia || id === '') {
+      return { ok: false, motivo: 'la fila ' + (i + 2) + ' tiene ' + (vacia ? 'observacionId sin secuencia' : 'secuencia sin observacionId') };
+    }
+    var n = typeof crudo === 'number' ? crudo : (/^\d+$/.test(String(crudo).trim()) ? Number(String(crudo).trim()) : NaN);
+    if (!isFinite(n) || Math.floor(n) !== n || n < 1) {
+      return { ok: false, motivo: 'la secuencia de la fila ' + (i + 2) + ' no es un entero >= 1' };
+    }
+    if (filaDe[n] !== undefined) {
+      return { ok: false, motivo: 'la secuencia ' + n + ' figura en mas de una fila (filas ' + filaDe[n] + ' y ' + (i + 2) + ')' };
+    }
+    filaDe[n] = i + 2;
+    if (n > max) {
+      max = n;
+    }
+  }
+  if (max >= Number.MAX_SAFE_INTEGER - 1) {
+    return { ok: false, motivo: 'la secuencia maxima no se puede incrementar de forma segura' };
+  }
+  return { ok: true, siguiente: max + 1 };
+}
+
+// Siguiente secuencia de la hoja. LANZA si no se puede calcular con seguridad (el que escribe no escribe nada). Llamar SOLO dentro de observacionesPozoRepository_conLock.
+function observacionesPozoRepository_siguienteSecuencia(hoja) {
+  var r = observacionesPozoRepository_calcularSiguienteSecuencia(
+    observacionesPozoRepository_leerColumna(hoja, 'observacionId'), observacionesPozoRepository_leerColumna(hoja, 'secuencia'));
+  if (!r.ok) {
+    throw new Error('No se puede calcular la secuencia de forma segura en "' + OBSERVACIONES_POZO_HOJA + '": ' + r.motivo + ' (no se escribio nada)');
+  }
+  return r.siguiente;
+}
+
+// Los eventos que ya usaron el clientRequestId de un usuario (en CUALQUIER evento de la hoja: el id es por usuario, no por tipo de evento). Lee 2 columnas completas (email y
+// clientRequestId) y despues SOLO las filas que coinciden. Devuelve {total, eventos}: `total` son todas las coincidencias y `eventos` las primeras 2 (con 2 ya se sabe que es una
+// inconsistencia: la idempotencia exige UNA). emailNormalizado: minuscula y sin espacios. NO verifica nada mas: la decision es del Service.
+function observacionesPozoRepository_buscarPorClientRequestId(emailNormalizado, clientRequestId) {
+  var hoja = observacionesPozoRepository_hoja();
+  var emails = observacionesPozoRepository_leerColumna(hoja, 'email');
+  if (emails.length === 0) {
+    return { total: 0, eventos: [] };
+  }
+  var reqs = observacionesPozoRepository_leerColumna(hoja, 'clientRequestId');
+  var filas = [];
+  for (var i = 0; i < reqs.length; i++) {
+    if (observacionesPozoRepository_esVacio(reqs[i]) || String(reqs[i]).trim() !== clientRequestId) {
+      continue;
+    }
+    if (String(observacionesPozoRepository_esVacio(emails[i]) ? '' : emails[i]).trim().toLowerCase() === emailNormalizado) {
+      filas.push(i + 2);
+    }
+  }
+  var eventos = filas.slice(0, 2).map(function (numero) {
+    return observacionesPozoRepository_eventoDesdeFila(hoja.sheet.getRange(numero, 1, 1, hoja.ancho).getValues()[0], hoja.indices, numero);
+  });
+  return { total: filas.length, eventos: eventos };
+}
+
+// Agrega UNA fila ALTA al final: asigna la `secuencia` (max + 1) y la escribe junto con el resto en una sola operacion. Llamar SOLO dentro de observacionesPozoRepository_conLock.
+// `alta` ya viene validada y normalizada por el Service: {observacionId, wellId, texto, email, nombre, timestampUtc, clientRequestId}; `evento`, `categoria` y `motivo` los fija este
+// archivo (ALTA, vacio, vacio) y `secuencia` tambien: el cliente nunca elige ninguno. LANZA, sin escribir nada, si la hoja falta o esta mal o si la secuencia no se puede calcular.
+// Devuelve el evento escrito (con su secuencia).
+function observacionesPozoRepository_agregarAlta(alta) {
+  var hoja = observacionesPozoRepository_hoja();
+  var secuencia = observacionesPozoRepository_siguienteSecuencia(hoja);
+  var evento = {
+    observacionId: alta.observacionId,
+    evento: 'ALTA',
+    wellId: alta.wellId,
+    texto: alta.texto,
+    categoria: '',
+    motivo: '',
+    email: alta.email,
+    nombre: alta.nombre || '',
+    timestampUtc: alta.timestampUtc,
+    secuencia: secuencia,
+    clientRequestId: alta.clientRequestId
+  };
+  var fila = observacionesPozoRepository_filaDesdeObjeto(evento, hoja.indices, hoja.ancho);
+  var primera = hoja.sheet.getLastRow() + 1;
+  var rango = hoja.sheet.getRange(primera, 1, 1, hoja.ancho);
+  rango.setNumberFormats([observacionesPozoRepository_formatosDeFila(hoja.indices, hoja.ancho)]);      // texto plano ANTES de los valores
+  rango.setValues([fila]);
+  SpreadsheetApp.flush();
+  return evento;
+}
+
+// Serializa leer -> decidir -> escribir entre ejecuciones simultaneas (lock de script). Siempre se libera. La usan las escrituras (E5-2: agregar; E5-3: anular).
 function observacionesPozoRepository_conLock(fn) {
   var lock = LockService.getScriptLock();
   lock.waitLock(OBSERVACIONES_POZO_LOCK_TIMEOUT_MS);
@@ -336,6 +481,13 @@ if (typeof module !== 'undefined' && module.exports) {
     observacionesPozoRepository_filaVacia,
     observacionesPozoRepository_hoja,
     observacionesPozoRepository_listarEventosDelPozo,
+    observacionesPozoRepository_filaDesdeObjeto,
+    observacionesPozoRepository_formatosDeFila,
+    observacionesPozoRepository_leerColumna,
+    observacionesPozoRepository_calcularSiguienteSecuencia,
+    observacionesPozoRepository_siguienteSecuencia,
+    observacionesPozoRepository_buscarPorClientRequestId,
+    observacionesPozoRepository_agregarAlta,
     observacionesPozoRepository_conLock,
     setupObservacionesPozoSheet
   };
