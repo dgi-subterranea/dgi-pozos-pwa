@@ -173,6 +173,13 @@ function doPost(e) {
           categoria: body.categoria,
           clientRequestId: body.clientRequestId
         });
+      } else if (body.action === 'anularObservacionPozo') {
+        // Solo estos 3 campos: el wellId, el autor, el estado y el texto NO los decide el cliente (salen de la ALTA original y de la sesion).
+        response = handleAnularObservacionPozo(body.sessionToken, {
+          observacionId: body.observacionId,
+          motivo: body.motivo,
+          clientRequestId: body.clientRequestId
+        });
       } else if (body.action === 'getObservacionesPozo') {
         // Solo estos 2 parametros de paginacion ademas del pozo: cualquier otro campo que mande el cliente se ignora.
         response = handleGetObservacionesPozo(body.sessionToken, body.wellId, body.limit, body.antesDeSecuencia);
@@ -1710,6 +1717,55 @@ function handleAgregarObservacionPozo(sessionToken, datos) {
   return { status: 'ok', data: { wellId: d.wellId, duplicada: resultado.duplicada === true, observacion: resultado.observacion } };
 }
 
+// Anular una observacion (E5-3). Orden de chequeos, igual que el resto pero SIN wellId del cliente: sesion -> permiso base `observaciones` Y (`observaciones_agregar` O
+// `observaciones_anular`) -> contenido (observacionId, motivo, clientRequestId) -> observacion objetivo -> autorizacion fina (moderador: cualquier autor; autor: solo la propia, por email
+// normalizado) -> idempotencia -> transicion. Los permisos se evaluan SIEMPRE antes de resolver un reintento: la idempotencia nunca es un bypass. NO verifica la existencia del pozo. email /
+// nombre SIEMPRE de la sesion + hoja Usuarios. Historial: UNA fila `anularObservacionPozo` + wellId (el de la ALTA) + OK por anulacion creada, jamas el motivo, el texto, el observacionId ni el
+// clientRequestId; el reintento idempotente no escribe otra; errores con su codigo. La respuesta no trae email, clientRequestId ni secuencia, y el texto original solo con observaciones_anular.
+function handleAnularObservacionPozo(sessionToken, datos) {
+  var d = datos || {};
+  var validation = validateSession(sessionToken, 'anularObservacionPozo', null);
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  // los tres permisos SOLO valen con `=== true` (un valor truthy que no sea el booleano no habilita nada)
+  if (hasPermission(session.email, 'observaciones') !== true) {
+    logHistoryEvent(session.email, 'anularObservacionPozo', null, 'PERMISSION_DENIED');
+    return { status: 'error', code: 'PERMISSION_DENIED', message: 'usuario sin permiso "observaciones": ' + session.email };
+  }
+  var puedeAgregar = hasPermission(session.email, 'observaciones_agregar') === true;
+  var puedeAnular = hasPermission(session.email, 'observaciones_anular') === true;
+  if (!puedeAgregar && !puedeAnular) {
+    logHistoryEvent(session.email, 'anularObservacionPozo', null, 'PERMISSION_DENIED');
+    return { status: 'error', code: 'PERMISSION_DENIED', message: 'usuario sin permiso para anular observaciones: ' + session.email };
+  }
+
+  var access = getUserAccess(session.email);
+  var resultado;
+  try {
+    resultado = observacionesPozoService_anular(session.email, access.nombre, {
+      observacionId: d.observacionId,
+      motivo: d.motivo,
+      clientRequestId: d.clientRequestId
+    }, { observaciones: true, agregar: puedeAgregar, anular: puedeAnular });
+  } catch (err) {
+    // mensaje fijo: el detalle tecnico va a Logger (recortado, sin URLs) y jamas lleva el motivo ni el texto
+    Logger.log('anularObservacionPozo: excepcion: ' + api_limpiarMensajeLog(err));
+    logHistoryEvent(session.email, 'anularObservacionPozo', null, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'no se pudo anular la observacion: intenta de nuevo en unos minutos' };
+  }
+  if (!resultado.ok) {
+    logHistoryEvent(session.email, 'anularObservacionPozo', resultado.wellId || null, resultado.code);
+    return { status: 'error', code: resultado.code, message: resultado.message };
+  }
+  if (!resultado.duplicada) {
+    logHistoryEvent(session.email, 'anularObservacionPozo', resultado.wellId, 'OK');
+  }
+  return { status: 'ok', data: { wellId: resultado.wellId, duplicada: resultado.duplicada === true, observacion: resultado.observacion } };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     doPost,
@@ -1720,6 +1776,7 @@ if (typeof module !== 'undefined' && module.exports) {
     handleCancelarSugerenciaFuente,
     handleGetObservacionesPozo,
     handleAgregarObservacionPozo,
+    handleAnularObservacionPozo,
     handleGetDecisionesFuentesPozo,
     handleGetDecisionesFuentesDelta,
     handleDecidirFuenteUbicacion,

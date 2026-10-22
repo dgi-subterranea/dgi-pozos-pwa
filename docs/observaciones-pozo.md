@@ -1,6 +1,6 @@
 # Observaciones del pozo (E5)
 
-Estado: **E5-1 (lectura) commiteada en local y E5-2 (alta) implementada en el repo, sin publicar.** La anulación (E5-3) y todo el frontend (E5-4 a E5-6) quedan para las etapas siguientes.
+Estado: **E5-1 (lectura) y E5-2 (alta) commiteadas en local; E5-3 (anulación) implementada en el repo, sin publicar.** Todo el frontend (E5-4 a E5-6) queda para las etapas siguientes.
 
 ## Propósito
 Una línea de tiempo de **observaciones operativas** por pozo: acceso, estado físico, lo que informa el propietario, anomalías vistas en campo, un dato registral a revisar o cualquier texto útil. Es **contexto humano y auditable**.
@@ -168,26 +168,89 @@ La respuesta nunca trae el email; **ni `Logger`, ni `Historial`, ni ningún mens
 ### Concurrencia
 Cubierta intercalando otra ejecución justo al tomar el lock: dos altas distintas simultáneas → secuencias distintas; el mismo `clientRequestId` simultáneo → **una sola fila** (la segunda recibe `duplicada: true`, un solo `Historial`); dos usuarios con el mismo id → cada uno crea la suya; mismo usuario y mismo id con otro texto → conflicto; muchas escrituras intercaladas → secuencias únicas, consecutivas y crecientes.
 
-**Pendiente (no implementado):** anulación (E5-3). No hay edición ni corrección de observaciones.
+No hay edición ni corrección de observaciones (la anulación está en la sección siguiente).
 
-## Decisiones ya cerradas para la anulación (E5-3)
-- **Dueño:** el dueño de una observación es el **email normalizado de la sesión** igual al `email` almacenado en su `ALTA`. El `nombre` **no** determina la propiedad.
-- **Motivo de anulación:** obligatorio; normalizado con la misma regla del texto (trim, CRLF → `\n`, tabulador → espacio, sin controles); **mínimo 3** y **máximo 300** caracteres únicos; se preservan los saltos de línea si se admiten; **nunca** va a Logger ni a mensajes de error ni a Historial.
-- **Idempotencia:** el `clientRequestId` comparte **espacio por usuario** entre `ALTA` y `ANULADA`: reutilizar un id de otro evento o con otro contenido → conflicto (`IDEMPOTENCY_CONFLICT`).
-- **Respuesta de un reintento de anulación:** se aplican los permisos **actuales** del usuario (no se congelan los de la respuesta original): con `observaciones_anular` puede recibir el texto original; sin él, el texto original queda oculto.
-- Anular **no** está implementado todavía.
+## Anulación: `anularObservacionPozo` (E5-3)
+Agrega **una fila `ANULADA`** que referencia la observación: no borra ni edita nada (la `ALTA` original se conserva para la auditoría). Acción por `doPost`; el cliente manda **solo** `observacionId`, `motivo` y `clientRequestId`. **No** acepta `wellId`, autor, estado ni texto: el pozo sale de la `ALTA` original, el autor y la fecha, de la sesión y del servidor.
+
+### Orden de chequeos
+1. sesión;
+2. `observaciones` **y** (`observaciones_agregar` **o** `observaciones_anular`); si no → `PERMISSION_DENIED` **sin consultar el `observacionId`** (ni leer la hoja);
+3. contenido (`observacionId`, `motivo`, `clientRequestId`: solo formato);
+4. observación objetivo y **autorización fina** (ver «Sin oráculo de observacionId»);
+5. idempotencia → transición → lock `{ repetir todo, integridad de secuencias, máx + 1, una fila }`.
+Los permisos se evalúan **siempre antes** de resolver un reintento y con los permisos **de hoy**.
+
+### Permisos y propiedad (fail-closed, todo `=== true`)
+| Quién | Condición |
+|---|---|
+| Autor | `observaciones` + `observaciones_agregar` **y** el email normalizado de la sesión == el email normalizado guardado en la `ALTA` → anula **la propia** |
+| Moderador | `observaciones` + `observaciones_anular` → anula la de **cualquier autor**, incluso si el email histórico es inválido (la observación se deriva igual) |
+| `observaciones_anular` sin `observaciones` | **no alcanza** |
+| `observaciones_agregar` sin `observaciones` | **no alcanza** |
+| Solo `observaciones` | no anula nada |
+
+- La propiedad se decide **solo por el email normalizado** (minúsculas, sin espacios). El `nombre` **nunca** cuenta. Si el email de la `ALTA` (o el de la sesión) falta o no tiene forma de email, **no** se afirma que es propia.
+- Un valor truthy que no sea el booleano (`1`, `"SI"`, `"true"`…) no habilita nada.
+
+### Motivo
+Obligatorio. Misma normalización que el texto (CRLF/NEL/LS/PS → `\n`, tabulador → espacio, sin controles ni sustitutos huérfanos, `trim` de extremos; no se colapsan espacios internos ni saltos de línea). **3 a 300 caracteres únicos** (un emoji cuenta 1). Error `INVALID_MOTIVO`, sin repetir el contenido. Se guarda como texto plano (una fórmula no se evalúa).
+
+### Observación objetivo
+Se busca por `observacionId` (columna completa y después solo las filas que coinciden; tope de 10 filas por id). Debe existir, ser inequívoca, derivable y no estar anulada. Lo que ve cada rol:
+| Situación | Moderador (`observaciones_anular`) | Autor (solo `observaciones_agregar`) |
+|---|---|---|
+| ninguna `ALTA` con ese id (una `ANULADA` huérfana **no** es una observación) | `OBSERVACION_NOT_FOUND` | `PERMISSION_DENIED` |
+| varias `ALTA`, demasiadas filas, `wellId` ilegible, o no derivable (identidad o secuencia duplicadas, contenido inválido) | `INCONSISTENT_STATE` (no se escribe) | `PERMISSION_DENIED` |
+| ajena, o email histórico vacío / sin forma de email (propiedad no verificable) | puede anular | `PERMISSION_DENIED` |
+| propia e inequívoca ya anulada (cualquier `ANULADA` que la referencie, aunque su fila esté rota: se prefiere **no** escribir de nuevo) | `INVALID_TRANSITION` — salvo el reintento de esa misma anulación | `INVALID_TRANSITION` (es suya) |
+
+**No** se llama a `PozoExistenciaService`: la `ALTA` es la autoridad del `wellId`. Una observación existente se puede anular aunque el pozo ya no figure en ninguna fuente (hay test).
+
+### Sin oráculo de observacionId
+Quien **no es moderador** no puede usar el endpoint para averiguar qué UUID existen: el backend resuelve el objetivo internamente para comprobar la propiedad, pero hacia afuera todo lo que no sea «propia e inequívoca» (inexistente, ajena, email histórico no verificable, ambigua o no derivable, incluso ajena ya anulada) es **el mismo `PERMISSION_DENIED` con el mismo mensaje** (fail-closed). La causa técnica va a `Logger` como etiqueta fija (`NO_ENCONTRADA`, `AJENA`, `PROPIEDAD_NO_VERIFICABLE`, `NO_DERIVABLE`), sin texto, motivo, email, nombre ni ids. El `Historial` interno sí registra el `wellId` cuando se conocía. El moderador sí distingue esos estados (puede administrar cualquier observación). Un autor solo ve `INVALID_TRANSITION`, `IDEMPOTENCY_CONFLICT` o `INCONSISTENT_STATE` (de su propio `clientRequestId`) **después** de haber probado que la observación es suya.
+
+### Idempotencia
+El `clientRequestId` comparte el **espacio por usuario** con la `ALTA` (regex `^[A-Za-z0-9_-]{8,64}$`):
+- mismo usuario + mismo id + misma intención (mismo `observacionId`, mismo motivo normalizado, `ANULADA`) → `duplicada: true`, **sin segunda fila, sin nueva secuencia, sin segundo `Historial`**;
+- mismo id usado antes para una `ALTA`, para otra observación o con otro motivo → `IDEMPOTENCY_CONFLICT`;
+- el mismo id en más de una fila del usuario → `INCONSISTENT_STATE`;
+- otro usuario con el mismo id es independiente.
+
+### El reintento aplica los permisos ACTUALES
+La idempotencia **nunca** es un bypass: el reintento pasa por la misma autorización con los permisos de hoy (sin permiso → `PERMISSION_DENIED` aunque la anulación ya exista) y el payload se **reconstruye** (quien perdió `observaciones_anular` recibe `texto: null` aunque su primera respuesta trajera el texto, y al revés). Un moderador que pierde `observaciones_anular` pero conserva `observaciones_agregar` se resuelve como autor: sobre una observación **ajena** el reintento da `PERMISSION_DENIED`; sobre una **propia** sigue valiendo (sin el texto original).
+
+### Secuencia, lock e integridad
+Igual que E5-2, dentro del lock: (1) permisos validados afuera; (2) se **vuelve a resolver** objetivo, autorización e idempotencia; (3) un reintento válido se devuelve **sin escribir**; (4) solo si hay que escribir, se valida la integridad **global** de las secuencias (ilegible, ≤ 0, fraccionaria, repetida → `SERVICE_UNAVAILABLE`, sin escribir ni reparar); (5) `máx + 1`; (6) **una sola** fila `ANULADA`. La escritura y el cálculo de la secuencia son compartidos con la alta (`observacionesPozoRepository_escribirEvento`).
+
+### La fila `ANULADA`
+`observacionId` = el de la `ALTA` · `evento` = `ANULADA` · `wellId` copiado **por el servidor** de la `ALTA` · `texto` = vacío · `categoria` = vacío · `motivo` = motivo normalizado · `email` / `nombre` = sesión · `timestampUtc` = servidor · `secuencia` = siguiente global · `clientRequestId`. **Nunca** se copia el texto original a la anulación.
+
+### Respuesta y privacidad
+`{wellId, duplicada, observacion}` con la observación en el **mismo contrato que la lectura** (E5-1): `{observacionId, wellId, estado: "ANULADA", texto, categoria: null, nombre, timestamp, anulacion: {nombre, timestamp, motivo}}`. Sin email, `clientRequestId` ni `secuencia`. El texto original solo con `observaciones_anular`; **sin él, `texto: null` incluso para el autor** de su propia observación (no hay excepción por autoría).
+
+### Historial y Logger
+Una fila `anularObservacionPozo` con el `wellId` derivado de la `ALTA` y `OK` por anulación creada; **nunca** el motivo, el texto, el `observacionId` ni el `clientRequestId`. El reintento idempotente no escribe otra. Los errores siguen el patrón con su código (con el `wellId` solo si ya se conocía por la `ALTA`). `Logger` recibe únicamente ids / filas / secuencias del detalle técnico, nunca texto, motivo, email ni nombre; el mensaje al cliente es fijo.
+
+### Errores
+`INVALID_OBSERVACION_ID` · `INVALID_MOTIVO` · `INVALID_CLIENT_REQUEST_ID` · `PERMISSION_DENIED` · `OBSERVACION_NOT_FOUND` · `INVALID_TRANSITION` · `IDEMPOTENCY_CONFLICT` · `INCONSISTENT_STATE` · `SERVICE_UNAVAILABLE` · `UNAUTHORIZED` / `USER_DISABLED`.
+
+### Concurrencia
+Cubierta intercalando otra ejecución justo al tomar el lock: autor vs. moderador y dos moderadores sobre la misma observación → una sola `ANULADA`, la otra relee dentro del lock y falla con `INVALID_TRANSITION`; el mismo `clientRequestId` simultáneo → una fila y `duplicada: true`; dos `clientRequestId` distintos → el segundo `INVALID_TRANSITION`; una alta de otra observación intercalada → secuencias únicas y consecutivas; un objetivo que se vuelve ambiguo o una corrupción que aparece mientras se espera el lock → no se escribe.
 
 ## Alcance
 | Etapa | Contenido | Estado |
 |---|---|---|
 | **E5-1** | modelo + hoja + permisos + derivación + `getObservacionesPozo` (lectura, paginada) | **commiteada en local (sin publicar)** |
 | **E5-2** | `agregarObservacionPozo`: existencia, idempotencia, lock, secuencia, `Historial`, validación de texto y categoría | **implementada (sin publicar)** |
-| E5-3 | `anularObservacionPozo` (propia / cualquiera según permiso, motivo obligatorio) | pendiente |
+| **E5-3** | `anularObservacionPozo` (propia / cualquiera según permiso, motivo obligatorio, idempotente, sin verificar existencia) | **implementada (sin publicar)** |
 | E5-4 a E5-6 | frontend: tarjeta y lectura, alta, anulación | pendiente |
 | E5-7 | publicación (**backend primero**, luego el frontend) y smoke real | pendiente |
 
-**Fuera de alcance de E5-1 / E5-2:** anulación, edición, frontend, tarjeta, modal, categorías funcionales, adjuntos, offline, cache, vista pública y cualquier cambio de mapa / reemplazo / ubicación / fotos / ITF / NE.
+**Fuera de alcance de E5-1 a E5-3:** edición, reemplazo automático, frontend, tarjeta, modal, categorías funcionales, adjuntos, offline, cache, vista pública y cualquier cambio de mapa / reemplazo / ubicación / fotos / ITF / NE.
 
 ## Tests
 `backend/test/ObservacionesPozoAlta.test.js` (normalización y validación del texto, categoría y `clientRequestId`; cálculo fail-closed de la secuencia; búsqueda por `clientRequestId`; la fila escrita y el formato de texto plano) y `ApiAgregarObservacionPozo.test.js` (de punta a punta: permisos, existencia, texto, categoría, idempotencia, lock y secuencia, concurrencia, fórmulas, Historial, privacidad y lectura posterior).
 `backend/test/ObservacionesPozoRepository.test.js` (esquema, hoja ausente / mal formada, setup, selección de filas, plan de lectura, llamadas y celdas leídas con hojas de 2.500 y 100.000 filas), `ObservacionesPozoService.test.js` (derivación, propiedades con datos aleatorios, privacidad, paginación), `ApiObservacionesPozo.test.js` (permisos, orden de chequeos, sin existencia, contrato, hoja ausente) y `ObservacionesPozoPermisos.test.js` (columnas de `Usuarios`, fail-closed, compatibilidad). Se ajustaron `SheetUserRepository.test.js` y `AuthService.test.js` a los 12 permisos.
+
+`backend/test/ObservacionesPozoAnulacion.test.js` (E5-3, unidades: validación de la entrada, propiedad por email normalizado, matriz pura de permisos, búsqueda por `observacionId`, fila `ANULADA`, decisión) y `ApiAnularObservacionPozo.test.js` (E5-3, de punta a punta por `doPost`: permisos y propiedad, motivo, observación objetivo, no consulta de existencia, privacidad, `Historial` / `Logger`, idempotencia compartida con la alta, reintento con permisos actuales, secuencia e integridad, concurrencia y guardas del código).

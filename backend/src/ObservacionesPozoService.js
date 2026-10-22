@@ -1,6 +1,7 @@
 // ObservacionesPozoService: logica de las observaciones generales de un pozo (E5). No sabe nada de HTTP (Api.js) ni de Sheets (ObservacionesPozoRepository.js). LEE (E5-1): deriva el
 // estado de cada observacion desde los eventos de la hoja, decide que se le muestra a quien consulta (privacidad de las anuladas) y pagina. AGREGA (E5-2): valida y normaliza el texto,
-// verifica la existencia del pozo, es idempotente y escribe una fila ALTA bajo lock. La anulacion llega en E5-3. Las observaciones son contexto humano y auditable: NO cambian la ubicacion, el estado registral, la evaluacion de reemplazo, las fotos, el ITF ni los NE.
+// verifica la existencia del pozo, es idempotente y escribe una fila ALTA bajo lock. ANULA (E5-3): agrega una fila ANULADA que referencia la ALTA (dueno o moderador, motivo obligatorio,
+// idempotente, sin verificar existencia). Nunca se edita ni se borra una fila. Las observaciones son contexto humano y auditable: NO cambian la ubicacion, el estado registral, la evaluacion de reemplazo, las fotos, el ITF ni los NE.
 //
 // Modelo (ver el repositorio para el esquema): una fila = un EVENTO inmutable.
 //   - ALTA     crea una observacion (observacionId, wellId, texto, secuencia...).
@@ -500,9 +501,210 @@ function observacionesPozoService_agregar(email, nombre, wellId, datos) {
   });
 }
 
+// --- Anulacion (E5-3) ---
+//
+// anularObservacionPozo. Una anulacion NO borra ni edita nada: agrega una fila ANULADA que REFERENCIA la observacion (la ALTA original se conserva para la auditoria). El cliente manda
+// SOLO observacionId, motivo y clientRequestId: el wellId sale de la ALTA original (autoridad), el autor y la fecha de la sesion y del servidor. Orden: validar la entrada -> localizar la
+// ALTA (inequivoca y derivable) -> AUTORIZAR con los permisos ACTUALES -> idempotencia -> transicion -> lock { repetir todo, integridad de secuencias, max + 1, una fila }.
+//   PERMISOS (fail-closed; observaciones SIEMPRE es necesario, y el nombre jamas decide la propiedad):
+//     - moderador: observaciones + observaciones_anular -> puede anular la observacion de CUALQUIER autor (incluso si el email historico es invalido);
+//     - autor: observaciones + observaciones_agregar Y el email normalizado de la sesion == el email normalizado guardado en la ALTA -> anula la PROPIA. Si no se puede determinar con
+//       seguridad que es propia (email vacio, sin forma de email o distinto) NO se trata como propia.
+//   La idempotencia NUNCA es un bypass de permisos: un reintento pasa por la misma autorizacion con los permisos de HOY (sin permiso, PERMISSION_DENIED aunque ya haya anulado); y la respuesta de un
+//   reintento se RECONSTRUYE con los permisos de hoy (quien no tiene observaciones_anular recibe el texto original en null aunque su primera respuesta lo trajera).
+//   NO verifica la existencia del pozo (la ALTA ya la demostro: una observacion existente se puede anular aunque el pozo ya no figure en ninguna fuente).
+var OBSERVACIONES_POZO_MOTIVO_MIN = 3;
+var OBSERVACIONES_POZO_MOTIVO_MAX = 300;
+var OBSERVACIONES_POZO_EMAIL_REGEX = /^[^\s@]+@[^\s@]+$/;
+
+// Valida y normaliza la entrada de una anulacion: {observacionId, motivo, clientRequestId}. El motivo usa la MISMA normalizacion que el texto (ver observacionesPozoService_normalizarTexto)
+// con largo de 3 a 300 caracteres unicos. {ok:true, valores} o {ok:false, code, message}: INVALID_OBSERVACION_ID / INVALID_MOTIVO / INVALID_CLIENT_REQUEST_ID, sin eco del contenido.
+function observacionesPozoService_validarAnulacion(datos) {
+  var d = datos || {};
+  var id = typeof d.observacionId === 'string' ? d.observacionId.trim().toLowerCase() : '';
+  if (!OBSERVACIONES_POZO_UUID_REGEX.test(id)) {
+    return observacionesPozoService_error('INVALID_OBSERVACION_ID', 'observacionId invalido');
+  }
+  var motivo = observacionesPozoService_normalizarTexto(d.motivo);
+  if (motivo === null || motivo === '') {
+    return observacionesPozoService_error('INVALID_MOTIVO', 'el motivo de la anulacion es obligatorio');
+  }
+  var largo = observacionesPozoService_largoTexto(motivo);
+  if (largo < OBSERVACIONES_POZO_MOTIVO_MIN) {
+    return observacionesPozoService_error('INVALID_MOTIVO', 'el motivo debe tener al menos ' + OBSERVACIONES_POZO_MOTIVO_MIN + ' caracteres');
+  }
+  if (largo > OBSERVACIONES_POZO_MOTIVO_MAX) {
+    return observacionesPozoService_error('INVALID_MOTIVO', 'el motivo admite hasta ' + OBSERVACIONES_POZO_MOTIVO_MAX + ' caracteres');
+  }
+  if (typeof d.clientRequestId !== 'string' || !OBSERVACIONES_POZO_CLIENT_REQUEST_ID_REGEX.test(d.clientRequestId)) {
+    return observacionesPozoService_error('INVALID_CLIENT_REQUEST_ID', 'clientRequestId obligatorio (8 a 64 caracteres: letras, numeros, guion y guion bajo)');
+  }
+  return { ok: true, valores: { observacionId: id, motivo: motivo, clientRequestId: d.clientRequestId } };
+}
+
+// ¿La observacion es del usuario de la sesion? SOLO por el email normalizado (minuscula, sin espacios): el nombre no cuenta. Si el email de la ALTA o el de la sesion falta o no tiene forma
+// de email, NO se puede afirmar que es propia: false.
+function observacionesPozoService_esPropia(emailSesion, emailAlta) {
+  var a = observacionesPozoService_normalizarEmail(emailSesion);
+  var b = observacionesPozoService_normalizarEmail(emailAlta);
+  return OBSERVACIONES_POZO_EMAIL_REGEX.test(a) && a === b;                  // iguales y con forma de email: el de la ALTA tambien la tiene
+}
+
+// Localiza la observacion objetivo: busca por observacionId, exige UNA sola ALTA inequivoca, toma de ella el wellId y la DERIVA con el modelo de lectura (E5-1). Devuelve
+//   {ok:true, wellId, obs} (obs = la derivada, con estado ACTIVA o ANULADA y el email de la ALTA) o {ok:false, code, message, wellId?}:
+//   - OBSERVACION_NOT_FOUND: ninguna ALTA lleva ese id (una ANULADA huerfana no es una observacion);
+//   - INCONSISTENT_STATE: varias ALTA, demasiadas filas, wellId ilegible, o la observacion no es derivable sin ambiguedad (identidad o secuencia duplicadas, contenido invalido): fail-closed.
+function observacionesPozoService_resolverObjetivo(observacionId) {
+  var busqueda = observacionesPozoRepository_buscarPorObservacionId(observacionId);
+  var altas = busqueda.eventos.filter(function (e) { return e.evento === 'ALTA'; });
+  if (altas.length === 0 && busqueda.total === busqueda.eventos.length) {
+    return observacionesPozoService_error('OBSERVACION_NOT_FOUND', 'no se encontro la observacion');
+  }
+  if (busqueda.total > busqueda.eventos.length || altas.length !== 1 || !OBSERVACIONES_POZO_WELLID_REGEX.test(altas[0].wellId)) {
+    return observacionesPozoService_error('INCONSISTENT_STATE', 'la observacion tiene un historial inconsistente: requiere revision manual');
+  }
+  var wellId = altas[0].wellId;
+  var derivado = observacionesPozoService_derivar(observacionesPozoRepository_listarEventosDelPozo(wellId).eventos);
+  var obs = null;
+  derivado.observaciones.forEach(function (o) { if (o.observacionId === observacionId && o.wellId === wellId) { obs = o; } });
+  if (obs === null) {
+    var r = observacionesPozoService_error('INCONSISTENT_STATE', 'la observacion no se puede determinar sin ambiguedad: requiere revision manual');
+    r.wellId = wellId;
+    return r;
+  }
+  return { ok: true, wellId: wellId, obs: obs };
+}
+
+// ¿Puede el usuario anular esta observacion? permisos: {observaciones, agregar, anular} (booleanos, solo `=== true`).
+function observacionesPozoService_puedeAnular(emailN, permisos, obs) {
+  if (permisos.observaciones !== true) {
+    return false;
+  }
+  if (permisos.anular === true) {
+    return true;
+  }
+  return permisos.agregar === true && observacionesPozoService_esPropia(emailN, obs.email);
+}
+
+// La observacion derivada con su estado de HOY -> la respuesta, con los permisos de HOY: el texto original solo para quien tiene observaciones_anular (tambien el autor sin ese permiso lo recibe
+// en null: no hay excepcion por autoria).
+function observacionesPozoService_vistaAnulacion(obs, permisos) {
+  return observacionesPozoService_vista(obs, { moderador: permisos.anular === true });
+}
+
+// Ya hay un evento para (usuario, clientRequestId): {ok:true, duplicada:true, ...} si es EXACTAMENTE esta misma anulacion; si no, conflicto.
+//   - mas de una coincidencia -> INCONSISTENT_STATE (no se elige);
+//   - un evento que no es una ANULADA (p. ej. una ALTA), de otra observacion o con otro motivo -> IDEMPOTENCY_CONFLICT;
+//   - la misma anulacion -> duplicada:true con la observacion en su estado de hoy. Una anulacion que referencia a la observacion SIEMPRE la deja ANULADA en el modelo de lectura (y si la
+//     colision de secuencias la oculta, el objetivo ya fallo antes de llegar aca): no hay un caso "existe la anulacion pero la observacion figura activa", asi que no se comprueba.
+function observacionesPozoService_atenderAnulacionExistente(busqueda, objetivo, valores, permisos) {
+  if (busqueda.total !== 1 || busqueda.eventos.length !== 1) {
+    return observacionesPozoService_error('INCONSISTENT_STATE', 'el clientRequestId figura mas de una vez: requiere revision manual');
+  }
+  var e = busqueda.eventos[0];
+  if (e.evento !== 'ANULADA' || e.observacionId !== valores.observacionId || e.motivo !== valores.motivo) {
+    var c = observacionesPozoService_error('IDEMPOTENCY_CONFLICT', 'clientRequestId ya usado con otro contenido');
+    c.wellId = objetivo.wellId;
+    return c;
+  }
+  return { ok: true, duplicada: true, wellId: objetivo.wellId, observacion: observacionesPozoService_vistaAnulacion(objetivo.obs, permisos) };
+}
+
+// Rechazo de autorizacion de quien NO es moderador: SIEMPRE el mismo codigo y el mismo mensaje hacia afuera, sea cual sea la causa (el id no existe, es ajena, no se puede verificar la propiedad
+// o la observacion no es derivable), para que el endpoint no sirva de oraculo de observacionId. La causa tecnica va a Logger como etiqueta fija (jamas texto, motivo, email ni nombre).
+function observacionesPozoService_denegar(wellId, causa) {
+  observacionesPozoService_log('anulacion denegada (' + causa + ')');
+  var d = observacionesPozoService_error('PERMISSION_DENIED', 'no podes anular esta observacion');
+  if (wellId) {
+    d.wellId = wellId;                                                   // solo para el Historial interno; la respuesta no lo lleva
+  }
+  return d;
+}
+
+// Una pasada de decision (fuera del lock y otra vez dentro): objetivo -> autorizacion (permisos de hoy) -> idempotencia -> transicion. Devuelve un error, un reintento valido
+// ({ok:true, duplicada:true}) o {ok:true, escribir:true, objetivo}. La idempotencia va DESPUES de la autorizacion (nunca un bypass) y ANTES de la transicion (un reintento de una anulacion ya
+// hecha no es "ya anulada").
+// MODERADOR (observaciones_anular): ve el estado real del objetivo (OBSERVACION_NOT_FOUND / INCONSISTENT_STATE). QUIEN SOLO ANULA LO PROPIO (agregar): el objetivo se resuelve internamente
+// para comprobar la propiedad, pero hacia afuera todo lo que no sea "propia e inequivoca" (inexistente, ajena, email historico no verificable, ambigua) es PERMISSION_DENIED (fail-closed).
+function observacionesPozoService_decidirAnulacion(emailN, permisos, valores) {
+  var moderador = permisos.anular === true;
+  var objetivo = observacionesPozoService_resolverObjetivo(valores.observacionId);
+  if (!objetivo.ok) {
+    return moderador ? objetivo : observacionesPozoService_denegar(objetivo.wellId, objetivo.code === 'OBSERVACION_NOT_FOUND' ? 'NO_ENCONTRADA' : 'NO_DERIVABLE');
+  }
+  if (!observacionesPozoService_puedeAnular(emailN, permisos, objetivo.obs)) {
+    return observacionesPozoService_denegar(objetivo.wellId, OBSERVACIONES_POZO_EMAIL_REGEX.test(observacionesPozoService_normalizarEmail(objetivo.obs.email)) ? 'AJENA' : 'PROPIEDAD_NO_VERIFICABLE');
+  }
+  var previa = observacionesPozoRepository_buscarPorClientRequestId(emailN, valores.clientRequestId);
+  if (previa.total > 0) {
+    return observacionesPozoService_atenderAnulacionExistente(previa, objetivo, valores, permisos);
+  }
+  if (objetivo.obs.estado === OBSERVACIONES_POZO_ESTADOS.ANULADA) {
+    var t = observacionesPozoService_error('INVALID_TRANSITION', 'la observacion ya esta anulada');
+    t.wellId = objetivo.wellId;
+    return t;
+  }
+  return { ok: true, escribir: true, objetivo: objetivo };
+}
+
+// Anula una observacion. `email` / `nombre` son los de la SESION; `permisos`: {observaciones, agregar, anular} (booleanos que decide Api.js). Devuelve {ok:true, duplicada, wellId, observacion}
+// o {ok:false, code, message, wellId?} (wellId solo si ya se conocia, para el Historial). LANZA si la hoja no se puede leer / escribir o si la secuencia no se puede calcular con seguridad
+// (Api.js lo traduce a SERVICE_UNAVAILABLE; en ese caso NO se escribio nada).
+// Doble anulacion: una observacion ya anulada -> INVALID_TRANSITION (salvo el reintento de esa misma anulacion); dos anulaciones simultaneas: solo escribe la primera en tomar el lock, la otra
+// relee dentro del lock, ve la transicion y falla. Orden dentro del lock: repetir objetivo / autorizacion / idempotencia; reintento valido -> devolver sin escribir; recien si hace falta escribir, la
+// integridad global de las secuencias (SERVICE_UNAVAILABLE sin escribir) -> max + 1 -> una sola fila ANULADA.
+function observacionesPozoService_anular(email, nombre, datos, permisos) {
+  var p = permisos || {};
+  if (p.observaciones !== true || (p.anular !== true && p.agregar !== true)) {
+    return observacionesPozoService_error('PERMISSION_DENIED', 'sin permiso para anular observaciones');
+  }
+  var validacion = observacionesPozoService_validarAnulacion(datos);
+  if (!validacion.ok) {
+    return validacion;
+  }
+  var valores = validacion.valores;
+  var emailN = observacionesPozoService_normalizarEmail(email);
+
+  var primera = observacionesPozoService_decidirAnulacion(emailN, p, valores);
+  if (primera.ok !== true || primera.escribir !== true) {
+    return primera;
+  }
+
+  return observacionesPozoRepository_conLock(function () {
+    // dentro del lock se vuelve a decidir: otra ejecucion pudo anularla, escribir este mismo pedido o cambiar el estado mientras se esperaba
+    var enLock = observacionesPozoService_decidirAnulacion(emailN, p, valores);
+    if (enLock.ok !== true || enLock.escribir !== true) {
+      return enLock;
+    }
+    var objetivo = enLock.objetivo;
+    var escrita = observacionesPozoRepository_agregarAnulada({
+      observacionId: objetivo.obs.observacionId,
+      wellId: objetivo.wellId,                                        // el wellId sale de la ALTA original, nunca del cliente
+      motivo: valores.motivo,
+      email: emailN,
+      nombre: observacionesPozoService_texto(nombre),
+      timestampUtc: new Date().toISOString(),
+      clientRequestId: valores.clientRequestId
+    });
+    var anulada = Object.assign({}, objetivo.obs, {
+      estado: OBSERVACIONES_POZO_ESTADOS.ANULADA,
+      anulacion: { nombre: escrita.nombre, timestamp: escrita.timestampUtc, motivo: escrita.motivo }
+    });
+    return { ok: true, duplicada: false, wellId: objetivo.wellId, observacion: observacionesPozoService_vistaAnulacion(anulada, p) };
+  });
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     OBSERVACIONES_POZO_ESTADOS,
+    OBSERVACIONES_POZO_MOTIVO_MIN,
+    OBSERVACIONES_POZO_MOTIVO_MAX,
+    observacionesPozoService_validarAnulacion,
+    observacionesPozoService_esPropia,
+    observacionesPozoService_resolverObjetivo,
+    observacionesPozoService_puedeAnular,
+    observacionesPozoService_decidirAnulacion,
+    observacionesPozoService_anular,
     OBSERVACIONES_POZO_TEXTO_MIN,
     OBSERVACIONES_POZO_TEXTO_MAX,
     OBSERVACIONES_POZO_CLIENT_REQUEST_ID_REGEX,

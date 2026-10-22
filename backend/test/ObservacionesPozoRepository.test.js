@@ -337,10 +337,14 @@ describe('lectura selectiva (hoja grande): pocas llamadas y las celdas minimas',
   });
 });
 
-describe('el repositorio solo agrega ALTAs (E5-2); no anula, edita ni borra', () => {
-  test('la unica escritura de eventos es agregarAlta (mas el setup explicito); no hay anular / actualizar / borrar', () => {
+describe('el repositorio solo AGREGA eventos (E5-2 ALTA, E5-3 ANULADA); no edita ni borra', () => {
+  test('las unicas escrituras de eventos son agregarAlta y agregarAnulada (sobre un mismo escribirEvento) mas el setup explicito; no hay actualizar / borrar / editar', () => {
     const nombres = Object.keys(R).filter((k) => typeof R[k] === 'function');
-    expect(nombres.filter((n) => /agregar|escribir|anular|actualizar|borrar|editar|eliminar/i.test(n))).toEqual(['observacionesPozoRepository_agregarAlta']);
+    expect(nombres.filter((n) => /agregar|escribir|anular|actualizar|borrar|editar|eliminar/i.test(n)).sort()).toEqual([
+      'observacionesPozoRepository_agregarAlta',
+      'observacionesPozoRepository_agregarAnulada',
+      'observacionesPozoRepository_escribirEvento'
+    ]);
     expect(nombres).toContain('setupObservacionesPozoSheet');
   });
 

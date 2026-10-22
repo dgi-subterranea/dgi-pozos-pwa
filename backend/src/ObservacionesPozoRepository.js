@@ -30,7 +30,7 @@
 //   - hoja grande: UNA lectura de las 3 columnas de IDENTIDAD (observacionId, evento, wellId) de todas las filas (sin los textos, que son lo pesado), se eligen las filas del pozo (y
 //     toda ANULADA que referencie una alta del pozo, aunque su wellId este roto) y se leen SOLO esas filas en a lo sumo OBSERVACIONES_POZO_MAX_RANGOS rangos.
 //
-// ESCRITURA (E5-2: solo la ALTA; la anulacion llega en E5-3). Una ALTA es UNA fila escrita de una sola vez (setValues de una fila), con el formato de texto plano ('@') puesto ANTES de los
+// ESCRITURA (E5-2: la ALTA; E5-3: la ANULADA). Una ALTA es UNA fila escrita de una sola vez (setValues de una fila), con el formato de texto plano ('@') puesto ANTES de los
 // valores en todas las columnas menos `secuencia` ('0'): un texto que empiece con "=", "+", "-" o "@" queda como texto, jamas se evalua como formula (mismo patron que el resto de las hojas).
 // La `secuencia` la calcula este archivo (max + 1) y es de FALLAR CERRADO: es un invariante estructural (orden global, cursor de paginacion: un entero unico y monotono), asi que si la hoja
 // ya esta corrupta (una secuencia ilegible, <= 0, fraccionaria o REPETIDA) no se escribe nada: ver calcularSiguienteSecuencia.
@@ -51,6 +51,7 @@ var OBSERVACIONES_POZO_FILAS_LECTURA_COMPLETA = 2000;
 // Lectura selectiva: se unen en un mismo rango las filas separadas por hasta GAP filas, y nunca se hacen mas de MAX_RANGOS lecturas de filas.
 var OBSERVACIONES_POZO_GAP_MAX = 40;
 var OBSERVACIONES_POZO_MAX_RANGOS = 5;
+var OBSERVACIONES_POZO_MAX_FILAS_POR_ID = 10;
 
 // --- Logica pura (testeable sin SpreadsheetApp) ---
 
@@ -397,14 +398,44 @@ function observacionesPozoRepository_buscarPorClientRequestId(emailNormalizado, 
   return { total: filas.length, eventos: eventos };
 }
 
-// Agrega UNA fila ALTA al final: asigna la `secuencia` (max + 1) y la escribe junto con el resto en una sola operacion. Llamar SOLO dentro de observacionesPozoRepository_conLock.
-// `alta` ya viene validada y normalizada por el Service: {observacionId, wellId, texto, email, nombre, timestampUtc, clientRequestId}; `evento`, `categoria` y `motivo` los fija este
-// archivo (ALTA, vacio, vacio) y `secuencia` tambien: el cliente nunca elige ninguno. LANZA, sin escribir nada, si la hoja falta o esta mal o si la secuencia no se puede calcular.
-// Devuelve el evento escrito (con su secuencia).
-function observacionesPozoRepository_agregarAlta(alta) {
+// Todas las filas (cualquier evento) de UNA observacion: las que llevan ese observacionId (en minuscula, sin espacios). Lee la columna observacionId completa y despues SOLO las filas que
+// coinciden. Devuelve {total, eventos}: `total` son todas las coincidencias y `eventos` las primeras OBSERVACIONES_POZO_MAX_FILAS_POR_ID (una observacion sana tiene 1 ALTA y a lo sumo una
+// ANULADA; con muchas mas es una inconsistencia y el Service no sigue). NO interpreta nada: la decision es del Service. Es la busqueda de la anulacion: el wellId NO lo trae el cliente,
+// sale de la ALTA que se encuentra aca.
+function observacionesPozoRepository_buscarPorObservacionId(observacionId) {
   var hoja = observacionesPozoRepository_hoja();
-  var secuencia = observacionesPozoRepository_siguienteSecuencia(hoja);
-  var evento = {
+  var ids = observacionesPozoRepository_leerColumna(hoja, 'observacionId');
+  var filas = [];
+  for (var i = 0; i < ids.length; i++) {
+    if (!observacionesPozoRepository_esVacio(ids[i]) && String(ids[i]).trim().toLowerCase() === observacionId) {
+      filas.push(i + 2);
+    }
+  }
+  var eventos = filas.slice(0, OBSERVACIONES_POZO_MAX_FILAS_POR_ID).map(function (numero) {
+    return observacionesPozoRepository_eventoDesdeFila(hoja.sheet.getRange(numero, 1, 1, hoja.ancho).getValues()[0], hoja.indices, numero);
+  });
+  return { total: filas.length, eventos: eventos };
+}
+
+// Escribe UN evento al final de la hoja: asigna la `secuencia` (max + 1, FALLA CERRADO) y lo escribe en una sola operacion, con formato de texto plano ANTES de los valores. Llamar SOLO
+// dentro de observacionesPozoRepository_conLock. `evento` trae todos los campos menos `secuencia`, que la fija este archivo. LANZA, sin escribir nada, si la hoja falta o esta mal o si la
+// secuencia no se puede calcular. Devuelve el evento escrito (con su secuencia).
+function observacionesPozoRepository_escribirEvento(evento) {
+  var hoja = observacionesPozoRepository_hoja();
+  evento.secuencia = observacionesPozoRepository_siguienteSecuencia(hoja);
+  var fila = observacionesPozoRepository_filaDesdeObjeto(evento, hoja.indices, hoja.ancho);
+  var primera = hoja.sheet.getLastRow() + 1;
+  var rango = hoja.sheet.getRange(primera, 1, 1, hoja.ancho);
+  rango.setNumberFormats([observacionesPozoRepository_formatosDeFila(hoja.indices, hoja.ancho)]);      // texto plano ANTES de los valores
+  rango.setValues([fila]);
+  SpreadsheetApp.flush();
+  return evento;
+}
+
+// Agrega UNA fila ALTA. `alta` ya viene validada y normalizada por el Service: {observacionId, wellId, texto, email, nombre, timestampUtc, clientRequestId}; `evento`, `categoria` y `motivo`
+// los fija este archivo (ALTA, vacio, vacio) y `secuencia` tambien: el cliente nunca elige ninguno.
+function observacionesPozoRepository_agregarAlta(alta) {
+  return observacionesPozoRepository_escribirEvento({
     observacionId: alta.observacionId,
     evento: 'ALTA',
     wellId: alta.wellId,
@@ -414,16 +445,25 @@ function observacionesPozoRepository_agregarAlta(alta) {
     email: alta.email,
     nombre: alta.nombre || '',
     timestampUtc: alta.timestampUtc,
-    secuencia: secuencia,
     clientRequestId: alta.clientRequestId
-  };
-  var fila = observacionesPozoRepository_filaDesdeObjeto(evento, hoja.indices, hoja.ancho);
-  var primera = hoja.sheet.getLastRow() + 1;
-  var rango = hoja.sheet.getRange(primera, 1, 1, hoja.ancho);
-  rango.setNumberFormats([observacionesPozoRepository_formatosDeFila(hoja.indices, hoja.ancho)]);      // texto plano ANTES de los valores
-  rango.setValues([fila]);
-  SpreadsheetApp.flush();
-  return evento;
+  });
+}
+
+// Agrega UNA fila ANULADA (E5-3). `anulada` ya viene validada por el Service: {observacionId (el de la ALTA original), wellId (copiado de esa ALTA), motivo, email, nombre,
+// timestampUtc, clientRequestId}. `evento`, `texto` y `categoria` los fija este archivo (ANULADA, vacio, vacio): NUNCA se copia el texto original a la fila de anulacion.
+function observacionesPozoRepository_agregarAnulada(anulada) {
+  return observacionesPozoRepository_escribirEvento({
+    observacionId: anulada.observacionId,
+    evento: 'ANULADA',
+    wellId: anulada.wellId,
+    texto: '',
+    categoria: '',
+    motivo: anulada.motivo,
+    email: anulada.email,
+    nombre: anulada.nombre || '',
+    timestampUtc: anulada.timestampUtc,
+    clientRequestId: anulada.clientRequestId
+  });
 }
 
 // Serializa leer -> decidir -> escribir entre ejecuciones simultaneas (lock de script). Siempre se libera. La usan las escrituras (E5-2: agregar; E5-3: anular).
@@ -472,6 +512,7 @@ if (typeof module !== 'undefined' && module.exports) {
     OBSERVACIONES_POZO_FILAS_LECTURA_COMPLETA,
     OBSERVACIONES_POZO_GAP_MAX,
     OBSERVACIONES_POZO_MAX_RANGOS,
+    OBSERVACIONES_POZO_MAX_FILAS_POR_ID,
     observacionesPozoRepository_indiceColumnas,
     observacionesPozoRepository_planEsquema,
     observacionesPozoRepository_identidadDeFila,
@@ -487,7 +528,10 @@ if (typeof module !== 'undefined' && module.exports) {
     observacionesPozoRepository_calcularSiguienteSecuencia,
     observacionesPozoRepository_siguienteSecuencia,
     observacionesPozoRepository_buscarPorClientRequestId,
+    observacionesPozoRepository_buscarPorObservacionId,
+    observacionesPozoRepository_escribirEvento,
     observacionesPozoRepository_agregarAlta,
+    observacionesPozoRepository_agregarAnulada,
     observacionesPozoRepository_conLock,
     setupObservacionesPozoSheet
   };

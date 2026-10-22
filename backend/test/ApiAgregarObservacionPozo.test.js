@@ -109,9 +109,9 @@ beforeEach(() => { armar([]); });
 afterEach(() => { jest.restoreAllMocks(); });
 
 describe('enrutado y contrato de la respuesta', () => {
-  test('la accion existe; anular y editar siguen sin existir (E5-3 / nunca)', () => {
+  test('la accion existe; anular existe desde E5-3 (otro archivo de tests) y editar nunca existe', () => {
     expect(agregar().status).toBe('ok');
-    expect(post({ action: 'anularObservacionPozo', sessionToken: 'tok-ana@x.com' }).message).toMatch(/accion desconocida/);
+    expect(post({ action: 'anularObservacionPozo', sessionToken: 'tok-ana@x.com' }).message).not.toMatch(/accion desconocida/);
     expect(post({ action: 'editarObservacionPozo', sessionToken: 'tok-ana@x.com' }).message).toMatch(/accion desconocida/);
   });
 

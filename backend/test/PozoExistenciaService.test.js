@@ -300,18 +300,22 @@ describe('vista sintetica de un pozo fuera del padron', () => {
 describe('el helper es el UNICO lugar: nadie mas consulta ITF por existencia', () => {
   const src = (f) => fs.readFileSync(path.join(__dirname, '..', 'src', f), 'utf8');
 
-  test('solo lo llaman: la correccion de ubicacion (snapshot), el handler de getWellLocation y -desde E5-2- agregar una observacion', () => {
+  test('solo lo llaman: la correccion de ubicacion (snapshot), el handler de getWellLocation y -desde E5-2- agregar una observacion (la anulacion de E5-3 NO)', () => {
     const usuarios = fs.readdirSync(path.join(__dirname, '..', 'src')).filter((f) => f !== 'PozoExistenciaService.js' && /pozoExistenciaService_/.test(src(f)));
     expect(usuarios.sort()).toEqual(['Api.js', 'ObservacionesPozoService.js', 'UbicacionCorreccionService.js']);
   });
 
   test('Observaciones lo usa SOLO al escribir (agregar): la lectura no verifica existencia, y no es una de sus fuentes', () => {
     const codigo = (f) => src(f).split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
-    const servicio = codigo('ObservacionesPozoService.js');
-    const inicio = servicio.indexOf('function observacionesPozoService_agregar(');
-    const llamadasFuera = servicio.slice(0, inicio) + servicio.slice(servicio.indexOf('if (typeof module', inicio));
-    expect(servicio.slice(inicio)).toMatch(/pozoExistenciaService_verificar\(wellId\)/);
-    expect(llamadasFuera).not.toMatch(/pozoExistenciaService_/);
+    const servicio = codigo('ObservacionesPozoService.js').split('\nfunction ');
+    const cuerpo = (nombre) => servicio.find((f) => f.startsWith(nombre + '('));
+    const conLlamada = servicio.filter((f) => /pozoExistenciaService_/.test(f.split('\nif (typeof module')[0]));
+    expect(conLlamada).toHaveLength(1);
+    expect(conLlamada[0].startsWith('observacionesPozoService_agregar(')).toBe(true);
+    expect(cuerpo('observacionesPozoService_agregar')).toMatch(/pozoExistenciaService_verificar\(wellId\)/);
+    expect(cuerpo('observacionesPozoService_anular')).toBeDefined();                         // la anulacion NO verifica la existencia: la ALTA es la autoridad del wellId
+    expect(cuerpo('observacionesPozoService_anular')).not.toMatch(/pozoExistenciaService_|existencia/i);
+    expect(cuerpo('observacionesPozoService_resolverObjetivo')).not.toMatch(/pozoExistenciaService_/);
     expect(codigo('PozoExistenciaService.js')).not.toMatch(/bservacion/);                    // ni como fuente ni de ninguna otra forma
   });
 
