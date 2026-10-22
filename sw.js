@@ -65,6 +65,8 @@ var SHELL_FILES = [
   './js/ubicacionesConocidas.js',
   './js/ubicacionValidacion.js',
   './js/ubicacionPendientes.js',
+  './js/observacionesPozoLogic.js',
+  './js/observacionesPozo.js',
   './js/app.js',
   './manifest.json',
   './icons/icon-192.png',

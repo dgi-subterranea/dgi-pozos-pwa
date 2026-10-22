@@ -1,6 +1,6 @@
 # Observaciones del pozo (E5)
 
-Estado: **E5-1 (lectura) y E5-2 (alta) commiteadas en local; E5-3 (anulación) implementada en el repo, sin publicar.** Todo el frontend (E5-4 a E5-6) queda para las etapas siguientes.
+Estado: **E5-1 (lectura), E5-2 (alta) y E5-3 (anulación) commiteadas en local (backend completo); E5-4 (frontend de lectura) implementada en el repo, sin publicar.** El alta y la anulación en el frontend (E5-5 / E5-6) quedan para las etapas siguientes.
 
 ## Propósito
 Una línea de tiempo de **observaciones operativas** por pozo: acceso, estado físico, lo que informa el propietario, anomalías vistas en campo, un dato registral a revisar o cualquier texto útil. Es **contexto humano y auditable**.
@@ -238,13 +238,50 @@ Una fila `anularObservacionPozo` con el `wellId` derivado de la `ALTA` y `OK` po
 ### Concurrencia
 Cubierta intercalando otra ejecución justo al tomar el lock: autor vs. moderador y dos moderadores sobre la misma observación → una sola `ANULADA`, la otra relee dentro del lock y falla con `INVALID_TRANSITION`; el mismo `clientRequestId` simultáneo → una fila y `duplicada: true`; dos `clientRequestId` distintos → el segundo `INVALID_TRANSITION`; una alta de otra observación intercalada → secuencias únicas y consecutivas; un objetivo que se vuelve ambiguo o una corrupción que aparece mientras se espera el lock → no se escribe.
 
+## Frontend de lectura (E5-4)
+Solo **leer**: tarjeta en el hub, pantalla propia y listado paginado. **No** hay alta ni anulación todavía (E5-5 / E5-6): aunque el usuario tenga `observaciones_agregar` u `observaciones_anular`, no aparece ningún botón ni existen los wrappers `agregarObservacionPozo` / `anularObservacionPozo` en `js/api.js`.
+
+### Archivos
+`js/observacionesPozoLogic.js` (lógica pura, con tests), `js/observacionesPozo.js` (controlador DOM), `apiGetObservacionesPozo` en `js/api.js`, la pantalla `#screen-observaciones` en `index.html`, estilos `.obs-*` en `css/styles.css`, cableado en `js/app.js` (solo hub / navegación) y los dos JS nuevos en `SHELL_FILES` de `sw.js`. Orden de scripts: `reemplazoLogic.js` (helper de fecha) → `observacionesPozoLogic.js` → `observacionesPozo.js` → `app.js`.
+
+### Tarjeta y permisos
+- Tarjeta «Observaciones» («Contexto y novedades del pozo») **solo** con `permisosActuales.observaciones === true` (el booleano exacto; `"SI"`, `1`, truthy o un permiso ausente de un backend viejo **no** cuentan) y sobre un pozo que algún módulo del hub ya encontró.
+- Sin llamada extra al backend para decidir mostrarla, sin carga desde el hub, sin contador ni badge.
+- Los defaults de permisos del frontend incluyen `observaciones`, `observaciones_agregar` y `observaciones_anular` en `false` (estado inicial y cierre de sesión).
+- Sin soporte especial para el rol «solo observaciones» (ver la limitación documentada arriba): no hay endpoint de existencia, búsqueda propia ni lookup adicional.
+
+### Pantalla y carga
+`getObservacionesPozo` se llama **solo al abrir la pantalla** (nunca en la búsqueda ni en el hub): «Cargando…» → primera página (`limit` 50) → render. Volver regresa al hub del **mismo pozo** (`pozoActual` no cambia, sin búsqueda nueva) y descarta todo lo cargado: al reabrir se piden **datos frescos**; no hay cache. Cerrar sesión descarta también las respuestas en vuelo.
+
+### Render
+- **Activa:** texto, `nombre · fecha dd/mm/aaaa hh:mm` (hora de Mendoza, mismo helper que Reemplazo) y la categoría solo si algún día viene definida.
+- **Anulada:** «Observación anulada» (con borde punteado, es una anulación deliberada, no un error), quién la escribió y cuándo, **quién anuló, cuándo** y el **motivo** si viene. Si el backend mandó `texto: null` no se intenta recuperar ni se dice «texto oculto». Si el backend mandó el texto (`observaciones_anular`) se muestra **subordinado** (más chico, apagado, en cursiva) debajo del título; el frontend **no** infiere permisos para decidirlo: renderiza lo que llega.
+- Fecha ausente o inválida: «Fecha no disponible» (en una anulada, la fecha de creación inválida simplemente se omite). Nombre ausente o con forma de email: «Usuario».
+- El estado vacío es «Este pozo todavía no tiene observaciones.» (sin error ni controles).
+
+### Privacidad y seguridad
+- **Lista blanca:** el modelo de vista solo toma `observacionId` (para no duplicar), estado, texto, nombre, fecha, categoría y anulación; un `email`, `clientRequestId`, `secuencia` o cualquier campo extra del payload se descarta antes de llegar al DOM. El `cursor` de paginación se usa internamente y nunca se muestra.
+- Todo texto libre (observación, nombre, motivo, categoría) se pone con `textContent`; el controlador solo crea `li` y `p`; **no** usa `innerHTML` (hay un DOM falso que lanza si alguien lo intenta). Los saltos de línea se conservan por CSS (`white-space: pre-wrap`) y las palabras largas se rompen (`overflow-wrap: anywhere`). Se muestra el texto completo (hasta 1000 caracteres), sin colapsar.
+- Nada de esto va a `console`, URL / hash, `localStorage` / `sessionStorage` ni cookies (hay guardas de fuente).
+- Una respuesta mal formada, sin la forma esperada o **de otro pozo** es un error genérico y nunca se muestra.
+
+### Paginación
+Orden recibido: más reciente primero. Con `hayMas` y un `cursor` válido se ofrece «Ver observaciones anteriores»; pide `antesDeSecuencia = cursor` y **agrega al final** (sin reemplazar la primera página, sin duplicados por `observacionId`). Un segundo toque mientras hay un pedido en vuelo no hace otro. Si falla la página 2 se conserva la página 1 y se muestra un error contextual con el botón disponible para reintentar. Un cursor que no retrocede corta la paginación (sin bucle). Las respuestas de una apertura anterior se descartan.
+
+### Errores
+Siempre desde una tabla (`PERMISSION_DENIED`: «No tenés acceso a las observaciones de este pozo.»; `SERVICE_UNAVAILABLE`, `INVALID_LIMIT`, `INVALID_CURSOR`, red y desconocidos: «No se pudieron cargar las observaciones. Intentá nuevamente.»); nunca el `message` técnico del backend. Con un backend viejo (acción desconocida) la pantalla muestra el error controlado y el resto de la app sigue funcionando. `UNAUTHORIZED` / `USER_DISABLED` cierran la sesión como en los demás módulos. Sin acceso o con sesión vencida no se ofrece «Reintentar».
+
+### Service worker
+`observacionesPozoLogic.js` y `observacionesPozo.js` están en `SHELL_FILES`; las llamadas a Apps Script siguen sin cachearse (network-first del shell; el API nunca pasa por el cache).
+
 ## Alcance
 | Etapa | Contenido | Estado |
 |---|---|---|
 | **E5-1** | modelo + hoja + permisos + derivación + `getObservacionesPozo` (lectura, paginada) | **commiteada en local (sin publicar)** |
 | **E5-2** | `agregarObservacionPozo`: existencia, idempotencia, lock, secuencia, `Historial`, validación de texto y categoría | **implementada (sin publicar)** |
 | **E5-3** | `anularObservacionPozo` (propia / cualquiera según permiso, motivo obligatorio, idempotente, sin verificar existencia) | **implementada (sin publicar)** |
-| E5-4 a E5-6 | frontend: tarjeta y lectura, alta, anulación | pendiente |
+| **E5-4** | frontend de lectura: tarjeta en el hub, pantalla, listado paginado, render de activas / anuladas | **implementada (sin publicar)** |
+| E5-5 / E5-6 | frontend: alta y anulación | pendiente |
 | E5-7 | publicación (**backend primero**, luego el frontend) y smoke real | pendiente |
 
 **Fuera de alcance de E5-1 a E5-3:** edición, reemplazo automático, frontend, tarjeta, modal, categorías funcionales, adjuntos, offline, cache, vista pública y cualquier cambio de mapa / reemplazo / ubicación / fotos / ITF / NE.
@@ -254,3 +291,5 @@ Cubierta intercalando otra ejecución justo al tomar el lock: autor vs. moderado
 `backend/test/ObservacionesPozoRepository.test.js` (esquema, hoja ausente / mal formada, setup, selección de filas, plan de lectura, llamadas y celdas leídas con hojas de 2.500 y 100.000 filas), `ObservacionesPozoService.test.js` (derivación, propiedades con datos aleatorios, privacidad, paginación), `ApiObservacionesPozo.test.js` (permisos, orden de chequeos, sin existencia, contrato, hoja ausente) y `ObservacionesPozoPermisos.test.js` (columnas de `Usuarios`, fail-closed, compatibilidad). Se ajustaron `SheetUserRepository.test.js` y `AuthService.test.js` a los 12 permisos.
 
 `backend/test/ObservacionesPozoAnulacion.test.js` (E5-3, unidades: validación de la entrada, propiedad por email normalizado, matriz pura de permisos, búsqueda por `observacionId`, fila `ANULADA`, decisión) y `ApiAnularObservacionPozo.test.js` (E5-3, de punta a punta por `doPost`: permisos y propiedad, motivo, observación objetivo, no consulta de existencia, privacidad, `Historial` / `Logger`, idempotencia compartida con la alta, reintento con permisos actuales, secuencia e integridad, concurrencia y guardas del código).
+
+Frontend (E5-4): `js/observacionesPozoLogic.test.js` (permisos fail-closed, vista de activa / anulada, privacidad por lista blanca, respuestas mal formadas, fechas y el cargador paginado: primera página, anteriores, sin duplicados, doble toque, error de la página 2, reabrir, respuestas viejas, sesión vencida), `observacionesPozoController.test.js` (el controlador ejecutado con un DOM falso que lanza ante `innerHTML`: activa, anulada con y sin texto, vacío, errores, paginación, XSS y privacidad del payload) y `observacionesPozoWiring.test.js` (HTML, hub, navegación, defaults de permisos, API, service worker, CSS responsive y guardas de fuente).

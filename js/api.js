@@ -354,3 +354,10 @@ function apiCancelarSugerenciaFuente(sessionToken, datos) {
     clientRequestId: d.clientRequestId
   });
 }
+
+// Observaciones del pozo (E5-4, solo LECTURA). Requiere el permiso "observaciones" (el BACKEND lo exige; el frontend ni siquiera llama sin el). Una pagina de las mas
+// recientes primero: `limit` (la primera pagina pide 50) y `antesDeSecuencia` = el `cursor` que devolvio la pagina anterior (undefined en la primera: JSON.stringify lo omite). El
+// backend decide ademas si el texto de una observacion anulada viaja (solo con observaciones_anular). Alta y anulacion llegan en E5-5 / E5-6.
+function apiGetObservacionesPozo(sessionToken, wellId, limit, antesDeSecuencia) {
+  return callBackend('getObservacionesPozo', { sessionToken: sessionToken, wellId: wellId, limit: limit, antesDeSecuencia: antesDeSecuencia });
+}

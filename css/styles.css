@@ -5353,3 +5353,105 @@ p.uval-primera {
 .usug-aviso-no-aplicable {
   margin: 8px 0 0;
 }
+
+/* --- Observaciones del pozo (E5-4, solo lectura) --- */
+.obs-contenido {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px 24px;
+}
+.obs-vacio {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--color-text-soft);
+}
+.obs-lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.obs-item {
+  min-width: 0;
+  padding: 12px 14px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+}
+.obs-item p {
+  margin: 0;
+}
+.obs-item p + p {
+  margin-top: 6px;
+}
+/* texto libre: respeta los saltos de linea sin interpretar HTML (se pone con textContent) y nunca desborda con palabras largas */
+.obs-texto {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  color: var(--color-text);
+}
+.obs-meta {
+  font-size: 0.8rem;
+  color: var(--color-text-soft);
+  overflow-wrap: anywhere;
+}
+.obs-categoria {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--color-primary-dark);
+  overflow-wrap: anywhere;
+}
+/* Anulada: una anulacion deliberada, distinta de una observacion activa (borde punteado, fondo neutro; el titulo lo dice con palabras, no solo con color) */
+.obs-item-anulada {
+  background: var(--color-bg);
+  border-style: dashed;
+  border-color: var(--color-text-faint);
+}
+.obs-anulada-titulo {
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--color-warn);
+}
+/* el texto original (solo si el backend lo mando) queda subordinado: mas chico, apagado y con otra tipografia que una observacion activa */
+.obs-texto-original {
+  font-size: 0.85rem;
+  color: var(--color-text-soft);
+  font-style: italic;
+  padding-left: 10px;
+  border-left: 2px solid var(--color-border);
+}
+.obs-motivo {
+  font-size: 0.85rem;
+  color: var(--color-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.obs-mas {
+  width: 100%;
+}
+.obs-mas:disabled {
+  opacity: 0.6;
+}
+@media (min-width: 640px) {
+  #screen-observaciones {
+    max-width: 640px;
+  }
+  #screen-observaciones .tv-topbar {
+    padding: 16px 34px;
+  }
+  #screen-observaciones .tv-header {
+    padding: 22px 34px 18px;
+  }
+  .obs-contenido {
+    padding: 22px 34px 32px;
+  }
+}

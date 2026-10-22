@@ -107,7 +107,7 @@ describe('integracion en app.js', () => {
   });
 
   test('permisos por defecto fail-closed incluyen ubicacion_corregir y ubicacion_validar en false (inicio y logout)', () => {
-    const defecto = app.match(/permisosActuales = \{[^}]*ubicacion_corregir: false, ubicacion_validar: false \}/g) || [];
+    const defecto = app.match(/permisosActuales = \{[^}]*ubicacion_corregir: false, ubicacion_validar: false[^}]* \}/g) || [];
     expect(defecto.length).toBe(2);
   });
 

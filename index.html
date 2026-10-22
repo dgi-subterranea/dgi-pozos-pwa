@@ -1229,6 +1229,39 @@
     </div>
   </div>
 
+  <!-- Observaciones del pozo (E5-4, solo lectura). Se abre desde la tarjeta "Observaciones" del hub (permiso observaciones=SI); getObservacionesPozo se llama SOLO al abrir
+       esta pantalla. Controlador: js/observacionesPozo.js (logica en js/observacionesPozoLogic.js). Volver regresa al hub del mismo pozo. El texto de las observaciones se pinta
+       siempre con textContent. Alta y anulacion llegan en E5-5 / E5-6. -->
+  <div id="screen-observaciones" class="screen" hidden>
+    <div class="tv-topbar tv-topbar-fija">
+      <button type="button" id="btn-observaciones-volver" class="tv-volver">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+        Volver
+      </button>
+    </div>
+    <div class="tv-header">
+      <div>
+        <p id="observaciones-entidad" class="mapa-titulo mono"></p>
+        <p class="tv-header-label">Observaciones del pozo</p>
+      </div>
+    </div>
+
+    <div id="observaciones-cargando" class="mapa-loading reemplazo-cargando" hidden>
+      <div class="cargando" data-cargando>Cargando observaciones...</div>
+    </div>
+    <div id="observaciones-error" class="reemplazo-bloque" hidden>
+      <p id="observaciones-error-texto" class="error-message"></p>
+      <button type="button" id="btn-observaciones-reintentar" class="button-secondary">Reintentar</button>
+    </div>
+
+    <div id="observaciones-contenido" class="obs-contenido" hidden>
+      <p id="observaciones-vacio" class="obs-vacio" hidden>Este pozo todavía no tiene observaciones.</p>
+      <ol id="observaciones-lista" class="obs-lista" aria-label="Observaciones del pozo"></ol>
+      <p id="observaciones-error-mas" class="error-message" role="alert" hidden></p>
+      <button type="button" id="btn-observaciones-mas" class="button-secondary obs-mas" hidden>Ver observaciones anteriores</button>
+    </div>
+  </div>
+
   <!-- Visor de la galeria de fotos de pozos: la imagen completa se pide al
        abrir y al pasar a la anterior/siguiente (por el proxy del backend). -->
   <div id="fotos-visor-overlay" class="reemplazo-visor" role="dialog" aria-modal="true" aria-label="Foto del pozo" hidden>
@@ -1615,6 +1648,8 @@
   <script src="js/ubicacionPendientes.js"></script>
   <script src="js/ubicacionSugerenciasLogic.js"></script>
   <script src="js/ubicacionSugerencias.js"></script>
+  <script src="js/observacionesPozoLogic.js"></script>
+  <script src="js/observacionesPozo.js"></script>
   <script src="js/app.js"></script>
   <!-- Va DESPUES de app.js en el documento a proposito, para que
        onGsiLoaded/onGsiLoadError ya existan antes de que puedan

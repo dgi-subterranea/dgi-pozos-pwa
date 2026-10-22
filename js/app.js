@@ -22,6 +22,7 @@
     seleccionItf: document.getElementById('screen-seleccion-itf'),
     reemplazo: document.getElementById('screen-reemplazo'),
     fotos: document.getElementById('screen-fotos'),
+    observaciones: document.getElementById('screen-observaciones'),
     disabled: document.getElementById('screen-disabled'),
     offline: document.getElementById('screen-offline')
   };
@@ -173,7 +174,7 @@
   // permiso. Se usan solo para decidir que fetch conviene ni siquiera
   // disparar - el backend vuelve a validar cada uno igual, esto es una
   // optimizacion de red, no el limite de seguridad real.
-  var permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false, ubicacion_corregir: false, ubicacion_validar: false };
+  var permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false, ubicacion_corregir: false, ubicacion_validar: false, observaciones: false, observaciones_agregar: false, observaciones_anular: false };
 
   var ICON_PERFIL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5.5-5.5L11 15l-3-3-4.5 4.5"/></svg>';
   var ICON_DATOS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>';
@@ -182,6 +183,7 @@
   var ICON_NE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 17l5-6 4 3 4-7 5 5"/><path d="M3 21h18" stroke-linecap="round"/></svg>';
   var ICON_REEMPLAZO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   var ICON_FOTOS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h3l2-3h6l2 3h3v11H4z" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.5"/></svg>';
+  var ICON_OBSERVACIONES = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 4h14a1 1 0 011 1v10a1 1 0 01-1 1h-8l-4 4v-4H5a1 1 0 01-1-1V5a1 1 0 011-1z" stroke-linejoin="round"/><path d="M8 9h8M8 12h5" stroke-linecap="round"/></svg>';
   var ICON_MAPS ='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 20l-5-2V5l5 2 6-2 5 2v13l-5-2-6 2z"/></svg>';
   var ICON_SEARCH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>';
   var ICON_CLOSE = '<svg viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
@@ -287,6 +289,11 @@
     if (puedeFotos()) {
       modulos.push({ id: 'fotos', titulo: 'Fotos', desc: descFotosHub(pozo.wellId), icono: ICON_FOTOS });
     }
+    // Observaciones del pozo (E5-4): solo con observaciones === true (el booleano exacto; 'SI', 1 o un permiso ausente NO). Sin llamada extra al backend: la tarjeta solo abre la
+    // pantalla, que es la que pide los datos. Sin contador ni badge. El alta y la anulacion (observaciones_agregar / observaciones_anular) llegan en E5-5 / E5-6.
+    if (observacionesPozoLogic_puedeVer(permisosActuales)) {
+      modulos.push({ id: 'observaciones', titulo: 'Observaciones', desc: 'Contexto y novedades del pozo', icono: ICON_OBSERVACIONES });
+    }
 
     // Cantidad impar (>1) de tarjetas: la ultima ocupa todo el ancho en vez
     // de dejar un hueco al lado (ver .hub-grid.n3).
@@ -382,6 +389,8 @@
       abrirReemplazo({ wellId: pozoActual.wellId, puntoNEReferencia: puntoNE });
     } else if (id === 'fotos') {
       abrirFotos(fotosPozosLogic_entidadDePozo(pozoActual));
+    } else if (id === 'observaciones') {
+      abrirObservaciones(pozoActual.wellId);
     }
   }
 
@@ -1239,7 +1248,7 @@
     localStorage.removeItem('sessionToken');
     sessionToken = null;
     currentEmail = null;
-    permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false, ubicacion_corregir: false, ubicacion_validar: false };
+    permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false, ubicacion_corregir: false, ubicacion_validar: false, observaciones: false, observaciones_agregar: false, observaciones_anular: false };
     // un modal de correccion abierto no sobrevive a la sesion
     ubicacionCorreccionController_cerrar();
     // ni el visor de ubicaciones conocidas
@@ -1254,6 +1263,8 @@
     // ni el resumen de fotos, la galeria abierta o la cola de subida
     fotosPozosResumenController_reset();
     fotosPozosController_reset();
+    // ni las observaciones abiertas (se descartan las respuestas en vuelo)
+    observacionesPozoController_reset();
     toggleAccesosUbicacion();
     if (gsiLoaded) {
       // Sin esto, auto_select podria volver a loguear silenciosamente a
@@ -1798,6 +1809,31 @@
     restaurarPantalla(fotosOrigen);
     // el contador del origen pudo cambiar (fotos cargadas): se repinta
     repintarContadoresFotos();
+  });
+
+  // --- Observaciones del pozo (E5-4, solo lectura) ---
+  // Se abre desde la tarjeta del hub y Volver regresa al hub del MISMO pozo (pozoActual no se toca: no hay busqueda nueva). Los datos se piden al abrir, siempre frescos.
+  function abrirObservaciones(wellId) {
+    if (!observacionesPozoLogic_puedeVer(permisosActuales) || typeof wellId !== 'string') {
+      return;       // defensa en profundidad: el backend vuelve a validar el permiso
+    }
+    showScreen('observaciones');
+    observacionesPozoController_abrir(wellId);
+  }
+
+  observacionesPozoController_inicializar(function () {
+    return {
+      sessionToken: sessionToken,
+      permisos: permisosActuales,
+      onSessionExpired: function () {
+        logout();
+      }
+    };
+  });
+
+  document.getElementById('btn-observaciones-volver').addEventListener('click', function () {
+    observacionesPozoController_cerrar();
+    showScreen('main');
   });
 
   // Repinta los contadores de fotos de la pantalla a la que se vuelve
