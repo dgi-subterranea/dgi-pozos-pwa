@@ -1,5 +1,7 @@
-// "¿Este pozo existe para la aplicacion?" - UNICO lugar que lo decide (E4). Lo usan, y nadie mas, dos puntos: el snapshot de Irrigacion al proponer una ubicacion
+// "¿Este pozo existe para la aplicacion?" - UNICO lugar que lo decide (E4). Hoy lo usan dos puntos: el snapshot de Irrigacion al proponer una ubicacion
 // (ubicacionCorreccionService_snapshotIrrigacion) y la vista de ubicacion de un pozo fuera del padron (handleGetWellLocation). Ningun endpoint hace sus propios lookups.
+// E5 (Observaciones del pozo) sumara un TERCER consumidor, solo al ESCRIBIR (agregar una observacion: E5-2): la LECTURA de observaciones no verifica existencia. Las observaciones NO son
+// evidencia de que un pozo exista (no hay fuente OBSERVACION_PREVIA): nunca se agregan a la lista de fuentes de abajo.
 //
 // Un pozo "existe" si alguna fuente institucional ya lo conoce. Fuentes validas (v1), en este orden, y se corta en la PRIMERA que confirma:
 //   1. PADRON            registryService_getWellLocation: el padron actual (si esta aca, el pozo NO esta "fuera del padron").

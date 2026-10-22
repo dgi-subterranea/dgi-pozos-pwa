@@ -9,16 +9,22 @@ const {
 } = require('../src/SheetUserRepository');
 
 describe('sheetUserRepository_indiceColumnas', () => {
-  test('encuentra las 13 columnas en el orden original', () => {
-    const header = ['email', 'nombre', 'estado', 'fecha_alta', 'perfil', 'datos', 'ubicacion', 'ne', 'reemplazo', 'fotos', 'fotos_carga', 'ubicacion_corregir', 'ubicacion_validar'];
+  test('encuentra las 16 columnas en el orden original (E5: + observaciones, observaciones_agregar, observaciones_anular)', () => {
+    const header = ['email', 'nombre', 'estado', 'fecha_alta', 'perfil', 'datos', 'ubicacion', 'ne', 'reemplazo', 'fotos', 'fotos_carga', 'ubicacion_corregir', 'ubicacion_validar', 'observaciones', 'observaciones_agregar', 'observaciones_anular'];
     const idx = sheetUserRepository_indiceColumnas(header);
-    expect(idx).toEqual({ email: 0, nombre: 1, estado: 2, fecha_alta: 3, perfil: 4, datos: 5, ubicacion: 6, ne: 7, reemplazo: 8, fotos: 9, fotos_carga: 10, ubicacion_corregir: 11, ubicacion_validar: 12 });
+    expect(idx).toEqual({
+      email: 0, nombre: 1, estado: 2, fecha_alta: 3, perfil: 4, datos: 5, ubicacion: 6, ne: 7, reemplazo: 8, fotos: 9, fotos_carga: 10, ubicacion_corregir: 11, ubicacion_validar: 12,
+      observaciones: 13, observaciones_agregar: 14, observaciones_anular: 15
+    });
   });
 
   test('encuentra las columnas aunque esten reordenadas', () => {
-    const header = ['ubicacion_validar', 'ubicacion_corregir', 'fotos_carga', 'fotos', 'reemplazo', 'ne', 'ubicacion', 'datos', 'perfil', 'fecha_alta', 'estado', 'nombre', 'email'];
+    const header = ['observaciones_anular', 'observaciones_agregar', 'observaciones', 'ubicacion_validar', 'ubicacion_corregir', 'fotos_carga', 'fotos', 'reemplazo', 'ne', 'ubicacion', 'datos', 'perfil', 'fecha_alta', 'estado', 'nombre', 'email'];
     const idx = sheetUserRepository_indiceColumnas(header);
-    expect(idx).toEqual({ ubicacion_validar: 0, ubicacion_corregir: 1, fotos_carga: 2, fotos: 3, reemplazo: 4, ne: 5, ubicacion: 6, datos: 7, perfil: 8, fecha_alta: 9, estado: 10, nombre: 11, email: 12 });
+    expect(idx).toEqual({
+      observaciones_anular: 0, observaciones_agregar: 1, observaciones: 2, ubicacion_validar: 3, ubicacion_corregir: 4, fotos_carga: 5, fotos: 6, reemplazo: 7, ne: 8, ubicacion: 9, datos: 10, perfil: 11,
+      fecha_alta: 12, estado: 13, nombre: 14, email: 15
+    });
   });
 
   test('una hoja SIN las columnas fotos / fotos_carga (todavia no agregadas) las da como -1: fail-closed', () => {

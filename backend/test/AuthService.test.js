@@ -412,7 +412,7 @@ describe('permiso reemplazo (Modulo Reemplazos v1)', () => {
     global.sheetUserRepository_getUserStatus.mockReturnValue({ found: true, active: true });
     expect(AuthService.getUserAccess('f@example.com').permisos).toEqual({
       perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false,
-      ubicacion_corregir: false, ubicacion_validar: false
+      ubicacion_corregir: false, ubicacion_validar: false, observaciones: false, observaciones_agregar: false, observaciones_anular: false
     });
   });
 });

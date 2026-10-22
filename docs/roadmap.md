@@ -133,7 +133,7 @@ Estado: idea documentada, sin diseño técnico ni implementación.
 
 **A evaluar más adelante:** categorías, adjuntos / fotos (en relación con la fase de fotos), permisos para comentar y visibilidad interna / pública.
 
-Estado: idea documentada, sin diseño técnico ni implementación.
+Estado: **en implementación (E5).** Diseño y avance en `docs/observaciones-pozo.md`: E5-1 (modelo, hoja `ObservacionesPozo`, permisos y lectura paginada) implementada en el repo, sin publicar; alta, anulación y frontend pendientes.
 
 ## Fase futura (SOLO documentada; sin código) — QR + NFC por pozo
 

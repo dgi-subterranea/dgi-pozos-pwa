@@ -165,6 +165,9 @@ function doPost(e) {
           motivo: body.motivo,
           clientRequestId: body.clientRequestId
         });
+      } else if (body.action === 'getObservacionesPozo') {
+        // Solo estos 2 parametros de paginacion ademas del pozo: cualquier otro campo que mande el cliente se ignora.
+        response = handleGetObservacionesPozo(body.sessionToken, body.wellId, body.limit, body.antesDeSecuencia);
       } else {
         Logger.log('doPost: accion desconocida: ' + api_limpiarMensajeLog(body.action));
         response = { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'accion desconocida: ' + body.action };
@@ -1625,6 +1628,39 @@ function handleCancelarSugerenciaFuente(sessionToken, datos) {
   return { status: 'ok', data: { sugerencia: resultado.sugerencia, duplicada: resultado.duplicada === true } };
 }
 
+// Observaciones generales de un pozo (E5-1, solo lectura). Orden de chequeos, igual que el resto: sesion -> formato de wellId -> permiso `observaciones` -> contenido. NO verifica que el
+// pozo exista (sin filas devuelve una lista vacia: leer no es un oraculo de existencia; las observaciones tampoco son evidencia de que un pozo exista). Quien ademas tiene
+// `observaciones_anular` recibe el texto original de las observaciones ANULADAS; el resto recibe null. Nunca viaja el email del autor, la secuencia ni el clientRequestId.
+// Una lectura OK no se audita (alta frecuencia y sin efectos); permisos denegados, parametros invalidos y fallas si, como siempre. Una hoja ausente o con un esquema que no se
+// reconoce NO se crea ni se repara: SERVICE_UNAVAILABLE (fail-closed).
+function handleGetObservacionesPozo(sessionToken, wellId, limit, antesDeSecuencia) {
+  var validation = validateSessionAndWellId(sessionToken, wellId, 'getObservacionesPozo');
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+
+  var permiso = validarPermiso(session, 'getObservacionesPozo', wellId, 'observaciones');
+  if (!permiso.ok) {
+    return permiso.response;
+  }
+
+  var resultado;
+  try {
+    resultado = observacionesPozoService_getObservaciones(wellId, { limit: limit, antesDeSecuencia: antesDeSecuencia }, {
+      moderador: hasPermission(session.email, 'observaciones_anular') === true
+    });
+  } catch (err) {
+    logHistoryEvent(session.email, 'getObservacionesPozo', wellId, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
+  }
+  if (!resultado.ok) {
+    logHistoryEvent(session.email, 'getObservacionesPozo', wellId, resultado.code);
+    return { status: 'error', code: resultado.code, message: resultado.message };
+  }
+  return { status: 'ok', data: resultado.data };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     doPost,
@@ -1633,6 +1669,7 @@ if (typeof module !== 'undefined' && module.exports) {
     handleGetSugerenciasFuentesPendientes,
     handleResolverSugerenciaFuente,
     handleCancelarSugerenciaFuente,
+    handleGetObservacionesPozo,
     handleGetDecisionesFuentesPozo,
     handleGetDecisionesFuentesDelta,
     handleDecidirFuenteUbicacion,
