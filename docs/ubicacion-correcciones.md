@@ -562,8 +562,17 @@ Solo frontend. La UI usa las dos marcas del backend **sin mezclarlas y sin volve
 - **Mensajes de éxito** (sin cambios respecto de E4-2, sin sobreexplicar): primera propuesta «Ubicación sugerida. Queda pendiente de validación.»; primera autovalidada «Ubicación agregada y validada.»; corrección propuesta «Corrección enviada para validación.»; corrección autovalidada «Ubicación corregida y validada.».
 - Permisos, composición E3, mapa, Cerca Mío, selección y reemplazo: sin cambios.
 
-### Pendiente (E4-4)
-Prueba de punta a punta (frontend real contra el backend real) y prueba real con el pozo 14-0123. **Orden de publicación:** primero el frontend, después el backend (gas:push → versión → deploy). Mejora futura: centro aproximado del departamento para el mapa de ingreso.
+## E4-4 — Publicación y cierre de E4 en producción (21/10/2026)
+**E4 queda CERRADA EN PRODUCCIÓN.** Orden seguido: frontend primero, backend después.
+
+- **Frontend:** `origin/main` = `e6bd642` (GitHub Pages). Commits de E4: `88a485d` (E4-1 backend), `97bf3b5` (E4-2 tarjeta y flujo), `aae5f45` (fix de un test con reloj real; solo tests) y `e6bd642` (E4-3 copy y marcas). Con el backend todavía v43 el frontend nuevo no rompió nada (un pozo fuera del padrón seguía sin tarjeta Ubicación: `WELL_LOCATION_NOT_FOUND`).
+- **Backend:** Apps Script `dgi-pozos-backend` en la **v44** (E4-1: `PozoExistenciaService`, `noEnPadron`, `primeraUbicacion` / `candidataPrimeraUbicacion`), desplegada sobre el deployment productivo existente (`gas:push` verificado → `gas:version` → `gas:deploy`); la URL `/exec` no cambió.
+- **Pozo 14-0123** (fuera del padrón, conocido por ITF): `getWellLocation` → `ok` con `ubicacionResuelta.estado = noEnPadron`, `coordenadas = null`, `coordenadasProvincia = []`; `getWellRecord` sigue en `WELL_RECORD_NOT_FOUND` (sin ficha registral inventada). La tarjeta Ubicación aparece con «Sin ubicación registrada» y «Este pozo no figura en el padrón actual.»; con corregir + validar el botón es «Agregar ubicación». Modal sin guardar verificado: título, texto de Irrigación, sin distancia ni aviso de 1 km ni marcador registral, observación obligatoria con su explicación siempre visible, Guardar deshabilitado sin texto, GPS / mapa / GMS / POSGAR disponibles.
+- **Sin regresiones** (backend viejo y nuevo): 14-0043 (R «Aceptada»), 14-0001 (V + R «Validada en campo»), 14-0002 (C «Coincidente») y 14-0006 (en el padrón sin coordenada: «Sin ubicación registrada», «figura en el padrón, pero no tiene una coordenada cargada», «Agregar ubicación»).
+- **Cero escrituras:** el smoke no creó ninguna corrección ni dato de producción (lectura de correcciones de 14-0123: sin vigente, sin pendientes, sin historial). No se creó ninguna ubicación ficticia.
+
+### Smoke pendiente (no bloqueante)
+**Validar de punta a punta la primera ubicación real de un pozo fuera del padrón cuando exista una coordenada de campo confirmada** (por ejemplo 14-0123): propuesta / autovalidación → marcas «Primera ubicación conocida / validada del pozo» en la ficha y la bandeja → aparición del pozo en el mapa con `sin base + V`. Solo con una coordenada real y con confirmación explícita de Federico antes de escribir; no se usan datos de prueba en producción. Mejora futura aparte: centro aproximado del departamento para el mapa de ingreso (GPS → departamento → Mendoza).
 
 ## Tests
 Punto operativo (etapa 1): `js/ubicacionOperativaLogic.test.js`. Etapa 2: `backend/test/UbicacionValidadasDelta.test.js`. Etapa 3: `js/mapaDatasetOperativo.test.js`, `js/mapaLogic.test.js` y `js/buscarReemplazoLogic.test.js`.
