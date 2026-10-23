@@ -1,6 +1,6 @@
 # Observaciones del pozo (E5)
 
-Estado: **E5-1 (lectura), E5-2 (alta) y E5-3 (anulación) commiteadas en local (backend completo); E5-4 (frontend de lectura) implementada en el repo, sin publicar.** El alta y la anulación en el frontend (E5-5 / E5-6) quedan para las etapas siguientes.
+Estado: **E5-1 (lectura), E5-2 (alta) y E5-3 (anulación) commiteadas en local (backend completo) y E5-4 (frontend de lectura) también; E5-5 (frontend: agregar observación) implementada en el repo, sin publicar.** La anulación en el frontend (E5-6) queda para la etapa siguiente.
 
 ## Propósito
 Una línea de tiempo de **observaciones operativas** por pozo: acceso, estado físico, lo que informa el propietario, anomalías vistas en campo, un dato registral a revisar o cualquier texto útil. Es **contexto humano y auditable**.
@@ -239,7 +239,7 @@ Una fila `anularObservacionPozo` con el `wellId` derivado de la `ALTA` y `OK` po
 Cubierta intercalando otra ejecución justo al tomar el lock: autor vs. moderador y dos moderadores sobre la misma observación → una sola `ANULADA`, la otra relee dentro del lock y falla con `INVALID_TRANSITION`; el mismo `clientRequestId` simultáneo → una fila y `duplicada: true`; dos `clientRequestId` distintos → el segundo `INVALID_TRANSITION`; una alta de otra observación intercalada → secuencias únicas y consecutivas; un objetivo que se vuelve ambiguo o una corrupción que aparece mientras se espera el lock → no se escribe.
 
 ## Frontend de lectura (E5-4)
-Solo **leer**: tarjeta en el hub, pantalla propia y listado paginado. **No** hay alta ni anulación todavía (E5-5 / E5-6): aunque el usuario tenga `observaciones_agregar` u `observaciones_anular`, no aparece ningún botón ni existen los wrappers `agregarObservacionPozo` / `anularObservacionPozo` en `js/api.js`.
+Solo **leer**: tarjeta en el hub, pantalla propia y listado paginado. El alta se describe en la sección siguiente (E5-5); la anulación (E5-6) todavía no existe.
 
 ### Archivos
 `js/observacionesPozoLogic.js` (lógica pura, con tests), `js/observacionesPozo.js` (controlador DOM), `apiGetObservacionesPozo` en `js/api.js`, la pantalla `#screen-observaciones` en `index.html`, estilos `.obs-*` en `css/styles.css`, cableado en `js/app.js` (solo hub / navegación) y los dos JS nuevos en `SHELL_FILES` de `sw.js`. Orden de scripts: `reemplazoLogic.js` (helper de fecha) → `observacionesPozoLogic.js` → `observacionesPozo.js` → `app.js`.
@@ -274,6 +274,47 @@ Siempre desde una tabla (`PERMISSION_DENIED`: «No tenés acceso a las observaci
 ### Service worker
 `observacionesPozoLogic.js` y `observacionesPozo.js` están en `SHELL_FILES`; las llamadas a Apps Script siguen sin cachearse (network-first del shell; el API nunca pasa por el cache).
 
+## Frontend: agregar observación (E5-5)
+Desde la pantalla Observaciones: botón «Agregar observación», formulario modal, validación, `clientRequestId` por intención, mensaje de éxito, actualización inmediata del listado y reintento seguro. **No** hay anulación todavía (E5-6): no existe el botón ni el wrapper `anularObservacionPozo` en ningún archivo del frontend.
+
+### Botón y permisos
+El botón aparece **solo** con `observaciones === true` **y** `observaciones_agregar === true` (ambos booleanos exactos): solo uno de los dos, `"SI"`, `1` o cualquier truthy **no** alcanzan. Solo se ve con la lista cargada (también con el estado vacío). El backend sigue siendo la autoridad: se vuelve a validar al abrir el formulario y al guardar (sin permiso no se hace ningún pedido).
+
+### API
+`apiAgregarObservacionPozo(sessionToken, wellId, texto, clientRequestId)`: POST `text/plain` como el resto. Lista blanca: **no** viaja categoría, email, nombre, fecha, `observacionId`, secuencia ni permisos.
+
+### Formulario
+Modal (hoja inferior en celular, centrado en pantallas grandes; fuera de `#screen-observaciones`): título, `label` asociado a un único `textarea` («Observación», sin `maxlength`: contaría unidades UTF-16 y cortaría emoji), la ayuda «No incluyas datos personales innecesarios.», el contador `n / 1000`, un error con `role="alert"` asociado al campo (`aria-describedby`, `aria-invalid`), **Cancelar** y **Guardar** (deshabilitado de verdad si el texto es inválido o se está guardando). Foco al `textarea` al abrir; al cerrar vuelve al botón que lo abrió; Escape cancela; Tab rota dentro del modal; el fondo no se desplaza. El estado «Guardando…» bloquea Guardar, Cancelar, × y el campo (no hay doble submit: una sola request). El `submit` siempre hace `preventDefault`.
+
+### Normalización y contador
+El frontend **replica la regla del backend** (`normalizarTexto`: saltos de línea CRLF/CR/NEL/LS/PS → `\n`, tabulador → espacio, se eliminan controles incompatibles, bidireccionales explícitos, BOM y surrogates sueltos, `trim` de los extremos; no se colapsan espacios ni líneas en blanco) y mide el largo en **code points** (`Array.from`, un emoji cuenta 1): mínimo 3, máximo 1000. Un test de **paridad** compara 6000 cadenas generadas con los caracteres problemáticos contra el backend real. Se envía el texto **ya normalizado** (el backend vuelve a normalizar: es idempotente y sigue siendo la autoridad). Diferencia con el backend: los surrogates sueltos se quitan con un bucle y no con una regex con lookbehind (que es un error de sintaxis en Safari < 16.4 y rompería todo el script). El contador pasa a decir «1003 / 1000 · te pasaste por 3» (con palabras, además del color y de `aria-invalid`).
+
+### clientRequestId: una intención de alta
+`^[A-Za-z0-9_-]{8,64}$` (`obs-` + UUID, con respaldo si no hay `crypto.randomUUID`). Se genera al abrir el formulario y define **una intención** (un texto normalizado que se quiere guardar una vez):
+| Situación | Id |
+|---|---|
+| abrir el formulario / cancelar y reabrir / tras un éxito la próxima alta | **nuevo** |
+| editar antes del primer envío | el mismo |
+| reintentar el **mismo** texto (red caída, error del servidor, definitivo o incierto) | el **mismo** (si la primera vez llegó a escribir, el backend devuelve esa observación con `duplicada: true`) |
+| ya hubo un intento y el texto **normalizado** cambió | **nuevo**, antes de enviar (reusarlo daría `IDEMPOTENCY_CONFLICT`) |
+| cambios que el backend normaliza igual (espacios de los extremos, CRLF) | el mismo |
+| tras `IDEMPOTENCY_CONFLICT` o `INVALID_CLIENT_REQUEST_ID` (el id quedó asociado a otro contenido / fue rechazado antes de escribir) | **nuevo en el siguiente envío del usuario** (nunca se reenvía solo ni en bucle) |
+
+### Respuesta y lista
+`duplicada: false` y `true` son **ambos éxito** («Observación agregada.», sin mostrar «duplicada»): la observación devuelta pasa por la lista blanca de E5-4 y entra **arriba** de lo ya cargado, **sin recargar**: dedupe por `observacionId`, el estado vacío desaparece, suma al total, **no toca el cursor** (sigue apuntando a las anteriores) ni el botón «Ver observaciones anteriores». Después se cierra el formulario. **No** hay alta optimista: nada se agrega antes de la respuesta.
+
+**Deuda menor (decisión MVP):** si el backend devuelve una observación con `duplicada: true` que **no** estaba en las páginas ya cargadas (p. ej. un reintento tardío), se inserta **arriba**; el frontend no conoce su `secuencia` y no intenta reconstruir su posición cronológica. Al volver a abrir la pantalla, la lectura del backend restaura el orden real. Una respuesta sin la forma esperada, de otro pozo o cuya observación no es una `ACTIVA` mostrable se trata como error (texto e id se conservan: el reintento es idempotente).
+
+### Frescura (respuestas viejas)
+Si la respuesta de un alta llega **después de** salir de la pantalla, cerrar sesión o abrir otro pozo, **no se aplica** a la UI (ni éxito ni error ni cierre de sesión): la escritura pudo ocurrir en el backend, pero la interfaz descarta el resultado de un contexto que ya no es ese. Al volver a abrir la pantalla se piden datos frescos y esa observación aparece. Mientras se guarda, Cancelar y Escape no cierran el formulario.
+
+### Errores
+Siempre desde una tabla; nunca el `message` técnico; el texto del formulario **siempre se conserva**:
+`INVALID_TEXTO` → «La observación debe tener entre 3 y 1000 caracteres.» junto al campo (con foco al campo y `aria-invalid`); `WELL_NOT_FOUND` → «No se pudo confirmar que este pozo exista en las fuentes disponibles.»; `SERVICE_UNAVAILABLE`, red, `INVALID_CATEGORIA`, `INVALID_CLIENT_REQUEST_ID`, `INCONSISTENT_STATE` y desconocidos → «No se pudo guardar la observación. Intentá nuevamente.»; `IDEMPOTENCY_CONFLICT` → «La observación cambió después de un intento anterior. Revisá el texto e intentá nuevamente.»; `PERMISSION_DENIED` → sin permiso; `UNAUTHORIZED` / `USER_DISABLED` → el flujo global de sesión.
+
+### Privacidad
+El texto nunca va a `console`, URL / hash, `localStorage` / `sessionStorage` ni cookies, y no se usa `innerHTML` (el DOM falso de los tests lanza si alguien lo intenta); el textarea se maneja con `.value` y la observación guardada se renderiza por el pipeline seguro de E5-4 (`textContent`).
+
 ## Alcance
 | Etapa | Contenido | Estado |
 |---|---|---|
@@ -281,7 +322,8 @@ Siempre desde una tabla (`PERMISSION_DENIED`: «No tenés acceso a las observaci
 | **E5-2** | `agregarObservacionPozo`: existencia, idempotencia, lock, secuencia, `Historial`, validación de texto y categoría | **implementada (sin publicar)** |
 | **E5-3** | `anularObservacionPozo` (propia / cualquiera según permiso, motivo obligatorio, idempotente, sin verificar existencia) | **implementada (sin publicar)** |
 | **E5-4** | frontend de lectura: tarjeta en el hub, pantalla, listado paginado, render de activas / anuladas | **implementada (sin publicar)** |
-| E5-5 / E5-6 | frontend: alta y anulación | pendiente |
+| **E5-5** | frontend: agregar observación (botón, formulario, `clientRequestId` por intención, actualización inmediata de la lista) | **implementada (sin publicar)** |
+| E5-6 | frontend: anulación | pendiente |
 | E5-7 | publicación (**backend primero**, luego el frontend) y smoke real | pendiente |
 
 **Fuera de alcance de E5-1 a E5-3:** edición, reemplazo automático, frontend, tarjeta, modal, categorías funcionales, adjuntos, offline, cache, vista pública y cualquier cambio de mapa / reemplazo / ubicación / fotos / ITF / NE.
@@ -293,3 +335,5 @@ Siempre desde una tabla (`PERMISSION_DENIED`: «No tenés acceso a las observaci
 `backend/test/ObservacionesPozoAnulacion.test.js` (E5-3, unidades: validación de la entrada, propiedad por email normalizado, matriz pura de permisos, búsqueda por `observacionId`, fila `ANULADA`, decisión) y `ApiAnularObservacionPozo.test.js` (E5-3, de punta a punta por `doPost`: permisos y propiedad, motivo, observación objetivo, no consulta de existencia, privacidad, `Historial` / `Logger`, idempotencia compartida con la alta, reintento con permisos actuales, secuencia e integridad, concurrencia y guardas del código).
 
 Frontend (E5-4): `js/observacionesPozoLogic.test.js` (permisos fail-closed, vista de activa / anulada, privacidad por lista blanca, respuestas mal formadas, fechas y el cargador paginado: primera página, anteriores, sin duplicados, doble toque, error de la página 2, reabrir, respuestas viejas, sesión vencida), `observacionesPozoController.test.js` (el controlador ejecutado con un DOM falso que lanza ante `innerHTML`: activa, anulada con y sin texto, vacío, errores, paginación, XSS y privacidad del payload) y `observacionesPozoWiring.test.js` (HTML, hub, navegación, defaults de permisos, API, service worker, CSS responsive y guardas de fuente).
+
+Alta en el frontend (E5-5): `js/observacionesPozoAlta.test.js` (permiso exacto, normalización con **paridad contra el backend**, contador por code points, `clientRequestId` por intención A–H, respuestas y errores, descarte de respuestas viejas, inserción arriba de la lista con `agregarNueva`), `observacionesPozoAltaController.test.js` (el controlador con DOM falso: botón y permisos, foco, contador, «Guardando…», doble submit, éxito sin recarga, errores que conservan el texto, paginación abierta, XSS, Escape / Tab, respuestas viejas) y los bloques E5-5 de `observacionesPozoWiring.test.js` (modal accesible, wrapper, CSS responsive).

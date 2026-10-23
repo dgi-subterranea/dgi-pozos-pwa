@@ -27,16 +27,18 @@ describe('index.html: pantalla propia y scripts', () => {
 
   test('la pantalla arranca oculta, es una pantalla de modulo y no se mezcla con Datos / Reemplazo / Ubicacion / Fotos', () => {
     expect(html).toMatch(/<div id="screen-observaciones" class="screen" hidden>/);
-    const bloque = html.slice(html.indexOf('<div id="screen-observaciones"'), html.indexOf('<!-- Visor de la galeria de fotos de pozos'));
+    const bloque = html.slice(html.indexOf('<div id="screen-observaciones"'), html.indexOf('<div id="observaciones-form-overlay"'));
     expect(bloque).not.toMatch(/screen-datos|screen-reemplazo|screen-ubicacion|screen-fotos|fotos-|reemplazo-form|fotos-nota/);
   });
 
-  test('estado vacio con el texto pedido; lista semantica; boton "Ver observaciones anteriores"; sin botones de alta ni de anulacion', () => {
+  test('estado vacio con el texto pedido; lista semantica; boton "Ver observaciones anteriores"; boton "Agregar observacion" (E5-5) pero ningun control de anulacion', () => {
     expect(html).toContain('Este pozo todavía no tiene observaciones.');
     expect(html).toMatch(/<ol id="observaciones-lista" class="obs-lista"/);
     expect(html).toContain('Ver observaciones anteriores');
-    const bloque = html.slice(html.indexOf('<div id="screen-observaciones"'), html.indexOf('<!-- Visor de la galeria de fotos de pozos'));
-    expect(bloque).not.toMatch(/agregar|anular|<textarea|<form|<input/i);
+    const bloque = html.slice(html.indexOf('<div id="screen-observaciones"'), html.indexOf('<div id="observaciones-form-overlay"'));
+    expect(bloque).toMatch(/id="btn-observaciones-agregar"[^>]*>Agregar observación<\/button>/);
+    expect(bloque).not.toMatch(/anular|anulaci[oó]n/i);
+    expect(bloque).not.toMatch(/<textarea|<form|<input/i);                    // el formulario vive en el modal, fuera de la pantalla
   });
 
   test('el estado vacio, el error y el "cargando" arrancan ocultos (la pantalla no muestra nada hasta tener datos)', () => {
@@ -54,7 +56,7 @@ describe('index.html: pantalla propia y scripts', () => {
     expect(pos('observacionesPozo.js')).toBeLessThan(pos('app.js'));
   });
 
-  test('sin handlers inline en la pantalla', () => {
+  test('sin handlers inline en la pantalla ni en el modal', () => {
     const bloque = html.slice(html.indexOf('<div id="screen-observaciones"'), html.indexOf('<!-- Visor de la galeria de fotos de pozos'));
     expect(bloque).not.toMatch(/\son[a-z]+=/i);
   });
@@ -82,9 +84,22 @@ describe('cliente API: solo lectura', () => {
     expect(api).toMatch(/'Content-Type': 'text\/plain;charset=utf-8'/);
   });
 
-  test('no existen todavia los wrappers de alta ni de anulacion (E5-5 / E5-6)', () => {
-    expect(api).not.toMatch(/agregarObservacionPozo|anularObservacionPozo|apiAgregarObservacion|apiAnularObservacion/);
-    [app, logica, controlador, html].forEach((t) => expect(t).not.toMatch(/agregarObservacionPozo|anularObservacionPozo/));
+  test('existe el wrapper del alta (E5-5) y NO el de anulacion (E5-6): la anulacion no existe en ningun archivo del frontend', () => {
+    expect(api).toMatch(/function apiAgregarObservacionPozo\(sessionToken, wellId, texto, clientRequestId\)/);
+    expect(api).toMatch(/callBackend\('agregarObservacionPozo', \{ sessionToken: sessionToken, wellId: wellId, texto: texto, clientRequestId: clientRequestId \}\)/);
+    [api, app, logica, controlador, html, css].forEach((t) => expect(t).not.toMatch(/anularObservacionPozo|apiAnularObservacion/));
+    expect(codigoApp).not.toMatch(/agregarObservacionPozo/);                  // app.js solo cablea hub / navegacion
+  });
+
+  test('el wrapper del alta manda SOLO sessionToken, wellId, texto y clientRequestId (sin categoria, email, nombre, fecha, id, secuencia ni permisos)', async () => {
+    const vm = require('vm');
+    const llamadas = [];
+    const ctx = vm.createContext({ JSON, Object, Promise, fetch: (url, opts) => { llamadas.push({ url, opts }); return Promise.resolve({ json: () => Promise.resolve({ status: 'ok' }) }); } });
+    vm.runInContext(api, ctx);
+    await ctx.apiAgregarObservacionPozo('tok', '14-0001', 'Bomba nueva', 'obs-12345678');
+    expect(JSON.parse(llamadas[0].opts.body)).toEqual({ action: 'agregarObservacionPozo', sessionToken: 'tok', wellId: '14-0001', texto: 'Bomba nueva', clientRequestId: 'obs-12345678' });
+    expect(llamadas[0].opts.method).toBe('POST');
+    expect(llamadas[0].opts.headers['Content-Type']).toBe('text/plain;charset=utf-8');
   });
 
   test('el wrapper manda exactamente esa accion (ejecutado con un fetch falso)', async () => {
@@ -171,8 +186,30 @@ describe('privacidad y seguridad de la fuente (sin comentarios)', () => {
     expect(codigo).not.toMatch(/console\.|localStorage|sessionStorage|indexedDB|\bcaches\b|document\.cookie|location\.|history\.|URLSearchParams|encodeURIComponent|navigator\./);
   });
 
-  test.each([['logica', codigoLogica], ['controlador', codigoControlador]])('%s: no nombra email, clientRequestId ni secuencia (lista blanca; nunca los espera ni los muestra)', (_n, codigo) => {
-    expect(codigo).not.toMatch(/\bemail\b|clientRequestId|secuencia/i);
+  test.each([['logica', codigoLogica], ['controlador', codigoControlador]])('%s: no nombra email ni secuencia (lista blanca; nunca los espera ni los muestra)', (_n, codigo) => {
+    expect(codigo).not.toMatch(/\bemail\b|secuencia/i);
+  });
+
+  test('el clientRequestId vive solo en la logica del alta: el modelo de vista y la lectura nunca lo tocan, y el controlador no lo maneja', () => {
+    const render = codigoControlador.slice(codigoControlador.indexOf('function nodo('), codigoControlador.indexOf('function pintarFormulario('));
+    expect(render).not.toMatch(/clientRequestId/i);                               // el render (lista, anuladas, estados) no lo conoce
+    expect(codigoControlador.match(/clientRequestId/g)).toHaveLength(2);          // solo el pasaje de argumento hacia el wrapper del alta
+    const lectura = codigoLogica.slice(codigoLogica.indexOf('function observacionesPozoLogic_vista('), codigoLogica.indexOf('function observacionesPozoLogic_agregarPagina('));
+    expect(lectura).not.toMatch(/clientRequestId/i);
+  });
+
+  test('compatibilidad con navegadores viejos: sin regex con lookbehind (error de sintaxis en Safari < 16.4) y sin caracteres invisibles crudos en el codigo', () => {
+    [logica, controlador].forEach((t) => {
+      expect(t).not.toMatch(/\(\?<[=!]/);
+      const crudos = Array.from(t).filter((c) => { const n = c.charCodeAt(0); return (n < 32 && c !== '\n' && c !== '\r' && c !== '\t') || (n >= 0x7f && n <= 0x9f) || n === 0x2028 || n === 0x2029 || n === 0xfeff || (n >= 0x202a && n <= 0x202e) || (n >= 0x2066 && n <= 0x2069); });
+      expect(crudos).toEqual([]);
+    });
+  });
+
+  test('el texto del formulario nunca va a un lugar persistente ni a un log: solo .value / textContent y el pedido de alta', () => {
+    expect(codigoControlador).not.toMatch(/console\.|localStorage|sessionStorage|document\.cookie|location|history\.|innerHTML|insertAdjacentHTML/);
+    expect(codigoControlador).toMatch(/textoEl\.value/);
+    expect(codigoControlador).not.toMatch(/maxlength|maxLength/);
   });
 
   test('el controlador solo crea li y p y pone todo texto con textContent', () => {
@@ -189,7 +226,7 @@ describe('privacidad y seguridad de la fuente (sin comentarios)', () => {
   });
 
   test('el frontend de lectura no escribe nada en el backend: unica accion de red = getObservacionesPozo', () => {
-    expect(codigoControlador.match(/apiGet\w+|api[A-Z]\w+\(/g)).toEqual(['apiGetObservacionesPozo']);
+    expect(codigoControlador.match(/\bapi[A-Z]\w+/g)).toEqual(['apiGetObservacionesPozo', 'apiAgregarObservacionPozo']);
     expect(codigoLogica).not.toMatch(/fetch\(|XMLHttpRequest|callBackend|api[A-Z]\w+\(/);
   });
 });
@@ -224,5 +261,84 @@ describe('CSS: responsive, saltos de linea y palabras largas', () => {
     expect(regla('.obs-texto-original')).toMatch(/font-size:\s*0\.85rem/);
     expect(regla('.obs-texto-original')).toMatch(/color:\s*var\(--color-text-soft\)/);
     expect(regla('.obs-anulada-titulo')).toMatch(/font-weight:\s*700/);
+  });
+});
+
+describe('E5-5: formulario "Agregar observacion" en index.html', () => {
+  const modal = html.slice(html.indexOf('<div id="observaciones-form-overlay"'), html.indexOf('<!-- Visor de la galeria de fotos de pozos'));
+
+  test('es un dialogo modal accesible, FUERA de #screen-observaciones, con titulo asociado', () => {
+    expect(html.indexOf('<div id="observaciones-form-overlay"')).toBeGreaterThan(html.indexOf('<div id="screen-observaciones"'));
+    const pantalla = html.slice(html.indexOf('<div id="screen-observaciones"'), html.indexOf('<div id="observaciones-form-overlay"'));
+    const abiertos = (pantalla.match(/<div[\s>]/g) || []).length;
+    const cerrados = (pantalla.match(/<\/div>/g) || []).length;
+    expect(abiertos).toBe(cerrados);                                          // la pantalla queda cerrada antes del modal
+    expect(modal).toMatch(/<div id="observaciones-form-overlay" class="obs-overlay" role="dialog" aria-modal="true" aria-labelledby="observaciones-form-titulo" hidden>/);
+    expect(modal).toMatch(/<h2 id="observaciones-form-titulo"[^>]*>Agregar observación<\/h2>/);
+    expect(modal).toMatch(/<button type="button" id="btn-observaciones-form-cerrar"[^>]*aria-label="Cerrar"/);
+  });
+
+  test('label asociado al textarea, ayuda, contador, error con role alert y describedby que apunta a ids que existen', () => {
+    expect(modal).toMatch(/<label for="observaciones-form-texto"[^>]*>Observación<\/label>/);
+    expect(modal).toMatch(/<textarea id="observaciones-form-texto"/);
+    expect(modal).toContain('No incluyas datos personales innecesarios.');
+    expect(modal).toMatch(/id="observaciones-form-contador"[^>]*>0 \/ 1000</);
+    expect(modal).toMatch(/id="observaciones-form-error"[^>]*role="alert"[^>]*hidden/);
+    const describedby = modal.match(/aria-describedby="([^"]+)"/)[1].split(' ');
+    describedby.forEach((id) => expect(modal.split('id="' + id + '"')).toHaveLength(2));
+    expect(modal).toMatch(/aria-invalid="false"/);
+  });
+
+  test('sin maxlength (contaria unidades UTF-16 y cortaria emoji), sin categoria ni otros campos, Cancelar y Guardar (disabled de verdad al abrir)', () => {
+    expect(modal).not.toMatch(/maxlength/i);
+    expect(modal).not.toMatch(/categor/i);
+    expect(modal.match(/<textarea/g) || []).toHaveLength(1);
+    expect(modal).not.toMatch(/<input|<select/);
+    expect(modal).toMatch(/id="btn-observaciones-form-cancelar"[^>]*>Cancelar<\/button>/);
+    expect(modal).toMatch(/<button type="submit" id="btn-observaciones-form-guardar" class="button" disabled>Guardar<\/button>/);
+    expect(modal).toMatch(/<form id="observaciones-form" autocomplete="off" novalidate>/);
+  });
+
+  test('todos los ids que usa el controlador existen en el HTML', () => {
+    const usados = Array.from(controlador.matchAll(/\$\('([^']+)'\)/g)).map((m) => m[1]);
+    expect(usados.length).toBeGreaterThan(15);
+    usados.forEach((id) => expect(html.split('id="' + id + '"')).toHaveLength(2));
+  });
+});
+
+describe('E5-5: CSS del modal (responsive y sin overflow)', () => {
+  const marca = '/* --- Observaciones del pozo: agregar (E5-5) --- */';
+  const bloque = css.slice(css.indexOf(marca));
+  const regla = (sel) => {
+    const i = css.indexOf('\n' + sel + ' {', css.indexOf(marca));
+    return i === -1 ? '' : css.slice(i, css.indexOf('}', i) + 1);
+  };
+
+  test('hoja inferior en celular con scroll interno, centrado en pantallas grandes; el fondo no se desplaza', () => {
+    expect(regla('.obs-overlay')).toMatch(/position:\s*fixed/);
+    expect(regla('.obs-panel')).toMatch(/max-height:\s*94dvh/);
+    expect(regla('.obs-panel')).toMatch(/overflow-y:\s*auto/);
+    expect(bloque).toMatch(/@media \(min-width: 640px\)\s*\{\s*\.obs-overlay\s*\{\s*align-items:\s*center/);
+    expect(regla('body.obs-form-abierto')).toMatch(/overflow:\s*hidden/);
+  });
+
+  test('textarea al ancho completo, sin anchos fijos, rompe palabras largas; el error tambien', () => {
+    expect(regla('.obs-form-texto')).toMatch(/width:\s*100%/);
+    expect(regla('.obs-form-texto')).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(regla('.obs-form-error')).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(bloque.replace(/@media \(min-width: 640px\)/g, '').replace(/\.obs-cerrar \{[^}]*\}/, '')).not.toMatch(/(^|[^-])width:\s*\d+px|min-width:\s*\d+px|white-space:\s*nowrap/);
+  });
+
+  test('los botones se acomodan en filas sin desbordar; deshabilitado se ve apagado; el exceso del contador no depende solo del color', () => {
+    expect(regla('.obs-form-botones')).toMatch(/flex-wrap:\s*wrap/);
+    expect(bloque).toMatch(/\.obs-form-botones \.button:disabled/);
+    expect(regla('.obs-form-contador-excede')).toMatch(/font-weight:\s*700/);
+    expect(regla('.obs-form-texto[aria-invalid="true"]')).toMatch(/border-width:\s*2px/);
+  });
+
+  test('los estilos nuevos son solo .obs-* / body.obs-form-abierto: no afectan otros modulos', () => {
+    const selectores = Array.from(bloque.matchAll(/(^|\n)\s*([^\n{};@]+?)\s*\{/g)).map((m) => m[2].trim()).filter((x) => x !== '' && !/^(from|to)$/.test(x));
+    expect(selectores.length).toBeGreaterThan(15);
+    selectores.forEach((sel) => expect(sel).toMatch(/^(\.obs-|body\.obs-form-abierto|#screen-observaciones)/));
   });
 });

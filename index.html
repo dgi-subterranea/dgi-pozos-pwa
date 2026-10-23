@@ -1231,7 +1231,7 @@
 
   <!-- Observaciones del pozo (E5-4, solo lectura). Se abre desde la tarjeta "Observaciones" del hub (permiso observaciones=SI); getObservacionesPozo se llama SOLO al abrir
        esta pantalla. Controlador: js/observacionesPozo.js (logica en js/observacionesPozoLogic.js). Volver regresa al hub del mismo pozo. El texto de las observaciones se pinta
-       siempre con textContent. Alta y anulacion llegan en E5-5 / E5-6. -->
+       siempre con textContent. El alta (E5-5) agrega el boton y el formulario; la anulacion llega en E5-6. -->
   <div id="screen-observaciones" class="screen" hidden>
     <div class="tv-topbar tv-topbar-fija">
       <button type="button" id="btn-observaciones-volver" class="tv-volver">
@@ -1255,10 +1255,36 @@
     </div>
 
     <div id="observaciones-contenido" class="obs-contenido" hidden>
+      <div id="observaciones-acciones" class="obs-acciones" hidden>
+        <button type="button" id="btn-observaciones-agregar" class="button obs-agregar" aria-haspopup="dialog">Agregar observación</button>
+      </div>
+      <p id="observaciones-exito" class="obs-exito" role="status" hidden></p>
       <p id="observaciones-vacio" class="obs-vacio" hidden>Este pozo todavía no tiene observaciones.</p>
       <ol id="observaciones-lista" class="obs-lista" aria-label="Observaciones del pozo"></ol>
       <p id="observaciones-error-mas" class="error-message" role="alert" hidden></p>
       <button type="button" id="btn-observaciones-mas" class="button-secondary obs-mas" hidden>Ver observaciones anteriores</button>
+    </div>
+  </div>
+
+  <!-- Formulario "Agregar observacion" (E5-5): hoja inferior en celular, centrado en pantallas grandes. Fuera de #screen-observaciones para que no dependa de su visibilidad. Solo texto: sin
+       categoria. El contador cuenta caracteres unicos (code points) como el backend; no hay maxlength (contaria unidades UTF-16 y cortaria emoji). El texto se pone con .value / textContent. -->
+  <div id="observaciones-form-overlay" class="obs-overlay" role="dialog" aria-modal="true" aria-labelledby="observaciones-form-titulo" hidden>
+    <div class="obs-panel">
+      <div class="obs-cabecera">
+        <h2 id="observaciones-form-titulo" class="obs-form-titulo">Agregar observación</h2>
+        <button type="button" id="btn-observaciones-form-cerrar" class="obs-cerrar" aria-label="Cerrar">&times;</button>
+      </div>
+      <form id="observaciones-form" autocomplete="off" novalidate>
+        <label for="observaciones-form-texto" class="obs-form-label">Observación</label>
+        <textarea id="observaciones-form-texto" class="obs-form-texto" rows="5" autocomplete="off" aria-invalid="false" aria-describedby="observaciones-form-ayuda observaciones-form-contador observaciones-form-error"></textarea>
+        <p id="observaciones-form-ayuda" class="obs-form-ayuda">No incluyas datos personales innecesarios.</p>
+        <p id="observaciones-form-contador" class="obs-form-contador">0 / 1000</p>
+        <p id="observaciones-form-error" class="error-message obs-form-error" role="alert" tabindex="-1" hidden></p>
+        <div class="obs-form-botones">
+          <button type="button" id="btn-observaciones-form-cancelar" class="button-secondary">Cancelar</button>
+          <button type="submit" id="btn-observaciones-form-guardar" class="button" disabled>Guardar</button>
+        </div>
+      </form>
     </div>
   </div>
 

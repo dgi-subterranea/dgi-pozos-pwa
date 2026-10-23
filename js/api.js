@@ -361,3 +361,9 @@ function apiCancelarSugerenciaFuente(sessionToken, datos) {
 function apiGetObservacionesPozo(sessionToken, wellId, limit, antesDeSecuencia) {
   return callBackend('getObservacionesPozo', { sessionToken: sessionToken, wellId: wellId, limit: limit, antesDeSecuencia: antesDeSecuencia });
 }
+
+// Alta de una observacion (E5-5). Requiere "observaciones" Y "observaciones_agregar" (el BACKEND lo exige). Lista blanca: sessionToken, wellId, texto y clientRequestId (el id de UNA intencion de alta:
+// se mantiene en los reintentos del mismo texto; el backend deduplica). NO viaja categoria, email, nombre, fecha, observacionId, secuencia ni permisos: salen de la sesion o los genera el servidor.
+function apiAgregarObservacionPozo(sessionToken, wellId, texto, clientRequestId) {
+  return callBackend('agregarObservacionPozo', { sessionToken: sessionToken, wellId: wellId, texto: texto, clientRequestId: clientRequestId });
+}

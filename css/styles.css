@@ -5455,3 +5455,159 @@ p.uval-primera {
     padding: 22px 34px 32px;
   }
 }
+
+/* --- Observaciones del pozo: agregar (E5-5) --- */
+.obs-acciones {
+  display: flex;
+}
+.obs-agregar {
+  width: 100%;
+}
+.obs-exito {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #17633d;
+}
+body.obs-form-abierto {
+  overflow: hidden;
+}
+.obs-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(22, 33, 42, 0.55);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.obs-panel {
+  background: var(--color-surface);
+  width: 100%;
+  max-width: 560px;
+  max-height: 94vh;
+  max-height: 94dvh;
+  overflow-y: auto;
+  border-radius: 20px 20px 0 0;
+  padding: 16px 18px 22px;
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.25);
+}
+.obs-cabecera {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.obs-form-titulo {
+  margin: 0;
+  font-size: 1.1rem;
+}
+.obs-cerrar {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  border-radius: 12px;
+  font-size: 1.6rem;
+  line-height: 1;
+  background: transparent;
+  color: var(--color-text-soft);
+  box-shadow: none;
+}
+.obs-cerrar:hover {
+  background: var(--color-border-soft);
+  color: var(--color-text);
+}
+.obs-form-label {
+  display: block;
+  margin: 12px 0 6px;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+.obs-form-texto {
+  display: block;
+  width: 100%;
+  min-height: 120px;
+  font: inherit;
+  font-size: 1rem;
+  padding: 10px 12px;
+  border: 1.5px solid var(--color-border);
+  border-radius: 12px;
+  resize: vertical;
+  overflow-wrap: anywhere;
+}
+.obs-form-texto:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+.obs-form-texto[aria-invalid="true"] {
+  border-color: var(--color-error);
+  border-width: 2px;
+}
+.obs-form-ayuda {
+  margin: 6px 0 0;
+  font-size: 0.82rem;
+  color: var(--color-text-soft);
+}
+.obs-form-contador {
+  margin: 4px 0 0;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-soft);
+  text-align: right;
+}
+/* pasado del maximo: negrita + el texto del contador lo dice con palabras (no se depende solo del color) */
+.obs-form-contador-excede {
+  font-weight: 700;
+  color: var(--color-error);
+}
+.obs-form-error {
+  margin: 8px 0 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.obs-form-botones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+.obs-form-botones .button,
+.obs-form-botones .button-secondary {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+/* Deshabilitado = claramente apagado (el .button global no distingue el estado disabled) */
+.obs-form-botones .button:disabled,
+.obs-form-botones .button:disabled:hover {
+  background: var(--color-primary);
+  opacity: 0.4;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.obs-form-botones .button-secondary:disabled,
+.obs-form-botones .button-secondary:disabled:hover {
+  background: transparent;
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+@media (min-width: 640px) {
+  .obs-overlay {
+    align-items: center;
+  }
+  .obs-panel {
+    border-radius: 18px;
+    max-height: 90vh;
+    max-height: 90dvh;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .obs-panel {
+    animation: obs-subir 0.18s ease-out;
+  }
+  @keyframes obs-subir {
+    from { transform: translateY(24px); opacity: 0.4; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+}

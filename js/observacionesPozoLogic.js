@@ -1,5 +1,5 @@
-// Logica pura de "Observaciones del pozo" (E5-4, solo LECTURA): permisos, normalizacion fail-safe de la respuesta de getObservacionesPozo, modelo de vista de cada observacion
-// (activa / anulada), mensajes de error y el cargador paginado (primera pagina + "ver anteriores"). Sin DOM ni red propios: la red entra por deps.consultar y el repintado por
+// Logica pura de "Observaciones del pozo" (E5-4 lectura, E5-5 alta): permisos, normalizacion fail-safe de la respuesta de getObservacionesPozo, modelo de vista de cada observacion
+// (activa / anulada), mensajes de error, el cargador paginado (primera pagina + "ver anteriores") y el formulario de alta (texto normalizado, clientRequestId por intencion, reintento seguro). Sin DOM ni red propios: la red entra por deps.consultar y el repintado por
 // deps.onCambio, asi todo se prueba con Jest (js/observacionesPozoLogic.test.js). El controlador DOM es js/observacionesPozo.js.
 //
 // EL BACKEND ES LA AUTORIDAD: el frontend nunca decide que se puede ver. Lo que el backend manda se renderiza; lo que no manda (texto null de una anulada) no se reconstruye ni se
@@ -283,6 +283,23 @@ function observacionesPozoLogic_crearCargador(deps) {
     return estado.fase === 'error' && estado.wellId ? abrir(estado.wellId) : Promise.resolve(estado);
   }
 
+  // Una observacion recien guardada (E5-5) entra ARRIBA de lo ya cargado, sin recargar: dedupe por observacionId (un reintento idempotente que ya esta en la lista no se duplica), suma al total y NO
+  // toca el cursor (sigue apuntando a las observaciones anteriores, que no cambian). Solo si la lista sigue siendo la del pozo y esta lista. Devuelve si se inserto.
+  function agregarNueva(vista, wellId) {
+    if (estado.fase !== 'listo' || !vista || estado.wellId !== wellId) {
+      return false;
+    }
+    for (var i = 0; i < estado.items.length; i++) {
+      if (estado.items[i].id === vista.id) {
+        return false;
+      }
+    }
+    estado.items = [vista].concat(estado.items);
+    estado.total += 1;
+    cambio();
+    return true;
+  }
+
   // Salir de la pantalla / cerrar sesion: se descartan las respuestas en vuelo y se olvida todo (no hay cache: reabrir pide datos frescos).
   function cerrar() {
     apertura += 1;
@@ -295,8 +312,308 @@ function observacionesPozoLogic_crearCargador(deps) {
     cargarMas: cargarMas,
     reintentar: reintentar,
     cerrar: cerrar,
+    agregarNueva: agregarNueva,
     estado: function () { return estado; }
   };
+}
+
+// =====================================================================================================================================================================
+// ALTA (E5-5): agregar una observacion. Permiso, normalizacion del texto (la MISMA regla que el backend), clientRequestId por intencion, errores y la maquina de estados del formulario.
+// =====================================================================================================================================================================
+
+var OBSERVACIONES_POZO_TEXTO_MIN = 3;
+var OBSERVACIONES_POZO_TEXTO_MAX = 1000;
+var OBSERVACIONES_POZO_CLIENT_REQUEST_ID_REGEX = /^[A-Za-z0-9_-]{8,64}$/;
+var OBSERVACIONES_POZO_MENSAJE_ALTA_GENERICO = 'No se pudo guardar la observación. Intentá nuevamente.';
+var OBSERVACIONES_POZO_MENSAJE_TEXTO = 'La observación debe tener entre 3 y 1000 caracteres.';
+var OBSERVACIONES_POZO_MENSAJE_EXITO = 'Observación agregada.';
+
+var OBSERVACIONES_POZO_MENSAJES_ALTA = {
+  INVALID_TEXTO: OBSERVACIONES_POZO_MENSAJE_TEXTO,
+  INVALID_CATEGORIA: OBSERVACIONES_POZO_MENSAJE_ALTA_GENERICO,                   // el MVP no manda categoria: si apareciera es un fallo tecnico, no del usuario
+  INVALID_CLIENT_REQUEST_ID: OBSERVACIONES_POZO_MENSAJE_ALTA_GENERICO,
+  INVALID_WELL_ID: OBSERVACIONES_POZO_MENSAJE_ALTA_GENERICO,
+  WELL_NOT_FOUND: 'No se pudo confirmar que este pozo exista en las fuentes disponibles.',
+  SERVICE_UNAVAILABLE: OBSERVACIONES_POZO_MENSAJE_ALTA_GENERICO,
+  INCONSISTENT_STATE: OBSERVACIONES_POZO_MENSAJE_ALTA_GENERICO,
+  RED: OBSERVACIONES_POZO_MENSAJE_ALTA_GENERICO,
+  IDEMPOTENCY_CONFLICT: 'La observación cambió después de un intento anterior. Revisá el texto e intentá nuevamente.',
+  PERMISSION_DENIED: 'No tenés permiso para agregar observaciones.',
+  UNAUTHORIZED: OBSERVACIONES_POZO_MENSAJES.UNAUTHORIZED,
+  USER_DISABLED: OBSERVACIONES_POZO_MENSAJES.USER_DISABLED
+};
+
+// El boton "Agregar observacion" exige AMBOS permisos con el booleano exacto (solo `observaciones`, solo `observaciones_agregar`, "SI", 1 o cualquier truthy NO alcanzan). El backend vuelve a validarlo.
+function observacionesPozoLogic_puedeAgregar(permisos) {
+  return observacionesPozoLogic_puedeVer(permisos) && permisos.observaciones_agregar === true;
+}
+
+// Mensaje de error del alta: siempre de la tabla (nunca el message tecnico), generico si el codigo no se conoce.
+function observacionesPozoLogic_mensajeErrorAlta(code) {
+  return Object.prototype.hasOwnProperty.call(OBSERVACIONES_POZO_MENSAJES_ALTA, code) ? OBSERVACIONES_POZO_MENSAJES_ALTA[code] : OBSERVACIONES_POZO_MENSAJE_ALTA_GENERICO;
+}
+
+// Quita los surrogates sueltos (UTF-16 invalido) y conserva los pares validos. Es lo que hace el backend con una regex con lookbehind; aca se hace con un bucle porque un lookbehind es un
+// error de SINTAXIS en navegadores viejos (Safari < 16.4) y romperia todo el script.
+function observacionesPozoLogic_sinSurrogatesSueltos(s) {
+  var salida = '';
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charCodeAt(i);
+    if (c >= 0xD800 && c <= 0xDBFF) {
+      var n = i + 1 < s.length ? s.charCodeAt(i + 1) : 0;
+      if (n >= 0xDC00 && n <= 0xDFFF) {
+        salida += s.charAt(i) + s.charAt(i + 1);
+        i += 1;
+      }
+    } else if (c < 0xDC00 || c > 0xDFFF) {
+      salida += s.charAt(i);
+    }
+  }
+  return salida;
+}
+
+// NORMALIZACION del texto: la MISMA regla que el backend (observacionesPozoService_normalizarTexto, que sigue siendo la autoridad y vuelve a normalizar): saltos de linea (CRLF, CR, NEL, LS, PS)
+// -> "\n"; tabulador -> un espacio; se eliminan los controles incompatibles con texto plano (C0 salvo "\n", DEL, C1, U+202A-202E, U+2066-2069, U+FEFF) y los surrogates sueltos; trim de los
+// extremos. NO se colapsan espacios internos ni lineas en blanco. Hay un test de PARIDAD con el backend. Devuelve '' si no es un string.
+function observacionesPozoLogic_normalizarTexto(texto) {
+  if (typeof texto !== 'string') {
+    return '';
+  }
+  return observacionesPozoLogic_sinSurrogatesSueltos(texto
+    .replace(/\r\n|\r|\u0085|\u2028|\u2029/g, '\n')
+    .replace(/\t/g, ' ')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u0084\u0086-\u009F\u202A-\u202E\u2066-\u2069\uFEFF]/g, '')).trim();
+}
+
+// Largo en CARACTERES UNICOS (code points: un emoji cuenta 1; .length contaria 2), igual que el backend.
+function observacionesPozoLogic_largoTexto(textoNormalizado) {
+  return Array.from(textoNormalizado).length;
+}
+
+// {texto (normalizado, es lo que se envia), largo, valido, motivo: null | 'VACIO' | 'CORTO' | 'LARGO'}
+function observacionesPozoLogic_validarTexto(crudo) {
+  var texto = observacionesPozoLogic_normalizarTexto(crudo);
+  var largo = observacionesPozoLogic_largoTexto(texto);
+  var motivo = null;
+  if (largo === 0) {
+    motivo = 'VACIO';
+  } else if (largo < OBSERVACIONES_POZO_TEXTO_MIN) {
+    motivo = 'CORTO';
+  } else if (largo > OBSERVACIONES_POZO_TEXTO_MAX) {
+    motivo = 'LARGO';
+  }
+  return { texto: texto, largo: largo, valido: motivo === null, motivo: motivo };
+}
+
+// "n / 1000" y, si se pasa, tambien con palabras (no se depende solo del color).
+function observacionesPozoLogic_textoContador(largo) {
+  var base = largo + ' / ' + OBSERVACIONES_POZO_TEXTO_MAX;
+  return largo > OBSERVACIONES_POZO_TEXTO_MAX ? base + ' · te pasaste por ' + (largo - OBSERVACIONES_POZO_TEXTO_MAX) : base;
+}
+
+// 8 a 64 caracteres [A-Za-z0-9_-] (lo que exige el backend). `aleatorio`: funcion opcional para tests. Mismo criterio que el resto de los modulos (ucorr-, ufd-).
+function observacionesPozoLogic_nuevoClientRequestId(aleatorio) {
+  if (!aleatorio && typeof crypto !== 'undefined' && crypto && typeof crypto.randomUUID === 'function') {
+    var id = 'obs-' + crypto.randomUUID();
+    if (OBSERVACIONES_POZO_CLIENT_REQUEST_ID_REGEX.test(id)) {
+      return id;
+    }
+  }
+  var azar = aleatorio || Math.random;
+  var s = '';
+  while (s.length < 24) {
+    s += Math.floor(azar() * 36).toString(36);
+  }
+  return 'obs-' + Date.now().toString(36) + '-' + s;
+}
+
+// Respuesta de agregarObservacionPozo -> {ok:true, duplicada, vista} | {ok:false, code}. `duplicada` true y false son AMBOS exito. Fail-safe: una respuesta sin la forma esperada, de otro pozo
+// o cuya observacion no es una ACTIVA mostrable NO se aplica a la lista (la escritura pudo ocurrir: el reintento con el mismo id es idempotente y la devuelve).
+function observacionesPozoLogic_leerRespuestaAlta(resp, wellIdEsperado) {
+  var falla = { ok: false, code: 'SERVICE_UNAVAILABLE' };
+  if (!resp || typeof resp !== 'object') {
+    return falla;
+  }
+  if (resp.status === 'error') {
+    return { ok: false, code: typeof resp.code === 'string' && resp.code !== '' ? resp.code : 'SERVICE_UNAVAILABLE' };
+  }
+  var d = resp.data;
+  if (resp.status !== 'ok' || !d || typeof d !== 'object' || d.wellId !== wellIdEsperado) {
+    return falla;
+  }
+  var vista = observacionesPozoLogic_vista(d.observacion);
+  if (!vista || vista.estado !== 'ACTIVA') {
+    return falla;
+  }
+  return { ok: true, duplicada: d.duplicada === true, vista: vista };
+}
+
+// Siguiente indice al tabular dentro del modal (rotacion): sin foco conocido (-1) arranca en el primero (o el ultimo hacia atras).
+function observacionesPozoLogic_siguienteFoco(cantidad, actual, atras) {
+  if (cantidad <= 0) {
+    return -1;
+  }
+  if (actual < 0 || actual >= cantidad) {
+    return atras ? cantidad - 1 : 0;
+  }
+  return atras ? (actual - 1 + cantidad) % cantidad : (actual + 1) % cantidad;
+}
+
+// Formulario de alta. deps:
+//   obtenerContexto() -> {sessionToken, permisos}                  (SIEMPRE fresco)
+//   enviar(sessionToken, wellId, texto, clientRequestId) -> Promise<respuesta del backend>   (texto = el normalizado)
+//   generarId() -> clientRequestId                                  (por defecto observacionesPozoLogic_nuevoClientRequestId)
+//   onCambio(estado)                                                (repintar)
+//   onExito(vista, duplicada, wellId)                               (solo si la respuesta sigue siendo del contexto vigente: aplica la observacion a la lista)
+//   onSesionExpirada()                                              (UNAUTHORIZED / USER_DISABLED)
+//
+// clientRequestId = UNA INTENCION de alta (un texto normalizado que se quiere guardar una vez):
+//   - abrir el formulario => id nuevo; cancelar y reabrir => id nuevo; despues de un exito, la proxima alta => id nuevo;
+//   - editar antes del primer envio, o reintentar el MISMO texto (red caida, error del servidor, definitivo o incierto) => el MISMO id (el backend deduplica: si la primera vez llego a escribir, el
+//     reintento devuelve esa misma observacion con duplicada:true);
+//   - si ya hubo un intento y el texto normalizado CAMBIO => id nuevo antes de enviar (ya es otra intencion; reusar el id daria IDEMPOTENCY_CONFLICT);
+//   - tras IDEMPOTENCY_CONFLICT (el id ya pertenece a otro contenido) o INVALID_CLIENT_REQUEST_ID (rechazado antes de escribir) el id queda "quemado": el SIGUIENTE envio, por accion del usuario,
+//     usa uno nuevo (nunca se reenvia solo ni en bucle).
+// Descarte de respuestas viejas: cada abrir / cancelar / cerrar invalida lo que este en vuelo; si la escritura llego a hacerse en el backend, la UI simplemente no la aplica a un contexto que ya no es ese.
+function observacionesPozoLogic_crearFormulario(deps) {
+  var s = observacionesPozoLogic_formularioInicial();
+  var sesion = 0;
+
+  function cambio() {
+    if (deps.onCambio) {
+      deps.onCambio(snapshot());
+    }
+  }
+
+  function snapshot() {
+    var v = observacionesPozoLogic_validarTexto(s.texto);
+    return {
+      abierto: s.abierto,
+      wellId: s.wellId,
+      texto: s.texto,
+      largo: v.largo,
+      contador: observacionesPozoLogic_textoContador(v.largo),
+      excede: v.motivo === 'LARGO',
+      valido: v.valido,
+      enviando: s.enviando,
+      puedeGuardar: s.abierto && !s.enviando && v.valido,
+      error: s.error,
+      clientRequestId: s.id
+    };
+  }
+
+  function generar() {
+    return (deps.generarId || observacionesPozoLogic_nuevoClientRequestId)();
+  }
+
+  function abrir(wellId) {
+    sesion += 1;
+    var ctx = deps.obtenerContexto() || {};
+    s = observacionesPozoLogic_formularioInicial();
+    if (!observacionesPozoLogic_puedeAgregar(ctx.permisos) || typeof wellId !== 'string' || wellId === '') {
+      cambio();
+      return false;
+    }
+    s.abierto = true;
+    s.wellId = wellId;
+    s.id = generar();
+    cambio();
+    return true;
+  }
+
+  function setTexto(texto) {
+    if (!s.abierto) {
+      return;
+    }
+    s.texto = typeof texto === 'string' ? texto : '';
+    s.error = null;                                         // lo editado reemplaza al aviso anterior; la decision del id se toma recien al enviar
+    cambio();
+  }
+
+  function falla(code) {
+    s.error = { code: code, mensaje: observacionesPozoLogic_mensajeErrorAlta(code), campo: code === 'INVALID_TEXTO' ? 'texto' : null };
+  }
+
+  function guardar() {
+    if (!s.abierto || s.enviando) {
+      return Promise.resolve(snapshot());              // doble submit: no hay otro pedido
+    }
+    var ctx = deps.obtenerContexto() || {};
+    if (!observacionesPozoLogic_puedeAgregar(ctx.permisos)) {
+      falla('PERMISSION_DENIED');
+      cambio();
+      return Promise.resolve(snapshot());
+    }
+    var v = observacionesPozoLogic_validarTexto(s.texto);
+    if (!v.valido) {
+      falla('INVALID_TEXTO');
+      cambio();
+      return Promise.resolve(snapshot());
+    }
+    if (s.ultimoIntento !== null && (s.ultimoIntento !== v.texto || s.idQuemado)) {
+      s.id = generar();                                 // otra intencion: texto distinto, o un id que el backend ya asocio a otro contenido
+      s.idQuemado = false;
+    }
+    s.ultimoIntento = v.texto;
+    s.enviando = true;
+    s.error = null;
+    var mia = sesion;
+    var wellId = s.wellId;
+    var id = s.id;
+    cambio();
+    return new Promise(function (resolver) {
+      resolver(deps.enviar(ctx.sessionToken, wellId, v.texto, id));
+    }).then(function (resp) {
+      return observacionesPozoLogic_leerRespuestaAlta(resp, wellId);
+    }, function () {
+      return { ok: false, code: 'RED' };
+    }).then(function (lectura) {
+      if (mia !== sesion) {
+        return snapshot();                              // contexto viejo (salio de la pantalla / cerro sesion / otro pozo): no se aplica nada
+      }
+      s.enviando = false;
+      if (lectura.ok) {
+        s = observacionesPozoLogic_formularioInicial();   // exito: el formulario se cierra y se descarta todo (la proxima alta es otra intencion)
+        sesion += 1;
+        if (deps.onExito) {
+          deps.onExito(lectura.vista, lectura.duplicada, wellId);
+        }
+        cambio();
+        return snapshot();
+      }
+      falla(lectura.code);
+      if (lectura.code === 'IDEMPOTENCY_CONFLICT' || lectura.code === 'INVALID_CLIENT_REQUEST_ID') {
+        s.idQuemado = true;
+      }
+      cambio();
+      if ((lectura.code === 'UNAUTHORIZED' || lectura.code === 'USER_DISABLED') && deps.onSesionExpirada) {
+        deps.onSesionExpirada();
+      }
+      return snapshot();
+    });
+  }
+
+  // Cancelar (boton / Escape): mientras se guarda no se puede (la respuesta todavia tiene que aplicarse o descartarse con criterio).
+  function cancelar() {
+    if (s.enviando) {
+      return false;
+    }
+    cerrar();
+    cambio();
+    return true;
+  }
+
+  // Salir de la pantalla / cerrar sesion / abrir otro pozo: se descarta todo, incluida cualquier respuesta en vuelo.
+  function cerrar() {
+    sesion += 1;
+    s = observacionesPozoLogic_formularioInicial();
+  }
+
+  return { abrir: abrir, setTexto: setTexto, guardar: guardar, cancelar: cancelar, cerrar: cerrar, estado: snapshot };
+}
+
+function observacionesPozoLogic_formularioInicial() {
+  return { abierto: false, wellId: null, texto: '', id: null, ultimoIntento: null, idQuemado: false, enviando: false, error: null };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
@@ -313,6 +630,21 @@ if (typeof module !== 'undefined' && module.exports) {
     observacionesPozoLogic_leerRespuesta,
     observacionesPozoLogic_agregarPagina,
     observacionesPozoLogic_estadoInicial,
-    observacionesPozoLogic_crearCargador
+    observacionesPozoLogic_crearCargador,
+    OBSERVACIONES_POZO_TEXTO_MIN,
+    OBSERVACIONES_POZO_TEXTO_MAX,
+    OBSERVACIONES_POZO_MENSAJE_EXITO,
+    OBSERVACIONES_POZO_MENSAJE_ALTA_GENERICO,
+    observacionesPozoLogic_puedeAgregar,
+    observacionesPozoLogic_mensajeErrorAlta,
+    observacionesPozoLogic_sinSurrogatesSueltos,
+    observacionesPozoLogic_normalizarTexto,
+    observacionesPozoLogic_largoTexto,
+    observacionesPozoLogic_validarTexto,
+    observacionesPozoLogic_textoContador,
+    observacionesPozoLogic_nuevoClientRequestId,
+    observacionesPozoLogic_leerRespuestaAlta,
+    observacionesPozoLogic_siguienteFoco,
+    observacionesPozoLogic_crearFormulario
   };
 }
