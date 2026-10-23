@@ -1231,7 +1231,7 @@
 
   <!-- Observaciones del pozo (E5-4, solo lectura). Se abre desde la tarjeta "Observaciones" del hub (permiso observaciones=SI); getObservacionesPozo se llama SOLO al abrir
        esta pantalla. Controlador: js/observacionesPozo.js (logica en js/observacionesPozoLogic.js). Volver regresa al hub del mismo pozo. El texto de las observaciones se pinta
-       siempre con textContent. El alta (E5-5) agrega el boton y el formulario; la anulacion llega en E5-6. -->
+       siempre con textContent. El alta (E5-5) agrega el boton y el formulario; la anulacion (E5-6) agrega un boton "Anular" por observacion activa y su modal. -->
   <div id="screen-observaciones" class="screen" hidden>
     <div class="tv-topbar tv-topbar-fija">
       <button type="button" id="btn-observaciones-volver" class="tv-volver">
@@ -1283,6 +1283,30 @@
         <div class="obs-form-botones">
           <button type="button" id="btn-observaciones-form-cancelar" class="button-secondary">Cancelar</button>
           <button type="submit" id="btn-observaciones-form-guardar" class="button" disabled>Guardar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal "Anular observacion" (E5-6): confirmacion + motivo obligatorio (3 a 300 caracteres unicos). No se borra nada: la observacion queda registrada como anulada. Solo muestra QUIEN
+       escribio la observacion y cuando (nunca su texto). Mismo patron que el modal de alta; fuera de #screen-observaciones. El motivo se maneja con .value / textContent. -->
+  <div id="observaciones-anular-overlay" class="obs-overlay" role="dialog" aria-modal="true" aria-labelledby="observaciones-anular-titulo" hidden>
+    <div class="obs-panel">
+      <div class="obs-cabecera">
+        <h2 id="observaciones-anular-titulo" class="obs-form-titulo">Anular observación</h2>
+        <button type="button" id="btn-observaciones-anular-cerrar" class="obs-cerrar" aria-label="Cerrar">&times;</button>
+      </div>
+      <p class="obs-anular-aviso">No se borra. La observación quedará registrada como anulada, con tu nombre y la fecha.</p>
+      <p id="observaciones-anular-contexto" class="obs-anular-contexto"></p>
+      <form id="observaciones-anular-form" autocomplete="off" novalidate>
+        <label for="observaciones-anular-motivo" class="obs-form-label">Motivo de la anulación</label>
+        <textarea id="observaciones-anular-motivo" class="obs-form-texto" rows="4" autocomplete="off" aria-invalid="false" aria-describedby="observaciones-anular-ayuda observaciones-anular-contador observaciones-anular-error"></textarea>
+        <p id="observaciones-anular-ayuda" class="obs-form-ayuda">Explicá brevemente por qué se anula.</p>
+        <p id="observaciones-anular-contador" class="obs-form-contador">0 / 300</p>
+        <p id="observaciones-anular-error" class="error-message obs-form-error" role="alert" tabindex="-1" hidden></p>
+        <div class="obs-form-botones">
+          <button type="button" id="btn-observaciones-anular-cancelar" class="button-secondary">Cancelar</button>
+          <button type="submit" id="btn-observaciones-anular-confirmar" class="button" disabled>Anular observación</button>
         </div>
       </form>
     </div>

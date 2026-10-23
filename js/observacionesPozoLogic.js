@@ -1,4 +1,4 @@
-// Logica pura de "Observaciones del pozo" (E5-4 lectura, E5-5 alta): permisos, normalizacion fail-safe de la respuesta de getObservacionesPozo, modelo de vista de cada observacion
+// Logica pura de "Observaciones del pozo" (E5-4 lectura, E5-5 alta, E5-6 anulacion): permisos, normalizacion fail-safe de la respuesta de getObservacionesPozo, modelo de vista de cada observacion
 // (activa / anulada), mensajes de error, el cargador paginado (primera pagina + "ver anteriores") y el formulario de alta (texto normalizado, clientRequestId por intencion, reintento seguro). Sin DOM ni red propios: la red entra por deps.consultar y el repintado por
 // deps.onCambio, asi todo se prueba con Jest (js/observacionesPozoLogic.test.js). El controlador DOM es js/observacionesPozo.js.
 //
@@ -82,7 +82,8 @@ function observacionesPozoLogic_vista(obs) {
       nombre: observacionesPozoLogic_nombre(obs.nombre),
       fecha: fecha === '' ? OBSERVACIONES_POZO_FECHA_NO_DISPONIBLE : fecha,
       categoria: categoria,
-      anulacion: null
+      anulacion: null,
+      puedeAnular: obs.puedeAnular === true                          // senal del BACKEND (E5-6b), booleano exacto; ausente / null / "true" / 1 = false. El frontend NUNCA decide la autoria
     };
   }
   if (obs.estado === 'ANULADA') {
@@ -95,6 +96,7 @@ function observacionesPozoLogic_vista(obs) {
       nombre: observacionesPozoLogic_nombre(obs.nombre),
       fecha: fecha,
       categoria: categoria,
+      puedeAnular: false,                                            // una anulada no se anula de nuevo
       anulacion: {
         nombre: observacionesPozoLogic_nombre(a.nombre),
         fecha: fechaAnulacion === '' ? OBSERVACIONES_POZO_FECHA_NO_DISPONIBLE : fechaAnulacion,
@@ -300,6 +302,29 @@ function observacionesPozoLogic_crearCargador(deps) {
     return true;
   }
 
+  // Una observacion recien ANULADA (E5-6) REEMPLAZA a su entrada, por observacionId y en el mismo lugar: es el modelo normalizado que devolvio el backend, tomado ENTERO (no se mezcla con
+  // el viejo: si el nuevo trae texto null, el texto original que estaba cargado desaparece del estado; el backend es la autoridad de lo que se puede ver). No toca el cursor, el total
+  // ni las demas paginas. Solo si la lista sigue siendo la del pozo y la entrada esta cargada. Devuelve si reemplazo.
+  function reemplazarObservacion(vista, wellId) {
+    if (estado.fase !== 'listo' || !vista || estado.wellId !== wellId) {
+      return false;
+    }
+    var indice = -1;
+    for (var i = 0; i < estado.items.length; i++) {
+      if (estado.items[i].id === vista.id) {
+        indice = i;
+      }
+    }
+    if (indice < 0) {
+      return false;
+    }
+    var nuevos = estado.items.slice();
+    nuevos[indice] = vista;
+    estado.items = nuevos;
+    cambio();
+    return true;
+  }
+
   // Salir de la pantalla / cerrar sesion: se descartan las respuestas en vuelo y se olvida todo (no hay cache: reabrir pide datos frescos).
   function cerrar() {
     apertura += 1;
@@ -313,6 +338,7 @@ function observacionesPozoLogic_crearCargador(deps) {
     reintentar: reintentar,
     cerrar: cerrar,
     agregarNueva: agregarNueva,
+    reemplazarObservacion: reemplazarObservacion,
     estado: function () { return estado; }
   };
 }
@@ -392,29 +418,36 @@ function observacionesPozoLogic_largoTexto(textoNormalizado) {
 
 // {texto (normalizado, es lo que se envia), largo, valido, motivo: null | 'VACIO' | 'CORTO' | 'LARGO'}
 function observacionesPozoLogic_validarTexto(crudo) {
+  return observacionesPozoLogic_validarContenido(crudo, OBSERVACIONES_POZO_TEXTO_MIN, OBSERVACIONES_POZO_TEXTO_MAX);
+}
+
+// Misma validacion para el texto de una alta (3..1000) y el motivo de una anulacion (3..300): se normaliza como el backend y se mide en code points.
+function observacionesPozoLogic_validarContenido(crudo, minimo, maximo) {
   var texto = observacionesPozoLogic_normalizarTexto(crudo);
   var largo = observacionesPozoLogic_largoTexto(texto);
   var motivo = null;
   if (largo === 0) {
     motivo = 'VACIO';
-  } else if (largo < OBSERVACIONES_POZO_TEXTO_MIN) {
+  } else if (largo < minimo) {
     motivo = 'CORTO';
-  } else if (largo > OBSERVACIONES_POZO_TEXTO_MAX) {
+  } else if (largo > maximo) {
     motivo = 'LARGO';
   }
   return { texto: texto, largo: largo, valido: motivo === null, motivo: motivo };
 }
 
 // "n / 1000" y, si se pasa, tambien con palabras (no se depende solo del color).
-function observacionesPozoLogic_textoContador(largo) {
-  var base = largo + ' / ' + OBSERVACIONES_POZO_TEXTO_MAX;
-  return largo > OBSERVACIONES_POZO_TEXTO_MAX ? base + ' · te pasaste por ' + (largo - OBSERVACIONES_POZO_TEXTO_MAX) : base;
+function observacionesPozoLogic_textoContador(largo, maximo) {
+  var max = maximo === undefined ? OBSERVACIONES_POZO_TEXTO_MAX : maximo;
+  var base = largo + ' / ' + max;
+  return largo > max ? base + ' · te pasaste por ' + (largo - max) : base;
 }
 
 // 8 a 64 caracteres [A-Za-z0-9_-] (lo que exige el backend). `aleatorio`: funcion opcional para tests. Mismo criterio que el resto de los modulos (ucorr-, ufd-).
-function observacionesPozoLogic_nuevoClientRequestId(aleatorio) {
+function observacionesPozoLogic_nuevoClientRequestId(aleatorio, prefijo) {
+  var pre = prefijo || 'obs';                               // el alta usa "obs", la anulacion "anu": el espacio de ids es compartido en el backend, pero asi nunca se parecen
   if (!aleatorio && typeof crypto !== 'undefined' && crypto && typeof crypto.randomUUID === 'function') {
-    var id = 'obs-' + crypto.randomUUID();
+    var id = pre + '-' + crypto.randomUUID();
     if (OBSERVACIONES_POZO_CLIENT_REQUEST_ID_REGEX.test(id)) {
       return id;
     }
@@ -424,7 +457,7 @@ function observacionesPozoLogic_nuevoClientRequestId(aleatorio) {
   while (s.length < 24) {
     s += Math.floor(azar() * 36).toString(36);
   }
-  return 'obs-' + Date.now().toString(36) + '-' + s;
+  return pre + '-' + Date.now().toString(36) + '-' + s;
 }
 
 // Respuesta de agregarObservacionPozo -> {ok:true, duplicada, vista} | {ok:false, code}. `duplicada` true y false son AMBOS exito. Fail-safe: una respuesta sin la forma esperada, de otro pozo
@@ -616,6 +649,234 @@ function observacionesPozoLogic_formularioInicial() {
   return { abierto: false, wellId: null, texto: '', id: null, ultimoIntento: null, idQuemado: false, enviando: false, error: null };
 }
 
+// =====================================================================================================================================================================
+// ANULACION (E5-6): anular una observacion ACTIVA con un motivo. Quien ve el boton, motivo, clientRequestId por intencion, errores y la maquina de estados del modal.
+// =====================================================================================================================================================================
+
+var OBSERVACIONES_POZO_MOTIVO_MIN = 3;
+var OBSERVACIONES_POZO_MOTIVO_MAX = 300;
+var OBSERVACIONES_POZO_MENSAJE_ANULADA = 'Observación anulada.';
+var OBSERVACIONES_POZO_MENSAJE_ANULAR_GENERICO = 'No se pudo anular la observación. Intentá nuevamente.';
+
+var OBSERVACIONES_POZO_MENSAJES_ANULAR = {
+  INVALID_MOTIVO: 'El motivo debe tener entre 3 y 300 caracteres.',
+  INVALID_TRANSITION: 'Esta observación ya no puede anularse.',
+  OBSERVACION_NOT_FOUND: 'La observación ya no está disponible.',
+  PERMISSION_DENIED: 'No tenés permiso para anular esta observación.',
+  IDEMPOTENCY_CONFLICT: 'La anulación cambió después de un intento anterior. Revisá el motivo e intentá nuevamente.',
+  INVALID_OBSERVACION_ID: OBSERVACIONES_POZO_MENSAJE_ANULAR_GENERICO,
+  INVALID_CLIENT_REQUEST_ID: OBSERVACIONES_POZO_MENSAJE_ANULAR_GENERICO,
+  INCONSISTENT_STATE: OBSERVACIONES_POZO_MENSAJE_ANULAR_GENERICO,
+  SERVICE_UNAVAILABLE: OBSERVACIONES_POZO_MENSAJE_ANULAR_GENERICO,
+  RED: OBSERVACIONES_POZO_MENSAJE_ANULAR_GENERICO,
+  UNAUTHORIZED: OBSERVACIONES_POZO_MENSAJES.UNAUTHORIZED,
+  USER_DISABLED: OBSERVACIONES_POZO_MENSAJES.USER_DISABLED
+};
+
+// ¿Se ofrece "Anular" sobre esta observacion? SOLO con la senal del BACKEND: `vista.puedeAnular === true` (el backend la calcula por observacion con la sesion y los permisos de HOY: moderador, o autor
+// de esa observacion), y solo en una ACTIVA (una anulada o un estado desconocido nunca, aunque un payload corrupto trajera true). `observaciones === true` sigue siendo la guarda global de la
+// pantalla. El frontend NO conoce el email de nadie, NO combina los permisos observaciones_agregar / observaciones_anular y NO usa el nombre: jamas infiere la autoria. Una observacion sin la senal
+// (payload viejo, null, "true", 1...) no tiene boton. El backend vuelve a autorizar al anular de todos modos.
+function observacionesPozoLogic_puedeAnular(permisos, vista) {
+  return observacionesPozoLogic_puedeVer(permisos) && !!vista && vista.estado === 'ACTIVA' && vista.puedeAnular === true;
+}
+
+function observacionesPozoLogic_validarMotivo(crudo) {
+  return observacionesPozoLogic_validarContenido(crudo, OBSERVACIONES_POZO_MOTIVO_MIN, OBSERVACIONES_POZO_MOTIVO_MAX);
+}
+
+function observacionesPozoLogic_mensajeErrorAnular(code) {
+  return Object.prototype.hasOwnProperty.call(OBSERVACIONES_POZO_MENSAJES_ANULAR, code) ? OBSERVACIONES_POZO_MENSAJES_ANULAR[code] : OBSERVACIONES_POZO_MENSAJE_ANULAR_GENERICO;
+}
+
+// Respuesta de anularObservacionPozo -> {ok:true, duplicada, vista} | {ok:false, code}. `duplicada` true y false son AMBOS exito. La vista sale de la lista blanca (el modelo ENTERO
+// normalizado que devolvio el backend) y tiene que ser una ANULADA de ESTA observacion y de ESTE pozo; si no, no se aplica (la anulacion pudo ocurrir: el reintento es idempotente).
+function observacionesPozoLogic_leerRespuestaAnulacion(resp, wellIdEsperado, observacionIdEsperado) {
+  var falla = { ok: false, code: 'SERVICE_UNAVAILABLE' };
+  if (!resp || typeof resp !== 'object') {
+    return falla;
+  }
+  if (resp.status === 'error') {
+    return { ok: false, code: typeof resp.code === 'string' && resp.code !== '' ? resp.code : 'SERVICE_UNAVAILABLE' };
+  }
+  var d = resp.data;
+  if (resp.status !== 'ok' || !d || typeof d !== 'object' || d.wellId !== wellIdEsperado) {
+    return falla;
+  }
+  var vista = observacionesPozoLogic_vista(d.observacion);
+  if (!vista || vista.estado !== 'ANULADA' || vista.id !== observacionIdEsperado) {
+    return falla;
+  }
+  return { ok: true, duplicada: d.duplicada === true, vista: vista };
+}
+
+function observacionesPozoLogic_anulacionInicial() {
+  return { abierto: false, wellId: null, objetivo: null, motivo: '', id: null, ultimoIntento: null, idQuemado: false, enviando: false, error: null };
+}
+
+// Modal de anulacion. deps:
+//   obtenerContexto() -> {sessionToken, permisos}                              (SIEMPRE fresco)
+//   enviar(sessionToken, observacionId, motivo, clientRequestId) -> Promise<respuesta del backend>   (motivo = el normalizado; NO viaja el pozo, el autor ni el texto)
+//   generarId() -> clientRequestId                                              (por defecto observacionesPozoLogic_nuevoClientRequestId con prefijo "anu")
+//   onCambio(estado)                                                            (repintar)
+//   onExito(vista, duplicada, observacionId, wellId)                           (solo si la respuesta sigue siendo del contexto vigente: reemplaza la observacion en la lista)
+//   onTransicionInvalida(wellId)                                                (la observacion ya no se puede anular: se cierra el modal y la pantalla refresca)
+//   onSesionExpirada()                                                          (UNAUTHORIZED / USER_DISABLED)
+//
+// clientRequestId = UNA intencion de anulacion (esta observacion + este motivo normalizado), con las mismas reglas que el alta (E5-5):
+//   abrir el modal => id nuevo (tambien al abrirlo para OTRA observacion), cancelar y reabrir => id nuevo, tras un exito => id nuevo en la proxima;
+//   editar el motivo antes del primer envio, o reintentar el MISMO motivo (red caida, error del servidor) => el MISMO id (el backend deduplica: duplicada:true);
+//   ya hubo un intento y el motivo normalizado cambio => id nuevo antes de enviar;
+//   tras IDEMPOTENCY_CONFLICT o INVALID_CLIENT_REQUEST_ID => el id queda "quemado": el SIGUIENTE envio del usuario usa uno nuevo (nunca se reenvia solo).
+// PRIVACIDAD: el estado del modal guarda solo {id, nombre, fecha, puedeAnular} de la observacion (NUNCA su texto).
+// Descarte de respuestas viejas: cada abrir / cancelar / cerrar invalida lo que este en vuelo (otra observacion, otro pozo, salir de la pantalla, cerrar sesion).
+function observacionesPozoLogic_crearAnulacion(deps) {
+  var s = observacionesPozoLogic_anulacionInicial();
+  var sesion = 0;
+
+  function cambio() {
+    if (deps.onCambio) {
+      deps.onCambio(snapshot());
+    }
+  }
+
+  function snapshot() {
+    var v = observacionesPozoLogic_validarMotivo(s.motivo);
+    return {
+      abierto: s.abierto,
+      wellId: s.wellId,
+      objetivo: s.objetivo,
+      motivo: s.motivo,
+      largo: v.largo,
+      contador: observacionesPozoLogic_textoContador(v.largo, OBSERVACIONES_POZO_MOTIVO_MAX),
+      excede: v.motivo === 'LARGO',
+      valido: v.valido,
+      enviando: s.enviando,
+      puedeGuardar: s.abierto && !s.enviando && v.valido,
+      error: s.error,
+      clientRequestId: s.id
+    };
+  }
+
+  function generar() {
+    return deps.generarId ? deps.generarId() : observacionesPozoLogic_nuevoClientRequestId(undefined, 'anu');
+  }
+
+  function falla(code) {
+    s.error = { code: code, mensaje: observacionesPozoLogic_mensajeErrorAnular(code), campo: code === 'INVALID_MOTIVO' ? 'motivo' : null };
+  }
+
+  function cerrar() {
+    sesion += 1;
+    s = observacionesPozoLogic_anulacionInicial();
+  }
+
+  // vista: la observacion (de la lista) que se quiere anular.
+  function abrir(wellId, vista) {
+    sesion += 1;
+    var ctx = deps.obtenerContexto() || {};
+    s = observacionesPozoLogic_anulacionInicial();
+    if (!observacionesPozoLogic_puedeAnular(ctx.permisos, vista) || typeof wellId !== 'string' || wellId === '') {
+      cambio();
+      return false;
+    }
+    s.abierto = true;
+    s.wellId = wellId;
+    s.objetivo = { id: vista.id, nombre: vista.nombre, fecha: vista.fecha, puedeAnular: vista.puedeAnular === true };       // sin texto
+    s.id = generar();
+    cambio();
+    return true;
+  }
+
+  function setMotivo(motivo) {
+    if (!s.abierto) {
+      return;
+    }
+    s.motivo = typeof motivo === 'string' ? motivo : '';
+    s.error = null;
+    cambio();
+  }
+
+  function guardar() {
+    if (!s.abierto || s.enviando) {
+      return Promise.resolve(snapshot());               // doble submit: no hay otro pedido
+    }
+    var ctx = deps.obtenerContexto() || {};
+    if (!observacionesPozoLogic_puedeAnular(ctx.permisos, { estado: 'ACTIVA', puedeAnular: s.objetivo.puedeAnular })) {
+      falla('PERMISSION_DENIED');
+      cambio();
+      return Promise.resolve(snapshot());
+    }
+    var v = observacionesPozoLogic_validarMotivo(s.motivo);
+    if (!v.valido) {
+      falla('INVALID_MOTIVO');
+      cambio();
+      return Promise.resolve(snapshot());
+    }
+    if (s.ultimoIntento !== null && (s.ultimoIntento !== v.texto || s.idQuemado)) {
+      s.id = generar();                                 // otra intencion: motivo distinto, o un id que el backend ya asocio a otro contenido
+      s.idQuemado = false;
+    }
+    s.ultimoIntento = v.texto;
+    s.enviando = true;
+    s.error = null;
+    var mia = sesion;
+    var wellId = s.wellId;
+    var observacionId = s.objetivo.id;
+    var id = s.id;
+    cambio();
+    return new Promise(function (resolver) {
+      resolver(deps.enviar(ctx.sessionToken, observacionId, v.texto, id));
+    }).then(function (resp) {
+      return observacionesPozoLogic_leerRespuestaAnulacion(resp, wellId, observacionId);
+    }, function () {
+      return { ok: false, code: 'RED' };
+    }).then(function (lectura) {
+      if (mia !== sesion) {
+        return snapshot();                              // contexto viejo: no se aplica nada
+      }
+      s.enviando = false;
+      if (lectura.ok) {
+        cerrar();                                       // exito: se descarta todo (la proxima anulacion es otra intencion)
+        if (deps.onExito) {
+          deps.onExito(lectura.vista, lectura.duplicada, observacionId, wellId);
+        }
+        cambio();
+        return snapshot();
+      }
+      if (lectura.code === 'INVALID_TRANSITION') {      // ya no se puede anular (otro la anulo): se cierra y la pantalla refresca
+        cerrar();
+        if (deps.onTransicionInvalida) {
+          deps.onTransicionInvalida(wellId);
+        }
+        cambio();
+        return snapshot();
+      }
+      falla(lectura.code);
+      if (lectura.code === 'IDEMPOTENCY_CONFLICT' || lectura.code === 'INVALID_CLIENT_REQUEST_ID') {
+        s.idQuemado = true;
+      }
+      cambio();
+      if ((lectura.code === 'UNAUTHORIZED' || lectura.code === 'USER_DISABLED') && deps.onSesionExpirada) {
+        deps.onSesionExpirada();
+      }
+      return snapshot();
+    });
+  }
+
+  // Cancelar (boton / Escape): mientras se anula no se puede.
+  function cancelar() {
+    if (s.enviando) {
+      return false;
+    }
+    cerrar();
+    cambio();
+    return true;
+  }
+
+  return { abrir: abrir, setMotivo: setMotivo, guardar: guardar, cancelar: cancelar, cerrar: cerrar, estado: snapshot };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     OBSERVACIONES_POZO_PAGINA,
@@ -645,6 +906,16 @@ if (typeof module !== 'undefined' && module.exports) {
     observacionesPozoLogic_nuevoClientRequestId,
     observacionesPozoLogic_leerRespuestaAlta,
     observacionesPozoLogic_siguienteFoco,
-    observacionesPozoLogic_crearFormulario
+    observacionesPozoLogic_crearFormulario,
+    OBSERVACIONES_POZO_MOTIVO_MIN,
+    OBSERVACIONES_POZO_MOTIVO_MAX,
+    OBSERVACIONES_POZO_MENSAJE_ANULADA,
+    OBSERVACIONES_POZO_MENSAJE_ANULAR_GENERICO,
+    observacionesPozoLogic_validarContenido,
+    observacionesPozoLogic_puedeAnular,
+    observacionesPozoLogic_validarMotivo,
+    observacionesPozoLogic_mensajeErrorAnular,
+    observacionesPozoLogic_leerRespuestaAnulacion,
+    observacionesPozoLogic_crearAnulacion
   };
 }

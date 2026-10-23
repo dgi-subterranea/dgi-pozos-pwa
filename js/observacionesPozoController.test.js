@@ -27,7 +27,8 @@ class Nodo {
 
 const IDS = ['observaciones-entidad', 'observaciones-cargando', 'observaciones-error', 'observaciones-error-texto', 'btn-observaciones-reintentar', 'observaciones-contenido', 'observaciones-vacio', 'observaciones-lista', 'observaciones-error-mas', 'btn-observaciones-mas',
   'observaciones-acciones', 'btn-observaciones-agregar', 'observaciones-exito', 'observaciones-form-overlay', 'observaciones-form', 'observaciones-form-texto', 'observaciones-form-contador',
-  'observaciones-form-error', 'btn-observaciones-form-cerrar', 'btn-observaciones-form-cancelar', 'btn-observaciones-form-guardar'];
+  'observaciones-form-error', 'btn-observaciones-form-cerrar', 'btn-observaciones-form-cancelar', 'btn-observaciones-form-guardar',
+  'observaciones-anular-overlay', 'observaciones-anular-form', 'observaciones-anular-contexto', 'observaciones-anular-motivo', 'observaciones-anular-contador', 'observaciones-anular-error', 'btn-observaciones-anular-cerrar', 'btn-observaciones-anular-cancelar', 'btn-observaciones-anular-confirmar'];
 const obs = (n, extra) => Object.assign({ observacionId: 'obs-' + n, wellId: W, estado: 'ACTIVA', texto: 'Texto ' + n, categoria: null, nombre: 'Ana', timestamp: ISO, anulacion: null }, extra || {});
 const anulada = (n, extra) => obs(n, Object.assign({ estado: 'ANULADA', texto: null, anulacion: { nombre: 'Moderadora', timestamp: '2026-10-21T18:30:00.000Z', motivo: 'Cargada por error' } }, extra || {}));
 const pagina = (items, extra) => ({ status: 'ok', data: Object.assign({ wellId: W, total: items.length, activas: items.length, anuladas: 0, hayMas: false, cursor: null, observaciones: items }, extra || {}) });
@@ -36,7 +37,7 @@ function cargar(opc) {
   const o = opc || {};
   const el = {};
   IDS.forEach((id) => { el[id] = new Nodo('el'); });
-  ['observaciones-cargando', 'observaciones-error', 'observaciones-contenido', 'observaciones-vacio', 'observaciones-error-mas', 'btn-observaciones-mas', 'btn-observaciones-reintentar', 'observaciones-acciones', 'observaciones-exito', 'observaciones-form-overlay', 'observaciones-form-error'].forEach((id) => { el[id].hidden = true; });
+  ['observaciones-cargando', 'observaciones-error', 'observaciones-contenido', 'observaciones-vacio', 'observaciones-error-mas', 'btn-observaciones-mas', 'btn-observaciones-reintentar', 'observaciones-acciones', 'observaciones-exito', 'observaciones-form-overlay', 'observaciones-form-error', 'observaciones-anular-overlay', 'observaciones-anular-error'].forEach((id) => { el[id].hidden = true; });
   const creados = [];
   const ctx = vm.createContext({ console, Promise, JSON, Math, Date, Object, Array, String, Number, isFinite, Intl, setTimeout });
   ctx.window = ctx;
@@ -44,6 +45,7 @@ function cargar(opc) {
   const pendientes = [];
   const llamadas = [];
   ctx.apiAgregarObservacionPozo = jest.fn(() => new Promise(() => {}));
+  ctx.apiAnularObservacionPozo = jest.fn(() => new Promise(() => {}));
   ctx.apiGetObservacionesPozo = jest.fn((token, wellId, limit, antes) => {
     llamadas.push({ token, wellId, limit, antes });
     return new Promise((resolver, rechazar) => { pendientes.push({ resolver, rechazar }); });

@@ -367,3 +367,10 @@ function apiGetObservacionesPozo(sessionToken, wellId, limit, antesDeSecuencia) 
 function apiAgregarObservacionPozo(sessionToken, wellId, texto, clientRequestId) {
   return callBackend('agregarObservacionPozo', { sessionToken: sessionToken, wellId: wellId, texto: texto, clientRequestId: clientRequestId });
 }
+
+// Anulacion de una observacion (E5-6). Requiere "observaciones" Y ("observaciones_anular" para cualquier autor, u "observaciones_agregar" para la propia: el BACKEND decide). Lista blanca:
+// sessionToken, observacionId, motivo y clientRequestId (el id de UNA intencion de anulacion: se mantiene en los reintentos del mismo motivo; el backend deduplica). NO viaja wellId, email,
+// nombre, texto original, estado ni permisos: el pozo y la autoria los deriva el backend de la observacion y la sesion.
+function apiAnularObservacionPozo(sessionToken, observacionId, motivo, clientRequestId) {
+  return callBackend('anularObservacionPozo', { sessionToken: sessionToken, observacionId: observacionId, motivo: motivo, clientRequestId: clientRequestId });
+}

@@ -84,11 +84,24 @@ describe('cliente API: solo lectura', () => {
     expect(api).toMatch(/'Content-Type': 'text\/plain;charset=utf-8'/);
   });
 
-  test('existe el wrapper del alta (E5-5) y NO el de anulacion (E5-6): la anulacion no existe en ningun archivo del frontend', () => {
+  test('existen los wrappers del alta (E5-5) y de la anulacion (E5-6), y NO hay ninguno de edicion; app.js no los conoce (solo cablea hub / navegacion)', () => {
     expect(api).toMatch(/function apiAgregarObservacionPozo\(sessionToken, wellId, texto, clientRequestId\)/);
     expect(api).toMatch(/callBackend\('agregarObservacionPozo', \{ sessionToken: sessionToken, wellId: wellId, texto: texto, clientRequestId: clientRequestId \}\)/);
-    [api, app, logica, controlador, html, css].forEach((t) => expect(t).not.toMatch(/anularObservacionPozo|apiAnularObservacion/));
-    expect(codigoApp).not.toMatch(/agregarObservacionPozo/);                  // app.js solo cablea hub / navegacion
+    expect(api).toMatch(/function apiAnularObservacionPozo\(sessionToken, observacionId, motivo, clientRequestId\)/);
+    expect(api).toMatch(/callBackend\('anularObservacionPozo', \{ sessionToken: sessionToken, observacionId: observacionId, motivo: motivo, clientRequestId: clientRequestId \}\)/);
+    [api, app, logica, controlador, html, css].forEach((t) => expect(t).not.toMatch(/editarObservacionPozo|apiEditarObservacion/));
+    expect(codigoApp).not.toMatch(/agregarObservacionPozo|anularObservacionPozo/);
+  });
+
+  test('el wrapper de la anulacion manda SOLO sessionToken, observacionId, motivo y clientRequestId (sin wellId, email, nombre, texto original, estado ni permisos)', async () => {
+    const vm = require('vm');
+    const llamadas = [];
+    const ctx = vm.createContext({ JSON, Object, Promise, fetch: (url, opts) => { llamadas.push({ url, opts }); return Promise.resolve({ json: () => Promise.resolve({ status: 'ok' }) }); } });
+    vm.runInContext(api, ctx);
+    await ctx.apiAnularObservacionPozo('tok', '00000000-0000-4000-8000-000000000001', 'Cargada por error', 'anu-12345678');
+    expect(JSON.parse(llamadas[0].opts.body)).toEqual({ action: 'anularObservacionPozo', sessionToken: 'tok', observacionId: '00000000-0000-4000-8000-000000000001', motivo: 'Cargada por error', clientRequestId: 'anu-12345678' });
+    expect(llamadas[0].opts.method).toBe('POST');
+    expect(llamadas[0].opts.headers['Content-Type']).toBe('text/plain;charset=utf-8');
   });
 
   test('el wrapper del alta manda SOLO sessionToken, wellId, texto y clientRequestId (sin categoria, email, nombre, fecha, id, secuencia ni permisos)', async () => {
@@ -190,10 +203,10 @@ describe('privacidad y seguridad de la fuente (sin comentarios)', () => {
     expect(codigo).not.toMatch(/\bemail\b|secuencia/i);
   });
 
-  test('el clientRequestId vive solo en la logica del alta: el modelo de vista y la lectura nunca lo tocan, y el controlador no lo maneja', () => {
+  test('el clientRequestId vive solo en la logica del alta / la anulacion: el modelo de vista y la lectura nunca lo tocan, y el controlador solo lo pasa de largo', () => {
     const render = codigoControlador.slice(codigoControlador.indexOf('function nodo('), codigoControlador.indexOf('function pintarFormulario('));
     expect(render).not.toMatch(/clientRequestId/i);                               // el render (lista, anuladas, estados) no lo conoce
-    expect(codigoControlador.match(/clientRequestId/g)).toHaveLength(2);          // solo el pasaje de argumento hacia el wrapper del alta
+    expect(codigoControlador.match(/clientRequestId/g)).toHaveLength(4);          // solo el pasaje de argumento hacia los wrappers del alta y de la anulacion
     const lectura = codigoLogica.slice(codigoLogica.indexOf('function observacionesPozoLogic_vista('), codigoLogica.indexOf('function observacionesPozoLogic_agregarPagina('));
     expect(lectura).not.toMatch(/clientRequestId/i);
   });
@@ -212,12 +225,12 @@ describe('privacidad y seguridad de la fuente (sin comentarios)', () => {
     expect(codigoControlador).not.toMatch(/maxlength|maxLength/);
   });
 
-  test('el controlador solo crea li y p y pone todo texto con textContent', () => {
+  test('el controlador solo crea li, p y button (el "Anular") y pone todo texto con textContent', () => {
     const creados = codigoControlador.match(/createElement\([^)]*\)|nodo\('[a-z]+'/g) || [];
     expect(creados.length).toBeGreaterThan(0);
     expect(codigoControlador).toMatch(/n\.textContent = texto/);
     expect(codigoControlador).toMatch(/nodo\('li'/);
-    expect(codigoControlador.match(/nodo\('([a-z]+)'/g).every((s) => /nodo\('(li|p)'/.test(s))).toBe(true);
+    expect(codigoControlador.match(/nodo\('([a-z]+)'/g).every((s) => /nodo\('(li|p|button)'/.test(s))).toBe(true);
   });
 
   test('la fecha usa el helper existente de Reemplazo (hora de Mendoza), sin inventar otra politica de huso', () => {
@@ -225,8 +238,8 @@ describe('privacidad y seguridad de la fuente (sin comentarios)', () => {
     expect(codigoLogica).not.toMatch(/toLocale|getTimezoneOffset|Intl\./);
   });
 
-  test('el frontend de lectura no escribe nada en el backend: unica accion de red = getObservacionesPozo', () => {
-    expect(codigoControlador.match(/\bapi[A-Z]\w+/g)).toEqual(['apiGetObservacionesPozo', 'apiAgregarObservacionPozo']);
+  test('el frontend solo habla con el backend por tres acciones: leer, agregar y anular (ninguna otra)', () => {
+    expect(codigoControlador.match(/\bapi[A-Z]\w+/g)).toEqual(['apiGetObservacionesPozo', 'apiAgregarObservacionPozo', 'apiAnularObservacionPozo']);
     expect(codigoLogica).not.toMatch(/fetch\(|XMLHttpRequest|callBackend|api[A-Z]\w+\(/);
   });
 });
@@ -265,7 +278,7 @@ describe('CSS: responsive, saltos de linea y palabras largas', () => {
 });
 
 describe('E5-5: formulario "Agregar observacion" en index.html', () => {
-  const modal = html.slice(html.indexOf('<div id="observaciones-form-overlay"'), html.indexOf('<!-- Visor de la galeria de fotos de pozos'));
+  const modal = html.slice(html.indexOf('<div id="observaciones-form-overlay"'), html.indexOf('<!-- Modal "Anular observacion"'));
 
   test('es un dialogo modal accesible, FUERA de #screen-observaciones, con titulo asociado', () => {
     expect(html.indexOf('<div id="observaciones-form-overlay"')).toBeGreaterThan(html.indexOf('<div id="screen-observaciones"'));
@@ -340,5 +353,102 @@ describe('E5-5: CSS del modal (responsive y sin overflow)', () => {
     const selectores = Array.from(bloque.matchAll(/(^|\n)\s*([^\n{};@]+?)\s*\{/g)).map((m) => m[2].trim()).filter((x) => x !== '' && !/^(from|to)$/.test(x));
     expect(selectores.length).toBeGreaterThan(15);
     selectores.forEach((sel) => expect(sel).toMatch(/^(\.obs-|body\.obs-form-abierto|#screen-observaciones)/));
+  });
+});
+
+describe('E5-6: modal "Anular observacion" en index.html y boton por observacion', () => {
+  const modal = html.slice(html.indexOf('<div id="observaciones-anular-overlay"'), html.indexOf('<!-- Visor de la galeria de fotos de pozos'));
+
+  test('dialogo modal accesible, FUERA de #screen-observaciones, con titulo asociado y el texto de confirmacion pedido', () => {
+    expect(html.indexOf('<div id="observaciones-anular-overlay"')).toBeGreaterThan(html.indexOf('<div id="observaciones-form-overlay"'));
+    expect(modal).toMatch(/<div id="observaciones-anular-overlay" class="obs-overlay" role="dialog" aria-modal="true" aria-labelledby="observaciones-anular-titulo" hidden>/);
+    expect(modal).toMatch(/<h2 id="observaciones-anular-titulo"[^>]*>Anular observación<\/h2>/);
+    expect(modal).toContain('No se borra. La observación quedará registrada como anulada, con tu nombre y la fecha.');
+    expect(modal).toMatch(/<button type="button" id="btn-observaciones-anular-cerrar"[^>]*aria-label="Cerrar"/);
+  });
+
+  test('label asociado al motivo, ayuda, contador 0 / 300, error con role alert y describedby que apunta a ids existentes; sin maxlength', () => {
+    expect(modal).toMatch(/<label for="observaciones-anular-motivo"[^>]*>Motivo de la anulación<\/label>/);
+    expect(modal).toMatch(/<textarea id="observaciones-anular-motivo"/);
+    expect(modal).toContain('Explicá brevemente por qué se anula.');
+    expect(modal).toMatch(/id="observaciones-anular-contador"[^>]*>0 \/ 300</);
+    expect(modal).toMatch(/id="observaciones-anular-error"[^>]*role="alert"[^>]*hidden/);
+    const describedby = modal.match(/aria-describedby="([^"]+)"/)[1].split(' ');
+    describedby.forEach((id) => expect(modal.split('id="' + id + '"')).toHaveLength(2));
+    expect(modal).toMatch(/aria-invalid="false"/);
+    expect(modal).not.toMatch(/maxlength/i);
+    expect(modal.match(/<textarea/g) || []).toHaveLength(1);
+    expect(modal).not.toMatch(/<input|<select/);
+  });
+
+  test('Cancelar y "Anular observación" (disabled de verdad al abrir); formulario con novalidate', () => {
+    expect(modal).toMatch(/id="btn-observaciones-anular-cancelar"[^>]*>Cancelar<\/button>/);
+    expect(modal).toMatch(/<button type="submit" id="btn-observaciones-anular-confirmar" class="button" disabled>Anular observación<\/button>/);
+    expect(modal).toMatch(/<form id="observaciones-anular-form" autocomplete="off" novalidate>/);
+    expect(modal).not.toMatch(/\son[a-z]+=/i);
+  });
+
+  test('el modal no repite el texto de la observacion: solo hay un lugar para "quien y cuando" (contexto)', () => {
+    expect(modal).toMatch(/<p id="observaciones-anular-contexto"[^>]*><\/p>/);
+  });
+
+  test('todos los ids que usa el controlador existen una sola vez (incluidos los de anulacion)', () => {
+    const usados = Array.from(controlador.matchAll(/\$\('([^']+)'\)/g)).map((m) => m[1]);
+    expect(usados.filter((i) => /anular/.test(i)).length).toBeGreaterThanOrEqual(9);
+    usados.forEach((id) => expect(html.split('id="' + id + '"')).toHaveLength(2));
+  });
+
+  test('el boton "Anular" por observacion lo crea el controlador SOLO con observacionesPozoLogic_puedeAnular (la senal puedeAnular del backend + estado ACTIVA); jamas por nombre ni por permisos', () => {
+    const f = codigoControlador.slice(codigoControlador.indexOf('function puedeAnularItem('), codigoControlador.indexOf('function accionAnular('));
+    expect(f).toMatch(/observacionesPozoLogic_puedeAnular\(ctx\.permisos, v\)/);
+    expect(f).not.toMatch(/nombre|\.name|email|observaciones_agregar|observaciones_anular/i);
+    const itemAnulada = codigoControlador.slice(codigoControlador.indexOf('function itemAnulada('), codigoControlador.indexOf('function renderItem('));
+    expect(itemAnulada).not.toMatch(/accionAnular|obs-anular/);              // una anulada nunca tiene boton
+    expect(codigoControlador.match(/accionAnular\(/g)).toHaveLength(2);        // definicion + una sola llamada (en itemActiva)
+    expect(codigoControlador).toMatch(/nodo\('button', 'obs-anular', 'Anular'\)/);
+  });
+
+  test('la decision de anular NO usa el nombre ni nada que no venga del backend: la funcion pura solo mira permisos, estado y vista.puedeAnular', () => {
+    const f = codigoLogica.slice(codigoLogica.indexOf('function observacionesPozoLogic_puedeAnular('), codigoLogica.indexOf('function observacionesPozoLogic_validarMotivo('));
+    expect(f).not.toMatch(/nombre|email|fecha|texto/i);
+    expect(f).toMatch(/vista\.estado === 'ACTIVA'/);
+    expect(f).toMatch(/vista\.puedeAnular === true/);
+    expect(f).not.toMatch(/observaciones_anular|observaciones_agregar/);       // sin fallback ni combinacion de permisos: manda la senal del backend
+  });
+
+  test('el estado del modal de anulacion no guarda el texto de la observacion', () => {
+    const f = codigoLogica.slice(codigoLogica.indexOf('function observacionesPozoLogic_crearAnulacion('), codigoLogica.indexOf('if (typeof module'));
+    expect(f).toMatch(/s\.objetivo = \{ id: vista\.id, nombre: vista\.nombre, fecha: vista\.fecha, puedeAnular: vista\.puedeAnular === true \}/);
+    expect(f).not.toMatch(/vista\.texto|objetivo\.texto/);                 // `v.texto` ahi es el MOTIVO normalizado; el texto de la observacion no se toca
+  });
+
+  test('la edicion y el reemplazo automatico no existen', () => {
+    [logica, controlador, html].forEach((t) => expect(t).not.toMatch(/editar observaci|Editar observaci|editarObservacion|apiEditar/i));
+  });
+});
+
+describe('E5-6: CSS del boton y del modal de anulacion', () => {
+  const marca = '/* --- Observaciones del pozo: anular (E5-6) --- */';
+  const bloque = css.slice(css.indexOf(marca));
+  const regla = (sel) => {
+    const i = css.indexOf('\n' + sel + ' {', css.indexOf(marca));
+    return i === -1 ? '' : css.slice(i, css.indexOf('}', i) + 1);
+  };
+
+  test('el boton es discreto pero legible: texto (no solo icono ni color), area tactil >= 40 px y borde propio', () => {
+    expect(regla('.obs-anular')).toMatch(/min-height:\s*40px/);
+    expect(regla('.obs-anular')).toMatch(/border:\s*1\.5px solid/);
+    expect(regla('.obs-anular')).toMatch(/font-weight:\s*700/);
+  });
+
+  test('el aviso de confirmacion y el contexto rompen palabras largas; sin anchos fijos', () => {
+    expect(regla('.obs-anular-contexto')).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(bloque).not.toMatch(/(^|[^-])width:\s*\d+px|white-space:\s*nowrap/);
+  });
+
+  test('los estilos nuevos son solo .obs-*: no afectan otros modulos', () => {
+    const selectores = Array.from(bloque.matchAll(/(^|\n)\s*([^\n{};@]+?)\s*\{/g)).map((m) => m[2].trim()).filter((x) => x !== '' && !/^(from|to)$/.test(x));
+    expect(selectores.length).toBeGreaterThanOrEqual(4);
+    selectores.forEach((sel) => expect(sel).toMatch(/^\.obs-/));
   });
 });

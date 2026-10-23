@@ -1,6 +1,6 @@
 # Observaciones del pozo (E5)
 
-Estado: **E5-1 (lectura), E5-2 (alta) y E5-3 (anulación) commiteadas en local (backend completo) y E5-4 (frontend de lectura) también; E5-5 (frontend: agregar observación) implementada en el repo, sin publicar.** La anulación en el frontend (E5-6) queda para la etapa siguiente.
+Estado: **E5-1 (lectura), E5-2 (alta) y E5-3 (anulación) commiteadas en local (backend completo) y E5-4 (frontend de lectura) y E5-5 (frontend: agregar observación) también; E5-6 (frontend: anular observación) y E5-6b (`puedeAnular` en el backend) implementadas en el repo, sin publicar.**
 
 ## Propósito
 Una línea de tiempo de **observaciones operativas** por pozo: acceso, estado físico, lo que informa el propietario, anomalías vistas en campo, un dato registral a revisar o cualquier texto útil. Es **contexto humano y auditable**.
@@ -72,7 +72,7 @@ Entrada: `wellId`, `limit?`, `antesDeSecuencia?`. Orden de chequeos: sesión →
 ```
 { wellId, total, activas, anuladas, hayMas, cursor,
   observaciones: [ { observacionId, wellId, estado: 'ACTIVA'|'ANULADA', texto|null, categoria|null,
-                     nombre, timestamp, anulacion: null | { nombre, timestamp, motivo|null } } ] }
+                     nombre, timestamp, puedeAnular: boolean, anulacion: null | { nombre, timestamp, motivo|null } } ] }
 ```
 - `total` / `activas` / `anuladas` son **globales del pozo**, no de la página: salen de los mismos eventos que hay que leer para derivar los estados, sin una lectura extra. **Cuentan solo las observaciones derivadas sin ambigüedad y retornables**: las ocultas por inconsistencia no suman a los totales (el payload no trae un contador de inconsistencias; el diagnóstico va a Logger).
 - **Orden:** más reciente primero (por `secuencia`, no por fecha). `limit`: 50 por defecto, **máximo 100** (por encima se acota a 100); un `limit` que no es un entero ≥ 1 → `INVALID_LIMIT`. **Cursor por `secuencia`** (no hay offset): `antesDeSecuencia` entero ≥ 1 (si no, `INVALID_CURSOR`); `cursor` = la secuencia a pasar en la página siguiente, o `null` si no hay más. Es **estable**: una observación nueva tiene una secuencia mayor, así que no entra en una página ya pedida ni la desplaza; una anulación solo cambia el estado de un ítem, nunca repite ni salta. Cada observación devuelta tiene una secuencia **inequívoca** (las ambiguas ya salieron), así que el cursor estricto nunca repite ni pierde observaciones sanas, ni siquiera alrededor de una secuencia corrupta.
@@ -147,7 +147,7 @@ Alta exitosa: **una** fila con acción `agregarObservacionPozo` + `wellId` + `OK
 
 ### Respuesta
 ```
-{ wellId, duplicada, observacion: { observacionId, wellId, estado: 'ACTIVA', texto, categoria: null, nombre, timestamp, anulacion: null } }
+{ wellId, duplicada, observacion: { observacionId, wellId, estado: 'ACTIVA', texto, categoria: null, nombre, timestamp, puedeAnular, anulacion: null } }
 ```
 Mismo contrato que la lectura: **sin email, sin `clientRequestId` y sin `secuencia`**. Si falta el nombre del autor, «Usuario».
 
@@ -227,7 +227,7 @@ Igual que E5-2, dentro del lock: (1) permisos validados afuera; (2) se **vuelve 
 `observacionId` = el de la `ALTA` · `evento` = `ANULADA` · `wellId` copiado **por el servidor** de la `ALTA` · `texto` = vacío · `categoria` = vacío · `motivo` = motivo normalizado · `email` / `nombre` = sesión · `timestampUtc` = servidor · `secuencia` = siguiente global · `clientRequestId`. **Nunca** se copia el texto original a la anulación.
 
 ### Respuesta y privacidad
-`{wellId, duplicada, observacion}` con la observación en el **mismo contrato que la lectura** (E5-1): `{observacionId, wellId, estado: "ANULADA", texto, categoria: null, nombre, timestamp, anulacion: {nombre, timestamp, motivo}}`. Sin email, `clientRequestId` ni `secuencia`. El texto original solo con `observaciones_anular`; **sin él, `texto: null` incluso para el autor** de su propia observación (no hay excepción por autoría).
+`{wellId, duplicada, observacion}` con la observación en el **mismo contrato que la lectura** (E5-1): `{observacionId, wellId, estado: "ANULADA", texto, categoria: null, nombre, timestamp, puedeAnular: false, anulacion: {nombre, timestamp, motivo}}`. Sin email, `clientRequestId` ni `secuencia`. El texto original solo con `observaciones_anular`; **sin él, `texto: null` incluso para el autor** de su propia observación (no hay excepción por autoría).
 
 ### Historial y Logger
 Una fila `anularObservacionPozo` con el `wellId` derivado de la `ALTA` y `OK` por anulación creada; **nunca** el motivo, el texto, el `observacionId` ni el `clientRequestId`. El reintento idempotente no escribe otra. Los errores siguen el patrón con su código (con el `wellId` solo si ya se conocía por la `ALTA`). `Logger` recibe únicamente ids / filas / secuencias del detalle técnico, nunca texto, motivo, email ni nombre; el mensaje al cliente es fijo.
@@ -315,6 +315,49 @@ Siempre desde una tabla; nunca el `message` técnico; el texto del formulario **
 ### Privacidad
 El texto nunca va a `console`, URL / hash, `localStorage` / `sessionStorage` ni cookies, y no se usa `innerHTML` (el DOM falso de los tests lanza si alguien lo intenta); el textarea se maneja con `.value` y la observación guardada se renderiza por el pipeline seguro de E5-4 (`textContent`).
 
+## Contrato: `puedeAnular` (E5-6b)
+Cada observación que sale hacia el cliente (lectura, alta y anulación) lleva **`puedeAnular: boolean`**, siempre booleano estricto. Es **solo una señal para la interfaz**: no reemplaza la autorización real de `anularObservacionPozo`, que sigue verificando permisos, propiedad, estado, idempotencia, lock y transición, y **nunca** confía en un `puedeAnular` que mande el cliente (el cliente no lo envía y, si lo envía, se ignora).
+
+**Regla exacta** (una sola función, `observacionesPozoService_capacidadAnular(obs, sesion)`, usada por la vista central `observacionesPozoService_vista`; reutiliza `observacionesPozoService_puedeAnular`, la misma regla con la que se autoriza al anular): `true` solo si la observación está **ACTIVA** y la sesión tiene `observaciones === true` **y**
+- `observaciones_anular === true`, **o**
+- `observaciones_agregar === true` y el **email normalizado** (minúsculas, sin espacios) de la sesión es igual al email normalizado guardado en la `ALTA` (si ese email está vacío o no tiene forma de email, **no** es propia).
+`false` para una anulada, para una observación inconsistente o no derivable (esas ni se devuelven), sin sesión o sin permisos, y ante cualquier valor que no sea el booleano `true` (`1`, `"SI"`, `"true"`…). **El nombre no cuenta nunca.**
+
+**Permisos de hoy.** Se calcula con la sesión y los permisos **actuales** en cada respuesta (no hay valor congelado): un autor que pierde `observaciones_agregar` pasa a `false`; un moderador que pierde `observaciones_anular` pasa a `false` salvo en lo que sea propio (si conserva `observaciones_agregar`).
+
+**Dónde viaja.**
+- `getObservacionesPozo`: cada observación, según la sesión que consulta.
+- `agregarObservacionPozo`: la recién creada usa la **misma** regla con los permisos de hoy (no está hardcodeado; con permisos que no son el booleano exacto da `false`). El reintento idempotente (`duplicada: true`) lo **recalcula** con los permisos y el estado de hoy (si otra persona la anuló entretanto, vuelve la anulada con `puedeAnular: false`).
+- `anularObservacionPozo`: la observación resultante es `ANULADA`, así que siempre `false` (también en el reintento).
+
+**Privacidad.** Solo el booleano: no expone el email, ni si el usuario es autor o moderador, ni el motivo del permiso (no hay `esPropia`, `esModerador`, `autorEmail`…). Nadie ve de quién es la observación de otro.
+
+**Alcance.** Es el único cambio de backend de E5-6b: sin columnas nuevas, sin cambios de esquema, secuencias, idempotencia, endpoints, permisos almacenados, privacidad del texto ni `Historial`.
+
+## Frontend: anular observación (E5-6)
+Acción «Anular» por observación, modal de confirmación con motivo obligatorio, `clientRequestId` por intención, actualización **en sitio** de la tarjeta, privacidad del texto original y reintento seguro. **No** se edita ni se reemplaza automáticamente.
+
+### Quién ve el botón
+**Solo** con la señal del backend: `observacion.puedeAnular === true`, en una observación **ACTIVA** (una anulada o un estado desconocido nunca lo tiene, ni siquiera con un payload corrupto que traiga `true`), con `observaciones === true` como guarda global de la pantalla. El frontend **no conoce ningún email**, **no combina** `observaciones_agregar` / `observaciones_anular` y **no usa el nombre**: no infiere la autoría de ninguna manera (la auditoría de E5-6 confirmó que no tenía una señal segura; de ahí `puedeAnular`). Una observación con la señal en `false`, ausente (backend viejo), `null`, `"true"`, `1`… no tiene botón y la lectura no se rompe. La observación recién creada por el alta trae su propia señal, así que su botón aparece sin recargar. El backend vuelve a autorizar al anular de todos modos.
+
+### Modal
+Fuera de `#screen-observaciones`, mismo patrón y estilos del modal de alta. Título «Anular observación»; aviso «No se borra. La observación quedará registrada como anulada, con tu nombre y la fecha.»; contexto con **quién escribió y cuándo** (**nunca el texto** de la observación: ni en el modal ni en el estado del formulario); `label` asociado al `textarea` «Motivo de la anulación»; ayuda «Explicá brevemente por qué se anula.»; contador `n / 300` (en code points, con el exceso dicho en palabras, sin `maxlength`); error con `role="alert"`, `aria-invalid`, foco al abrir y ante `INVALID_MOTIVO`; Cancelar y «Anular observación» (deshabilitado de verdad si el motivo es inválido o se está anulando; «Anulando…»); Escape cancela y Tab rota dentro del modal. No se puede abrir mientras el modal de alta está abierto.
+
+### Motivo
+3 a 300 caracteres únicos, **misma normalización que el backend** (la del texto; los tests de paridad la comparan con el backend real). Se envía el motivo ya normalizado. No viaja `wellId`, email, nombre, texto original, estado ni permisos: solo `observacionId`, `motivo` y `clientRequestId`.
+
+### clientRequestId: una intención de anulación
+Prefijo `anu-` (dentro del regex del backend; el espacio de ids es compartido con el alta en el backend, que nunca se reutiliza desde el frontend). Mismas reglas que E5-5 con el par **observación + motivo normalizado**: nuevo al abrir (también para otra observación), al cancelar y reabrir, tras un éxito y cuando cambia el motivo después de un intento; igual al editar antes del primer envío y al reintentar el mismo motivo; **quemado** tras `IDEMPOTENCY_CONFLICT` / `INVALID_CLIENT_REQUEST_ID` (el siguiente envío del usuario usa otro; nunca se reenvía solo). El doble submit hace una sola request.
+
+### Éxito: reemplazo en sitio
+`duplicada` true y false son ambos éxito («Observación anulada.»). El modelo **normalizado que devolvió el backend reemplaza a la entrada completa**, por `observacionId` y en el mismo lugar (no se agrega otra tarjeta). **No** hay merge: si el backend devuelve `texto: null` (autor / sin `observaciones_anular`) el texto original desaparece del DOM **y** del estado de la lista; si devuelve el texto (moderación) se muestra subordinado. Nunca se usa el texto cargado antes como respaldo. No toca el cursor, el total ni las demás páginas (la interfaz de E5-4 no mantiene contadores de activas / anuladas, así que no hay nada que reconciliar). Una respuesta de otro pozo, de otra observación o que no sea una `ANULADA` mostrable se trata como error (el reintento es idempotente).
+
+### Errores y respuestas viejas
+Tabla fija, nunca el `message` técnico; el motivo siempre se conserva: `INVALID_MOTIVO` (junto al campo, con foco), `OBSERVACION_NOT_FOUND` («La observación ya no está disponible.»), `PERMISSION_DENIED`, `IDEMPOTENCY_CONFLICT`, `SERVICE_UNAVAILABLE` / red, `UNAUTHORIZED` / `USER_DISABLED` (logout global). **`INVALID_TRANSITION`** («Esta observación ya no puede anularse.») cierra el modal, vuelve a pedir la lista desde la primera página y muestra el aviso (en el estilo informativo, no el del éxito). Una respuesta que llega **después de** salir de la pantalla, cerrar sesión, cambiar de pozo o abrir el modal para **otra** observación no se aplica (ni éxito, ni error, ni refresco): la anulación pudo ocurrir en el backend; al volver a abrir la pantalla la lectura la refleja.
+
+### Privacidad
+Sin `innerHTML` (el DOM falso lanza si se intenta; solo se crean `li`, `p` y `button`), sin `console`, storage, URL ni cookies; el motivo se maneja con `.value` y se renderiza con `textContent`.
+
 ## Alcance
 | Etapa | Contenido | Estado |
 |---|---|---|
@@ -323,7 +366,8 @@ El texto nunca va a `console`, URL / hash, `localStorage` / `sessionStorage` ni 
 | **E5-3** | `anularObservacionPozo` (propia / cualquiera según permiso, motivo obligatorio, idempotente, sin verificar existencia) | **implementada (sin publicar)** |
 | **E5-4** | frontend de lectura: tarjeta en el hub, pantalla, listado paginado, render de activas / anuladas | **implementada (sin publicar)** |
 | **E5-5** | frontend: agregar observación (botón, formulario, `clientRequestId` por intención, actualización inmediata de la lista) | **implementada (sin publicar)** |
-| E5-6 | frontend: anulación | pendiente |
+| **E5-6** | frontend: anular observación (botón por activa, modal con motivo, `clientRequestId` por intención, reemplazo en sitio, privacidad del texto original) | **implementada (sin publicar)** |
+| **E5-6b** | backend: `puedeAnular` por observación (contrato mínimo para el botón del autor y del moderador) | **implementada (sin publicar)** |
 | E5-7 | publicación (**backend primero**, luego el frontend) y smoke real | pendiente |
 
 **Fuera de alcance de E5-1 a E5-3:** edición, reemplazo automático, frontend, tarjeta, modal, categorías funcionales, adjuntos, offline, cache, vista pública y cualquier cambio de mapa / reemplazo / ubicación / fotos / ITF / NE.
@@ -337,3 +381,7 @@ El texto nunca va a `console`, URL / hash, `localStorage` / `sessionStorage` ni 
 Frontend (E5-4): `js/observacionesPozoLogic.test.js` (permisos fail-closed, vista de activa / anulada, privacidad por lista blanca, respuestas mal formadas, fechas y el cargador paginado: primera página, anteriores, sin duplicados, doble toque, error de la página 2, reabrir, respuestas viejas, sesión vencida), `observacionesPozoController.test.js` (el controlador ejecutado con un DOM falso que lanza ante `innerHTML`: activa, anulada con y sin texto, vacío, errores, paginación, XSS y privacidad del payload) y `observacionesPozoWiring.test.js` (HTML, hub, navegación, defaults de permisos, API, service worker, CSS responsive y guardas de fuente).
 
 Alta en el frontend (E5-5): `js/observacionesPozoAlta.test.js` (permiso exacto, normalización con **paridad contra el backend**, contador por code points, `clientRequestId` por intención A–H, respuestas y errores, descarte de respuestas viejas, inserción arriba de la lista con `agregarNueva`), `observacionesPozoAltaController.test.js` (el controlador con DOM falso: botón y permisos, foco, contador, «Guardando…», doble submit, éxito sin recarga, errores que conservan el texto, paginación abierta, XSS, Escape / Tab, respuestas viejas) y los bloques E5-5 de `observacionesPozoWiring.test.js` (modal accesible, wrapper, CSS responsive).
+
+Anulación en el frontend (E5-6): `js/observacionesPozoAnular.test.js` (quién ve el botón: moderador, autor solo con la señal del backend, nunca por nombre ni en una anulada; motivo con paridad contra el backend; `clientRequestId` por intención; máquina del modal; **reemplazo en sitio sin merge**), `observacionesPozoAnularController.test.js` (el controlador con DOM falso: botón por permiso y estado, modal, éxito que **borra el texto original** cuando el backend manda `null`, errores, paginación intacta, XSS, respuestas viejas) y los bloques E5-6 de `observacionesPozoWiring.test.js`.
+
+`puedeAnular` (E5-6b): `backend/test/ObservacionesPozoPuedeAnular.test.js` (la regla con todos los casos, la vista central, lectura / alta / anulación, el recálculo con permisos de hoy, la privacidad y una **prueba de paridad**: `puedeAnular === true` ⇔ `anularObservacionPozo` de esa sesión se autoriza, para todas las combinaciones usuario × observación × estado del email) y los ajustes de contrato en los tests existentes; en el frontend, los tests de E5-6 usan la señal real del backend.

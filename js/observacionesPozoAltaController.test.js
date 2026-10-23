@@ -27,9 +27,10 @@ class Nodo {
 
 const IDS = ['observaciones-entidad', 'observaciones-cargando', 'observaciones-error', 'observaciones-error-texto', 'btn-observaciones-reintentar', 'observaciones-contenido', 'observaciones-acciones',
   'btn-observaciones-agregar', 'observaciones-exito', 'observaciones-vacio', 'observaciones-lista', 'observaciones-error-mas', 'btn-observaciones-mas', 'observaciones-form-overlay', 'observaciones-form',
-  'observaciones-form-texto', 'observaciones-form-contador', 'observaciones-form-error', 'btn-observaciones-form-cerrar', 'btn-observaciones-form-cancelar', 'btn-observaciones-form-guardar'];
+  'observaciones-form-texto', 'observaciones-form-contador', 'observaciones-form-error', 'btn-observaciones-form-cerrar', 'btn-observaciones-form-cancelar', 'btn-observaciones-form-guardar',
+  'observaciones-anular-overlay', 'observaciones-anular-form', 'observaciones-anular-contexto', 'observaciones-anular-motivo', 'observaciones-anular-contador', 'observaciones-anular-error', 'btn-observaciones-anular-cerrar', 'btn-observaciones-anular-cancelar', 'btn-observaciones-anular-confirmar'];
 const OCULTOS = ['observaciones-cargando', 'observaciones-error', 'observaciones-contenido', 'observaciones-acciones', 'observaciones-exito', 'observaciones-vacio', 'observaciones-error-mas', 'btn-observaciones-mas',
-  'btn-observaciones-reintentar', 'observaciones-form-overlay', 'observaciones-form-error'];
+  'btn-observaciones-reintentar', 'observaciones-form-overlay', 'observaciones-form-error', 'observaciones-anular-overlay', 'observaciones-anular-error'];
 const obs = (n, extra) => Object.assign({ observacionId: 'obs-' + n, wellId: W, estado: 'ACTIVA', texto: 'Texto ' + n, categoria: null, nombre: 'Ana', timestamp: ISO, anulacion: null }, extra || {});
 const pagina = (items, extra) => ({ status: 'ok', data: Object.assign({ wellId: W, total: items.length, activas: items.length, anuladas: 0, hayMas: false, cursor: null, observaciones: items }, extra || {}) });
 const alta = (o, duplicada) => ({ status: 'ok', data: { wellId: W, duplicada: duplicada === true, observacion: o } });
@@ -56,6 +57,7 @@ function cargar(opc) {
   const escrituras = [];
   const escriturasPend = [];
   ctx.apiGetObservacionesPozo = jest.fn((token, wellId, limit, antes) => { lecturas.push({ token, wellId, limit, antes }); return new Promise((res) => { lecturasPend.push(res); }); });
+  ctx.apiAnularObservacionPozo = jest.fn(() => new Promise(() => {}));
   ctx.apiAgregarObservacionPozo = jest.fn((token, wellId, texto, clientRequestId) => { escrituras.push({ token, wellId, texto, clientRequestId }); return new Promise((res, rej) => { escriturasPend.push({ res, rej }); }); });
   fuentes.forEach((f) => vm.runInContext(f, ctx));
   const sesion = { sessionToken: 'tok-real', permisos: o.permisos || { observaciones: true, observaciones_agregar: true }, onSessionExpired: jest.fn() };
@@ -260,6 +262,25 @@ describe('exito: la observacion entra arriba, sin recargar', () => {
     expect(t.el['observaciones-exito'].hidden).toBe(false);
     expect(t.el['observaciones-exito'].textContent).toBe('Observación agregada.');
     expect(Nodo.enFoco).toBe(t.el['btn-observaciones-agregar']);
+    expect(t.lecturas).toHaveLength(1);
+  });
+
+  test('la recien creada trae la senal del backend: con puedeAnular=true su tarjeta tiene "Anular" sin recargar; con false o ausente, no', async () => {
+    const t = await conLista({ permisos: { observaciones: true, observaciones_agregar: true } });
+    const botonDe = (i) => t.lista()[i].children.filter((p) => p.className === 'obs-item-acciones').map((p) => p.children[0])[0] || null;
+    t.abrirForm();
+    t.escribir('Con la senal');
+    t.enviar();
+    await t.responder(alta(obs(9, { texto: 'Con la senal', puedeAnular: true })));
+    expect(botonDe(0)).not.toBeNull();
+    expect(botonDe(0).textContent).toBe('Anular');
+    expect(botonDe(1)).toBeNull();                                                  // las que ya estaban no cambian (sin senal)
+    t.abrirForm();
+    t.escribir('Sin la senal');
+    t.enviar();
+    await t.responder(alta(obs(10, { texto: 'Sin la senal' })));
+    expect(t.textosLista()[0]).toBe('Sin la senal');
+    expect(botonDe(0)).toBeNull();
     expect(t.lecturas).toHaveLength(1);
   });
 

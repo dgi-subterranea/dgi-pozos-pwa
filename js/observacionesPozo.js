@@ -1,4 +1,4 @@
-// Controlador DOM de la pantalla "Observaciones" del pozo (E5-4 lectura + E5-5 alta; la anulacion llega en E5-6). Toda la logica -permisos fail-closed, normalizacion de la respuesta,
+// Controlador DOM de la pantalla "Observaciones" del pozo (E5-4 lectura + E5-5 alta + E5-6 anulacion). Toda la logica -permisos fail-closed, normalizacion de la respuesta,
 // paginacion, formulario de alta, clientRequestId por intencion, descarte de respuestas viejas, mensajes- vive en js/observacionesPozoLogic.js (con tests); aca solo se pinta.
 //
 // API (ver window.observacionesPozoController_* al final):
@@ -33,12 +33,26 @@
   var btnCerrarFormEl = $('btn-observaciones-form-cerrar');
   var btnCancelarEl = $('btn-observaciones-form-cancelar');
   var btnGuardarEl = $('btn-observaciones-form-guardar');
+  // modal "Anular observacion"
+  var anularOverlayEl = $('observaciones-anular-overlay');
+  var anularFormEl = $('observaciones-anular-form');
+  var anularContextoEl = $('observaciones-anular-contexto');
+  var motivoEl = $('observaciones-anular-motivo');
+  var anularContadorEl = $('observaciones-anular-contador');
+  var anularErrorEl = $('observaciones-anular-error');
+  var btnAnularCerrarEl = $('btn-observaciones-anular-cerrar');
+  var btnAnularCancelarEl = $('btn-observaciones-anular-cancelar');
+  var btnAnularConfirmarEl = $('btn-observaciones-anular-confirmar');
 
   var cargador = null;
   var formulario = null;
   var obtenerContexto = null;
-  var textoExito = '';
+  var anulacion = null;
+  var textoAviso = '';
+  var claseAviso = 'obs-exito';
   var formAbierto = false;
+  var anulAbierto = false;
+  var abridorAnulacion = null;
 
   function nodo(tag, clase, texto) {
     var n = document.createElement(tag);
@@ -54,10 +68,27 @@
     return nodo('p', 'obs-meta', partes.join(' · '));
   }
 
+  // "Anular" solo en una ACTIVA y solo con la senal del BACKEND (observacion.puedeAnular === true, via observacionesPozoLogic_puedeAnular): nunca por nombre ni por los permisos de agregar / anular.
+  function puedeAnularItem(v) {
+    var ctx = obtenerContexto ? obtenerContexto() || {} : {};
+    return observacionesPozoLogic_puedeAnular(ctx.permisos, v);
+  }
+
+  function accionAnular(v) {
+    var fila = nodo('p', 'obs-item-acciones');
+    var boton = nodo('button', 'obs-anular', 'Anular');
+    boton.type = 'button';
+    boton.setAttribute('aria-label', 'Anular la observación de ' + v.nombre + ' del ' + v.fecha);
+    boton.addEventListener('click', function () { abrirAnulacion(v, boton); });
+    fila.appendChild(boton);
+    return fila;
+  }
+
   function itemActiva(v, li) {
     li.appendChild(nodo('p', 'obs-texto', v.texto));
     li.appendChild(lineaMeta('', v.nombre, v.fecha));
     if (v.categoria) { li.appendChild(nodo('p', 'obs-categoria', v.categoria)); }
+    if (puedeAnularItem(v)) { li.appendChild(accionAnular(v)); }
   }
 
   // Anulada: una anulacion DELIBERADA (no un error). Si el backend mando el texto original (moderacion) se muestra subordinado; si mando null, no se intenta recuperar ni se dice nada de el.
@@ -96,8 +127,9 @@
     contenidoEl.hidden = !listo;
     listaEl.textContent = '';
     accionesEl.hidden = !(listo && puedeAgregar());
-    exitoEl.textContent = listo ? textoExito : '';
-    exitoEl.hidden = !listo || textoExito === '';
+    exitoEl.textContent = listo ? textoAviso : '';
+    exitoEl.className = claseAviso;
+    exitoEl.hidden = !listo || textoAviso === '';
     if (!listo) {
       return;
     }
@@ -115,7 +147,7 @@
     var estabaAbierto = formAbierto;
     formAbierto = e.abierto;
     overlayEl.hidden = !e.abierto;
-    document.body.classList.toggle('obs-form-abierto', e.abierto);
+    document.body.classList.toggle('obs-form-abierto', e.abierto);          // los dos modales son excluyentes (ninguno abre con el otro abierto)
     if (!e.abierto) {
       textoEl.value = '';
       formErrorEl.textContent = '';
@@ -139,10 +171,72 @@
     formErrorEl.hidden = !e.error;
   }
 
+  // Aviso de la pantalla (exito o informacion): un solo lugar, siempre con textContent.
+  function avisar(texto, clase) {
+    textoAviso = texto;
+    claseAviso = clase;
+    exitoEl.textContent = texto;
+    exitoEl.className = clase;
+    exitoEl.hidden = texto === '';
+  }
+
+  // --- Modal "Anular observacion" ---
+  function pintarAnulacion(e) {
+    var estabaAbierto = anulAbierto;
+    anulAbierto = e.abierto;
+    anularOverlayEl.hidden = !e.abierto;
+    document.body.classList.toggle('obs-form-abierto', e.abierto);
+    if (!e.abierto) {
+      motivoEl.value = '';
+      anularErrorEl.textContent = '';
+      anularErrorEl.hidden = true;
+      anularContextoEl.textContent = '';
+      var vuelta = abridorAnulacion;
+      abridorAnulacion = null;
+      if (estabaAbierto) {
+        if (vuelta && vuelta.isConnected !== false && typeof vuelta.focus === 'function') { vuelta.focus(); }
+        else if (!accionesEl.hidden && typeof btnAgregarEl.focus === 'function') { btnAgregarEl.focus(); }
+      }
+      return;
+    }
+    anularContextoEl.textContent = e.objetivo ? 'Observación de ' + e.objetivo.nombre + (e.objetivo.fecha ? ' · ' + e.objetivo.fecha : '') : '';      // quien y cuando; jamas el texto
+    if (motivoEl.value !== e.motivo) { motivoEl.value = e.motivo; }
+    anularContadorEl.textContent = e.contador;
+    anularContadorEl.className = e.excede ? 'obs-form-contador obs-form-contador-excede' : 'obs-form-contador';
+    btnAnularConfirmarEl.disabled = !e.puedeGuardar;
+    btnAnularConfirmarEl.textContent = e.enviando ? 'Anulando…' : 'Anular observación';
+    btnAnularCancelarEl.disabled = e.enviando;
+    btnAnularCerrarEl.disabled = e.enviando;
+    motivoEl.readOnly = e.enviando;
+    var errorMotivo = !!e.error && e.error.campo === 'motivo';
+    motivoEl.setAttribute('aria-invalid', errorMotivo || e.excede ? 'true' : 'false');
+    anularErrorEl.textContent = e.error ? e.error.mensaje : '';
+    anularErrorEl.hidden = !e.error;
+  }
+
+  function abrirAnulacion(vista, boton) {
+    if (!cargador || !anulacion || formAbierto) { return; }       // el permiso y el estado ACTIVA los exige anulacion.abrir (puedeAnular)
+    avisar('', 'obs-exito');
+    abridorAnulacion = boton;
+    if (anulacion.abrir(cargador.estado().wellId, vista)) {
+      motivoEl.focus();
+    } else {
+      abridorAnulacion = null;
+    }
+  }
+
+  function guardarAnulacion() {
+    if (!anulacion) { return; }
+    anulacion.guardar().then(function (e) {
+      if (!e.abierto) { return; }
+      if (e.error && e.error.campo === 'motivo') { motivoEl.focus(); } else if (e.error) { anularErrorEl.focus(); }
+    });
+  }
+
   function abrirFormulario() {
-    if (!cargador || !formulario) { return; }                      // el permiso lo exige formulario.abrir (puedeAgregar)
+    if (!cargador || !formulario || anulAbierto) { return; }       // el permiso lo exige formulario.abrir (puedeAgregar)
     var wellId = cargador.estado().wellId;
-    textoExito = '';
+    avisar('', 'obs-exito');
     exitoEl.hidden = true;
     if (formulario.abrir(wellId)) {
       textoEl.focus();
@@ -161,20 +255,27 @@
     return [btnCerrarFormEl, textoEl, btnCancelarEl, btnGuardarEl].filter(function (el) { return !el.disabled; });
   }
 
-  function onTeclaFormulario(ev) {
-    if (ev.key === 'Escape') {
-      if (formulario) { formulario.cancelar(); }
-      return;
-    }
-    if (ev.key === 'Tab') {                   // el foco no se escapa del modal
-      var lista = enfocables();
-      var actual = lista.indexOf(document.activeElement);
-      var siguiente = observacionesPozoLogic_siguienteFoco(lista.length, actual, ev.shiftKey === true);
-      if (siguiente >= 0) {
-        ev.preventDefault();
-        lista[siguiente].focus();
+  // Teclado de un modal: Escape cancela (si no esta guardando) y Tab rota dentro del modal.
+  function teclaDeModal(listaEnfocables, cancelar) {
+    return function (ev) {
+      if (ev.key === 'Escape') {
+        cancelar();
+        return;
       }
-    }
+      if (ev.key === 'Tab') {                 // el foco no se escapa del modal
+        var lista = listaEnfocables();
+        var actual = lista.indexOf(document.activeElement);
+        var siguiente = observacionesPozoLogic_siguienteFoco(lista.length, actual, ev.shiftKey === true);
+        if (siguiente >= 0) {
+          ev.preventDefault();
+          lista[siguiente].focus();
+        }
+      }
+    };
+  }
+
+  function enfocablesAnulacion() {
+    return [btnAnularCerrarEl, motivoEl, btnAnularCancelarEl, btnAnularConfirmarEl].filter(function (el) { return !el.disabled; });
   }
 
   function observacionesPozoController_inicializar(ctxFn) {
@@ -194,10 +295,32 @@
       onCambio: pintarFormulario,
       // la observacion devuelta entra arriba de la lista ya cargada (sin recargar); duplicada=true tambien es exito
       onExito: function (vista, duplicada, wellId) {
-        textoExito = OBSERVACIONES_POZO_MENSAJE_EXITO;
+        textoAviso = OBSERVACIONES_POZO_MENSAJE_EXITO;
+        claseAviso = 'obs-exito';
         cargador.agregarNueva(vista, wellId);
-        exitoEl.textContent = textoExito;                                  // tambien si la observacion ya estaba en la lista (no se repinta)
-        exitoEl.hidden = false;
+        avisar(OBSERVACIONES_POZO_MENSAJE_EXITO, 'obs-exito');             // tambien si la observacion ya estaba en la lista (no se repinta)
+      },
+      onSesionExpirada: function () {
+        var ctx = ctxFn() || {};
+        if (typeof ctx.onSessionExpired === 'function') { ctx.onSessionExpired(); }
+      }
+    });
+    anulacion = observacionesPozoLogic_crearAnulacion({
+      obtenerContexto: ctxFn,
+      enviar: function (sessionToken, observacionId, motivo, clientRequestId) { return apiAnularObservacionPozo(sessionToken, observacionId, motivo, clientRequestId); },
+      onCambio: pintarAnulacion,
+      // la observacion anulada REEMPLAZA a su entrada con el modelo que devolvio el backend (texto null borra el original); duplicada=true tambien es exito
+      onExito: function (vista, duplicada, observacionId, wellId) {
+        textoAviso = OBSERVACIONES_POZO_MENSAJE_ANULADA;
+        claseAviso = 'obs-exito';
+        cargador.reemplazarObservacion(vista, wellId);
+        avisar(OBSERVACIONES_POZO_MENSAJE_ANULADA, 'obs-exito');
+      },
+      // otro la anulo (o ya no se puede): se cierra el modal y se vuelve a pedir la lista desde la primera pagina, con el aviso
+      onTransicionInvalida: function (wellId) {
+        textoAviso = observacionesPozoLogic_mensajeErrorAnular('INVALID_TRANSITION');
+        claseAviso = 'obs-aviso';
+        cargador.abrir(wellId);
       },
       onSesionExpirada: function () {
         var ctx = ctxFn() || {};
@@ -210,7 +333,10 @@
     if (!cargador) { return Promise.resolve(null); }
     formulario.cerrar();
     pintarFormulario(formulario.estado());
-    textoExito = '';
+    anulacion.cerrar();
+    pintarAnulacion(anulacion.estado());
+    textoAviso = '';
+    claseAviso = 'obs-exito';
     entidadEl.textContent = typeof wellId === 'string' ? wellId : '';
     return cargador.abrir(wellId);
   }
@@ -220,7 +346,12 @@
       formulario.cerrar();
       pintarFormulario(formulario.estado());
     }
-    textoExito = '';
+    if (anulacion) {
+      anulacion.cerrar();
+      pintarAnulacion(anulacion.estado());
+    }
+    textoAviso = '';
+    claseAviso = 'obs-exito';
     if (cargador) { cargador.cerrar(); }
     pintar(observacionesPozoLogic_estadoInicial());
   }
@@ -246,5 +377,17 @@
   });
   btnCancelarEl.addEventListener('click', function () { if (formulario) { formulario.cancelar(); } });
   btnCerrarFormEl.addEventListener('click', function () { if (formulario) { formulario.cancelar(); } });
-  overlayEl.addEventListener('keydown', onTeclaFormulario);
+  overlayEl.addEventListener('keydown', teclaDeModal(enfocables, function () { if (formulario) { formulario.cancelar(); } }));
+
+  // modal de anulacion
+  motivoEl.addEventListener('input', function () {
+    if (anulacion) { anulacion.setMotivo(motivoEl.value); }
+  });
+  anularFormEl.addEventListener('submit', function (ev) {
+    if (ev && typeof ev.preventDefault === 'function') { ev.preventDefault(); }
+    guardarAnulacion();
+  });
+  btnAnularCancelarEl.addEventListener('click', function () { if (anulacion) { anulacion.cancelar(); } });
+  btnAnularCerrarEl.addEventListener('click', function () { if (anulacion) { anulacion.cancelar(); } });
+  anularOverlayEl.addEventListener('keydown', teclaDeModal(enfocablesAnulacion, function () { if (anulacion) { anulacion.cancelar(); } }));
 })();

@@ -5611,3 +5611,48 @@ body.obs-form-abierto {
     to { transform: translateY(0); opacity: 1; }
   }
 }
+
+/* --- Observaciones del pozo: anular (E5-6) --- */
+.obs-item-acciones {
+  margin-top: 8px;
+}
+/* discreto: no compite con el contenido; dice "Anular" con texto (no solo color ni solo un icono) */
+.obs-anular {
+  min-height: 40px;
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  border: 1.5px solid var(--color-border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--color-text-soft);
+  cursor: pointer;
+  box-shadow: none;
+}
+.obs-anular:hover {
+  border-color: var(--color-warn);
+  color: var(--color-warn);
+  background: var(--color-warn-tint);
+}
+.obs-anular-aviso {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--color-warn-tint);
+  color: var(--color-warn);
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+.obs-anular-contexto {
+  margin: 8px 0 0;
+  font-size: 0.82rem;
+  color: var(--color-text-soft);
+  overflow-wrap: anywhere;
+}
+/* aviso informativo (p. ej. "ya no puede anularse"): no va en el verde del exito */
+.obs-aviso {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--color-warn);
+}

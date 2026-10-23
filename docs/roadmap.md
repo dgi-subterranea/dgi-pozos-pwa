@@ -133,7 +133,7 @@ Estado: idea documentada, sin diseño técnico ni implementación.
 
 **A evaluar más adelante:** categorías, adjuntos / fotos (en relación con la fase de fotos), permisos para comentar y visibilidad interna / pública.
 
-Estado: **en implementación (E5).** Diseño y avance en `docs/observaciones-pozo.md`: E5-1 (modelo, hoja `ObservacionesPozo`, permisos y lectura paginada), E5-2 (alta) y E5-3 (anulación) en el repo (backend completo) y E5-4 (frontend de lectura) commiteada en local y E5-5 (frontend: agregar observación) implementada, sin publicar; la anulación en el frontend (E5-6) pendiente.
+Estado: **en implementación (E5).** Diseño y avance en `docs/observaciones-pozo.md`: E5-1 (modelo, hoja `ObservacionesPozo`, permisos y lectura paginada), E5-2 (alta) y E5-3 (anulación) en el repo (backend completo) y E5-4 (frontend de lectura) commiteada en local y E5-5 (frontend: agregar observación) y E5-6 (frontend: anular observación) implementadas, sin publicar; el backend entrega `puedeAnular` por observación (E5-6b) y el botón del frontend depende solo de esa señal.
 
 ## Fase futura (SOLO documentada; sin código) — QR + NFC por pozo
 

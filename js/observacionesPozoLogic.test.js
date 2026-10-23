@@ -53,7 +53,7 @@ describe('fecha y nombre', () => {
 
 describe('vista de una observacion', () => {
   test('ACTIVA: texto, autor, fecha legible, sin categoria ni anulacion', () => {
-    expect(L.observacionesPozoLogic_vista(obs(1))).toEqual({ id: 'obs-1', estado: 'ACTIVA', texto: 'Texto 1', nombre: 'Ana', fecha: FECHA, categoria: null, anulacion: null });
+    expect(L.observacionesPozoLogic_vista(obs(1))).toEqual({ id: 'obs-1', estado: 'ACTIVA', texto: 'Texto 1', nombre: 'Ana', fecha: FECHA, categoria: null, anulacion: null, puedeAnular: false });
   });
 
   test('ACTIVA con categoria definida: se muestra; vacia o no string: no', () => {
@@ -64,7 +64,7 @@ describe('vista de una observacion', () => {
   test('ANULADA sin texto (usuario comun): no se reconstruye el original; datos de la anulacion', () => {
     const v = L.observacionesPozoLogic_vista(anulada(2));
     expect(v).toEqual({
-      id: 'obs-2', estado: 'ANULADA', texto: null, nombre: 'Ana', fecha: FECHA, categoria: null,
+      id: 'obs-2', estado: 'ANULADA', texto: null, nombre: 'Ana', fecha: FECHA, categoria: null, puedeAnular: false,
       anulacion: { nombre: 'Moderadora', fecha: '21/10/2026 15:30', motivo: 'Cargada por error' }
     });
   });
@@ -113,7 +113,7 @@ describe('vista de una observacion', () => {
   test('PRIVACIDAD: lista blanca. email, clientRequestId, secuencia y campos extra del payload no llegan a la vista', () => {
     const sucio = obs(1, { email: 'ana@x.com', clientRequestId: 'req-12345678', secuencia: 77, nombreCompleto: 'Ana', usuario: 'ana@x.com', extra: { email: 'otro@x.com' } });
     const v = L.observacionesPozoLogic_vista(sucio);
-    expect(Object.keys(v).sort()).toEqual(['anulacion', 'categoria', 'estado', 'fecha', 'id', 'nombre', 'texto']);
+    expect(Object.keys(v).sort()).toEqual(['anulacion', 'categoria', 'estado', 'fecha', 'id', 'nombre', 'puedeAnular', 'texto']);
     expect(JSON.stringify(v)).not.toMatch(/ana@x\.com|otro@x\.com|req-12345678|77|secuencia|clientRequestId|email/);
     const va = L.observacionesPozoLogic_vista(anulada(2, { email: 'ana@x.com', clientRequestId: 'req-12345678', secuencia: 5, anulacion: { nombre: 'Mod', timestamp: ISO, motivo: 'm', email: 'mod@x.com', clientRequestId: 'otro-12345678', secuencia: 9 } }));
     expect(JSON.stringify(va)).not.toMatch(/@x\.com|req-12345678|otro-12345678|secuencia|clientRequestId|email/);
