@@ -144,7 +144,7 @@ describe('respuesta: contrato minimo y privacidad', () => {
     expect(Object.keys(r.data).sort()).toEqual(['activas', 'anuladas', 'cursor', 'hayMas', 'observaciones', 'total', 'wellId']);
     expect(r.data).toMatchObject({ wellId: W, total: 2, activas: 1, anuladas: 1, hayMas: false, cursor: null });
     expect(r.data.observaciones.map((o) => o.observacionId)).toEqual([uuid(2), uuid(1)]);
-    r.data.observaciones.forEach((o) => expect(Object.keys(o).sort()).toEqual(['anulacion', 'categoria', 'estado', 'nombre', 'observacionId', 'texto', 'timestamp', 'wellId']));
+    r.data.observaciones.forEach((o) => expect(Object.keys(o).sort()).toEqual(['anulacion', 'categoria', 'estado', 'nombre', 'observacionId', 'puedeAnular', 'texto', 'timestamp', 'wellId']));
   });
 
   test('el email NUNCA sale, ni secuencia ni clientRequestId (con ningun usuario)', () => {

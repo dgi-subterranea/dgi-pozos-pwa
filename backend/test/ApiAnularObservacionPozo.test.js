@@ -121,7 +121,7 @@ describe('contrato de la respuesta y de la fila escrita', () => {
     expect(r.status).toBe('ok');
     expect(Object.keys(r.data).sort()).toEqual(['duplicada', 'observacion', 'wellId']);
     expect(r.data).toMatchObject({ wellId: W, duplicada: false });
-    expect(Object.keys(r.data.observacion).sort()).toEqual(['anulacion', 'categoria', 'estado', 'nombre', 'observacionId', 'texto', 'timestamp', 'wellId']);
+    expect(Object.keys(r.data.observacion).sort()).toEqual(['anulacion', 'categoria', 'estado', 'nombre', 'observacionId', 'puedeAnular', 'texto', 'timestamp', 'wellId']);
     expect(r.data.observacion).toMatchObject({ observacionId: OBS_ANA, wellId: W, estado: 'ANULADA', texto: 'Texto previo 1', categoria: null, nombre: 'Ana' });
     expect(Object.keys(r.data.observacion.anulacion).sort()).toEqual(['motivo', 'nombre', 'timestamp']);
     expect(r.data.observacion.anulacion).toMatchObject({ nombre: 'Moderadora', motivo: 'Dato cargado por error' });

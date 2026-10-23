@@ -238,6 +238,8 @@ function observacionesPozoService_derivar(eventos) {
 //   - nombre: solo el nombre (neutro si falta o parece un email).
 //   - anulacion: quien, cuando y por que se anulo (el motivo lo ve cualquiera que pueda leer observaciones).
 //   - categoria: reservada: null mientras no exista un catalogo.
+//   - puedeAnular (E5-6b): booleano ESTRICTO, solo una SENAL para la interfaz (no reemplaza la autorizacion real de anularObservacionPozo). Lo calcula observacionesPozoService_capacidadAnular
+//     con la sesion y los permisos ACTUALES (opciones.sesion = {email, permisos}); sin sesion -> false. No expone el email ni si el usuario es autor o moderador: solo el booleano.
 function observacionesPozoService_vista(obs, opciones) {
   var moderador = !!opciones && opciones.moderador === true;
   var anulada = obs.estado === OBSERVACIONES_POZO_ESTADOS.ANULADA;
@@ -250,6 +252,7 @@ function observacionesPozoService_vista(obs, opciones) {
     categoria: obs.categoria === '' ? null : obs.categoria,
     nombre: observacionesPozoService_nombreVisible(obs.nombre),
     timestamp: obs.timestamp,
+    puedeAnular: observacionesPozoService_capacidadAnular(obs, opciones && opciones.sesion),
     anulacion: anulada ? {
       nombre: observacionesPozoService_nombreVisible(obs.anulacion.nombre),
       timestamp: obs.anulacion.timestamp,
@@ -305,7 +308,7 @@ function observacionesPozoService_logInconsistencias(wellId, derivado) {
 }
 
 // Observaciones de un pozo. NO verifica que el pozo exista (un pozo sin filas devuelve una lista vacia: leer no sirve de oraculo de existencia).
-//   parametros: {limit, antesDeSecuencia};  opciones: {moderador} (observaciones_anular, lo decide Api.js).
+//   parametros: {limit, antesDeSecuencia};  opciones: {moderador (observaciones_anular, lo decide Api.js), sesion: {email, permisos:{observaciones, agregar, anular}} (para puedeAnular)}.
 // Devuelve {ok:true, data:{wellId, total, activas, anuladas, hayMas, cursor, observaciones[]}} o {ok:false, code, message}. total / activas / anuladas son GLOBALES del pozo (no de la pagina)
 // y cuentan SOLO las observaciones derivadas sin ambiguedad (las ocultas por inconsistencia no suman): salen de los mismos eventos que ya hubo que leer, asi que no cuestan una lectura
 // extra. LANZA si la hoja no se puede leer (Api.js lo traduce).
@@ -334,7 +337,7 @@ function observacionesPozoService_getObservaciones(wellId, parametros, opciones)
       anuladas: delPozo.length - activas,
       hayMas: pagina.hayMas,
       cursor: pagina.cursor,
-      observaciones: pagina.items.map(function (o) { return observacionesPozoService_vista(o, { moderador: moderador }); })
+      observaciones: pagina.items.map(function (o) { return observacionesPozoService_vista(o, { moderador: moderador, sesion: opciones ? opciones.sesion : undefined }); })
     }
   };
 }
@@ -405,8 +408,8 @@ function observacionesPozoService_normalizarEmail(email) {
 }
 
 // Una observacion derivada -> la respuesta de un alta. Mismo contrato que la lectura (sin email, sin secuencia).
-function observacionesPozoService_vistaAlta(obs) {
-  return observacionesPozoService_vista(obs, { moderador: false });
+function observacionesPozoService_vistaAlta(obs, sesion) {
+  return observacionesPozoService_vista(obs, { moderador: false, sesion: sesion });
 }
 
 // Ya hay un evento para (usuario, clientRequestId): decide que responder.
@@ -415,7 +418,7 @@ function observacionesPozoService_vistaAlta(obs) {
 //   - con otro contenido (wellId, texto normalizado o categoria) -> IDEMPOTENCY_CONFLICT. El timestamp y la secuencia NO cuentan;
 //   - mismo contenido -> reenvio idempotente: se devuelve la observacion YA creada (duplicada:true), con su estado de hoy segun el modelo de lectura; NO se escribe otra fila, no se
 //     consume otra secuencia y Api.js no vuelve a escribir en Historial. Si el modelo de lectura no la devuelve (ambigua / oculta) -> INCONSISTENT_STATE.
-function observacionesPozoService_atenderExistente(busqueda, wellId, valores) {
+function observacionesPozoService_atenderExistente(busqueda, wellId, valores, sesion) {
   if (busqueda.total !== 1 || busqueda.eventos.length !== 1) {
     return observacionesPozoService_error('INCONSISTENT_STATE', 'el clientRequestId figura mas de una vez: requiere revision manual');
   }
@@ -435,7 +438,7 @@ function observacionesPozoService_atenderExistente(busqueda, wellId, valores) {
   if (obs === null) {
     return observacionesPozoService_error('INCONSISTENT_STATE', 'la observacion existente no se puede determinar: requiere revision manual');
   }
-  return { ok: true, duplicada: true, observacion: observacionesPozoService_vistaAlta(obs) };
+  return { ok: true, duplicada: true, observacion: observacionesPozoService_vistaAlta(obs, sesion) };
 }
 
 // Agrega una observacion a un pozo. Devuelve {ok:true, duplicada, observacion} o {ok:false, code, message}. LANZA si la hoja no se puede leer / escribir, o si la secuencia no se puede
@@ -445,18 +448,19 @@ function observacionesPozoService_atenderExistente(busqueda, wellId, valores) {
 // ORDEN dentro del lock: 1) volver a comprobar la idempotencia: si el (usuario, clientRequestId) ya identifica INEQUIVOCAMENTE una ALTA con el mismo contenido, se devuelve (duplicada:true) y
 // NO se escribe ni se consume secuencia, aunque la hoja tenga una corrupcion no relacionada; 2) recien si hace falta una NUEVA escritura se valida la integridad GLOBAL de las secuencias
 // (ilegibles, <= 0, fraccionarias o repetidas -> SERVICE_UNAVAILABLE sin escribir); 3) max + 1; 4) una sola fila. Si el propio clientRequestId es ambiguo, INCONSISTENT_STATE.
-function observacionesPozoService_agregar(email, nombre, wellId, datos) {
+function observacionesPozoService_agregar(email, nombre, wellId, datos, permisos) {
   var validacion = observacionesPozoService_validarAlta(datos);
   if (!validacion.ok) {
     return validacion;
   }
   var valores = validacion.valores;
   var emailN = observacionesPozoService_normalizarEmail(email);
+  var sesion = { email: emailN, permisos: permisos };                // para puedeAnular de la respuesta: la MISMA regla que la lectura, con los permisos de hoy
 
   // camino rapido (sin lock): la solicitud ya se proceso
   var previa = observacionesPozoRepository_buscarPorClientRequestId(emailN, valores.clientRequestId);
   if (previa.total > 0) {
-    return observacionesPozoService_atenderExistente(previa, wellId, valores);
+    return observacionesPozoService_atenderExistente(previa, wellId, valores, sesion);
   }
 
   var existencia = pozoExistenciaService_verificar(wellId);
@@ -471,7 +475,7 @@ function observacionesPozoService_agregar(email, nombre, wellId, datos) {
     // dentro del lock se vuelve a comprobar: otra ejecucion pudo escribir mientras se esperaba
     var enLock = observacionesPozoRepository_buscarPorClientRequestId(emailN, valores.clientRequestId);
     if (enLock.total > 0) {
-      return observacionesPozoService_atenderExistente(enLock, wellId, valores);
+      return observacionesPozoService_atenderExistente(enLock, wellId, valores, sesion);
     }
     var escrita = observacionesPozoRepository_agregarAlta({
       observacionId: Utilities.getUuid(),
@@ -496,7 +500,7 @@ function observacionesPozoService_agregar(email, nombre, wellId, datos) {
         timestamp: escrita.timestampUtc,
         estado: OBSERVACIONES_POZO_ESTADOS.ACTIVA,
         anulacion: null
-      })
+      }, sesion)
     };
   });
 }
@@ -586,10 +590,20 @@ function observacionesPozoService_puedeAnular(emailN, permisos, obs) {
   return permisos.agregar === true && observacionesPozoService_esPropia(emailN, obs.email);
 }
 
+// puedeAnular (E5-6b): ¿puede la sesion anular ESTA observacion? Solo una ACTIVA y con la MISMA regla que usa anularObservacionPozo para autorizar (observacionesPozoService_puedeAnular):
+// observaciones === true Y (observaciones_anular === true, o observaciones_agregar === true con el email normalizado de la sesion igual al de la ALTA). Booleano estricto; ANULADA, sin sesion,
+// sin permisos o con valores no booleanos -> false. Nunca usa el nombre. Es solo una senal para la interfaz: la autorizacion real se vuelve a decidir al anular.
+function observacionesPozoService_capacidadAnular(obs, sesion) {
+  if (!obs || obs.estado !== OBSERVACIONES_POZO_ESTADOS.ACTIVA || !sesion || !sesion.permisos) {
+    return false;
+  }
+  return observacionesPozoService_puedeAnular(sesion.email, sesion.permisos, obs) === true;                 // esPropia normaliza los dos emails
+}
+
 // La observacion derivada con su estado de HOY -> la respuesta, con los permisos de HOY: el texto original solo para quien tiene observaciones_anular (tambien el autor sin ese permiso lo recibe
-// en null: no hay excepcion por autoria).
-function observacionesPozoService_vistaAnulacion(obs, permisos) {
-  return observacionesPozoService_vista(obs, { moderador: permisos.anular === true });
+// en null: no hay excepcion por autoria). puedeAnular se recalcula con la sesion de HOY (una anulada siempre false).
+function observacionesPozoService_vistaAnulacion(obs, permisos, emailN) {
+  return observacionesPozoService_vista(obs, { moderador: permisos.anular === true, sesion: { email: emailN, permisos: permisos } });
 }
 
 // Ya hay un evento para (usuario, clientRequestId): {ok:true, duplicada:true, ...} si es EXACTAMENTE esta misma anulacion; si no, conflicto.
@@ -597,7 +611,7 @@ function observacionesPozoService_vistaAnulacion(obs, permisos) {
 //   - un evento que no es una ANULADA (p. ej. una ALTA), de otra observacion o con otro motivo -> IDEMPOTENCY_CONFLICT;
 //   - la misma anulacion -> duplicada:true con la observacion en su estado de hoy. Una anulacion que referencia a la observacion SIEMPRE la deja ANULADA en el modelo de lectura (y si la
 //     colision de secuencias la oculta, el objetivo ya fallo antes de llegar aca): no hay un caso "existe la anulacion pero la observacion figura activa", asi que no se comprueba.
-function observacionesPozoService_atenderAnulacionExistente(busqueda, objetivo, valores, permisos) {
+function observacionesPozoService_atenderAnulacionExistente(busqueda, objetivo, valores, permisos, emailN) {
   if (busqueda.total !== 1 || busqueda.eventos.length !== 1) {
     return observacionesPozoService_error('INCONSISTENT_STATE', 'el clientRequestId figura mas de una vez: requiere revision manual');
   }
@@ -607,7 +621,7 @@ function observacionesPozoService_atenderAnulacionExistente(busqueda, objetivo, 
     c.wellId = objetivo.wellId;
     return c;
   }
-  return { ok: true, duplicada: true, wellId: objetivo.wellId, observacion: observacionesPozoService_vistaAnulacion(objetivo.obs, permisos) };
+  return { ok: true, duplicada: true, wellId: objetivo.wellId, observacion: observacionesPozoService_vistaAnulacion(objetivo.obs, permisos, emailN) };
 }
 
 // Rechazo de autorizacion de quien NO es moderador: SIEMPRE el mismo codigo y el mismo mensaje hacia afuera, sea cual sea la causa (el id no existe, es ajena, no se puede verificar la propiedad
@@ -637,7 +651,7 @@ function observacionesPozoService_decidirAnulacion(emailN, permisos, valores) {
   }
   var previa = observacionesPozoRepository_buscarPorClientRequestId(emailN, valores.clientRequestId);
   if (previa.total > 0) {
-    return observacionesPozoService_atenderAnulacionExistente(previa, objetivo, valores, permisos);
+    return observacionesPozoService_atenderAnulacionExistente(previa, objetivo, valores, permisos, emailN);
   }
   if (objetivo.obs.estado === OBSERVACIONES_POZO_ESTADOS.ANULADA) {
     var t = observacionesPozoService_error('INVALID_TRANSITION', 'la observacion ya esta anulada');
@@ -690,7 +704,7 @@ function observacionesPozoService_anular(email, nombre, datos, permisos) {
       estado: OBSERVACIONES_POZO_ESTADOS.ANULADA,
       anulacion: { nombre: escrita.nombre, timestamp: escrita.timestampUtc, motivo: escrita.motivo }
     });
-    return { ok: true, duplicada: false, wellId: objetivo.wellId, observacion: observacionesPozoService_vistaAnulacion(anulada, p) };
+    return { ok: true, duplicada: false, wellId: objetivo.wellId, observacion: observacionesPozoService_vistaAnulacion(anulada, p, emailN) };
   });
 }
 
@@ -703,6 +717,7 @@ if (typeof module !== 'undefined' && module.exports) {
     observacionesPozoService_esPropia,
     observacionesPozoService_resolverObjetivo,
     observacionesPozoService_puedeAnular,
+    observacionesPozoService_capacidadAnular,
     observacionesPozoService_decidirAnulacion,
     observacionesPozoService_anular,
     OBSERVACIONES_POZO_TEXTO_MIN,

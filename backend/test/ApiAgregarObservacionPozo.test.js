@@ -119,7 +119,7 @@ describe('enrutado y contrato de la respuesta', () => {
     const r = agregar({ texto: '  Hola\r\nmundo  ' });
     expect(Object.keys(r.data).sort()).toEqual(['duplicada', 'observacion', 'wellId']);
     expect(r.data).toMatchObject({ wellId: W, duplicada: false });
-    expect(Object.keys(r.data.observacion).sort()).toEqual(['anulacion', 'categoria', 'estado', 'nombre', 'observacionId', 'texto', 'timestamp', 'wellId']);
+    expect(Object.keys(r.data.observacion).sort()).toEqual(['anulacion', 'categoria', 'estado', 'nombre', 'observacionId', 'puedeAnular', 'texto', 'timestamp', 'wellId']);
     expect(r.data.observacion).toMatchObject({ wellId: W, estado: 'ACTIVA', texto: 'Hola\nmundo', categoria: null, nombre: 'Ana', anulacion: null });
     expect(r.data.observacion.observacionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     expect(new Date(r.data.observacion.timestamp).toISOString()).toBe(r.data.observacion.timestamp);
@@ -697,8 +697,12 @@ describe('la fila escrita', () => {
     const l = leer();
     expect(l.data).toMatchObject({ total: 2, activas: 2, anuladas: 0 });
     expect(l.data.observaciones.map((o) => o.texto)).toEqual(['segunda', 'primera']);
-    expect(l.data.observaciones[1]).toEqual(a.data.observacion);
-    expect(l.data.observaciones[0]).toEqual(b.data.observacion);
+    // el lector comun ve lo mismo salvo puedeAnular (es una senal de la SESION que consulta: para quien escribio es true; para un lector, false)
+    expect(l.data.observaciones[1]).toEqual(Object.assign({}, a.data.observacion, { puedeAnular: false }));
+    expect(l.data.observaciones[0]).toEqual(Object.assign({}, b.data.observacion, { puedeAnular: false }));
+    const propia = leer({}, 'ana@x.com');
+    expect(propia.data.observaciones[1]).toEqual(a.data.observacion);
+    expect(propia.data.observaciones[0]).toEqual(b.data.observacion);
   });
 
   test('lo escrito en un pozo no aparece en otro', () => {

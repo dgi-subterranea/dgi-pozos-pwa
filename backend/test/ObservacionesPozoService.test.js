@@ -286,7 +286,7 @@ describe('privacidad: lo que sale hacia el cliente', () => {
   const vista = (o, moderador) => S.observacionesPozoService_vista(o, { moderador: moderador });
 
   test('lista blanca EXACTA de campos (nada de email, secuencia, clientRequestId ni datos tecnicos)', () => {
-    expect(Object.keys(vista(activa(), false)).sort()).toEqual(['anulacion', 'categoria', 'estado', 'nombre', 'observacionId', 'texto', 'timestamp', 'wellId']);
+    expect(Object.keys(vista(activa(), false)).sort()).toEqual(['anulacion', 'categoria', 'estado', 'nombre', 'observacionId', 'puedeAnular', 'texto', 'timestamp', 'wellId']);
     expect(Object.keys(vista(anulada(), true).anulacion).sort()).toEqual(['motivo', 'nombre', 'timestamp']);
   });
 

@@ -1660,10 +1660,16 @@ function handleGetObservacionesPozo(sessionToken, wellId, limit, antesDeSecuenci
     return permiso.response;
   }
 
+  // moderador = observaciones_anular (privacidad del texto de las anuladas); `sesion` alimenta puedeAnular de cada observacion con los permisos de HOY (booleanos estrictos; el email no sale)
+  var moderador = hasPermission(session.email, 'observaciones_anular') === true;
   var resultado;
   try {
     resultado = observacionesPozoService_getObservaciones(wellId, { limit: limit, antesDeSecuencia: antesDeSecuencia }, {
-      moderador: hasPermission(session.email, 'observaciones_anular') === true
+      moderador: moderador,
+      sesion: {
+        email: session.email,
+        permisos: { observaciones: hasPermission(session.email, 'observaciones') === true, agregar: hasPermission(session.email, 'observaciones_agregar') === true, anular: moderador }
+      }
     });
   } catch (err) {
     logHistoryEvent(session.email, 'getObservacionesPozo', wellId, 'SERVICE_UNAVAILABLE');
@@ -1700,6 +1706,10 @@ function handleAgregarObservacionPozo(sessionToken, datos) {
       texto: d.texto,
       categoria: d.categoria,
       clientRequestId: d.clientRequestId
+    }, {
+      observaciones: hasPermission(session.email, 'observaciones') === true,
+      agregar: hasPermission(session.email, 'observaciones_agregar') === true,
+      anular: hasPermission(session.email, 'observaciones_anular') === true
     });
   } catch (err) {
     // mensaje fijo: el detalle tecnico va a Logger (recortado, sin URLs) y jamas lleva el texto de la observacion
