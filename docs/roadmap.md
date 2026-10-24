@@ -125,7 +125,7 @@ Estado: **idea documentada, sin diseño técnico ni implementación.** Antes de 
 
 Estado: idea documentada, sin diseño técnico ni implementación.
 
-## Fase futura (SOLO documentada; sin código) — Observaciones generales del pozo
+## Observaciones generales del pozo (E5) — CERRADA / PRODUCCIÓN (24/10/2026)
 
 **Objetivo:** una sección propia en la ficha, **«Observaciones del pozo»**, **separada** de «Evaluar para reemplazo», para comentarios generales sobre la perforación: acceso, estado físico, funcionamiento, surgencia, información informada por el propietario, anomalías observadas en campo y cualquier dato útil que no sea una evaluación de reemplazo.
 
@@ -133,7 +133,7 @@ Estado: idea documentada, sin diseño técnico ni implementación.
 
 **A evaluar más adelante:** categorías, adjuntos / fotos (en relación con la fase de fotos), permisos para comentar y visibilidad interna / pública.
 
-Estado: **en implementación (E5).** Diseño y avance en `docs/observaciones-pozo.md`: E5-1 (modelo, hoja `ObservacionesPozo`, permisos y lectura paginada), E5-2 (alta) y E5-3 (anulación) en el repo (backend completo) y E5-4 (frontend de lectura) commiteada en local y E5-5 (frontend: agregar observación) y E5-6 (frontend: anular observación) implementadas, sin publicar; el backend entrega `puedeAnular` por observación (E5-6b) y el botón del frontend depende solo de esa señal.
+Estado: **E5 CERRADA / PRODUCCIÓN (24/10/2026).** Backend en Apps Script **v45** (deployment productivo existente, URL `/exec` sin cambios) y frontend en GitHub Pages = `6720cf3`. Etapas: E5-1 lectura / modelo (`def2839`), E5-2 alta backend (`1939f5f`), E5-3 anulación backend (`6e81803`), E5-4 lectura frontend (`c806e2f`), E5-5 alta frontend (`f0e5113`), E5-6b `puedeAnular` (`40e7669`), E5-6 anulación frontend (`6720cf3`) y E5-7 rollout. Smoke real en el pozo 14-0006 (lectura vacía, alta, `puedeAnular`, anulación, persistencia tras recargar; append-only) y regresión de solo lectura de los módulos existentes sin hallazgos. Rollout de permisos inicialmente limitado a una cuenta controlada. Detalle, preparación y deuda no bloqueante en `docs/observaciones-pozo.md`.
 
 ## Fase futura (SOLO documentada; sin código) — QR + NFC por pozo
 

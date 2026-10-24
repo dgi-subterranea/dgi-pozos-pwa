@@ -1,6 +1,6 @@
 # Observaciones del pozo (E5)
 
-Estado: **E5-1 (lectura), E5-2 (alta) y E5-3 (anulación) commiteadas en local (backend completo) y E5-4 (frontend de lectura) y E5-5 (frontend: agregar observación) también; E5-6 (frontend: anular observación) y E5-6b (`puedeAnular` en el backend) implementadas en el repo, sin publicar.**
+Estado: **E5 CERRADA / PRODUCCIÓN (24/10/2026).** Backend en Apps Script **v45** (deployment productivo existente, URL `/exec` sin cambios) y frontend en GitHub Pages = commit `6720cf3`. Todas las etapas (E5-1 a E5-7) están terminadas y publicadas; el detalle del rollout está en «Rollout a producción (E5-7)» y las mejoras futuras, aparte, en «Deuda y mejoras futuras (no bloqueantes)».
 
 ## Propósito
 Una línea de tiempo de **observaciones operativas** por pozo: acceso, estado físico, lo que informa el propietario, anomalías vistas en campo, un dato registral a revisar o cualquier texto útil. Es **contexto humano y auditable**.
@@ -94,8 +94,8 @@ Apps Script cobra por **llamada** a Sheets y por **volumen leído**; el texto es
 ## Limitación documentada: roles «solo observaciones»
 El hub solo ofrecerá la tarjeta si **otro** módulo (perfil, datos, ubicación o NE) encuentra el pozo. Por eso, **quien reciba `observaciones` debe tener al menos un permiso de descubrimiento existente** (`perfil`, `datos`, `ubicacion` o `ne`). Un usuario con *únicamente* `observaciones` no podría llegar a un pozo desde el buscador. No se agrega un endpoint `existe` ni se toca el buscador / hub en E5-1.
 
-## Setup de la hoja (manual, NO ejecutado todavía)
-`setupObservacionesPozoSheet()` (en el editor de Apps Script): crea la hoja con sus 11 encabezados y la fila congelada si no existe; si existe solo la **valida** (no toca ninguna fila ni el encabezado) y falla si el esquema no es el esperado. **Ninguna lectura la llama**: una hoja ausente es un error controlado, no se autocrea.
+## Setup de la hoja (manual; ejecutado en producción el 24/10/2026)
+`setupObservacionesPozoSheet()` (en el editor de Apps Script): crea la hoja con sus 11 encabezados y la fila congelada si no existe; si existe solo la **valida** (no toca ninguna fila ni el encabezado) y falla si el esquema no es el esperado. **Ninguna lectura la llama**: una hoja ausente es un error controlado, no se autocrea. En producción se corrió una vez después del `gas:push` y devolvió `CREADA` (ver «Rollout a producción (E5-7)»).
 
 ## Alta: `agregarObservacionPozo` (E5-2)
 Entrada: `wellId`, `texto`, `clientRequestId` y (técnicamente) `categoria`. **Solo** esos cuatro campos cuentan; cualquier otro (`email`, `nombre`, `observacionId`, `secuencia`, `timestamp`, `estado`, `motivo`…) se **ignora**: los genera el servidor o salen de la sesión.
@@ -361,16 +361,60 @@ Sin `innerHTML` (el DOM falso lanza si se intenta; solo se crean `li`, `p` y `bu
 ## Alcance
 | Etapa | Contenido | Estado |
 |---|---|---|
-| **E5-1** | modelo + hoja + permisos + derivación + `getObservacionesPozo` (lectura, paginada) | **commiteada en local (sin publicar)** |
-| **E5-2** | `agregarObservacionPozo`: existencia, idempotencia, lock, secuencia, `Historial`, validación de texto y categoría | **implementada (sin publicar)** |
-| **E5-3** | `anularObservacionPozo` (propia / cualquiera según permiso, motivo obligatorio, idempotente, sin verificar existencia) | **implementada (sin publicar)** |
-| **E5-4** | frontend de lectura: tarjeta en el hub, pantalla, listado paginado, render de activas / anuladas | **implementada (sin publicar)** |
-| **E5-5** | frontend: agregar observación (botón, formulario, `clientRequestId` por intención, actualización inmediata de la lista) | **implementada (sin publicar)** |
-| **E5-6** | frontend: anular observación (botón por activa, modal con motivo, `clientRequestId` por intención, reemplazo en sitio, privacidad del texto original) | **implementada (sin publicar)** |
-| **E5-6b** | backend: `puedeAnular` por observación (contrato mínimo para el botón del autor y del moderador) | **implementada (sin publicar)** |
-| E5-7 | publicación (**backend primero**, luego el frontend) y smoke real | pendiente |
+| **E5-1** | modelo + hoja + permisos + derivación + `getObservacionesPozo` (lectura, paginada) | **cerrada / producción** (`def2839`) |
+| **E5-2** | `agregarObservacionPozo`: existencia, idempotencia, lock, secuencia, `Historial`, validación de texto y categoría | **cerrada / producción** (`1939f5f`) |
+| **E5-3** | `anularObservacionPozo` (propia / cualquiera según permiso, motivo obligatorio, idempotente, sin verificar existencia) | **cerrada / producción** (`6e81803`) |
+| **E5-4** | frontend de lectura: tarjeta en el hub, pantalla, listado paginado, render de activas / anuladas | **cerrada / producción** (`c806e2f`) |
+| **E5-5** | frontend: agregar observación (botón, formulario, `clientRequestId` por intención, actualización inmediata de la lista) | **cerrada / producción** (`f0e5113`) |
+| **E5-6b** | backend: `puedeAnular` por observación (contrato mínimo para el botón del autor y del moderador) | **cerrada / producción** (`40e7669`) |
+| **E5-6** | frontend: anular observación (botón por activa, modal con motivo, `clientRequestId` por intención, reemplazo en sitio, privacidad del texto original) | **cerrada / producción** (`6720cf3`) |
+| **E5-7** | rollout controlado: preparación de la hoja y los permisos, backend primero (v45), después el frontend, smoke real y regresión | **cerrada / producción** (24/10/2026) |
 
-**Fuera de alcance de E5-1 a E5-3:** edición, reemplazo automático, frontend, tarjeta, modal, categorías funcionales, adjuntos, offline, cache, vista pública y cualquier cambio de mapa / reemplazo / ubicación / fotos / ITF / NE.
+**Fuera de alcance de E5 (no se hizo):** edición de observaciones, reemplazo automático, categorías funcionales, adjuntos, offline, cache de la API, vista pública y cualquier cambio de mapa / reemplazo / ubicación / fotos / ITF / NE.
+
+## Rollout a producción (E5-7) — 24/10/2026
+**E5 queda CERRADA en producción.** Orden seguido: backend primero, frontend después (la URL `/exec` no cambió y no se creó ningún deployment nuevo).
+
+### Commits publicados
+| Etapa | Commit |
+|---|---|
+| E5-1 lectura / modelo | `def2839` |
+| E5-2 alta (backend) | `1939f5f` |
+| E5-3 anulación (backend) | `6e81803` |
+| E5-4 lectura (frontend) | `c806e2f` |
+| E5-5 alta (frontend) | `f0e5113` |
+| E5-6b `puedeAnular` (backend) | `40e7669` |
+| E5-6 anulación (frontend) | `6720cf3` |
+
+### Producción
+- **Backend:** Apps Script `dgi-pozos-backend` en la **v45** («E5: Observaciones del pozo (backend E5-1 a E5-6b: lectura, alta, anulacion, puedeAnular)»), desplegada sobre el deployment productivo existente (`gas:push` verificado → preparación manual → `gas:version` → `gas:deploy`). El `push` subió 2 archivos nuevos (`ObservacionesPozoRepository.js`, `ObservacionesPozoService.js`) y modificó 4 (`Api.js`, `AuthService.js`, `PozoExistenciaService.js`, `SheetUserRepository.js`), sin borrar nada y con el manifiesto sin cambios. Mientras el deployment apuntó a la v44, el código nuevo no se sirvió. La v44 siguió sirviendo hasta el `deploy`; luego `getObservacionesPozo` / `anularObservacionPozo` respondieron como acciones conocidas (`UNAUTHORIZED` sin sesión) y no «acción desconocida».
+- **Frontend:** `origin/main` = `6720cf3`; GitHub Pages (`github-pages`) terminó el deployment de ese commit (24/10/2026) y sirve archivos idénticos a los del repo (`index.html`, `sw.js`, `api.js`, `app.js`, `styles.css`, `observacionesPozo.js`, `observacionesPozoLogic.js`). Los dos JS nuevos están en `SHELL_FILES` del service worker; la estrategia network-first no cambió.
+
+### Preparación
+- Hoja **`ObservacionesPozo`** creada con `setupObservacionesPozoSheet()` (resultado `CREADA`): **11 columnas** en el orden `observacionId · evento · wellId · texto · categoria · motivo · email · nombre · timestampUtc · secuencia · clientRequestId`, fila 1 congelada, sin filas de datos. La función es idempotente (`YA_EXISTE` si se vuelve a correr) y **debe correrse después del `gas:push`** (la función vive en un archivo que antes no estaba en el proyecto de Apps Script).
+- Hoja **`Usuarios`**: columnas agregadas `observaciones`, `observaciones_agregar` y `observaciones_anular` (el parser lee por el texto del encabezado; solo `SI` habilita; sin columna o celda vacía = `false`, fail-closed).
+- **Permisos reales:** rollout inicial **controlado**: solo una cuenta activa del responsable del módulo con los tres permisos en `SI`; el resto de los usuarios sin el permiso (`false`).
+- Los permisos tienen caché de hasta 300 s: tras editar `Usuarios`, hay que esperar hasta ~5 min.
+
+### Smoke real (pozo 14-0006, en el padrón)
+Realizado desde la interfaz de producción con la cuenta controlada: tarjeta «Observaciones» visible → estado vacío («Este pozo todavía no tiene observaciones.») → **alta real** → la observación entra arriba con `puedeAnular: true` → **anulación real** con motivo de smoke → la tarjeta pasa a «Observación anulada» en sitio → al recargar la pantalla el backend conserva el estado `ANULADA` (sin botón «Anular»). Antes del `git push` se comprobó que el frontend viejo no mostraba la tarjeta (el backend nuevo ya estaba, la UI vieja seguía inerte).
+El smoke es **append-only**: quedaron de forma permanente **una `ALTA`, una `ANULADA` y sus filas de `Historial`**; **no se borran ni se editan** (se verificó de nuevo el 24/10/2026 que 14-0006 muestra una sola observación `ANULADA`).
+
+### Regresión de producción (solo lectura, 24/10/2026)
+Con sesión real, sin escrituras de datos (ni correcciones, ni fotos, ni observaciones nuevas):
+- **Hub** (14-0001): tarjetas Perfil, Datos, Ubicación, Evaluar reemplazo, Fotos y Observaciones; en un pozo de la red NE aparece también Niveles estáticos.
+- **Perfil ITF** (imagen cargada), **Datos** (ficha), **Ubicación** (ubicación de Irrigación y coordenadas), **Evaluar reemplazo** (estado y evaluaciones), **Fotos** (galería y «Agregar foto»), **Observaciones** (estado vacío y botón «Agregar observación»).
+- **Mapa de Provincia** («13804 de 13804 pozos», teselas cargadas), **mapa NE** («405 de 405 puntos») y la **ficha NE** de un punto con histórico (gráficos, última medición).
+- Sin errores de la aplicación en la consola (solo los avisos habituales del inicio de sesión de Google). Buscar un pozo deja la fila normal de búsqueda en `Historial`, como cualquier uso de la app.
+- Verificación técnica final: Apps Script en v45, `/exec` sin cambios, Pages = `6720cf3`, `origin/main == HEAD`.
+
+## Deuda y mejoras futuras (no bloqueantes)
+No son bugs de E5; quedan fuera de esta etapa.
+- El helper de fecha del módulo se llama `reemplazoLogic_formatearFecha` (formateador genérico en hora de Mendoza): debería migrar a una utilidad compartida cuando se vuelva a tocar esa zona.
+- Los estados de carga y de error de la pantalla de Observaciones reutilizan clases genéricas con prefijo `reemplazo-` (`reemplazo-cargando`, `reemplazo-bloque`), igual que Fotos: pendientes de una limpieza transversal de nombres.
+- Si una respuesta de alta con `duplicada: true` corresponde a una observación fuera de las páginas ya cargadas, se muestra temporalmente **arriba** hasta recargar la pantalla (el frontend no conoce su secuencia); la lectura del backend restaura el orden real.
+- **Rollout de permisos limitado a una cuenta controlada:** ampliar a más usuarios es una decisión operativa explícita, de a poco (recordar que quien reciba `observaciones` necesita también un permiso de descubrimiento: `perfil`, `datos`, `ubicacion` o `ne`; ver «Limitación documentada»).
+- Dos tests de mediciones con el `pozos.json` real se saltan en un checkout limpio porque ese dato generado está ignorado por git (`scripts/out/`); ya existía antes de E5 y no tiene relación con Observaciones.
 
 ## Tests
 `backend/test/ObservacionesPozoAlta.test.js` (normalización y validación del texto, categoría y `clientRequestId`; cálculo fail-closed de la secuencia; búsqueda por `clientRequestId`; la fila escrita y el formato de texto plano) y `ApiAgregarObservacionPozo.test.js` (de punta a punta: permisos, existencia, texto, categoría, idempotencia, lock y secuencia, concurrencia, fórmulas, Historial, privacidad y lectura posterior).
