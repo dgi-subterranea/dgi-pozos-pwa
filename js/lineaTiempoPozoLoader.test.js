@@ -951,11 +951,10 @@ describe('guardas del codigo fuente', () => {
     expect(M.LINEA_TIEMPO_CARGA_ESTADOS).toEqual({ OK: 'OK', VACIA: 'VACIA', SIN_PERMISO: 'SIN_PERMISO', ERROR: 'ERROR', PARCIAL: 'PARCIAL', NO_CARGADA: 'NO_CARGADA' });
   });
 
-  test('E6-2 no toca la interfaz: index.html, sw.js, app.js y api.js no referencian la linea de tiempo', () => {
+  test('api.js no conoce el cargador y app.js solo cablea la pantalla (nunca nombra al cargador)', () => {
     const raiz = path.join(__dirname, '..');
-    ['index.html', 'sw.js', path.join('js', 'app.js'), path.join('js', 'api.js'), path.join('css', 'styles.css')].forEach((f) => {
-      expect(fs.readFileSync(path.join(raiz, f), 'utf8')).not.toMatch(/lineaTiempoPozo|linea-tiempo/i);
-    });
+    expect(fs.readFileSync(path.join(raiz, 'js', 'api.js'), 'utf8')).not.toMatch(/lineaTiempoPozo/);
+    expect(fs.readFileSync(path.join(raiz, 'js', 'app.js'), 'utf8')).not.toMatch(/lineaTiempoPozoLoader/);
   });
 });
 

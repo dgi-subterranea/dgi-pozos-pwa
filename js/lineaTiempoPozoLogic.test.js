@@ -1044,10 +1044,8 @@ describe('guardas del codigo fuente', () => {
     internas.forEach((n) => expect(nombres).toContain(n));                  // la lista de internas no queda desactualizada
   });
 
-  test('ningun archivo existente del frontend carga ni referencia este modulo todavia (E6-1 no toca la interfaz)', () => {
+  test('api.js (cliente de la API) no conoce el modelo: la interfaz de la linea de tiempo (E6-3) lo usa desde sus propios archivos', () => {
     const raiz = path.join(__dirname, '..');
-    ['index.html', 'sw.js', path.join('js', 'app.js'), path.join('js', 'api.js')].forEach((f) => {
-      expect(fs.readFileSync(path.join(raiz, f), 'utf8')).not.toMatch(/lineaTiempoPozo/);
-    });
+    expect(fs.readFileSync(path.join(raiz, 'js', 'api.js'), 'utf8')).not.toMatch(/lineaTiempoPozo/);
   });
 });

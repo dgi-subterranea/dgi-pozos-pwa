@@ -5354,6 +5354,170 @@ p.uval-primera {
   margin: 8px 0 0;
 }
 
+/* --- Linea de tiempo del pozo (E6-3, solo lectura) --- */
+.lt-cargando {
+  display: flex;
+  justify-content: center;
+  padding: 28px 18px;
+}
+.lt-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 16px 18px;
+}
+.lt-contenido {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px 24px;
+}
+/* carga incompleta: aviso discreto con palabras (no solo color); el filtro no lo oculta */
+.lt-avisos {
+  padding: 10px 12px;
+  background: var(--color-warn-tint);
+  border: 1px solid var(--color-warn);
+  border-radius: 10px;
+  font-size: 0.85rem;
+  color: var(--color-warn);
+}
+.lt-aviso {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.lt-aviso + .lt-aviso {
+  margin-top: 4px;
+}
+.lt-filtros {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.lt-filtro {
+  min-height: 44px;
+  padding: 0 14px;
+  background: var(--color-surface);
+  border: 1.5px solid var(--color-border);
+  border-radius: 999px;
+  box-shadow: none;
+  color: var(--color-text);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.lt-filtro:hover,
+.lt-filtro:active {
+  background: var(--color-primary-tint);
+  color: var(--color-primary-dark);
+}
+.lt-filtro:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+/* seleccionado: color, peso y un tilde (el estado no depende solo del color) */
+.lt-filtro-activo {
+  background: var(--color-primary-tint);
+  border-color: var(--color-primary);
+  color: var(--color-primary-dark);
+  font-weight: 700;
+}
+.lt-filtro-activo::before {
+  content: "\2713\00a0";
+}
+.lt-vacio {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--color-text-soft);
+}
+.lt-lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.lt-item {
+  min-width: 0;
+  padding: 12px 14px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+}
+.lt-item p {
+  margin: 0;
+}
+.lt-item p + p {
+  margin-top: 6px;
+}
+.lt-item-cabecera {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 10px;
+  margin-bottom: 6px;
+}
+/* la fuente se lee en el texto del badge; el color es solo un refuerzo */
+.lt-fuente {
+  padding: 2px 8px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-primary-dark);
+}
+.lt-item-reemplazo .lt-fuente {
+  color: var(--color-accent);
+}
+.lt-item-observaciones .lt-fuente {
+  color: #17633d;
+}
+.lt-fecha {
+  font-size: 0.8rem;
+  color: var(--color-text-soft);
+  font-variant-numeric: tabular-nums;
+}
+.lt-titulo {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+/* texto libre (extracto): se pone con textContent; las palabras largas no desbordan */
+.lt-detalle {
+  font-size: 0.9rem;
+  line-height: 1.4;
+  color: var(--color-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.lt-nota,
+.lt-autor {
+  font-size: 0.8rem;
+  color: var(--color-text-soft);
+  overflow-wrap: anywhere;
+}
+@media (min-width: 640px) {
+  #screen-linea-tiempo {
+    max-width: 640px;
+  }
+  #screen-linea-tiempo .tv-topbar {
+    padding: 16px 34px;
+  }
+  #screen-linea-tiempo .tv-header {
+    padding: 22px 34px 18px;
+  }
+  .lt-contenido,
+  .lt-error {
+    padding-left: 34px;
+    padding-right: 34px;
+  }
+}
+
 /* --- Observaciones del pozo (E5-4, solo lectura) --- */
 .obs-contenido {
   display: flex;

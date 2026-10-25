@@ -23,6 +23,7 @@
     reemplazo: document.getElementById('screen-reemplazo'),
     fotos: document.getElementById('screen-fotos'),
     observaciones: document.getElementById('screen-observaciones'),
+    lineaTiempo: document.getElementById('screen-linea-tiempo'),
     disabled: document.getElementById('screen-disabled'),
     offline: document.getElementById('screen-offline')
   };
@@ -184,6 +185,7 @@
   var ICON_REEMPLAZO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   var ICON_FOTOS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h3l2-3h6l2 3h3v11H4z" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.5"/></svg>';
   var ICON_OBSERVACIONES = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 4h14a1 1 0 011 1v10a1 1 0 01-1 1h-8l-4 4v-4H5a1 1 0 01-1-1V5a1 1 0 011-1z" stroke-linejoin="round"/><path d="M8 9h8M8 12h5" stroke-linecap="round"/></svg>';
+  var ICON_LINEA_TIEMPO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 4v16" stroke-linecap="round"/><circle cx="6" cy="7" r="2" fill="currentColor"/><circle cx="6" cy="17" r="2" fill="currentColor"/><path d="M11 7h9M11 12h6M11 17h9" stroke-linecap="round"/></svg>';
   var ICON_MAPS ='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 20l-5-2V5l5 2 6-2 5 2v13l-5-2-6 2z"/></svg>';
   var ICON_SEARCH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>';
   var ICON_CLOSE = '<svg viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
@@ -294,6 +296,11 @@
     if (observacionesPozoLogic_puedeVer(permisosActuales)) {
       modulos.push({ id: 'observaciones', titulo: 'Observaciones', desc: 'Contexto y novedades del pozo', icono: ICON_OBSERVACIONES });
     }
+    // Linea de tiempo (E6-3): con al menos UNO de ubicacion / reemplazo / observaciones === true (booleano exacto; perfil, datos, NE y fotos no la habilitan). La tarjeta solo navega: no carga
+    // nada (los datos se piden al abrir la pantalla).
+    if (lineaTiempoPozoLogic_puedeVerLineaTiempo(permisosActuales)) {
+      modulos.push({ id: 'linea-tiempo', titulo: 'Línea de tiempo', desc: 'Historia operativa del pozo', icono: ICON_LINEA_TIEMPO });
+    }
 
     // Cantidad impar (>1) de tarjetas: la ultima ocupa todo el ancho en vez
     // de dejar un hueco al lado (ver .hub-grid.n3).
@@ -391,6 +398,8 @@
       abrirFotos(fotosPozosLogic_entidadDePozo(pozoActual));
     } else if (id === 'observaciones') {
       abrirObservaciones(pozoActual.wellId);
+    } else if (id === 'linea-tiempo') {
+      abrirLineaTiempo(pozoActual.wellId);
     }
   }
 
@@ -1265,6 +1274,8 @@
     fotosPozosController_reset();
     // ni las observaciones abiertas (se descartan las respuestas en vuelo)
     observacionesPozoController_reset();
+    // ni la linea de tiempo abierta (se cancela lo que este en vuelo)
+    lineaTiempoPozoController_reset();
     toggleAccesosUbicacion();
     if (gsiLoaded) {
       // Sin esto, auto_select podria volver a loguear silenciosamente a
@@ -1833,6 +1844,32 @@
 
   document.getElementById('btn-observaciones-volver').addEventListener('click', function () {
     observacionesPozoController_cerrar();
+    showScreen('main');
+  });
+
+  // --- Linea de tiempo del pozo (E6-3, solo lectura) ---
+  // Se abre desde la tarjeta del hub y Volver regresa al hub del MISMO pozo (pozoActual no se toca: no hay busqueda nueva). Los datos se piden al abrir, siempre frescos; la sesion vencida
+  // (UNAUTHORIZED / USER_DISABLED) usa el cierre de sesion de siempre. Toda la logica vive en js/lineaTiempoPozo*.js.
+  function abrirLineaTiempo(wellId) {
+    if (!lineaTiempoPozoLogic_puedeVerLineaTiempo(permisosActuales) || typeof wellId !== 'string') {
+      return;       // defensa en profundidad: cada fuente vuelve a validar su permiso en el backend
+    }
+    showScreen('lineaTiempo');
+    lineaTiempoPozoController_abrir(wellId);
+  }
+
+  lineaTiempoPozoController_inicializar(function () {
+    return {
+      sessionToken: sessionToken,
+      permisos: permisosActuales,
+      onSessionExpired: function () {
+        logout();
+      }
+    };
+  });
+
+  document.getElementById('btn-linea-tiempo-volver').addEventListener('click', function () {
+    lineaTiempoPozoController_cerrar();
     showScreen('main');
   });
 

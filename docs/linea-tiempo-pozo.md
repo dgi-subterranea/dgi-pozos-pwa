@@ -1,6 +1,6 @@
 # Línea de tiempo del pozo (E6)
 
-Estado: **E6-1 (modelo puro) aprobada y commiteada (`f48ac7c`). E6-2 (cargador) implementada en el repo, sin commit.** Sin pantalla, sin tarjeta, sin CSS, sin service worker, sin cambios de backend ni de `api.js`. Las etapas siguientes (E6-2 carga por fuente, E6-3 pantalla, E6-4 rollout) no empezaron.
+Estado: **E6-1 (modelo puro, `f48ac7c`) y E6-2 (cargador, `1063474`) commiteadas. E6-3 (pantalla) implementada en el repo, sin commit.** Sin pantalla, sin tarjeta, sin CSS, sin service worker, sin cambios de backend ni de `api.js`. Las etapas siguientes (E6-2 carga por fuente, E6-3 pantalla, E6-4 rollout) no empezaron.
 
 ## Propósito
 Una vista cronológica única, de lectura, que junta lo que hoy está repartido en cuatro pantallas: ubicación, evaluaciones de reemplazo y observaciones (las fotos quedan afuera en v1, ver abajo). **No agrega datos, hojas, permisos ni endpoints**: se arma en el cliente con las lecturas que ya existen, cada una con su permiso.
@@ -134,3 +134,32 @@ Solo eventos del modelo (lista blanca), contadores y códigos. Nunca payload cru
 **Best-effort.** Son varias llamadas separadas, no un snapshot: si durante la carga se agrega o se anula una observación, la paginación puede repetir o saltear elementos. El modelo evita que una `ANULADA` vuelva a verse `ACTIVA` cuando ambas lecturas están presentes, pero no se intenta una lectura transaccional ni se toma ningún lock. Una observación anulada *entre* páginas, cuya alta ya se había leído, puede quedar mostrada como activa hasta recargar.
 
 **Tests.** `js/lineaTiempoPozoLoader.test.js` (unitarios con promesas controladas y reloj falso) y `js/lineaTiempoPozoLoaderContrato.test.js` (los wrappers reales de `api.js` contra el backend real: paginación real, tope de 500, `WELL_NOT_FOUND` real, permisos, errores de sesión, hoja caída).
+
+## E6-3 — Pantalla de la línea de tiempo
+Solo frontend, sin backend, sin escrituras, sin permisos nuevos, sin Fotos y sin endpoint agregado.
+
+**Archivos.** `js/lineaTiempoPozo.js` (controlador DOM), `js/lineaTiempoPozoVistaLogic.js` (presentación pura: qué se muestra, filtros, avisos y notas de cada evento), `index.html` (pantalla `#screen-linea-tiempo` y scripts), `css/styles.css` (bloque `.lt-*`, antes del de Observaciones), `sw.js` (los cuatro scripts en `SHELL_FILES`) y `js/app.js` (solo cablea). `js/api.js` no cambió: se usan los wrappers de lectura que ya existían.
+
+**Tarjeta del hub.** «Línea de tiempo» · «Historia operativa del pozo». Aparece solo si `lineaTiempoPozoLogic_puedeVerLineaTiempo(permisosActuales)`: al menos uno de `ubicacion`, `reemplazo` u `observaciones` es exactamente `true`. Perfil, datos, NE, fotos y los valores «truthy» no la habilitan. La tarjeta **no carga datos**: solo navega; el pedido sale al abrir la pantalla. Un usuario con solo `observaciones` sigue sin descubrimiento propio (limitación conocida de E5).
+
+**Pantalla.** Cabecera con el pozo, «Cargando…», lista de eventos (`<ol>`, el orden que entrega el modelo: más reciente primero, sin reordenar en el DOM), filtros, avisos y estado vacío. Volver cancela la carga y regresa al hub del mismo pozo (no hay búsqueda nueva). Cada apertura es una carga fresca; no hay caché.
+
+**Evento.** Badge de la fuente en texto (Ubicación / Reemplazo / Observaciones; el color solo refuerza), fecha y hora locales (helper de fecha de la app sobre el instante UTC canónico del modelo), título, detalle (extracto de hasta 140 caracteres, solo con `textContent`), notas y «Por <nombre>». Las notas salen de una lista blanca de metadata: método de ubicación, «Primera ubicación del pozo», tipo de fuente registral, motivo de la evaluación (con la etiqueta del catálogo; un código sin etiqueta no se muestra) y el estado actual de una propuesta u observación. Nunca ids, emails, secuencias, `clientRequestId`, metadata cruda ni códigos técnicos. Una observación anulada nunca muestra el texto original, ni siquiera a un moderador.
+
+**Filtros.** Botones reales «Todas · Ubicación · Reemplazo · Observaciones» (`aria-pressed`, el seleccionado lleva además un tilde), solo de las fuentes que participan (una fuente `SIN_PERMISO` o no cargada no tiene filtro; con menos de dos fuentes no hay barra). Filtrar usa `lineaTiempoPozoLogic_filtrarPorFuente` sobre el resultado ya cargado: **no vuelve a pedir nada** y el aviso de carga incompleta sigue visible (filtrar no arregla lo que no se cargó).
+
+**Estados.**
+- *Vacío* (todo cargó, sin eventos): «Este pozo todavía no tiene eventos en la línea de tiempo.» (no es un error).
+- *Ninguna fuente se pudo leer* (el frontend creía poder verla pero el backend denegó todas): estado neutro «No hay información disponible para mostrar.». No afirma que no haya eventos (no pudo leerlos), no menciona permisos, no sugiere datos ocultos y no es un error.
+- *Error total* (sin eventos y nada útil): «No se pudo cargar la línea de tiempo.» + «Reintentar» (carga nueva del mismo pozo). Sin códigos.
+- *Parcial* (hay información útil pero falta algo): la lista disponible y un aviso discreto: «Parte de la información no pudo cargarse.» más una línea por fuente («Reemplazo no pudo cargarse.», «Observaciones no pudo cargarse por completo.», «Parte del historial de ubicación no pudo cargarse.»).
+- *Límite* (`LIMIT_REACHED`): «Hay más observaciones antiguas que no se incluyeron en esta vista.» (no es un error y no activa el aviso general).
+- `SIN_PERMISO` y `CANCELADA` no se avisan; los tiempos del cargador no se muestran.
+
+**Sesión.** `UNAUTHORIZED` / `USER_DISABLED` no se muestran como error: el controlador pide el cierre de sesión de siempre (`logout()`), **una sola vez** por apertura y apenas la primera fuente lo informa. El cierre de sesión (`reset`) cancela y limpia la pantalla.
+
+**Respuestas viejas.** El resultado se aplica solo si `cargador.esVigente(resultado)`: salir, cambiar de pozo o reabrir descartan lo que venía en vuelo.
+
+**Service worker.** Los cuatro scripts se precachean como el resto del shell; la estrategia no cambió y la API sigue sin cachearse.
+
+**Tests.** `js/lineaTiempoPozoVistaLogic.test.js` (presentación pura), `js/lineaTiempoPozoController.test.js` (controlador real con DOM falso que lanza ante `innerHTML` o `data-*`) y `js/lineaTiempoPozoWiring.test.js` (index.html, tarjeta, app.js, service worker y CSS). Verificación visual con datos simulados a 375 px y 1280 px, sin scroll horizontal.

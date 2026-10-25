@@ -1312,6 +1312,39 @@
     </div>
   </div>
 
+  <!-- Linea de tiempo del pozo (E6-3, solo lectura). Se abre desde la tarjeta "Linea de tiempo" del hub (al menos uno de los permisos ubicacion, reemplazo u observaciones === true);
+       los datos se piden SOLO al abrir esta pantalla. Controlador: js/lineaTiempoPozo.js (presentacion en js/lineaTiempoPozoVistaLogic.js, carga en js/lineaTiempoPozoLoader.js,
+       modelo de eventos en js/lineaTiempoPozoLogic.js). Volver regresa al hub del mismo pozo. Todo texto de datos se pinta con textContent. -->
+  <div id="screen-linea-tiempo" class="screen" hidden>
+    <div class="tv-topbar tv-topbar-fija">
+      <button type="button" id="btn-linea-tiempo-volver" class="tv-volver">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+        Volver
+      </button>
+    </div>
+    <div class="tv-header">
+      <div>
+        <p id="linea-tiempo-entidad" class="mapa-titulo mono"></p>
+        <h2 class="tv-header-label">Línea de tiempo del pozo</h2>
+      </div>
+    </div>
+
+    <div id="linea-tiempo-cargando" class="lt-cargando" role="status" hidden>
+      <div class="cargando" data-cargando>Cargando línea de tiempo...</div>
+    </div>
+    <div id="linea-tiempo-error" class="lt-error" hidden>
+      <p id="linea-tiempo-error-texto" class="error-message" role="alert"></p>
+      <button type="button" id="btn-linea-tiempo-reintentar" class="button-secondary">Reintentar</button>
+    </div>
+
+    <div id="linea-tiempo-contenido" class="lt-contenido" hidden>
+      <div id="linea-tiempo-avisos" class="lt-avisos" role="status" hidden></div>
+      <div id="linea-tiempo-filtros" class="lt-filtros" role="group" aria-label="Filtrar por fuente" hidden></div>
+      <p id="linea-tiempo-vacio" class="lt-vacio" hidden></p>
+      <ol id="linea-tiempo-lista" class="lt-lista" aria-label="Eventos del pozo, del más reciente al más antiguo"></ol>
+    </div>
+  </div>
+
   <!-- Visor de la galeria de fotos de pozos: la imagen completa se pide al
        abrir y al pasar a la anterior/siguiente (por el proxy del backend). -->
   <div id="fotos-visor-overlay" class="reemplazo-visor" role="dialog" aria-modal="true" aria-label="Foto del pozo" hidden>
@@ -1700,6 +1733,10 @@
   <script src="js/ubicacionSugerencias.js"></script>
   <script src="js/observacionesPozoLogic.js"></script>
   <script src="js/observacionesPozo.js"></script>
+  <script src="js/lineaTiempoPozoLogic.js"></script>
+  <script src="js/lineaTiempoPozoLoader.js"></script>
+  <script src="js/lineaTiempoPozoVistaLogic.js"></script>
+  <script src="js/lineaTiempoPozo.js"></script>
   <script src="js/app.js"></script>
   <!-- Va DESPUES de app.js en el documento a proposito, para que
        onGsiLoaded/onGsiLoadError ya existan antes de que puedan
