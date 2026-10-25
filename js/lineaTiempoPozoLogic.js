@@ -96,6 +96,14 @@ function lineaTiempoPozoLogic_enLista(lista, valor) {
   return typeof valor === 'string' && lista.indexOf(valor) !== -1;
 }
 
+// --- Acceso ---
+
+// La pantalla de la linea de tiempo existe si el usuario ve AL MENOS una de sus tres fuentes. Solo el booleano exacto cuenta (fail-closed: "SI", 1, "true" o un permiso ausente no). Perfil,
+// datos, NE y fotos NO la habilitan, y no hay permiso propio ni descubrimiento nuevo para quien solo tiene `observaciones` (limitacion conocida de E5).
+function lineaTiempoPozoLogic_puedeVerLineaTiempo(permisos) {
+  return lineaTiempoPozoLogic_esObjeto(permisos) && (permisos.ubicacion === true || permisos.reemplazo === true || permisos.observaciones === true);
+}
+
 // --- Fechas ---
 
 // ISO 8601 con zona explicita -> `AAAA-MM-DDTHH:MM:SS.mmmZ` (UTC) o null. Valida el calendario (31 de febrero, hora 24, minuto 60 y segundo 60 son invalidos) y el rango de anios.
@@ -604,6 +612,7 @@ if (typeof module !== 'undefined' && module.exports) {
     LINEA_TIEMPO_NOMBRE_MAX,
     LINEA_TIEMPO_NOMBRE_NEUTRO,
     LINEA_TIEMPO_METADATA_PERMITIDA,
+    lineaTiempoPozoLogic_puedeVerLineaTiempo,
     lineaTiempoPozoLogic_normalizarTimestamp,
     lineaTiempoPozoLogic_sinSurrogatesSueltos,
     lineaTiempoPozoLogic_limpiarTexto,

@@ -1,6 +1,6 @@
 # Línea de tiempo del pozo (E6)
 
-Estado: **E6-1 (modelo puro) aprobada.** Sin pantalla, sin tarjeta, sin CSS, sin service worker, sin cambios de backend ni de `api.js`. Las etapas siguientes (E6-2 carga por fuente, E6-3 pantalla, E6-4 rollout) no empezaron.
+Estado: **E6-1 (modelo puro) aprobada y commiteada (`f48ac7c`). E6-2 (cargador) implementada en el repo, sin commit.** Sin pantalla, sin tarjeta, sin CSS, sin service worker, sin cambios de backend ni de `api.js`. Las etapas siguientes (E6-2 carga por fuente, E6-3 pantalla, E6-4 rollout) no empezaron.
 
 ## Propósito
 Una vista cronológica única, de lectura, que junta lo que hoy está repartido en cuatro pantallas: ubicación, evaluaciones de reemplazo y observaciones (las fotos quedan afuera en v1, ver abajo). **No agrega datos, hojas, permisos ni endpoints**: se arma en el cliente con las lecturas que ya existen, cada una con su permiso.
@@ -97,3 +97,40 @@ Surgen de los bloqueos encontrados en E6-1. El modelo puro de E6-1 sigue con los
 **E. Latencia.** E6-2 mide la duración de cada fuente y el total **solo dentro del cargador, del test o de un diagnóstico local**. Sin analytics, sin hoja, sin `localStorage` y sin backend nuevo. Primero se mide; un endpoint agregado no se considera antes.
 
 **Sigue vigente de E6-1:** Fotos fuera de v1 (no se usa `fechaFotoValor` como fecha de incorporación ni se fabrica `FOTO_AGREGADA`), y una `OBSERVACION_ANULADA` nunca incorpora el texto original, aunque el backend se lo entregue a un moderador: la línea de tiempo es un resumen operativo, no una segunda vista de moderación.
+
+## E6-2 — Cargador (`js/lineaTiempoPozoLoader.js`)
+Capa de carga **sin DOM**: consulta las fuentes permitidas con los wrappers que ya existen en `js/api.js` (`apiGetCorreccionesUbicacionPozo`, `apiGetDecisionesFuentesPozo`, `apiGetHistorialReemplazo`, `apiGetObservacionesPozo`; no hizo falta tocar `api.js`), normaliza con el modelo de E6-1 y devuelve un resultado agregado. No renderiza, no guarda nada y no toca el backend. Pantalla, tarjeta, CSS y service worker son E6-3.
+
+**Uso.** `var cargador = lineaTiempoPozoLoader_crear(deps)` (todo opcional: `api`, `logica`, `ahora`, `onSesionExpirada(code)`); `cargador.cargar(sessionToken, wellId, permisos)` devuelve una promesa que **nunca se rechaza**; `cargador.esVigente(resultado)`, `cargador.cancelar()`. `lineaTiempoPozoLogic_puedeVerLineaTiempo(permisos)` (en el modelo) dice si hay pantalla: al menos uno de `ubicacion`, `reemplazo`, `observaciones` es `=== true`.
+
+**Resultado.**
+```
+{ wellId, generacion, puedeVer, auth, eventos, completa, parcial, duracionMs,
+  fuentes: {
+    ubicacion:     { estado, cantidadEventos, omitidos, duracionMs, motivoParcial, codigoError, partes: {correcciones: {estado, duracionMs, codigoError}, decisiones: {...}} },
+    reemplazo:     { estado, cantidadEventos, omitidos, duracionMs, motivoParcial, codigoError },
+    observaciones: { estado, cantidadEventos, omitidos, duracionMs, motivoParcial, codigoError, paginas, cargadas } } }
+```
+Solo eventos del modelo (lista blanca), contadores y códigos. Nunca payload crudo, emails, `clientRequestId`, secuencias, el `sessionToken` ni el texto de una observación anulada.
+
+**Permisos y paralelismo.** Cada fuente se pide solo con su permiso exacto (`=== true`); sin permiso no hay request. Las lecturas independientes (correcciones, decisiones, reemplazo y la primera página de observaciones) arrancan en el mismo instante; solo las páginas siguientes de observaciones son secuenciales. La duración total es la de la fuente más lenta. Si el backend responde `PERMISSION_DENIED` (el permiso cambió), la fuente queda `SIN_PERMISO` y no es un fallo.
+
+**Estados por fuente.** `OK`, `VACIA`, `SIN_PERMISO`, `ERROR`, `PARCIAL`, `NO_CARGADA`. Un payload válido con ítems omitidos por el modelo sigue siendo `OK` (o `VACIA` si no quedó ninguno): los omitidos quedan en `omitidos` como diagnóstico. `ERROR` solo si no se pudo obtener o interpretar la respuesta.
+- *Ubicación* combina dos lecturas independientes: ambas `ERROR` → `ERROR`; una `ERROR` → `PARCIAL` (`motivoParcial`: `SUBFUENTE_CORRECCIONES` / `SUBFUENTE_DECISIONES`); ambas vacías → `VACIA`; si no, `OK`. `WELL_NOT_FOUND` de decisiones (pozo fuera del padrón) es «sin decisiones» (`VACIA`), nunca un fallo; en correcciones sí sería un fallo. Ambas con `PERMISSION_DENIED` → `SIN_PERMISO`.
+- *Observaciones* — `PARCIAL` si la paginación se cortó con datos ya cargados: `LIMIT_REACHED`, `CURSOR_INVALIDO`, `CURSOR_REPETIDO`, `CURSOR_NO_AVANZA`, `ERROR_PAGINA`, `RESPUESTA_INVALIDA` o `CANCELADA`. Si falla la primera página → `ERROR`.
+
+**Paginación de Observaciones.** `limit=100`; primera llamada sin cursor; mientras `hayMas === true` se pide `antesDeSecuencia = cursor`. Tope: **5 páginas / 500 observaciones**; si al llegar todavía hay más → `PARCIAL` + `LIMIT_REACHED`, se conservan los eventos y **no** se afirma que la línea de tiempo está completa. Cortes fail-safe (sin bucles, conservando lo cargado): `hayMas=true` con cursor ausente o que no sea un entero ≥ 1; cursor ya pedido; cursor que no baja estrictamente. Una página posterior con error o mal formada (incluida la de otro pozo) → `PARCIAL`. Los elementos repetidos entre páginas se deduplican con el modelo de E6-1 (id + avance de estado).
+
+**Completa / parcial global** (sobre las fuentes *permitidas*, es decir, todas las que no son `SIN_PERMISO`):
+- `completa = true` si hay al menos una fuente permitida y todas terminaron `OK` o `VACIA`. `SIN_PERMISO` no lo impide. Sin ninguna fuente permitida, `completa = false` (no se cargó nada; `puedeVer = false`).
+- `parcial = true` si alguna fuente permitida quedó `ERROR`/`PARCIAL` **y** alguna dio datos útiles (`OK`, `VACIA` o `PARCIAL`). Si todas las permitidas fallan: `parcial = false` y `completa = false`.
+
+**Sesión.** `UNAUTHORIZED` / `USER_DISABLED` no son un fallo de fuente: se propagan en `resultado.auth` (y en `onSesionExpirada(code)`, una sola vez por carga vigente), se corta lo pendiente y el resultado queda sin eventos y con las fuentes permitidas en `NO_CARGADA`. `USER_DISABLED` gana si coexiste con `UNAUTHORIZED`. E6-3 debe usar el cierre de sesión de siempre.
+
+**Respuestas viejas.** Cada `cargar` abre una *generación*. `esVigente(resultado)` es `true` solo para el de la última carga; una carga desplazada o `cancelar()` corta la paginación (`PARCIAL` + `CANCELADA`) y su resultado **no debe aplicarse**. No usa `AbortController`.
+
+**Latencia.** `duracionMs` por fuente (y por subfuente de ubicación), total y por carga, con reloj inyectable (`performance.now` por defecto), en enteros y solo en memoria: sin `console`, analytics, `localStorage`, Sheet ni backend.
+
+**Best-effort.** Son varias llamadas separadas, no un snapshot: si durante la carga se agrega o se anula una observación, la paginación puede repetir o saltear elementos. El modelo evita que una `ANULADA` vuelva a verse `ACTIVA` cuando ambas lecturas están presentes, pero no se intenta una lectura transaccional ni se toma ningún lock. Una observación anulada *entre* páginas, cuya alta ya se había leído, puede quedar mostrada como activa hasta recargar.
+
+**Tests.** `js/lineaTiempoPozoLoader.test.js` (unitarios con promesas controladas y reloj falso) y `js/lineaTiempoPozoLoaderContrato.test.js` (los wrappers reales de `api.js` contra el backend real: paginación real, tope de 500, `WELL_NOT_FOUND` real, permisos, errores de sesión, hoja caída).
