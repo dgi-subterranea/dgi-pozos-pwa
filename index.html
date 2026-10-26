@@ -936,6 +936,12 @@
         <option value="profundidad">Ordenar: Profundidad</option>
       </select>
     </div>
+    <!-- Exportar a Excel (E7-3): lo que la tabla muestra ahora (busqueda + filtro + orden); N = filas visibles. Sin pantalla ni modal. -->
+    <div class="seleccion-tabla-exportar">
+      <button type="button" id="btn-seleccion-exportar" class="button-secondary seleccion-exportar-btn" disabled>Exportar Excel (0)</button>
+      <p id="seleccion-exportar-estado" class="seleccion-exportar-mensaje" role="status" aria-live="polite" hidden></p>
+      <p id="seleccion-exportar-error" class="seleccion-exportar-mensaje seleccion-exportar-mensaje-error" role="alert" hidden></p>
+    </div>
     <!-- Aptitud (solo reemplazo=SI): se combina con buscar y ordenar -->
     <div id="seleccion-tabla-grupo-reemplazo" class="seleccion-tabla-filtro-reemplazo" hidden>
       <p class="mapa-filtro-label">Aptitud para reemplazo</p>
@@ -1705,6 +1711,8 @@
   <script src="js/cercaMioLogic.js"></script>
   <script src="js/buscarReemplazoLogic.js"></script>
   <script src="js/seleccionLogic.js"></script>
+  <script src="js/xlsxLogic.js"></script>
+  <script src="js/exportacionSeleccionLogic.js"></script>
   <script src="js/mapaShared.js"></script>
   <script src="js/fotosPopup.js"></script>
   <script src="js/mapa.js"></script>
@@ -1712,6 +1720,7 @@
   <script src="js/cercaMio.js"></script>
   <script src="js/buscarReemplazo.js"></script>
   <script src="js/seleccion.js"></script>
+  <script src="js/exportacionSeleccion.js"></script>
   <script src="js/reemplazoLogic.js"></script>
   <script src="js/reemplazoFotosLogic.js"></script>
   <script src="js/fotosImagen.js"></script>

@@ -243,7 +243,8 @@ describe('la tabla y la exportacion comparten el codigo de filtro/orden y de lot
   });
 
   test('seleccion.js pide la disponibilidad por lotes (seleccionLogic_dividirEnLotes + combinar), no la seleccion entera de una vez', () => {
-    expect(src).toContain('seleccionLogic_dividirEnLotes(estado.seleccion, SELECCION_ITF_LOTE_MAX)');
+    expect(src).toContain('seleccionLogic_dividirEnLotes(wellIds, SELECCION_ITF_LOTE_MAX)');
+    expect(src).toContain('pedirItfEnLotes(contexto, estado.seleccion)');
     expect(src).toContain('seleccionLogic_combinarDisponibilidadItf(');
     expect(src).not.toMatch(/apiGetItfAvailability\(contexto\.sessionToken, estado\.seleccion\)/);
   });

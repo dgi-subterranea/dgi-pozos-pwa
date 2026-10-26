@@ -54,6 +54,9 @@
     disponibilidadItf: {},            // cache {wellId: boolean}
     disponibilidadItfListoPara: null, // snapshot (join de wellIds) de la seleccion para la que ya se pidio
     disponibilidadItfDesconocidos: [],// wellId cuyo lote de disponibilidad fallo (ni Si ni No); la exportacion los deja vacios
+    filasVisibles: 0,                 // cuantas filas dibuja la tabla ahora (despues de buscar + filtrar): el N de "Exportar Excel (N)"
+    listenersFilasVisibles: [],
+    neCargado: false,                 // el dataset de NE se cargo (distinto de "cargado y vacio"): sin el, la exportacion deja "Tiene NE" vacio
     obtenerContexto: null,
     listeners: [],
     pendienteConfirmacion: null,      // {wellIds, origen, geometria} mientras se muestra el dialogo
@@ -117,8 +120,13 @@
   // contra llamar onSessionExpired() varias veces si varios requests en
   // vuelo devuelven UNAUTHORIZED casi juntos (ej. una descarga en lote).
   var sesionExpiradaYaManejada = false;
+  // UNAUTHORIZED (token vencido) y USER_DISABLED (cuenta deshabilitada) cierran la sesion igual: flujo global de logout.
+  function esFalloDeSesion(result) {
+    return !!result && (result.code === 'UNAUTHORIZED' || result.code === 'USER_DISABLED');
+  }
+
   function manejarSiSesionExpiro(result, contexto) {
-    if (result && result.code === 'UNAUTHORIZED' && !sesionExpiradaYaManejada) {
+    if (esFalloDeSesion(result) && !sesionExpiradaYaManejada) {
       sesionExpiradaYaManejada = true;
       if (contexto && contexto.onSessionExpired) {
         contexto.onSessionExpired();
@@ -130,6 +138,17 @@
 
   function notificarCambio() {
     estado.listeners.forEach(function (fn) { fn(); });
+  }
+
+  // Cantidad de filas que la tabla dibuja (despues de buscar + filtrar): la usa el boton "Exportar Excel (N)". No hace ningun pedido.
+  function notificarFilasVisibles(n) {
+    estado.filasVisibles = n;
+    estado.listenersFilasVisibles.forEach(function (fn) { fn(n); });
+  }
+
+  function seleccionController_registrarListenerFilasVisibles(fn) {
+    estado.listenersFilasVisibles.push(fn);
+    fn(estado.filasVisibles);
   }
 
   function invalidarCachesDependientes() {
@@ -322,6 +341,7 @@
     var aperturaId = estado.aperturaTablaId;
 
     tablaSubtituloEl.textContent = estado.seleccion.length + ' pozo' + (estado.seleccion.length === 1 ? '' : 's');
+    notificarFilasVisibles(0);            // hasta que la tabla se dibuje no hay nada que exportar
     // Busqueda y filtro de aptitud se conservan al volver de abrir un pozo /
     // evaluar (misma seleccion, o un subconjunto por haber quitado pozos);
     // una seleccion con pozos nuevos arranca limpia.
@@ -367,6 +387,7 @@
       if (neResult.status === 'ok') {
         neResult.data.puntos.forEach(function (p) { if (p.wellId) { neSet.add(p.wellId); } });
       }
+      estado.neCargado = !!permisos.ne && neResult.status === 'ok';
 
       function continuarConDisponibilidad() {
         if (aperturaId !== estado.aperturaTablaId) {
@@ -384,6 +405,7 @@
       if (aperturaId !== estado.aperturaTablaId) {
         return;
       }
+      notificarFilasVisibles(0);
       tablaContenidoEl.hidden = false;
       tablaContenidoEl.innerHTML = '<p class="cercamio-estado">No se pudo cargar la información. Intentá de nuevo.</p>';
     });
@@ -395,26 +417,35 @@
     return estado.seleccion.slice().sort().join(',');
   }
 
-  // El backend rechaza mas de 500 wellId por llamada: la seleccion se parte en lotes de a lo sumo SELECCION_ITF_LOTE_MAX (max. ITF_CONCURRENCIA_MAX en vuelo) y se une el resultado.
-  // Un lote que falla NO convierte sus pozos en "No": quedan en estado.disponibilidadItfDesconocidos (la exportacion los deja vacios) y la disponibilidad NO se da por lista,
-  // asi que la proxima vez se vuelve a pedir.
-  function asegurarDisponibilidadItf(contexto) {
-    var snapshot = snapshotSeleccion();
-    if (estado.disponibilidadItfListoPara === snapshot) {
-      return Promise.resolve(estado.disponibilidadItf);
-    }
-    var lotes = seleccionLogic_dividirEnLotes(estado.seleccion, SELECCION_ITF_LOTE_MAX);
+  // El backend rechaza mas de 500 wellId por llamada: se parte en lotes de a lo sumo SELECCION_ITF_LOTE_MAX (max. ITF_CONCURRENCIA_MAX en vuelo) y se une el resultado.
+  // Un lote que falla NO convierte sus pozos en "No": quedan en `desconocidos`. sesionInvalida = algun lote devolvio UNAUTHORIZED / USER_DISABLED (ya se aviso al flujo global de logout).
+  function pedirItfEnLotes(contexto, wellIds) {
+    var lotes = seleccionLogic_dividirEnLotes(wellIds, SELECCION_ITF_LOTE_MAX);
     return ejecutarConConcurrencia(lotes, ITF_CONCURRENCIA_MAX, function (lote) {
       return apiGetItfAvailability(contexto.sessionToken, lote);
     }).then(function (resultados) {
+      var sesionInvalida = false;
       var respuestas = resultados.map(function (r) {
         if (!r.ok) { return null; }
-        if (r.valor && r.valor.status !== 'ok') {
+        if (r.valor && r.valor.status !== 'ok' && esFalloDeSesion(r.valor)) {
+          sesionInvalida = true;
           manejarSiSesionExpiro(r.valor, contexto);
         }
         return r.valor;
       });
       var combinado = seleccionLogic_combinarDisponibilidadItf(lotes, respuestas);
+      combinado.sesionInvalida = sesionInvalida;
+      return combinado;
+    });
+  }
+
+  // Un lote fallido deja sus pozos desconocidos y la disponibilidad NO se da por lista, asi que la proxima vez se vuelve a pedir.
+  function asegurarDisponibilidadItf(contexto) {
+    var snapshot = snapshotSeleccion();
+    if (estado.disponibilidadItfListoPara === snapshot) {
+      return Promise.resolve(estado.disponibilidadItf);
+    }
+    return pedirItfEnLotes(contexto, estado.seleccion).then(function (combinado) {
       if (snapshotSeleccion() !== snapshot) {
         return estado.disponibilidadItf;      // la seleccion cambio mientras tanto: este resultado ya no corresponde
       }
@@ -447,6 +478,67 @@
     return asegurarDisponibilidadItf(contexto).then(function () {
       return { disponibilidad: estado.disponibilidadItf, desconocidos: estado.disponibilidadItfDesconocidos.slice() };
     });
+  }
+
+  // Disponibilidad de ITF SOLO de estos pozos (los de una exportacion). Usa lo que la tabla ya sabe de la seleccion actual y pide unicamente lo que falta, en lotes de <= 500.
+  // Devuelve null sin permiso perfil === true (no se consulta nada). Si no:
+  //   {disponibilidad: {wellId: bool} (solo pozos respondidos), desconocidos: [wellId], completo, sesionInvalida}
+  // Nunca rechaza: un fallo inesperado deja todos los pedidos como desconocidos.
+  function seleccionController_disponibilidadItfDe(wellIds) {
+    var contexto = obtenerContextoSeguro();
+    if (!contexto || !contexto.permisos || contexto.permisos.perfil !== true) {
+      return Promise.resolve(null);
+    }
+    sesionExpiradaYaManejada = false;
+    var ids = seleccionLogic_normalizar(wellIds);
+    var conocidos = estado.disponibilidadItfListoPara === snapshotSeleccion() ? estado.disponibilidadItf : {};
+    var faltan = ids.filter(function (id) { return typeof conocidos[id] !== 'boolean'; });
+    function armar(nuevos, sesionInvalida) {
+      var disponibilidad = {};
+      var desconocidos = [];
+      ids.forEach(function (id) {
+        if (typeof conocidos[id] === 'boolean') { disponibilidad[id] = conocidos[id]; }
+        else if (nuevos && typeof nuevos[id] === 'boolean') { disponibilidad[id] = nuevos[id]; }
+        else { desconocidos.push(id); }
+      });
+      return { disponibilidad: disponibilidad, desconocidos: desconocidos, completo: desconocidos.length === 0, sesionInvalida: sesionInvalida };
+    }
+    if (faltan.length === 0) {
+      return Promise.resolve(armar(null, false));
+    }
+    return pedirItfEnLotes(contexto, faltan).then(function (combinado) {
+      return armar(combinado.disponibilidad, combinado.sesionInvalida);
+    }).catch(function () {
+      return armar(null, false);              // fallo inesperado: lo que ya se sabia se conserva; lo pedido queda desconocido
+    });
+  }
+
+  function copiarObjetoPlano(origen) {
+    if (!origen || typeof origen !== 'object') { return null; }
+    var copia = {};
+    Object.keys(origen).forEach(function (k) { copia[k] = origen[k]; });
+    return copia;
+  }
+
+  // Foto, en el instante del clic, de lo que la exportacion necesita: los wellId que la tabla muestra AHORA (misma funcion que la dibuja: busqueda + aptitud + orden), los filtros,
+  // los permisos actuales y los datasets de la tabla. Nada de red. Las listas y los filtros son copias: cambiarlos despues no afecta a una exportacion ya iniciada.
+  // null si la tabla todavia no cargo (o no hay sesion).
+  function seleccionController_snapshotExportacion() {
+    var contexto = obtenerContextoSeguro();
+    var tabla = estado.ultimoRenderTabla;
+    if (!contexto || !tabla) { return null; }
+    var filas = construirFilasOrdenadasYFiltradas(tabla.indicePozos, tabla.indiceBusqueda, tabla.neSet, tabla.permisos);
+    var p = contexto.permisos || {};
+    return {
+      wellIds: filas.map(function (f) { return f.wellId; }),
+      totalSeleccion: estado.seleccion.length,
+      permisos: { ubicacion: p.ubicacion, perfil: p.perfil, ne: p.ne, reemplazo: p.reemplazo },
+      indicePozos: tabla.indicePozos,
+      neSet: estado.neCargado ? tabla.neSet : null,
+      resumenReemplazo: copiarObjetoPlano(reemplazoEstadosController_resumen()),
+      filtros: { texto: tablaBuscarEl.value, orden: tablaOrdenEl.value, aptitudActivos: copiarObjetoPlano(estado.reemplazoActivos) || {} },
+      periodoPadron: typeof mapaDataset_periodoDelBase === 'function' ? mapaDataset_periodoDelBase() : null
+    };
   }
 
   function campoTexto(valor) {
@@ -666,6 +758,7 @@
     tablaContenidoEl.hidden = false;
     tablaContenidoEl.innerHTML = '';
     var filas = construirFilasOrdenadasYFiltradas(indicePozos, indiceBusqueda, neSet, permisos);
+    notificarFilasVisibles(filas.length);
     if (filas.length === 0) {
       var vacio = document.createElement('p');
       vacio.className = 'cercamio-estado';
@@ -967,4 +1060,7 @@
   window.seleccionController_abrirTabla = seleccionController_abrirTabla;
   window.seleccionController_abrirItf = seleccionController_abrirItf;
   window.seleccionController_asegurarDisponibilidadItf = seleccionController_asegurarDisponibilidadItf;
+  window.seleccionController_disponibilidadItfDe = seleccionController_disponibilidadItfDe;
+  window.seleccionController_snapshotExportacion = seleccionController_snapshotExportacion;
+  window.seleccionController_registrarListenerFilasVisibles = seleccionController_registrarListenerFilasVisibles;
 })();

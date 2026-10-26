@@ -1276,6 +1276,8 @@
     observacionesPozoController_reset();
     // ni la linea de tiempo abierta (se cancela lo que este en vuelo)
     lineaTiempoPozoController_reset();
+    // ni una exportacion de Mi seleccion en preparacion (no se descarga nada despues de cerrar sesion)
+    exportacionSeleccionController_reset();
     toggleAccesosUbicacion();
     if (gsiLoaded) {
       // Sin esto, auto_select podria volver a loguear silenciosamente a

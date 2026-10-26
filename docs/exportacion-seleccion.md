@@ -1,6 +1,6 @@
 # Exportación de «Mi selección» a XLSX (E7)
 
-Estado: **E7-2 — lógica pura lista, SIN cablear** (sin botón, sin pantalla, sin descarga, sin permiso nuevo, sin backend). La interfaz y la descarga son E7-3.
+Estado: **E7-3 — cableado en «Mi selección»** (botón «Exportar Excel (N)» + descarga real). Frontend-only: sin backend nuevo, sin permiso nuevo, sin pantalla nueva y sin auditoría nueva. E7-2 dejó la lógica pura (commit `958606a`); E7-4 es el smoke real (incluido iPhone / Safari).
 
 Alcance de E7 v1: exportar a **XLSX** los pozos que el usuario ve en la tabla de «Mi selección», solo con datos operativos y técnicos. Decisiones cerradas: (1) las coordenadas salen solo con `ubicacion === true`; (2) XLSX sí, CSV fuera de v1; (3) `titular` y `nc16` fuera de v1; (4) la hoja «Información» describe los filtros aplicados.
 
@@ -81,6 +81,46 @@ Verificado con Excel de escritorio (decimal `,`): los textos `=1+1`, `+1+1`, `@S
 
 Modelo + XLSX en ~0,5 s, ~0,8 MB. Sin límites artificiales todavía.
 
-## Pendiente para E7-3
+## Cableado en «Mi selección» (E7-3)
 
-Botón y pantalla, carga de JSZip con `mapaShared_cargarJSZip()`, descarga con `descargarBlob`, reunir los datasets de la tabla (índice operativo, NE, resumen de reemplazo, ITF) para llamar a `exportacionSeleccion_construirLibro`, mensajes de error y de «sin pozos», y decidir si se audita la descarga.
+No hay pantalla, modal ni selector de formato: un botón en la pantalla existente de la tabla (`#btn-seleccion-exportar`, debajo de la búsqueda y el orden) y dos mensajes (`role="status"` y `role="alert"`). Controlador: `js/exportacionSeleccion.js`; `js/seleccion.js` solo entrega la foto, la disponibilidad ITF de pozos concretos y el contador.
+
+### Botón y contador
+
+- Texto **«Exportar Excel (N)»**, con N = filas que la tabla dibuja **ahora** (después de búsqueda + filtro de aptitud + orden). No es la cantidad de la selección. Se actualiza al instante al buscar / filtrar / ordenar o cambiar la selección y **no hace ningún pedido**.
+- N = 0 → deshabilitado. Durante la preparación → «Preparando Excel…», deshabilitado y `aria-busy="true"`; al terminar vuelve a «Exportar Excel (N)». Una sola exportación a la vez (el segundo clic se ignora).
+
+### Foto (snapshot)
+
+Al hacer clic se captura, sin red: los `wellId` visibles y ordenados (misma función que dibuja la tabla), búsqueda, filtro de aptitud, orden, permisos y datasets. Lo que el usuario cambie mientras se prepara (búsqueda, filtro, orden, selección) **no** entra en el archivo ya iniciado; la exportación siguiente usa el estado nuevo. La fecha se toma en el clic.
+
+### Flujo
+
+1. Foto. 2. Con `perfil === true`: disponibilidad de ITF **solo de los pozos de la foto**, reutilizando lo que la tabla ya sabe y pidiendo únicamente lo que falta, en lotes de ≤ 500 con 3 en vuelo; sin `perfil`, no se consulta nada ni existe la columna. 3. `mapaShared_cargarJSZip()` (carga diferida: nunca al entrar a «Mi selección»). 4. `exportacionSeleccion_construirLibro` + `xlsxLogic_generar`. 5. Blob con el MIME de XLSX y descarga con un enlace `download`; la URL se revoca a los 60 s (no al instante). Sin fetch por pozo.
+
+### Mensajes
+
+| Caso | Mensaje |
+|---|---|
+| Éxito | «Excel descargado.» (se borra solo) |
+| ITF parcial o caído (con `perfil`) | «El archivo se exportó, pero no se pudo determinar la disponibilidad de ITF para algunos pozos.» El archivo se genera igual; los pozos sin respuesta quedan con «Tiene ITF» vacío, nunca «No». |
+| JSZip, Blob o generación fallan | «No se pudo preparar el archivo Excel. Intentá nuevamente.» No se descarga nada y el botón se rehabilita. |
+| `UNAUTHORIZED` / `USER_DISABLED` | Logout global existente; no se genera archivo ni se muestra un error de Excel. |
+
+Sin códigos del backend, cantidades de lotes ni detalles técnicos. Un logout descarta cualquier exportación en preparación.
+
+### ITF y auditoría
+
+Cada lote de `getItfAvailability` usa el comportamiento actual del backend (una fila de Historial, sin Telegram): una selección muy grande puede producir varias lecturas auditadas de disponibilidad ITF (13 804 pozos → 28). **No** hay `registrarExportacion`: la auditoría específica de exportaciones será requisito antes de exportar datos personales o reportes masivos sensibles (E7 v1 no los incluye).
+
+### Safari / iPhone
+
+Blob + enlace `download`, sin File System Access API ni nada exclusivo de Chromium; la URL del objeto sigue viva 60 s para que Safari / iOS alcance a iniciar la descarga. Pendiente de smoke real en E7-4 si hay dispositivo.
+
+### Service worker
+
+`xlsxLogic.js`, `exportacionSeleccionLogic.js` y `exportacionSeleccion.js` están en el shell (mismo orden que `index.html`). No se cachea ningún XLSX ni URL de objeto; la API sigue sin cachearse.
+
+## Pendiente para E7-4
+
+Smoke real en producción (escritorio y, si hay dispositivo, iPhone / Safari), medición con datos reales y cierre documental.

@@ -2712,6 +2712,43 @@ body.con-bandeja {
   flex-direction: column;
 }
 
+/* Exportar a Excel desde Mi seleccion (E7-3): boton + mensaje de resultado; envuelve, nunca desborda */
+.seleccion-tabla-exportar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 18px;
+  border-bottom: 1.5px solid var(--color-border-soft);
+}
+.seleccion-exportar-btn {
+  min-height: 44px;
+  padding: 8px 18px;
+  font-size: 0.92rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.seleccion-exportar-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.seleccion-exportar-btn[aria-busy="true"] {
+  cursor: progress;
+}
+.seleccion-exportar-mensaje {
+  flex: 1 1 220px;
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--color-text-soft);
+  overflow-wrap: anywhere;
+}
+.seleccion-exportar-mensaje-aviso {
+  color: var(--color-warn);
+}
+.seleccion-exportar-mensaje-error {
+  color: var(--color-error);
+}
+
 /* Mobile: cards apiladas (una tabla horizontal incomoda en pantalla
    chica, pedido explicito del usuario). */
 .seleccion-card {
@@ -2845,6 +2882,7 @@ body.con-bandeja {
     font-size: 0.86rem;
   }
   .seleccion-tabla-barra,
+  .seleccion-tabla-exportar,
   .seleccion-itf-lotes,
   .seleccion-itf-lista {
     padding-left: 34px;
