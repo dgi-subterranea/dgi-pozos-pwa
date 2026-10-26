@@ -141,6 +141,12 @@ Estado: **E5 CERRADA / PRODUCCIÓN (24/10/2026).** Backend en Apps Script **v45*
 
 **Estado:** **E6 CERRADA / PRODUCCIÓN (26/10/2026).** Frontend en GitHub Pages; backend en Apps Script **v45**, sin cambios y sin `gas:*`. Etapas: E6-1 modelo de eventos (`f48ac7c`), E6-2 cargador con paginación y fallos parciales (`1063474`), E6-3 tarjeta del hub y pantalla con filtros (`8d481e6`), E6-4 rollout frontend (realizado), E6-4b ajuste responsive del hub (`6201f82`). **E6-5 (endpoint agregado) NO necesaria:** las cuatro fuentes cargan en paralelo y la latencia real en 14-0001 (5 aperturas: mín 2183 ms, mediana 2933 ms, máx 4387 ms) es razonable. Smoke real en 14-0001, 14-0006 (la anulación nunca muestra el texto original, ni a un moderador), 14-0002 (vacío verdadero) y 14-0123 (fuera del padrón, sin error). Detalle, contratos y decisiones en `docs/linea-tiempo-pozo.md`.
 
+## Exportación de «Mi selección» a Excel (E7) — CERRADA / PRODUCCIÓN (26/10/2026)
+
+**Objetivo:** descargar a XLSX los pozos que el usuario ve en la tabla de «Mi selección» (después de búsqueda, filtro de aptitud y orden), solo con datos operativos y técnicos.
+
+**Estado:** **E7 CERRADA / PRODUCCIÓN (26/10/2026).** Frontend en GitHub Pages; backend en Apps Script **v45**, sin cambios y sin `gas:*`. Etapas: E7-1 auditoría y diseño (XLSX elegido sobre CSV); E7-2 lógica pura de exportación y escritor XLSX, con ITF por lotes de 500 (`958606a`); E7-3 botón «Exportar Excel (N)», snapshot al clic y descarga (`010fa6d`); E7-4 rollout + smoke real. Sin datos personales (titular y NC16 fuera de v1), sin permiso nuevo (columnas por permiso `=== true`: `ubicacion`, `perfil`, `ne`, `reemplazo`), sin pantalla nueva y sin `registrarExportacion`. ITF en lotes de 500 con concurrencia 3; un lote caído deja la celda «Tiene ITF» vacía, nunca «No». Validado con openpyxl y con Excel real (es-AR), y responsive en 375 px y escritorio. **Safari / iPhone: no probado** (sin dispositivo). Deuda no bloqueante: comportamiento previo de `perfil` truthy en la tabla; helper legacy `seleccionController_asegurarDisponibilidadItf()` (solo tests); auditoría específica antes de exportar datos personales; reportes batch de Reemplazo / Observaciones requerirán backend. Detalle en `docs/exportacion-seleccion.md`.
+
 ## Fase futura (SOLO documentada; sin código) — QR + NFC por pozo
 
 **Idea:** cada perforación puede tener un sticker o cartel físico con **QR** y, opcionalmente, **NFC**. QR y NFC apuntan a **la misma URL estable**; al escanear o tocar se abre una ficha del pozo **preparada para ese acceso**.
