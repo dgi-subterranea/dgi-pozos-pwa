@@ -255,8 +255,92 @@ function seleccionLogic_debeConservarVista(wellIdsAnteriores, wellIdsActuales) {
   return wellIdsActuales.every(function (id) { return previos.has(id); });
 }
 
+// Etiqueta humana del tipo de pozo (campo `surgencia` del dataset): la usan la tabla de Mi seleccion y la exportacion.
+var SELECCION_ETIQUETAS_TIPO_POZO = { Profundo: 'Profundo', SemiSurgente: 'Semisurgente', Natural: 'Surgente' };
+
+// ---- Tabla "Mi seleccion": filtro y orden (UNA sola fuente para la tabla y para la exportacion) ----
+// Usa reemplazoResumenLogic_filtrar (js/reemplazoResumenLogic.js): global en el navegador, que carga antes que este archivo.
+// filas: objetos con al menos {wellId, titular, departamento, cuenca, profundidadNum}, en el orden de la seleccion.
+// opciones: {texto, orden, resumen, aptitudActivos}
+//   texto -> busqueda libre (wellId / titular / departamento / cuenca); vacio = sin busqueda
+//   orden -> 'departamento' | 'cuenca' | 'profundidad' | otro/vacio = por wellId
+//   resumen + aptitudActivos -> filtro de aptitud para reemplazo (AND con la busqueda; OR dentro de los chips)
+// No muta la lista recibida: devuelve una copia filtrada y ordenada.
+function seleccionLogic_filtrarYOrdenarFilas(filas, opciones) {
+  var o = opciones || {};
+  var texto = String(o.texto === undefined || o.texto === null ? '' : o.texto).trim().toLowerCase();
+  var resultado = reemplazoResumenLogic_filtrar((filas || []).slice(), o.resumen || null, o.aptitudActivos || {});
+  if (resultado === filas) {
+    resultado = resultado.slice();
+  }
+
+  if (texto) {
+    resultado = resultado.filter(function (f) {
+      return f.wellId.toLowerCase().indexOf(texto) !== -1 ||
+        f.titular.toLowerCase().indexOf(texto) !== -1 ||
+        f.departamento.toLowerCase().indexOf(texto) !== -1 ||
+        f.cuenca.toLowerCase().indexOf(texto) !== -1;
+    });
+  }
+
+  resultado.sort(function (a, b) {
+    if (o.orden === 'departamento') { return a.departamento.localeCompare(b.departamento) || a.wellId.localeCompare(b.wellId); }
+    if (o.orden === 'cuenca') { return a.cuenca.localeCompare(b.cuenca) || a.wellId.localeCompare(b.wellId); }
+    if (o.orden === 'profundidad') { return b.profundidadNum - a.profundidadNum || a.wellId.localeCompare(b.wellId); }
+    return a.wellId.localeCompare(b.wellId);
+  });
+
+  return resultado;
+}
+
+// ---- Disponibilidad de ITF por lotes ----
+// El backend rechaza mas de 500 wellId por llamada (SELECCION_LOTE_MAX_WELLIDS en Api.js): una seleccion mayor se parte en lotes de a lo sumo 500.
+var SELECCION_ITF_LOTE_MAX = 500;
+
+function seleccionLogic_dividirEnLotes(wellIds, tamano) {
+  var max = typeof tamano === 'number' && tamano >= 1 ? Math.floor(tamano) : SELECCION_ITF_LOTE_MAX;
+  var lista = wellIds || [];
+  var lotes = [];
+  for (var i = 0; i < lista.length; i += max) {
+    lotes.push(lista.slice(i, i + max));
+  }
+  return lotes;
+}
+
+// Une las respuestas de los lotes. lotes: [wellId[]]; respuestas: [{status, data}] (misma posicion que el lote; cualquier cosa que no sea status 'ok' con un objeto = el lote fallo).
+// Cada pozo termina en UNO de tres estados, nunca dos:
+//   disponibilidad[wellId] === true / false  -> el backend respondio ese pozo (Si / No)
+//   desconocidos incluye wellId              -> no se sabe (el lote fallo o la respuesta no trae un booleano para ese pozo): NUNCA se lo trata como "No"
+// completo = no quedo ningun desconocido.
+function seleccionLogic_combinarDisponibilidadItf(lotes, respuestas) {
+  var disponibilidad = {};
+  var desconocidos = [];
+  var vistos = {};
+  (lotes || []).forEach(function (lote, i) {
+    var r = respuestas ? respuestas[i] : null;
+    var datos = r && r.status === 'ok' && r.data && typeof r.data === 'object' && !Array.isArray(r.data) ? r.data : null;
+    lote.forEach(function (wellId) {
+      if (vistos[wellId] === true) {
+        return;
+      }
+      vistos[wellId] = true;
+      if (datos && typeof datos[wellId] === 'boolean') {
+        disponibilidad[wellId] = datos[wellId];
+      } else {
+        desconocidos.push(wellId);
+      }
+    });
+  });
+  return { disponibilidad: disponibilidad, desconocidos: desconocidos, completo: desconocidos.length === 0 };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
+    SELECCION_ITF_LOTE_MAX,
+    SELECCION_ETIQUETAS_TIPO_POZO,
+    seleccionLogic_filtrarYOrdenarFilas,
+    seleccionLogic_dividirEnLotes,
+    seleccionLogic_combinarDisponibilidadItf,
     SELECCION_POLIGONO_TOLERANCIA_DEFAULT,
     seleccionLogic_resolverContexto,
     seleccionLogic_claveContexto,
