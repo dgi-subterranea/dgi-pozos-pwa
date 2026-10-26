@@ -2360,12 +2360,13 @@ table.ne-table tr:last-child td {
   .hub-sub {
     margin-bottom: 22px;
   }
+  /* Las tarjetas se reparten en varias columnas y pasan a una segunda fila cuando no entran (antes: una sola fila con grid-auto-flow: column, que desbordaba con 6 o mas modulos).
+     Con pocas tarjetas siguen en una fila: auto-fit descarta las columnas vacias. */
   .hub-grid,
   .hub-grid.n1,
   .hub-grid.n3 {
-    grid-template-columns: none;
-    grid-auto-flow: column;
-    grid-auto-columns: 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(134px, 1fr));
+    grid-auto-flow: row;
   }
   .hub-grid.n1 .hub-card,
   .hub-grid.n3 .hub-card:last-child {
@@ -2373,6 +2374,15 @@ table.ne-table tr:last-child td {
   }
   .hub-card {
     padding: 18px;
+  }
+  /* Con 134 px por columna (4 columnas en el ancho del hub) "Observaciones", la palabra mas larga (~107 px a 0.82rem en negrita), entra sin pisar el borde. Solo el hub de modulos: las
+     tarjetas del selector de mapas (otra pantalla) conservan su tamano. Si una tipografia la hace mas ancha, se parte en vez de desbordar. */
+  #hub-area .hub-card {
+    padding: 18px 10px;
+  }
+  #hub-area .hub-card-ct {
+    font-size: 0.82rem;
+    overflow-wrap: anywhere;
   }
 
   /* Las 4 pantallas de modulo: mismo tratamiento de "ventana" mas ancha

@@ -7,7 +7,7 @@ const L = require('./lineaTiempoPozoLogic');
 const raiz = path.join(__dirname, '..');
 const leer = (...p) => fs.readFileSync(path.join(...p), 'utf8');
 const html = leer(raiz, 'index.html');
-const css = leer(raiz, 'css', 'styles.css');
+const css = leer(raiz, 'css', 'styles.css').replace(/\r\n/g, '\n');                  // el fin de linea del archivo en disco depende de la configuracion de Git
 const app = leer(__dirname, 'app.js').replace(/\r\n/g, '\n');
 const api = leer(__dirname, 'api.js');
 const { SHELL_FILES } = require('../sw');
