@@ -1,6 +1,6 @@
 # Línea de tiempo del pozo (E6)
 
-Estado: **E6-1 (modelo puro, `f48ac7c`) y E6-2 (cargador, `1063474`) commiteadas. E6-3 (pantalla) implementada en el repo, sin commit.** Sin pantalla, sin tarjeta, sin CSS, sin service worker, sin cambios de backend ni de `api.js`. Las etapas siguientes (E6-2 carga por fuente, E6-3 pantalla, E6-4 rollout) no empezaron.
+Estado: **E6 CERRADA / PRODUCCIÓN (26/10/2026).** Frontend en GitHub Pages; backend en Apps Script **v45** sin cambios. Etapas: E6-1 modelo de eventos (`f48ac7c`), E6-2 cargador (`1063474`), E6-3 pantalla (`8d481e6`), E6-4 rollout frontend (realizado) y E6-4b ajuste responsive del hub (`6201f82`). **E6-5 (endpoint agregado) NO es necesaria.**
 
 ## Propósito
 Una vista cronológica única, de lectura, que junta lo que hoy está repartido en cuatro pantallas: ubicación, evaluaciones de reemplazo y observaciones (las fotos quedan afuera en v1, ver abajo). **No agrega datos, hojas, permisos ni endpoints**: se arma en el cliente con las lecturas que ya existen, cada una con su permiso.
@@ -163,3 +163,19 @@ Solo frontend, sin backend, sin escrituras, sin permisos nuevos, sin Fotos y sin
 **Service worker.** Los cuatro scripts se precachean como el resto del shell; la estrategia no cambió y la API sigue sin cachearse.
 
 **Tests.** `js/lineaTiempoPozoVistaLogic.test.js` (presentación pura), `js/lineaTiempoPozoController.test.js` (controlador real con DOM falso que lanza ante `innerHTML` o `data-*`) y `js/lineaTiempoPozoWiring.test.js` (index.html, tarjeta, app.js, service worker y CSS). Verificación visual con datos simulados a 375 px y 1280 px, sin scroll horizontal.
+
+## Rollout a producción (E6-4 y E6-4b) — 25 y 26/10/2026
+Solo frontend: `git push origin main` publicó E6-1, E6-2 y E6-3 juntos (GitHub Pages `success`; los cuatro scripts nuevos responden 200 y el `sw.js` publicado los precachea). **Backend en Apps Script v45, sin `gas:push`, versión ni deploy.**
+
+**Smoke en producción (solo lectura, sesión real).**
+- **14-0001:** la tarjeta aparece sin afectar a las demás; abrirla pide las 4 fuentes en paralelo y muestra 7 eventos de Ubicación, el más reciente primero, con badges, notas y fecha local. Los filtros no hacen ningún pedido. Volver regresa al hub del mismo pozo y reabrir carga de nuevo.
+- **14-0006:** aparecen la alta y la anulación de la observación de smoke de E5. La anulación muestra solo su motivo y la alta lleva «Estado actual: anulada». La cuenta de prueba es moderadora (la pantalla de Observaciones sí muestra el texto original) y la línea de tiempo **no** lo contiene.
+- **14-0002:** vacío verdadero («Este pozo todavía no tiene eventos en la línea de tiempo.»).
+- **14-0123** (fuera del padrón): abre sin error ni aviso; la fuente de Ubicación queda `VACIA` y la carga `completa`.
+- **Regresión:** Perfil, Datos, Ubicación, Reemplazo, Fotos, Observaciones, y los mapas Provincia y NE abren sin errores y vuelven al hub.
+
+**Latencia real** (5 aperturas de 14-0001 con el diagnóstico del cargador, sin tocar el código; 4 pedidos y 1 página de observaciones cada una): total **mín 2183 ms · mediana 2933 ms · máx 4387 ms**. Medianas por fuente: correcciones 2575 ms, decisiones 2103 ms, reemplazo 2412 ms, observaciones 2817 ms. El total sigue a la fuente más lenta (Ubicación/correcciones), no a la suma.
+
+**Decisión: E6-5 NO es necesaria.** Las cuatro fuentes ya cargan en paralelo y la experiencia observada es razonable (del orden de abrir un módulo suelto): no hay evidencia que justifique un endpoint agregado. Habría que reabrir la decisión solo si la latencia empeora de forma sostenida con más datos.
+
+**E6-4b — ajuste responsive del hub (`6201f82`).** El smoke detectó que el hub, a partir de 640 px, ponía las tarjetas en una sola fila (`grid-auto-flow: column`, pensada para pocas): con 6 módulos (desde E5) ya desbordaba por dentro y con 7 aparecía scroll horizontal y «Línea de tiempo» quedaba cortada. Ahora la grilla es `repeat(auto-fit, minmax(134px, 1fr))` por filas (solo en el `@media (min-width: 640px)` existente), con el padding lateral y el título del hub de módulos algo más chicos para que «Observaciones», la palabra más larga, entre sin pisar el borde (si una tipografía la hace más ancha, se parte). Resultado: 7 tarjetas en 4 + 3 a 962 y 1280 px (3 columnas en 640 px), sin scroll horizontal, centrado, y 1 a 4 tarjetas siguen en una fila. El selector de mapas no cambió. En celular (375 px) todo igual: 2 columnas, sin scroll horizontal. Test: `js/hubResponsive.test.js`.

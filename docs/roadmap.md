@@ -135,6 +135,12 @@ Estado: idea documentada, sin diseño técnico ni implementación.
 
 Estado: **E5 CERRADA / PRODUCCIÓN (24/10/2026).** Backend en Apps Script **v45** (deployment productivo existente, URL `/exec` sin cambios) y frontend en GitHub Pages = `6720cf3`. Etapas: E5-1 lectura / modelo (`def2839`), E5-2 alta backend (`1939f5f`), E5-3 anulación backend (`6e81803`), E5-4 lectura frontend (`c806e2f`), E5-5 alta frontend (`f0e5113`), E5-6b `puedeAnular` (`40e7669`), E5-6 anulación frontend (`6720cf3`) y E5-7 rollout. Smoke real en el pozo 14-0006 (lectura vacía, alta, `puedeAnular`, anulación, persistencia tras recargar; append-only) y regresión de solo lectura de los módulos existentes sin hallazgos. Rollout de permisos inicialmente limitado a una cuenta controlada. Detalle, preparación y deuda no bloqueante en `docs/observaciones-pozo.md`.
 
+## Línea de tiempo del pozo (E6) — CERRADA / PRODUCCIÓN (26/10/2026)
+
+**Objetivo:** una vista cronológica única, de solo lectura, que junta lo que estaba repartido en varias pantallas: **ubicación** (correcciones y decisiones sobre fuentes), **evaluaciones de reemplazo** y **observaciones**. Sin datos, hojas, permisos ni endpoints nuevos: se arma en el cliente con las lecturas existentes, cada una con su permiso. **Fotos queda fuera de v1** (`getFotosPozo` no expone fecha de alta ni autor).
+
+**Estado:** **E6 CERRADA / PRODUCCIÓN (26/10/2026).** Frontend en GitHub Pages; backend en Apps Script **v45**, sin cambios y sin `gas:*`. Etapas: E6-1 modelo de eventos (`f48ac7c`), E6-2 cargador con paginación y fallos parciales (`1063474`), E6-3 tarjeta del hub y pantalla con filtros (`8d481e6`), E6-4 rollout frontend (realizado), E6-4b ajuste responsive del hub (`6201f82`). **E6-5 (endpoint agregado) NO necesaria:** las cuatro fuentes cargan en paralelo y la latencia real en 14-0001 (5 aperturas: mín 2183 ms, mediana 2933 ms, máx 4387 ms) es razonable. Smoke real en 14-0001, 14-0006 (la anulación nunca muestra el texto original, ni a un moderador), 14-0002 (vacío verdadero) y 14-0123 (fuera del padrón, sin error). Detalle, contratos y decisiones en `docs/linea-tiempo-pozo.md`.
+
 ## Fase futura (SOLO documentada; sin código) — QR + NFC por pozo
 
 **Idea:** cada perforación puede tener un sticker o cartel físico con **QR** y, opcionalmente, **NFC**. QR y NFC apuntan a **la misma URL estable**; al escanear o tocar se abre una ficha del pozo **preparada para ese acceso**.
