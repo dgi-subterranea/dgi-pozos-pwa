@@ -35,6 +35,20 @@ function fotosPozosModeracionOps_filtrarVisibles(fotos, derivacion) {
   return (fotos || []).filter(function (f) { return fotosPozosModeracion_visible(f, derivacion); });
 }
 
+// Galeria normal (E8-5): las mismas fotos visibles que filtrarVisibles, cada una como COPIA con `tieneSolicitudRetiro` (true solo si el historial derivable de la foto tiene una solicitud ABIERTA). Es
+// un booleano derivado de los eventos reales, calculado en la misma pasada y con la misma derivacion (una sola lectura de la hoja): nada de datos de la solicitud sale de aca. Una solicitud rechazada,
+// aprobada o inexistente da false (la aprobada ademas retira la foto: no llega a la galeria).
+function fotosPozosModeracionOps_visiblesConSolicitud(fotos, derivacion) {
+  var salida = [];
+  (fotos || []).forEach(function (f) {
+    var dto = fotosPozosModeracion_estadoFoto(f, derivacion);
+    if (dto.visible === true) {
+      salida.push(Object.assign({}, f, { tieneSolicitudRetiro: dto.solicitudAbierta !== null && typeof dto.solicitudAbierta === 'object' }));
+    }
+  });
+  return salida;
+}
+
 // ¿La foto sigue permitida segun los EVENTOS solos? (no necesita la fila de FotosPozos): false si fue retirada por eventos o si su historial no se puede derivar. Es la comprobacion barata que se hace
 // SIEMPRE antes de servir una imagen, aun con el cache de ids / miniatura lleno: un cache viejo nunca es un bypass de un retiro.
 function fotosPozosModeracionOps_permitidaPorEventos(fotoId, derivacion) {
@@ -281,6 +295,65 @@ function fotosPozosModeracionOps_cola(limit, cursor) {
   };
 }
 
+// Listado institucional de fotos RETIRADAS POR EVENTOS que se pueden reponer (E8-5), la mas recientemente retirada primero (secuencia del evento que la retiro: unica y determinista, cursor estable).
+// Entran SOLO las que cumplen todo: historial derivable (integridad OK), estado derivado RETIRADA con origen EVENTO (puedeReponerse), baseline ACTIVA y vinculo CONFIRMADO (reponerla la hace volver
+// a la galeria) y entidad coincidente. NO entran: OCULTA legacy (ningun evento la revive), no derivables, ni fotos sin fila en FotosPozos. UNA lectura de eventos y UNA de FotosPozos (si hay
+// candidatas), sin imagenes, sin ids de Drive, sin email / clientRequestId / secuencia.
+// {ok:true, total, items, hayMas, cursor} | {ok:false, ...}. items: {fotoId, entidadTipo, entidadId, origenRetiro, motivoCodigo, motivoTexto, nombre, timestampUtc, viaSolicitud, requiereRevisionBorrado,
+// foto:{tipoFoto, fuente, fechaFotoValor, fechaFotoPrecision}}. nombre = quien retiro (RETIRADA) o quien aprobo (RETIRO_RESUELTO + APROBADO); motivo y detalle son los de la retirada / de la solicitud aprobada.
+function fotosPozosModeracionOps_retiradas(limit, cursor) {
+  var p = fotosPozosModeracionOps_parametrosCola(limit, cursor);
+  if (!p.ok) {
+    return p;
+  }
+  var derivacion = fotosPozosModeracionOps_cargarDerivacion();
+  var candidatas = Object.keys(derivacion.porFoto).filter(function (id) {
+    var ev = derivacion.porFoto[id];
+    return ev.integridad === FOTOS_MOD_INTEGRIDAD.OK && ev.estado === FOTOS_MOD_ESTADOS_FOTO.RETIRADA && ev.origen === FOTOS_MOD_ORIGEN_RETIRO.EVENTO && !!ev.retiro;
+  });
+  var fotos = candidatas.length === 0 ? {} : fotosPozosModeracionOps_indicePorFotoId(fotosPozosRepository_leerTodasLasFotos());
+  var elegibles = [];
+  candidatas.forEach(function (id) {
+    var base = fotos[id];
+    if (base === undefined) {
+      return;
+    }
+    var dto = fotosPozosModeracion_estadoFoto(base, derivacion);
+    if (dto.integridad !== FOTOS_MOD_INTEGRIDAD.OK || dto.estado !== FOTOS_MOD_ESTADOS_FOTO.RETIRADA || dto.puedeReponerse !== true || fotosPozosModeracion_texto(base.estadoVinculo) !== 'CONFIRMADO') {
+      return;
+    }
+    elegibles.push({ id: id, base: base, dto: dto, retiro: derivacion.porFoto[id].retiro });
+  });
+  elegibles.sort(function (a, b) { return b.retiro.ev.secuencia - a.retiro.ev.secuencia; });
+  var restantes = elegibles.filter(function (it) { return p.cursor === null || it.retiro.ev.secuencia < p.cursor; });
+  var pagina = restantes.slice(0, p.limit);
+  var hayMas = restantes.length > pagina.length;
+  var items = pagina.map(function (it) {
+    var vista = fotosPozosModeracionOps_vistaFoto(it.base);
+    var origen = it.retiro.solicitud === null ? it.retiro.ev : it.retiro.solicitud;     // el motivo es el de la retirada, o el de la solicitud que se aprobo
+    return {
+      fotoId: vista.fotoId,
+      entidadTipo: vista.entidadTipo,
+      entidadId: vista.entidadId,
+      origenRetiro: it.dto.origenRetiro,
+      motivoCodigo: origen.motivoCodigo,
+      motivoTexto: origen.motivoTexto,
+      nombre: fotosPozosModeracion_nombreVisible(it.retiro.ev.nombre),
+      timestampUtc: it.retiro.ev.timestamp,
+      viaSolicitud: it.retiro.solicitud !== null,
+      requiereRevisionBorrado: it.dto.requiereRevisionBorrado === true,
+      foto: { tipoFoto: vista.tipoFoto, fuente: vista.fuente, fechaFotoValor: vista.fechaFotoValor, fechaFotoPrecision: vista.fechaFotoPrecision }
+    };
+  });
+  return {
+    ok: true,
+    total: elegibles.length,
+    items: items,
+    hayMas: hayMas,
+    cursor: hayMas ? pagina[pagina.length - 1].retiro.ev.secuencia : null
+  };
+}
+
 // Imagen (miniatura o completa) de una foto para el MODERADOR, activa o retirada. El endpoint normal (getFotoPozo) sigue respetando la visibilidad: este es el UNICO camino a una foto no visible y lo
 // autoriza Api.js con fotos + fotos_moderar. No usa ni llena el cache de la galeria. Sin metadata de storage en la respuesta.
 function fotosPozosModeracionOps_imagen(fotoId, variante) {
@@ -311,6 +384,7 @@ if (typeof module !== 'undefined' && module.exports) {
     FOTOS_MOD_OPS_LIMITE_MAX,
     fotosPozosModeracionOps_cargarDerivacion,
     fotosPozosModeracionOps_filtrarVisibles,
+    fotosPozosModeracionOps_visiblesConSolicitud,
     fotosPozosModeracionOps_permitidaPorEventos,
     fotosPozosModeracionOps_invalidarCache,
     fotosPozosModeracionOps_indicePorFotoId,
@@ -320,6 +394,7 @@ if (typeof module !== 'undefined' && module.exports) {
     fotosPozosModeracionOps_historial,
     fotosPozosModeracionOps_parametrosCola,
     fotosPozosModeracionOps_cola,
+    fotosPozosModeracionOps_retiradas,
     fotosPozosModeracionOps_imagen
   };
 }

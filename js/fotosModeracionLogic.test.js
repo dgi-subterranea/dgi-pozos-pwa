@@ -818,3 +818,202 @@ describe('siguienteFoco', () => {
     expect(L.fotosModeracionLogic_siguienteFoco(3, 1, false)).toBe(2);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+// E8-5: estado de la solicitud y resolucion (aprobar / rechazar)
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+describe('E8-5: ver el estado "Retiro sugerido" (puedeVerEstadoSolicitud)', () => {
+  test('lo ve quien puede sugerir o moderar; un lector, fotos_carga sin fotos o valores truthy no', () => {
+    expect(L.fotosModeracionLogic_puedeVerEstadoSolicitud({ fotos: true, fotos_carga: true })).toBe(true);
+    expect(L.fotosModeracionLogic_puedeVerEstadoSolicitud({ fotos: true, fotos_moderar: true })).toBe(true);
+    [{ fotos: true }, { fotos_carga: true }, { fotos_moderar: true }, { fotos: 'SI', fotos_carga: 'SI' }, { fotos: true, fotos_carga: 1 }, null, undefined].forEach((p) => {
+      expect(L.fotosModeracionLogic_puedeVerEstadoSolicitud(p)).toBe(false);
+    });
+  });
+  test('el texto para el moderador lo orienta hacia Fotos pendientes', () => {
+    expect(L.FOTOS_MODERACION_MENSAJE_ESTADO_SUGERIDO).toBe('Retiro sugerido');
+    expect(L.FOTOS_MODERACION_MENSAJE_SUGERIDO_MODERADOR).toBe('Retiro sugerido. Resolvelo desde Fotos pendientes.');
+  });
+});
+
+describe('E8-5: aprobar y rechazar con la maquina de acciones', () => {
+  const MOD = { fotos: true, fotos_moderar: true };
+  const SOL = '33333333-3333-4333-8333-333333333333';
+  const ITEM = { fotoId: FOTO, solicitudId: SOL, clave: SOL };
+  const respRes = (resolucion, extra) => ({ status: 'ok', data: Object.assign({ fotoId: FOTO, duplicada: false, solicitudId: SOL, resolucion: resolucion }, extra || {}) });
+
+  function armar(permisos, extra) {
+    const ctx = { sessionToken: 'tok', permisos: permisos };
+    const envios = [];
+    const pendientes = [];
+    const eventos = { exito: [], cambio: [], sesion: 0 };
+    const a = L.fotosModeracionLogic_crearAccion(Object.assign({
+      obtenerContexto: () => ctx,
+      enviar: (tipo, token, datos, id) => { envios.push({ tipo, token, datos: Object.assign({}, datos), id }); return new Promise((res) => { pendientes.push(res); }); },
+      onExito: (i) => eventos.exito.push(i),
+      onEstadoCambiado: (i) => eventos.cambio.push(i),
+      onSesionExpirada: () => { eventos.sesion += 1; }
+    }, extra || {}));
+    return { a, ctx, envios, pendientes, eventos };
+  }
+
+  test('solo fotos + fotos_moderar abren APROBAR / RECHAZAR; fotos_carga, solo fotos o truthy no', () => {
+    ['APROBAR', 'RECHAZAR'].forEach((tipo) => {
+      expect(armar(MOD).a.abrir(tipo, ITEM)).toBe(true);
+      [{ fotos: true }, { fotos: true, fotos_carga: true }, { fotos_moderar: true }, { fotos: 'SI', fotos_moderar: 'SI' }, {}].forEach((p) => {
+        expect(armar(p).a.abrir(tipo, ITEM)).toBe(false);
+      });
+      expect(L.fotosModeracionLogic_permitida(tipo, MOD)).toBe(true);
+      expect(L.fotosModeracionLogic_permitida(tipo, { fotos: true, fotos_carga: true })).toBe(false);
+    });
+  });
+
+  test('no se abre sin solicitud: la resolucion necesita solicitudId', () => {
+    const t = armar(MOD);
+    expect(t.a.abrir('APROBAR', { fotoId: FOTO })).toBe(false);
+    expect(t.a.abrir('RECHAZAR', { fotoId: FOTO, solicitudId: '' })).toBe(false);
+    expect(t.a.abrir('APROBAR', { fotoId: '', solicitudId: SOL })).toBe(false);
+  });
+
+  test('aprobar manda solicitudId + resolucion APROBADO (sin motivo) con id foto-res-<uuid>', async () => {
+    const t = armar(MOD);
+    t.a.abrir('APROBAR', ITEM);
+    expect(t.a.estado().puedeEnviar).toBe(true);
+    t.a.guardar();
+    expect(t.envios).toHaveLength(1);
+    expect(t.envios[0]).toMatchObject({ tipo: 'APROBAR', token: 'tok', datos: { fotoId: FOTO, solicitudId: SOL, resolucion: 'APROBADO' } });
+    expect(t.envios[0].datos).not.toHaveProperty('motivoCodigo');
+    expect(t.envios[0].datos).not.toHaveProperty('motivoTexto');
+    expect(t.envios[0].id).toMatch(/^foto-res-[0-9a-f-]{36}$/);
+    t.pendientes[0](respRes('APROBADO'));
+    await flush();
+    expect(t.eventos.exito).toHaveLength(1);
+    expect(t.eventos.exito[0]).toMatchObject({ tipo: 'APROBAR', fotoId: FOTO, duplicada: false });
+    expect(t.a.estado().abierto).toBe(false);
+  });
+
+  test('rechazar manda resolucion RECHAZADO con id foto-res-<uuid>', async () => {
+    const t = armar(MOD);
+    t.a.abrir('RECHAZAR', ITEM);
+    t.a.guardar();
+    expect(t.envios[0].datos).toEqual({ fotoId: FOTO, solicitudId: SOL, resolucion: 'RECHAZADO' });
+    expect(t.envios[0].id).toMatch(/^foto-res-[0-9a-f-]{36}$/);
+    t.pendientes[0](respRes('RECHAZADO'));
+    await flush();
+    expect(t.eventos.exito[0].tipo).toBe('RECHAZAR');
+  });
+
+  test('el id es estable en el reintento tras un error recuperable y nuevo al cancelar y reabrir o tras un exito', async () => {
+    const t = armar(MOD);
+    t.a.abrir('APROBAR', ITEM);
+    t.a.guardar();
+    t.pendientes[0]({ status: 'error', code: 'SERVICE_UNAVAILABLE' });
+    await flush();
+    t.a.guardar();
+    t.pendientes[1]({ status: 'error', code: 'SERVICE_UNAVAILABLE' });
+    await flush();
+    expect(t.envios[1].id).toBe(t.envios[0].id);
+    t.a.guardar();
+    expect(t.envios[2].id).toBe(t.envios[0].id);
+    t.a.cancelar();
+    t.a.abrir('APROBAR', ITEM);
+    t.a.guardar();
+    expect(t.envios[3].id).not.toBe(t.envios[0].id);
+  });
+
+  test('IDEMPOTENCY_CONFLICT quema el id: el siguiente envio usa otro (nunca se reenvia solo)', async () => {
+    const t = armar(MOD);
+    t.a.abrir('RECHAZAR', ITEM);
+    t.a.guardar();
+    t.pendientes[0]({ status: 'error', code: 'IDEMPOTENCY_CONFLICT' });
+    await flush();
+    expect(t.envios).toHaveLength(1);
+    t.a.guardar();
+    expect(t.envios[1].id).not.toBe(t.envios[0].id);
+  });
+
+  test('doble clic: un solo pedido mientras hay uno en vuelo', () => {
+    const t = armar(MOD);
+    t.a.abrir('APROBAR', ITEM);
+    t.a.guardar();
+    t.a.guardar();
+    t.a.guardar();
+    expect(t.envios).toHaveLength(1);
+    expect(t.a.estado().enviando).toBe(true);
+    expect(t.a.cancelar()).toBe(false);
+  });
+
+  test('una respuesta de OTRA solicitud, o con otra resolucion, no se da por buena (queda abierto con error recuperable)', async () => {
+    const t = armar(MOD);
+    t.a.abrir('APROBAR', ITEM);
+    t.a.guardar();
+    t.pendientes[0](respRes('RECHAZADO'));
+    await flush();
+    expect(t.eventos.exito).toHaveLength(0);
+    expect(t.a.estado().abierto).toBe(true);
+    expect(t.a.estado().error.code).toBe('SERVICE_UNAVAILABLE');
+    t.a.guardar();
+    t.pendientes[1](respRes('APROBADO', { solicitudId: '44444444-4444-4444-8444-444444444444' }));
+    await flush();
+    expect(t.eventos.exito).toHaveLength(0);
+    t.a.guardar();
+    t.pendientes[2](respRes('APROBADO'));
+    await flush();
+    expect(t.eventos.exito).toHaveLength(1);
+  });
+
+  test('un reintento idempotente (duplicada) tambien es exito', async () => {
+    const t = armar(MOD);
+    t.a.abrir('APROBAR', ITEM);
+    t.a.guardar();
+    t.pendientes[0](respRes('APROBADO', { duplicada: true }));
+    await flush();
+    expect(t.eventos.exito[0].duplicada).toBe(true);
+  });
+
+  test.each([['SOLICITUD_YA_RESUELTA'], ['SOLICITUD_NOT_FOUND'], ['INVALID_TRANSITION'], ['FOTO_NOT_FOUND'], ['FOTO_YA_RETIRADA']])('%s al resolver: se cierra y se avisa que el estado cambio', async (code) => {
+    const t = armar(MOD);
+    t.a.abrir('APROBAR', ITEM);
+    t.a.guardar();
+    t.pendientes[0]({ status: 'error', code: code });
+    await flush();
+    expect(t.eventos.cambio).toEqual([{ tipo: 'APROBAR', fotoId: FOTO, foto: ITEM, code: code }]);
+    expect(t.a.estado().abierto).toBe(false);
+  });
+
+  test.each([['UNAUTHORIZED'], ['USER_DISABLED']])('%s al resolver: cierre de sesion global, una vez', async (code) => {
+    const t = armar(MOD);
+    t.a.abrir('RECHAZAR', ITEM);
+    t.a.guardar();
+    t.pendientes[0]({ status: 'error', code: code });
+    await flush();
+    expect(t.eventos.sesion).toBe(1);
+  });
+
+  test('si el permiso se pierde con la confirmacion abierta, no se manda nada', async () => {
+    const t = armar(MOD);
+    t.a.abrir('APROBAR', ITEM);
+    t.ctx.permisos = { fotos: true };
+    await t.a.guardar();
+    expect(t.envios).toHaveLength(0);
+    expect(t.a.estado().error.code).toBe('PERMISSION_DENIED');
+  });
+
+  test('los prefijos de clientRequestId: cada accion con su espacio, todos validos para el backend', () => {
+    const re = /^[A-Za-z0-9_-]{8,64}$/;
+    const prefijo = (tipo) => L.fotosModeracionLogic_nuevoClientRequestId(tipo).replace(/-[0-9a-f-]{36}$/, '');
+    expect(['SUGERIR', 'RETIRAR', 'REPONER', 'APROBAR', 'RECHAZAR'].map(prefijo)).toEqual(['foto-sol', 'foto-ret', 'foto-rep', 'foto-res', 'foto-res']);
+    ['SUGERIR', 'RETIRAR', 'REPONER', 'APROBAR', 'RECHAZAR', 'RESOLVER'].forEach((t) => { expect(L.fotosModeracionLogic_nuevoClientRequestId(t)).toMatch(re); });
+    expect(() => L.fotosModeracionLogic_nuevoClientRequestId('BORRAR')).toThrow();
+    expect(() => L.fotosModeracionLogic_nuevoClientRequestId('toString')).toThrow();
+  });
+
+  test('leerRespuestaEscritura: sin `esperado` no exige solicitud; con `esperado` contrasta solicitud y resolucion', () => {
+    expect(L.fotosModeracionLogic_leerRespuestaEscritura(respRes('APROBADO'), FOTO).ok).toBe(true);
+    expect(L.fotosModeracionLogic_leerRespuestaEscritura(respRes('APROBADO'), FOTO, { solicitudId: SOL, resolucion: 'APROBADO' }).ok).toBe(true);
+    expect(L.fotosModeracionLogic_leerRespuestaEscritura(respRes('APROBADO'), FOTO, { solicitudId: SOL.toUpperCase(), resolucion: 'APROBADO' }).ok).toBe(true);
+    expect(L.fotosModeracionLogic_leerRespuestaEscritura(respRes('APROBADO'), FOTO, { solicitudId: SOL, resolucion: 'RECHAZADO' }).ok).toBe(false);
+    expect(L.fotosModeracionLogic_leerRespuestaEscritura(respRes('APROBADO'), FOTO, { solicitudId: 'otra', resolucion: 'APROBADO' }).ok).toBe(false);
+  });
+});

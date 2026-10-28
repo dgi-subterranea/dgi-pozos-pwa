@@ -111,6 +111,8 @@ function doPost(e) {
         response = handleGetHistorialFotoPozo(body.sessionToken, body.fotoId);
       } else if (body.action === 'getFotosPozosPendientesModeracion') {
         response = handleGetFotosPozosPendientesModeracion(body.sessionToken, body.limit, body.cursor);
+      } else if (body.action === 'getFotosPozosRetiradasModeracion') {
+        response = handleGetFotosPozosRetiradasModeracion(body.sessionToken, body.limit, body.cursor);
       } else if (body.action === 'getFotoPozoModeracion') {
         response = handleGetFotoPozoModeracion(body.sessionToken, body.fotoId, body.variante);
       } else if (body.action === 'proponerCorreccionUbicacion') {
@@ -1274,6 +1276,12 @@ function handleGetFotosPozosPendientesModeracion(sessionToken, limit, cursor) {
   return r.status === 'ok' ? { status: 'ok', data: { total: r.data.total, items: r.data.items, hayMas: r.data.hayMas, cursor: r.data.cursor } } : r;
 }
 
+// Fotos RETIRADAS por eventos que se pueden reponer (E8-5): solo fotos + fotos_moderar, paginado igual que la cola. Sin imagenes, ids de Drive, email, clientRequestId ni secuencia.
+function handleGetFotosPozosRetiradasModeracion(sessionToken, limit, cursor) {
+  var r = api_lecturaModeracionFotoPozo(sessionToken, 'getFotosPozosRetiradasModeracion', function () { return fotosPozosModeracionOps_retiradas(limit, cursor); });
+  return r.status === 'ok' ? { status: 'ok', data: { total: r.data.total, items: r.data.items, hayMas: r.data.hayMas, cursor: r.data.cursor } } : r;
+}
+
 // Imagen de una foto para el moderador, activa o RETIRADA (el endpoint normal getFotoPozo sigue respetando la visibilidad). Solo la imagen: ni ids de Drive ni metadata de storage.
 function handleGetFotoPozoModeracion(sessionToken, fotoId, variante) {
   var r = api_lecturaModeracionFotoPozo(sessionToken, 'getFotoPozoModeracion', function () { return fotosPozosModeracionOps_imagen(fotoId, variante); });
@@ -1958,6 +1966,7 @@ if (typeof module !== 'undefined' && module.exports) {
     handleReponerFotoPozo,
     handleGetHistorialFotoPozo,
     handleGetFotosPozosPendientesModeracion,
+    handleGetFotosPozosRetiradasModeracion,
     handleGetFotoPozoModeracion,
     handleGetFotosPozo,
     handleGetFotoPozo,

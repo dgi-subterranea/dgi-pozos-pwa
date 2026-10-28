@@ -386,7 +386,7 @@ function apiRetirarFotoPozo(sessionToken, fotoId, motivoCodigo, motivoTexto, cli
   return callBackend('retirarFotoPozo', { sessionToken: sessionToken, fotoId: fotoId, motivoCodigo: motivoCodigo, motivoTexto: motivoTexto, clientRequestId: clientRequestId });
 }
 
-// Se usa recien en E8-5 (cola de solicitudes): el wrapper ya fija el contrato. La foto sale de la solicitud, el cliente NO la manda.
+// Aprobar / rechazar una solicitud de retiro (E8-5). La foto sale de la solicitud, el cliente NO la manda.
 function apiResolverRetiroFotoPozo(sessionToken, solicitudId, resolucion, clientRequestId) {
   return callBackend('resolverRetiroFotoPozo', { sessionToken: sessionToken, solicitudId: solicitudId, resolucion: resolucion, clientRequestId: clientRequestId });
 }
@@ -399,9 +399,14 @@ function apiGetHistorialFotoPozo(sessionToken, fotoId) {
   return callBackend('getHistorialFotoPozo', { sessionToken: sessionToken, fotoId: fotoId });
 }
 
-// Se usa recien en E8-5 (cola global).
+// Cola global de solicitudes de retiro ABIERTAS (E8-5), mas reciente primero, paginada por cursor.
 function apiGetFotosPozosPendientesModeracion(sessionToken, limit, cursor) {
   return callBackend('getFotosPozosPendientesModeracion', { sessionToken: sessionToken, limit: limit, cursor: cursor });
+}
+
+// Fotos RETIRADAS por moderacion que se pueden reponer (E8-5), la retirada mas recientemente primero, paginada por cursor.
+function apiGetFotosPozosRetiradasModeracion(sessionToken, limit, cursor) {
+  return callBackend('getFotosPozosRetiradasModeracion', { sessionToken: sessionToken, limit: limit, cursor: cursor });
 }
 
 // Imagen de una foto ACTIVA o RETIRADA, solo para moderadores. El visor normal NUNCA la usa (getFotoPozo respeta la visibilidad). variante: 'thumb' | 'full'.

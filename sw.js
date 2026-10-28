@@ -72,6 +72,8 @@ var SHELL_FILES = [
   './js/observacionesPozo.js',
   './js/fotosModeracionLogic.js',
   './js/fotosModeracion.js',
+  './js/fotosModeracionColaLogic.js',
+  './js/fotosModeracionCola.js',
   './js/lineaTiempoPozoLogic.js',
   './js/lineaTiempoPozoLoader.js',
   './js/lineaTiempoPozoVistaLogic.js',

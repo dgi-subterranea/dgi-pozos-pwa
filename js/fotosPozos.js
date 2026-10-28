@@ -140,7 +140,7 @@
     estado.mensajeExito = '';
     cerrarVisor();
     entidadEl.textContent = entidad.etiqueta || fotosPozosLogic_claveEntidad(entidad);
-    // moderacion (E8-4): descarta modales de otra entidad y arma la bandeja de esta
+    // moderacion (E8-4): descarta los modales de otra entidad
     if (typeof fotosModeracionController_alAbrir === 'function') { fotosModeracionController_alAbrir(entidad); }
 
     var permisos = (ctx && ctx.permisos) || {};
@@ -219,6 +219,7 @@
         estado.fotos = r.data.fotos || [];
         mostrarSolo('contenido');
         renderTodo();
+        sincronizarVisor();
         if (typeof fotosPozosResumenController_cargar === 'function') { fotosPozosResumenController_cargar(true); }
         return true;
       })
@@ -229,8 +230,22 @@
       });
   }
 
-  function fotosPozosController_repintar() {
-    if (estado.puedeVer && estado.entidad) { renderGaleria(); }
+  // Tras volver a pedir la galeria con el visor abierto: el visor pasa a mostrar la foto ACTUALIZADA (p. ej. con `tieneSolicitudRetiro` recien confirmado por el backend) sin volver a pedir la imagen; si la
+  // foto ya no esta en la galeria (se retiro mientras se la miraba), se cierra el visor.
+  function sincronizarVisor() {
+    if (visorEl.hidden) { return; }
+    var actual = estado.visor.fotos[estado.visor.indice];
+    var visibles = fotosPozosLogic_filtrar(estado.fotos, estado.filtros);
+    var indice = -1;
+    visibles.forEach(function (f, i) { if (actual && f.fotoId === actual.fotoId) { indice = i; } });
+    if (indice < 0) {
+      cerrarVisor();
+      return;
+    }
+    estado.visor.fotos = visibles;
+    estado.visor.indice = indice;
+    if (typeof fotosModeracionController_alMostrarFoto === 'function') { fotosModeracionController_alMostrarFoto(visibles[indice]); }
+    visorContadorEl.textContent = 'Foto ' + (indice + 1) + ' de ' + visibles.length;
   }
 
   // Cierre de sesion: nada de la galeria ni de la cola sobrevive
@@ -329,7 +344,7 @@
     if (f.observacion) {
       item.appendChild(el('p', 'fotos-item-obs', f.observacion));
     }
-    var etiquetaMod = typeof fotosModeracionController_etiquetaItem === 'function' ? fotosModeracionController_etiquetaItem(f.fotoId) : '';
+    var etiquetaMod = typeof fotosModeracionController_etiquetaItem === 'function' ? fotosModeracionController_etiquetaItem(f) : '';
     if (etiquetaMod) {
       item.appendChild(el('p', 'fotos-mod-item-estado', etiquetaMod));
     }
@@ -864,5 +879,4 @@
   window.fotosPozosController_reset = fotosPozosController_reset;
   window.fotosPozosController_refrescar = fotosPozosController_refrescar;
   window.fotosPozosController_cerrarVisor = cerrarVisor;
-  window.fotosPozosController_repintar = fotosPozosController_repintar;
 })();

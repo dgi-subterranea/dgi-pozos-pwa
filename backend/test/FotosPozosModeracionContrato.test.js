@@ -237,13 +237,13 @@ describe('integracion dominio + repositorio sobre una hoja en memoria', () => {
 
 describe('E8-3: alcance del cableado (backend si; frontend, storage, Drive y legacy no)', () => {
   const api = sinComentarios(leer('backend', 'src', 'Api.js'));
-  const ACCIONES = ['solicitarRetiroFotoPozo', 'retirarFotoPozo', 'resolverRetiroFotoPozo', 'reponerFotoPozo', 'getHistorialFotoPozo', 'getFotosPozosPendientesModeracion', 'getFotoPozoModeracion'];
+  const ACCIONES = ['solicitarRetiroFotoPozo', 'retirarFotoPozo', 'resolverRetiroFotoPozo', 'reponerFotoPozo', 'getHistorialFotoPozo', 'getFotosPozosPendientesModeracion', 'getFotosPozosRetiradasModeracion', 'getFotoPozoModeracion'];
   const jsFrontend = () => fs.readdirSync(path.join(raiz, 'js')).filter((f) => /\.js$/.test(f));
 
-  test('Api.js enruta las 7 acciones y exporta sus handlers', () => {
+  test('Api.js enruta las 8 acciones y exporta sus handlers', () => {
     ACCIONES.forEach((a) => { expect(api).toContain("body.action === '" + a + "'"); });
     const Api = require('../src/Api');
-    ['handleSolicitarRetiroFotoPozo', 'handleRetirarFotoPozo', 'handleResolverRetiroFotoPozo', 'handleReponerFotoPozo', 'handleGetHistorialFotoPozo', 'handleGetFotosPozosPendientesModeracion', 'handleGetFotoPozoModeracion']
+    ['handleSolicitarRetiroFotoPozo', 'handleRetirarFotoPozo', 'handleResolverRetiroFotoPozo', 'handleReponerFotoPozo', 'handleGetHistorialFotoPozo', 'handleGetFotosPozosPendientesModeracion', 'handleGetFotosPozosRetiradasModeracion', 'handleGetFotoPozoModeracion']
       .forEach((h) => { expect(typeof Api[h]).toBe('function'); });
   });
 
@@ -266,8 +266,11 @@ describe('E8-3: alcance del cableado (backend si; frontend, storage, Drive y leg
   test('las acciones de moderacion las llaman solo api.js (wrappers) y los archivos de moderacion', () => {
     const conAccion = jsFrontend().filter((f) => !/\.test\.js$/.test(f) && ACCIONES.some((a) => sinComentarios(leer('js', f)).indexOf(a) >= 0));
     expect(conAccion).toEqual(['api.js']);
-    const conWrapper = jsFrontend().filter((f) => !/\.test\.js$/.test(f) && /api(SolicitarRetiro|RetirarFoto|ReponerFoto|GetHistorialFoto|GetFotoPozoModeracion|ResolverRetiro|GetFotosPozosPendientes)\w*\(/.test(sinComentarios(leer('js', f)))).sort();
-    expect(conWrapper).toEqual(['api.js', 'fotosModeracion.js']);
+    const usan = (re) => jsFrontend().filter((f) => !/\.test\.js$/.test(f) && re.test(sinComentarios(leer('js', f)))).sort();
+    // E8-5: la galeria (fotosModeracion.js) sugiere, retira y muestra el historial; la pantalla de fotos pendientes (fotosModeracionCola.js) lista, aprueba / rechaza y repone. Nadie mas.
+    expect(usan(/api(SolicitarRetiro|RetirarFoto|GetHistorialFoto)\w*\(/)).toEqual(['api.js', 'fotosModeracion.js']);
+    expect(usan(/api(ResolverRetiro|GetFotosPozosPendientes|GetFotosPozosRetiradas)\w*\(/)).toEqual(['api.js', 'fotosModeracionCola.js']);
+    expect(usan(/api(ReponerFoto|GetFotoPozoModeracion)\w*\(/)).toEqual(['api.js', 'fotosModeracion.js', 'fotosModeracionCola.js']);
   });
 
   test('FotosPozosService consume SOLO las lecturas de la moderacion: no escribe eventos ni conoce sus constantes', () => {

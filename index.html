@@ -115,6 +115,15 @@
       Evaluación / Reemplazo
     </button>
 
+    <!-- Fotos pendientes (E8-5): visible solo con fotos=SI y fotos_moderar=SI exactos (ver toggleAccesosUbicacion en app.js). La tarjeta NO pide nada: la cola se carga al abrir la pantalla. -->
+    <button type="button" id="btn-abrir-fotos-moderacion" class="button-secondary btn-mapa-acceso fotos-cola-acceso" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.5"/></svg>
+      <span class="fotos-cola-acceso-textos">
+        <span class="fotos-cola-acceso-titulo">Fotos pendientes</span>
+        <span class="fotos-cola-acceso-desc">Revisá solicitudes de retiro</span>
+      </span>
+    </button>
+
     <!-- Hub modular: cabecera compacta + tarjetas de acceso solo a los
          modulos que existen (Perfil/Datos/Ubicacion/Niveles Estaticos).
          Los 3 fetches (ITF, Ficha, NE) corren en paralelo y son
@@ -1216,13 +1225,8 @@
         </div>
       </form>
 
-      <!-- Moderacion (E8-4, solo fotos + fotos_moderar): aviso de la ultima accion y fotos retiradas EN ESTA SESION (el backend todavia no tiene un listado de retiradas: llega con la cola de E8-5). -->
+      <!-- Moderacion (E8-4): aviso de la ultima accion sobre una foto de esta galeria. Las fotos retiradas y las solicitudes pendientes viven en la pantalla "Fotos pendientes" (E8-5). -->
       <p id="fotos-mod-aviso" class="fotos-mod-aviso" role="status" tabindex="-1" hidden></p>
-      <section id="fotos-mod-retiradas" class="fotos-mod-retiradas" aria-labelledby="fotos-mod-retiradas-titulo" hidden>
-        <h2 id="fotos-mod-retiradas-titulo" class="fotos-mod-retiradas-titulo">Retiradas en esta sesión</h2>
-        <p class="fotos-nota">Solo vos ves estas fotos. Podés revisar su historial o reponerlas.</p>
-        <ul id="fotos-mod-retiradas-lista" class="fotos-mod-retiradas-lista"></ul>
-      </section>
 
       <section id="fotos-galeria" class="fotos-galeria" aria-label="Galería de fotos" hidden>
         <div id="fotos-filtros" class="fotos-filtros" hidden>
@@ -1450,6 +1454,82 @@
       <div id="fotos-mod-hist-botones" class="fotos-mod-botones">
         <button type="button" id="btn-fotos-mod-hist-reponer" class="button" hidden>Reponer foto</button>
         <button type="button" id="btn-fotos-mod-hist-cerrar2" class="button-secondary">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Fotos pendientes (E8-5, solo fotos + fotos_moderar). Controlador: js/fotosModeracionCola.js (logica en js/fotosModeracionColaLogic.js). Dos listas separadas: Pendientes (solicitudes de retiro
+       abiertas) y Retiradas (fotos retiradas que se pueden reponer). Se pide UNA pagina por vez ("Ver mas"). Las imagenes salen de getFotoPozoModeracion. Todo texto de datos se pone con textContent. -->
+  <div id="screen-fotos-moderacion" class="screen" hidden>
+    <div class="tv-topbar tv-topbar-fija">
+      <button type="button" id="btn-fotos-cola-volver" class="tv-volver">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+        Volver
+      </button>
+    </div>
+    <div class="tv-header">
+      <div>
+        <h1 class="mapa-titulo">Fotos pendientes</h1>
+        <p class="tv-header-label">Revisá solicitudes de retiro</p>
+      </div>
+    </div>
+
+    <div class="fotos-cola-pestanas" role="tablist" aria-label="Fotos a revisar">
+      <button type="button" id="fotos-cola-tab-pendientes" class="fotos-cola-pestana" role="tab" aria-selected="true" aria-controls="fotos-cola-panel" tabindex="0">Pendientes</button>
+      <button type="button" id="fotos-cola-tab-retiradas" class="fotos-cola-pestana" role="tab" aria-selected="false" aria-controls="fotos-cola-panel" tabindex="-1">Retiradas</button>
+    </div>
+    <p id="fotos-cola-aviso" class="fotos-mod-aviso" role="status" tabindex="-1" hidden></p>
+
+    <div id="fotos-cola-panel" class="fotos-cola-panel" role="tabpanel" aria-labelledby="fotos-cola-tab-pendientes" tabindex="-1">
+      <div class="fotos-cola-barra">
+        <p id="fotos-cola-total" class="fotos-nota" role="status" hidden></p>
+        <button type="button" id="btn-fotos-cola-actualizar" class="button-secondary fotos-cola-actualizar">Actualizar</button>
+      </div>
+      <div id="fotos-cola-cargando" class="mapa-loading reemplazo-cargando" role="status" hidden>
+        <div class="cargando" data-cargando>Cargando fotos...</div>
+      </div>
+      <div id="fotos-cola-error" class="reemplazo-bloque" hidden>
+        <p id="fotos-cola-error-texto" class="error-message" role="alert" tabindex="-1"></p>
+        <button type="button" id="btn-fotos-cola-reintentar" class="button-secondary">Reintentar</button>
+      </div>
+      <p id="fotos-cola-vacio" class="fotos-nota fotos-cola-vacio" hidden></p>
+      <ul id="fotos-cola-lista" class="fotos-cola-lista"></ul>
+      <p id="fotos-cola-mas-error" class="error-message" role="alert" hidden></p>
+      <button type="button" id="btn-fotos-cola-mas" class="button-secondary fotos-cola-mas" hidden>Ver más</button>
+    </div>
+  </div>
+
+  <!-- Confirmacion de aprobar / rechazar un retiro y de reponer una foto (E8-5). Un solo dialogo con titulo, texto y boton segun la accion. No pide motivo nuevo. -->
+  <div id="fotos-cola-conf-overlay" class="fotos-mod-overlay" role="dialog" aria-modal="true" aria-labelledby="fotos-cola-conf-titulo" aria-describedby="fotos-cola-conf-texto" hidden>
+    <div class="fotos-mod-panel">
+      <div class="fotos-mod-cabecera">
+        <h2 id="fotos-cola-conf-titulo" class="fotos-mod-titulo"></h2>
+        <button type="button" id="btn-fotos-cola-conf-cerrar" class="fotos-mod-cerrar" aria-label="Cerrar">&times;</button>
+      </div>
+      <p id="fotos-cola-conf-entidad" class="fotos-mod-intro"></p>
+      <p id="fotos-cola-conf-texto" class="fotos-mod-confirmar-pregunta"></p>
+      <p id="fotos-cola-conf-extra" class="fotos-mod-privacidad" hidden></p>
+      <p id="fotos-cola-conf-error" class="error-message fotos-mod-error" role="alert" tabindex="-1" hidden></p>
+      <div class="fotos-mod-botones">
+        <button type="button" id="btn-fotos-cola-conf-cancelar" class="button-secondary">Cancelar</button>
+        <button type="button" id="btn-fotos-cola-conf-confirmar" class="button"></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Foto de la cola a tamano completo (E8-5): se pide con getFotoPozoModeracion (full), aunque otra persona la haya retirado mientras se miraba la cola. Nunca usa el endpoint normal. -->
+  <div id="fotos-cola-vis-overlay" class="fotos-mod-overlay" role="dialog" aria-modal="true" aria-labelledby="fotos-cola-vis-titulo" hidden>
+    <div class="fotos-mod-panel">
+      <div class="fotos-mod-cabecera">
+        <h2 id="fotos-cola-vis-titulo" class="fotos-mod-titulo">Foto en revisión</h2>
+        <button type="button" id="btn-fotos-cola-vis-cerrar" class="fotos-mod-cerrar" aria-label="Cerrar">&times;</button>
+      </div>
+      <p id="fotos-cola-vis-pie" class="fotos-mod-intro"></p>
+      <div id="fotos-cola-vis-cargando" class="cargando cargando-sm" data-cargando hidden>Cargando foto…</div>
+      <img id="fotos-cola-vis-img" class="fotos-cola-vis-img" alt="Foto en revisión" hidden>
+      <p id="fotos-cola-vis-error" class="error-message fotos-mod-error" role="alert" tabindex="-1" hidden></p>
+      <div class="fotos-mod-botones">
+        <button type="button" id="btn-fotos-cola-vis-cerrar2" class="button-secondary">Cerrar</button>
       </div>
     </div>
   </div>
@@ -1824,6 +1904,8 @@
   <script src="js/observacionesPozo.js"></script>
   <script src="js/fotosModeracionLogic.js"></script>
   <script src="js/fotosModeracion.js"></script>
+  <script src="js/fotosModeracionColaLogic.js"></script>
+  <script src="js/fotosModeracionCola.js"></script>
   <script src="js/lineaTiempoPozoLogic.js"></script>
   <script src="js/lineaTiempoPozoLoader.js"></script>
   <script src="js/lineaTiempoPozoVistaLogic.js"></script>

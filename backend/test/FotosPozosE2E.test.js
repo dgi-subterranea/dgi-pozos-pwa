@@ -222,7 +222,7 @@ describe('flujo completo con el codigo real', () => {
     expect(lista.data.total).toBe(1);
     expect(lista.data.fotos[0]).toEqual({
       fotoId, fuente: 'CAMPO_APP', tipoFoto: 'CERCA', fechaFotoValor: '2026-10-05', fechaFotoPrecision: 'DIA', fechaFotoFuente: 'USUARIO',
-      observacion: 'Boca del pozo', ancho: 1600, alto: 1200, tieneGps: true
+      observacion: 'Boca del pozo', ancho: 1600, alto: 1200, tieneGps: true, tieneSolicitudRetiro: false
     });
     const thumb = post({ action: 'getFotoPozo', sessionToken: 't', fotoId, variante: 'thumb' });
     expect(thumb.data.imagenBase64).toBe(THUMB);

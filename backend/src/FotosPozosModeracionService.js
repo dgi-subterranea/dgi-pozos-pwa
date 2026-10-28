@@ -267,7 +267,9 @@ function fotosPozosModeracion_parsearEvento(e, orden) {
 // eventos: lista de eventos "crudos" del repositorio (ver fotosPozoEventosRepository_eventoDesdeFila). Devuelve
 //   {porFoto, solicitudes, solicitudFoto, globales}
 //   porFoto[fotoId] (solo fotos con algun evento o afectadas por una inconsistencia): {integridad, inconsistencias:[codigos], estado:'ACTIVA'|'RETIRADA'|null, origen:'EVENTO'|null,
-//     solicitudAbierta:{solicitudId, motivoCodigo}|null, motivoRetiro:codigo|null, entidad:{tipo,id}|null}. integridad 'NO_DERIVABLE' -> estado null.
+//     solicitudAbierta:{solicitudId, motivoCodigo}|null, motivoRetiro:codigo|null, retiro:{ev, solicitud}|null, entidad:{tipo,id}|null}. integridad 'NO_DERIVABLE' -> estado null.
+//     retiro (E8-5): el evento que dejo RETIRADA a la foto ahora (la RETIRADA directa, o el RETIRO_RESUELTO APROBADO + la solicitud que lo origino); null si esta ACTIVA. Es interno (los eventos
+//     parseados no llevan el email) y sirve al listado institucional de fotos retiradas.
 //   solicitudes: TODAS las solicitudes de fotos derivables, con su estado derivado (ver fotosPozosModeracion_vistaSolicitud para lo que sale hacia un moderador).
 //   solicitudFoto[solicitudId] = fotoId (de TODA RETIRO_SOLICITADO bien formada, aun de una foto no derivable): permite distinguir "no existe" de "no se puede derivar".
 //   globales: [{codigo, fila}] filas que no se pueden atribuir a ninguna foto (solo diagnostico: no afectan a ninguna foto).
@@ -372,14 +374,14 @@ function fotosPozosModeracion_derivar(eventos) {
   var porFoto = {};
   var solicitudes = [];
   Object.keys(afectadas).forEach(function (fotoId) {
-    porFoto[fotoId] = { integridad: FOTOS_MOD_INTEGRIDAD.NO_DERIVABLE, inconsistencias: afectadas[fotoId].slice(), estado: null, origen: null, solicitudAbierta: null, motivoRetiro: null, entidad: null };
+    porFoto[fotoId] = { integridad: FOTOS_MOD_INTEGRIDAD.NO_DERIVABLE, inconsistencias: afectadas[fotoId].slice(), estado: null, origen: null, solicitudAbierta: null, motivoRetiro: null, retiro: null, entidad: null };
   });
   Object.keys(porFotoEventos).forEach(function (fotoId) {
     if (afectadas[fotoId]) {
       return;
     }
     var lista = porFotoEventos[fotoId].slice().sort(function (a, b) { return a.secuencia - b.secuencia; });
-    var st = { estado: FOTOS_MOD_ESTADOS_FOTO.ACTIVA, origen: null, abierta: null, motivoRetiro: null };
+    var st = { estado: FOTOS_MOD_ESTADOS_FOTO.ACTIVA, origen: null, abierta: null, motivoRetiro: null, retiro: null };
     var sols = {};
     var solsOrden = [];
     var invalido = null;
@@ -404,6 +406,7 @@ function fotosPozosModeracion_derivar(eventos) {
           st.estado = FOTOS_MOD_ESTADOS_FOTO.RETIRADA;
           st.origen = FOTOS_MOD_ORIGEN_RETIRO.EVENTO;
           st.motivoRetiro = x.motivoCodigo;
+          st.retiro = { ev: x, solicitud: null };
         }
       } else if (x.evento === FOTOS_MOD_EVENTO.RETIRO_RESUELTO) {
         if (st.abierta === null || st.abierta !== x.solicitudId || !sols[x.solicitudId]) {
@@ -417,6 +420,7 @@ function fotosPozosModeracion_derivar(eventos) {
             st.estado = FOTOS_MOD_ESTADOS_FOTO.RETIRADA;
             st.origen = FOTOS_MOD_ORIGEN_RETIRO.EVENTO;
             st.motivoRetiro = s.ev.motivoCodigo;
+            st.retiro = { ev: x, solicitud: s.ev };
           }
         }
       } else if (x.evento === FOTOS_MOD_EVENTO.REPUESTA) {
@@ -426,16 +430,17 @@ function fotosPozosModeracion_derivar(eventos) {
           st.estado = FOTOS_MOD_ESTADOS_FOTO.ACTIVA;
           st.origen = null;
           st.motivoRetiro = null;
+          st.retiro = null;
         }
       }
     }
     if (invalido !== null) {
-      porFoto[fotoId] = { integridad: FOTOS_MOD_INTEGRIDAD.NO_DERIVABLE, inconsistencias: [invalido], estado: null, origen: null, solicitudAbierta: null, motivoRetiro: null, entidad: null };
+      porFoto[fotoId] = { integridad: FOTOS_MOD_INTEGRIDAD.NO_DERIVABLE, inconsistencias: [invalido], estado: null, origen: null, solicitudAbierta: null, motivoRetiro: null, retiro: null, entidad: null };
       return;
     }
     var abierta = st.abierta === null ? null : { solicitudId: st.abierta, motivoCodigo: sols[st.abierta].ev.motivoCodigo };
     porFoto[fotoId] = {
-      integridad: FOTOS_MOD_INTEGRIDAD.OK, inconsistencias: [], estado: st.estado, origen: st.origen, solicitudAbierta: abierta, motivoRetiro: st.motivoRetiro,
+      integridad: FOTOS_MOD_INTEGRIDAD.OK, inconsistencias: [], estado: st.estado, origen: st.origen, solicitudAbierta: abierta, motivoRetiro: st.motivoRetiro, retiro: st.retiro,
       entidad: { tipo: lista[0].entidadTipo, id: lista[0].entidadId }
     };
     solsOrden.forEach(function (sid) { solicitudes.push({ fotoId: fotoId, entidad: porFoto[fotoId].entidad, solicitud: sols[sid] }); });
@@ -774,6 +779,7 @@ if (typeof module !== 'undefined' && module.exports) {
     FOTOS_MOD_CACHE_META_PREFIJO,
     FOTOS_MOD_CACHE_THUMB_PREFIJO,
     FOTOS_MOD_CACHE_RESUMEN_CLAVE,
+    fotosPozosModeracion_texto,
     fotosPozosModeracion_idNormalizado,
     fotosPozosModeracion_normalizarEmail,
     fotosPozosModeracion_fechaIso,

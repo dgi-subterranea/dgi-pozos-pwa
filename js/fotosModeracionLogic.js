@@ -1,12 +1,12 @@
 // Logica pura de la MODERACION de fotos de pozos (E8-4): quien ve cada accion, catalogo de motivos con etiquetas humanas, mensajes de error, lectura segura de las respuestas del backend, vista del
-// historial y la maquina de estados de las acciones (sugerir retiro, retirar, reponer) con su clientRequestId por intencion. Sin DOM ni red propios: la red entra por deps.enviar / deps.consultar y el
+// historial y la maquina de estados de las acciones (sugerir retiro, retirar, reponer y, desde E8-5, aprobar / rechazar una solicitud) con su clientRequestId por intencion. Sin DOM ni red propios: la red entra por deps.enviar / deps.consultar y el
 // repintado por deps.onCambio. El controlador (js/fotosModeracion.js) solo pinta. Backend: docs/fotos-pozos-moderacion.md.
 //
 // Principios:
 //  - Permisos con booleanos EXACTOS (=== true). Nunca por truthy, por nombre ni por autoria. Sugerir = fotos + fotos_carga. Moderar = fotos + fotos_moderar (fotos_carga NO modera, fotos_moderar sin
 //    fotos NO modera). El backend vuelve a exigirlos.
-//  - El frontend NO reconstruye el estado de una foto: lo que se muestra sale de lo que devuelve el backend (la galeria ya viene filtrada). Lo unico que se recuerda localmente son hechos que el backend
-//    acaba de CONFIRMAR en esta sesion (solicitud enviada, foto retirada por esta persona).
+//  - El frontend NO reconstruye el estado de una foto: lo que se muestra sale de lo que devuelve el backend (la galeria ya viene filtrada y, desde E8-5, trae `tieneSolicitudRetiro`). No se recuerda
+//    nada en memoria de sesion: ni solicitudes enviadas ni fotos retiradas (las listas institucionales vienen del backend).
 //  - Nada tecnico llega a pantalla: ni email, ni clientRequestId, ni secuencia, ni ids, ni el `message` crudo del backend. Los codigos de motivo y de evento se traducen con UNA sola tabla (aca).
 //  - El texto libre (motivoTexto) se normaliza con la MISMA regla que el backend (la de las observaciones) y se pinta siempre con textContent.
 //
@@ -28,9 +28,10 @@ var FOTOS_MODERACION_MOTIVOS = [
 ];
 var FOTOS_MODERACION_MOTIVO_DESCONOCIDO = 'Motivo no reconocido';
 
-var FOTOS_MODERACION_TIPOS = ['SUGERIR', 'RETIRAR', 'REPONER'];
-var FOTOS_MODERACION_PREFIJOS = { SUGERIR: 'foto-sol', RETIRAR: 'foto-ret', REPONER: 'foto-rep' };     // resolver (E8-5) usara "foto-res"
+var FOTOS_MODERACION_TIPOS = ['SUGERIR', 'RETIRAR', 'REPONER', 'APROBAR', 'RECHAZAR'];
+var FOTOS_MODERACION_PREFIJOS = { SUGERIR: 'foto-sol', RETIRAR: 'foto-ret', REPONER: 'foto-rep', APROBAR: 'foto-res', RECHAZAR: 'foto-res' };     // aprobar y rechazar son "resolver": foto-res
 var FOTOS_MODERACION_PREFIJO_RESOLVER = 'foto-res';
+var FOTOS_MODERACION_RESOLUCION = { APROBAR: 'APROBADO', RECHAZAR: 'RECHAZADO' };
 
 var FOTOS_MODERACION_MENSAJE_GENERICO = 'No se pudo completar la acción. Intentá nuevamente.';
 var FOTOS_MODERACION_MENSAJE_ESTADO_CAMBIO = 'El estado de la foto cambió. Actualizamos la galería.';
@@ -40,6 +41,7 @@ var FOTOS_MODERACION_MENSAJE_EXITO_SUGERIR = 'Sugerencia enviada. Un moderador l
 var FOTOS_MODERACION_MENSAJE_EXITO_RETIRAR = 'Foto retirada. El archivo no se eliminó.';
 var FOTOS_MODERACION_MENSAJE_EXITO_REPONER = 'Foto repuesta en la galería.';
 var FOTOS_MODERACION_MENSAJE_ESTADO_SUGERIDO = 'Retiro sugerido';
+var FOTOS_MODERACION_MENSAJE_SUGERIDO_MODERADOR = 'Retiro sugerido. Resolvelo desde Fotos pendientes.';
 var FOTOS_MODERACION_AVISO_PRIVACIDAD = 'Quedará marcada para revisión de borrado.';
 var FOTOS_MODERACION_AVISO_PENDIENTE_BORRADO = 'Pendiente de revisión de borrado';
 var FOTOS_MODERACION_AVISO_LEGACY = 'Las fotos ocultas históricamente no pueden reponerse desde este flujo.';
@@ -90,7 +92,12 @@ function fotosModeracionLogic_puedeSugerir(permisos) {
   return fotosModeracionLogic_puedeVer(permisos) && permisos.fotos_carga === true;
 }
 
-// Retirar / ver historial / reponer: fotos + fotos_moderar. NO se infiere de fotos_carga, ni del nombre, ni de la autoria de la foto.
+// "Retiro sugerido" (estado discreto): lo ve quien puede sugerir o moderar. Un lector (solo fotos) no lo ve: el booleano llega a todos, pero la UI no lo expone a quien no actua sobre las fotos.
+function fotosModeracionLogic_puedeVerEstadoSolicitud(permisos) {
+  return fotosModeracionLogic_puedeSugerir(permisos) || fotosModeracionLogic_puedeModerar(permisos);
+}
+
+// Retirar / ver historial / reponer / aprobar / rechazar: fotos + fotos_moderar. NO se infiere de fotos_carga, ni del nombre, ni de la autoria de la foto.
 function fotosModeracionLogic_puedeModerar(permisos) {
   return fotosModeracionLogic_puedeVer(permisos) && permisos.fotos_moderar === true;
 }
@@ -99,7 +106,7 @@ function fotosModeracionLogic_permitida(tipo, permisos) {
   if (tipo === 'SUGERIR') {
     return fotosModeracionLogic_puedeSugerir(permisos);
   }
-  if (tipo === 'RETIRAR' || tipo === 'REPONER') {
+  if (tipo === 'RETIRAR' || tipo === 'REPONER' || tipo === 'APROBAR' || tipo === 'RECHAZAR') {
     return fotosModeracionLogic_puedeModerar(permisos);
   }
   return false;
@@ -178,7 +185,7 @@ function fotosModeracionLogic_validarContenido(codigo, textoCrudo) {
 
 // "foto-sol-<uuid>", "foto-ret-<uuid>", "foto-rep-<uuid>", "foto-res-<uuid>": cada accion con su propio espacio; 8 a 64 caracteres [A-Za-z0-9_-] (lo que exige el backend). `aleatorio`: solo para tests.
 function fotosModeracionLogic_nuevoClientRequestId(tipo, aleatorio) {
-  var pre = tipo === 'RESOLVER' ? FOTOS_MODERACION_PREFIJO_RESOLVER : FOTOS_MODERACION_PREFIJOS[tipo];
+  var pre = tipo === 'RESOLVER' ? FOTOS_MODERACION_PREFIJO_RESOLVER : (Object.prototype.hasOwnProperty.call(FOTOS_MODERACION_PREFIJOS, tipo) ? FOTOS_MODERACION_PREFIJOS[tipo] : null);
   if (!pre) {
     throw new Error('tipo de accion de moderacion desconocido');
   }
@@ -202,9 +209,10 @@ function fotosModeracionLogic_idNormalizado(id) {
   return typeof id === 'string' ? id.trim().toLowerCase() : '';
 }
 
-// Respuesta de solicitar / retirar / reponer -> {ok:true, duplicada, solicitudId} | {ok:false, code}. `duplicada` true y false son AMBOS exito (el reintento es idempotente). Una respuesta sin la forma esperada
-// o de OTRA foto NO se da por buena (la escritura pudo ocurrir: reintentar con el mismo id es seguro).
-function fotosModeracionLogic_leerRespuestaEscritura(resp, fotoIdEsperado) {
+// Respuesta de solicitar / retirar / reponer / resolver -> {ok:true, duplicada, solicitudId} | {ok:false, code}. `duplicada` true y false son AMBOS exito (el reintento es idempotente). Una respuesta sin la
+// forma esperada o de OTRA foto NO se da por buena (la escritura pudo ocurrir: reintentar con el mismo id es seguro). Al resolver, `esperado` ({solicitudId, resolucion}) tambien se contrasta: una
+// respuesta de OTRA solicitud, o con otra resolucion, tampoco vale.
+function fotosModeracionLogic_leerRespuestaEscritura(resp, fotoIdEsperado, esperado) {
   var falla = { ok: false, code: 'SERVICE_UNAVAILABLE' };
   if (!resp || typeof resp !== 'object') {
     return falla;
@@ -214,6 +222,9 @@ function fotosModeracionLogic_leerRespuestaEscritura(resp, fotoIdEsperado) {
   }
   var d = resp.data;
   if (resp.status !== 'ok' || !d || typeof d !== 'object' || fotosModeracionLogic_idNormalizado(d.fotoId) !== fotosModeracionLogic_idNormalizado(fotoIdEsperado) || fotosModeracionLogic_idNormalizado(fotoIdEsperado) === '') {
+    return falla;
+  }
+  if (esperado && (fotosModeracionLogic_idNormalizado(d.solicitudId) !== fotosModeracionLogic_idNormalizado(esperado.solicitudId) || d.resolucion !== esperado.resolucion)) {
     return falla;
   }
   return { ok: true, duplicada: d.duplicada === true, solicitudId: typeof d.solicitudId === 'string' ? d.solicitudId : null };
@@ -356,10 +367,10 @@ function fotosModeracionLogic_crearHistorial(deps) {
   };
 }
 
-// --- Acciones con envio: sugerir retiro, retirar, reponer ---
+// --- Acciones con envio: sugerir retiro, retirar, reponer, aprobar y rechazar una solicitud ---
 // deps:
 //   obtenerContexto() -> {sessionToken, permisos}                                  (SIEMPRE fresco)
-//   enviar(tipo, sessionToken, datos{fotoId, motivoCodigo, motivoTexto}, clientRequestId) -> Promise<respuesta del backend>
+//   enviar(tipo, sessionToken, datos{fotoId, motivoCodigo, motivoTexto | solicitudId, resolucion}, clientRequestId) -> Promise<respuesta del backend>
 //   generarId(tipo) -> clientRequestId                                              (por defecto fotosModeracionLogic_nuevoClientRequestId)
 //   onCambio(estado)                                                                (repintar)
 //   onExito({tipo, fotoId, foto, duplicada, solicitudId, motivoCodigo})             (solo si la respuesta sigue siendo del contexto vigente)
@@ -426,12 +437,15 @@ function fotosModeracionLogic_crearAccion(deps) {
     s = fotosModeracionLogic_accionInicial();
   }
 
-  // tipo: 'SUGERIR' | 'RETIRAR' | 'REPONER'. foto: {fotoId, ...datos de la grilla}. false si no hay permiso o la foto no es valida (no se abre nada).
+  // tipo: 'SUGERIR' | 'RETIRAR' | 'REPONER' | 'APROBAR' | 'RECHAZAR'. foto: {fotoId, ...datos de la grilla} (APROBAR y RECHAZAR llevan ademas solicitudId: la solicitud que se resuelve). false si no hay
+  // permiso, la foto no es valida o falta la solicitud (no se abre nada).
   function abrir(tipo, foto) {
     sesion += 1;
     var ctx = deps.obtenerContexto() || {};
     s = fotosModeracionLogic_accionInicial();
-    if (FOTOS_MODERACION_TIPOS.indexOf(tipo) < 0 || !fotosModeracionLogic_permitida(tipo, ctx.permisos) || !foto || fotosModeracionLogic_idNormalizado(foto.fotoId) === '') {
+    var esResolucion = tipo === 'APROBAR' || tipo === 'RECHAZAR';
+    if (FOTOS_MODERACION_TIPOS.indexOf(tipo) < 0 || !fotosModeracionLogic_permitida(tipo, ctx.permisos) || !foto || fotosModeracionLogic_idNormalizado(foto.fotoId) === '' ||
+      (esResolucion && fotosModeracionLogic_idNormalizado(foto.solicitudId) === '')) {
       cambio();
       return false;
     }
@@ -492,15 +506,21 @@ function fotosModeracionLogic_crearAccion(deps) {
     var fotoId = foto.fotoId;
     var id = s.id;
     var datos = { fotoId: fotoId };
+    var esperado = null;
     if (contenido) {
       datos.motivoCodigo = v.codigo;
       datos.motivoTexto = v.texto === '' ? undefined : v.texto;
+    }
+    if (tipo === 'APROBAR' || tipo === 'RECHAZAR') {
+      datos.solicitudId = fotosModeracionLogic_idNormalizado(foto.solicitudId);
+      datos.resolucion = FOTOS_MODERACION_RESOLUCION[tipo];
+      esperado = { solicitudId: datos.solicitudId, resolucion: datos.resolucion };
     }
     cambio();
     return new Promise(function (resolver) {
       resolver(deps.enviar(tipo, ctx.sessionToken, datos, id));
     }).then(function (resp) {
-      return fotosModeracionLogic_leerRespuestaEscritura(resp, fotoId);
+      return fotosModeracionLogic_leerRespuestaEscritura(resp, fotoId, esperado);
     }, function () {
       return { ok: false, code: 'RED' };
     }).then(function (lectura) {
@@ -580,6 +600,7 @@ if (typeof module !== 'undefined' && module.exports) {
     FOTOS_MODERACION_MENSAJE_EXITO_RETIRAR,
     FOTOS_MODERACION_MENSAJE_EXITO_REPONER,
     FOTOS_MODERACION_MENSAJE_ESTADO_SUGERIDO,
+    FOTOS_MODERACION_MENSAJE_SUGERIDO_MODERADOR,
     FOTOS_MODERACION_AVISO_PRIVACIDAD,
     FOTOS_MODERACION_AVISO_PENDIENTE_BORRADO,
     FOTOS_MODERACION_AVISO_LEGACY,
@@ -587,6 +608,7 @@ if (typeof module !== 'undefined' && module.exports) {
     fotosModeracionLogic_esErrorDeSesion,
     fotosModeracionLogic_puedeVer,
     fotosModeracionLogic_puedeSugerir,
+    fotosModeracionLogic_puedeVerEstadoSolicitud,
     fotosModeracionLogic_puedeModerar,
     fotosModeracionLogic_permitida,
     fotosModeracionLogic_etiquetaMotivo,
@@ -597,6 +619,7 @@ if (typeof module !== 'undefined' && module.exports) {
     fotosModeracionLogic_nuevoClientRequestId,
     fotosModeracionLogic_idNormalizado,
     fotosModeracionLogic_leerRespuestaEscritura,
+    fotosModeracionLogic_fechaEvento,
     fotosModeracionLogic_vistaHistorial,
     fotosModeracionLogic_crearHistorial,
     fotosModeracionLogic_crearAccion,

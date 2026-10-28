@@ -22,6 +22,7 @@
     seleccionItf: document.getElementById('screen-seleccion-itf'),
     reemplazo: document.getElementById('screen-reemplazo'),
     fotos: document.getElementById('screen-fotos'),
+    fotosModeracion: document.getElementById('screen-fotos-moderacion'),
     observaciones: document.getElementById('screen-observaciones'),
     lineaTiempo: document.getElementById('screen-linea-tiempo'),
     disabled: document.getElementById('screen-disabled'),
@@ -1240,6 +1241,8 @@
     var accesos = mapaLogic_calcularAccesos(permisosActuales, true);
     document.getElementById('btn-abrir-cerca-mio').hidden = !accesos.cercaMio;
     document.getElementById('btn-abrir-reemplazo').hidden = !accesos.reemplazo;
+    // "Fotos pendientes" (E8-5): solo fotos=true y fotos_moderar=true exactos; la tarjeta no carga nada
+    document.getElementById('btn-abrir-fotos-moderacion').hidden = !fotosModeracionLogic_puedeModerar(permisosActuales);
     document.getElementById('btn-abrir-mapa').hidden = accesos.mapas === 'ninguno';
     actualizarBotonesVolverMapa();
   }
@@ -1272,8 +1275,10 @@
     // ni el resumen de fotos, la galeria abierta o la cola de subida
     fotosPozosResumenController_reset();
     fotosPozosController_reset();
-    // ni la moderacion de fotos (modales abiertos, fotos retiradas de la sesion, sugerencias recordadas)
+    // ni la moderacion de fotos (modales abiertos, imagenes de fotos retiradas)
     fotosModeracionController_reset();
+    // ni la pantalla "Fotos pendientes" (listas, imagenes y lo que este en vuelo)
+    fotosModeracionColaController_reset();
     // ni las observaciones abiertas (se descartan las respuestas en vuelo)
     observacionesPozoController_reset();
     // ni la linea de tiempo abierta (se cancela lo que este en vuelo)
@@ -1824,8 +1829,36 @@
     };
   }, {
     refrescar: fotosPozosController_refrescar,
-    cerrarVisor: fotosPozosController_cerrarVisor,
-    repintar: fotosPozosController_repintar
+    cerrarVisor: fotosPozosController_cerrarVisor
+  });
+
+  // Fotos pendientes (E8-5): pantalla propia (solicitudes de retiro y fotos retiradas), con su contexto fresco. Se abre desde la tarjeta del hub y Volver regresa a la pantalla de origen; los datos se
+  // piden SOLO al abrir. Una sesion vencida usa el logout de siempre.
+  var fotosModeracionOrigen = { pantalla: 'main', scrollY: 0 };
+
+  fotosModeracionColaController_inicializar(function () {
+    return {
+      sessionToken: sessionToken,
+      permisos: permisosActuales,
+      onSessionExpired: function () {
+        logout();
+      }
+    };
+  });
+
+  document.getElementById('btn-abrir-fotos-moderacion').addEventListener('click', function () {
+    if (!fotosModeracionLogic_puedeModerar(permisosActuales)) {
+      toggleAccesosUbicacion();          // el permiso se perdio: la tarjeta se corrige y no se abre ni se pide nada
+      return;
+    }
+    fotosModeracionOrigen = { pantalla: pantallaActual, scrollY: window.scrollY };
+    showScreen('fotosModeracion');
+    fotosModeracionColaController_abrir();
+  });
+
+  document.getElementById('btn-fotos-cola-volver').addEventListener('click', function () {
+    fotosModeracionColaController_cerrar();
+    restaurarPantalla(fotosModeracionOrigen);
   });
 
   // Resumen de fotos compartido (hub, ficha NE, popup NE, Buscar reemplazo, Cerca

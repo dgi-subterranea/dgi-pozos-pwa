@@ -464,3 +464,118 @@ describe('cola de pendientes: volumen y forma', () => {
     expect(post('mod@x.com', { action: 'getFotosPozosPendientesModeracion', limit: 1000 }).code).toBe('INVALID_LIMIT');
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+// E8-5: tieneSolicitudRetiro en la galeria y listado de retiradas, por doPost y con el dominio real
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+const retiradasPost = (token, extra) => post(token, Object.assign({ action: 'getFotosPozosRetiradasModeracion' }, extra || {}));
+const flagGaleria = (token, wellId, fotoId) => galeria(token, wellId).data.fotos.find((f) => f.fotoId === fotoId);
+
+describe('E8-5: la solicitud abierta sobrevive a una nueva sesion (viene del backend)', () => {
+  test('solicitar -> true para todos los que ven la galeria; rechazar -> false; la foto nunca se oculta ni cambia el contador', () => {
+    expect(flagGaleria('ana@x.com', '14-0001', A1).tieneSolicitudRetiro).toBe(false);
+    const s = solicitar('ana@x.com', A1);
+    ['ana@x.com', 'lector@x.com', 'mod@x.com'].forEach((u) => { expect(flagGaleria(u, '14-0001', A1).tieneSolicitudRetiro).toBe(true); });
+    expect(flagGaleria('mod@x.com', '14-0001', A2).tieneSolicitudRetiro).toBe(false);
+    expect(resumen('lector@x.com').data['14-0001']).toBe(2);
+    expect(galeria('lector@x.com', '14-0001').data.total).toBe(2);
+    expect(resolver('mod@x.com', s.data.solicitudId, 'RECHAZADO').status).toBe('ok');
+    expect(flagGaleria('ana@x.com', '14-0001', A1).tieneSolicitudRetiro).toBe(false);
+    expect(resumen('lector@x.com').data['14-0001']).toBe(2);
+    // y se puede volver a sugerir
+    expect(solicitar('ana@x.com', A1).status).toBe('ok');
+    expect(flagGaleria('ana@x.com', '14-0001', A1).tieneSolicitudRetiro).toBe(true);
+  });
+
+  test('aprobar: la foto sale de la galeria normal y del contador; el booleano nunca lleva datos de la solicitud', () => {
+    const s = solicitar('ana@x.com', A1, { motivoCodigo: 'OTRO', motivoTexto: 'texto privado de Ana' });
+    const antes = JSON.stringify(galeria('lector@x.com', '14-0001'));
+    expect(antes).not.toMatch(/texto privado|ana@x\.com|OTRO|solicitud|motivo|"Ana"/);
+    resolver('mod@x.com', s.data.solicitudId, 'APROBADO');
+    expect(idsGaleria(galeria('lector@x.com', '14-0001'))).toEqual([A2]);
+    expect(resumen('lector@x.com').data['14-0001']).toBe(1);
+  });
+
+  test('la galeria sin la hoja de eventos es SERVICE_UNAVAILABLE (nunca una galeria sin moderar)', () => {
+    montar([filaFoto(A1, '14-0001')], true);
+    expect(galeria('lector@x.com', '14-0001').code).toBe('SERVICE_UNAVAILABLE');
+  });
+});
+
+describe('E8-5: listado de fotos retiradas', () => {
+  test('permisos: solo fotos + fotos_moderar; lector, fotos_carga, fotos_moderar sin fotos y sin permisos reciben PERMISSION_DENIED', () => {
+    ['lector@x.com', 'ana@x.com', 'ciego@x.com', 'sinfotos@x.com'].forEach((u) => { expect(retiradasPost(u).code).toBe('PERMISSION_DENIED'); });
+    expect(retiradasPost('mod@x.com').status).toBe('ok');
+    expect(retiradasPost('mod2@x.com').status).toBe('ok');
+  });
+
+  test('retirar -> aparece; reponer -> desaparece y vuelve a la galeria; una retirada no se cuela en la galeria normal', () => {
+    retirar('mod@x.com', A1, { motivoCodigo: 'PRIVACIDAD' });
+    const r = retiradasPost('mod@x.com');
+    expect(r.data).toMatchObject({ total: 1, hayMas: false, cursor: null });
+    expect(r.data.items[0]).toMatchObject({ fotoId: A1, entidadTipo: 'WELL', entidadId: '14-0001', origenRetiro: 'EVENTO', motivoCodigo: 'PRIVACIDAD', nombre: 'Moderadora Uno', requiereRevisionBorrado: true, viaSolicitud: false });
+    expect(idsGaleria(galeria('lector@x.com', '14-0001'))).toEqual([A2]);
+    expect(reponer('mod2@x.com', A1).status).toBe('ok');
+    expect(retiradasPost('mod@x.com').data.total).toBe(0);
+    expect(idsGaleria(galeria('lector@x.com', '14-0001'))).toEqual([A1, A2].sort());
+  });
+
+  test('aprobar una solicitud la pasa de la cola de pendientes a retiradas (con el motivo de la solicitud y el nombre de quien aprobo)', () => {
+    const s = solicitar('ana@x.com', B1, { motivoCodigo: 'OTRO', motivoTexto: 'otra cosa' });
+    expect(post('mod@x.com', { action: 'getFotosPozosPendientesModeracion' }).data.total).toBe(1);
+    expect(retiradasPost('mod@x.com').data.total).toBe(0);
+    resolver('mod2@x.com', s.data.solicitudId, 'APROBADO');
+    expect(post('mod@x.com', { action: 'getFotosPozosPendientesModeracion' }).data.total).toBe(0);
+    const r = retiradasPost('mod@x.com');
+    expect(r.data.items[0]).toMatchObject({ fotoId: B1, entidadId: '14-0002', motivoCodigo: 'OTRO', motivoTexto: 'otra cosa', nombre: 'Moderador Dos', viaSolicitud: true });
+  });
+
+  test('una OCULTA legacy no aparece como reponible, y reponerla desde el backend sigue prohibido', () => {
+    montar([filaFoto(A1, '14-0001', { estado: 'OCULTA' }), filaFoto(A2, '14-0001')]);
+    expect(retiradasPost('mod@x.com').data.total).toBe(0);
+    expect(reponer('mod@x.com', A1)).toMatchObject({ status: 'error' });
+  });
+
+  test('paginacion por cursor via doPost, mas reciente primero, y limites', () => {
+    const fotos = [A1, A2, B1, NE1];
+    fotos.forEach((f) => retirar('mod@x.com', f));
+    const orden = fotos.slice().reverse();
+    const p1 = retiradasPost('mod@x.com', { limit: 3 });
+    expect(p1.data).toMatchObject({ total: 4, hayMas: true });
+    expect(p1.data.items.map((i) => i.fotoId)).toEqual(orden.slice(0, 3));
+    const p2 = retiradasPost('mod@x.com', { limit: 3, cursor: p1.data.cursor });
+    expect(p2.data.items.map((i) => i.fotoId)).toEqual(orden.slice(3));
+    expect(p2.data.hayMas).toBe(false);
+    expect(retiradasPost('mod@x.com', { limit: 1000 }).code).toBe('INVALID_LIMIT');
+    expect(retiradasPost('mod@x.com', { cursor: -1 }).code).toBe('INVALID_CURSOR');
+  });
+
+  test('payload minimo: sin email, clientRequestId, secuencia, ids de Drive, base64 ni URLs; UNA lectura de cada hoja', () => {
+    retirar('mod@x.com', A1, { motivoCodigo: 'OTRO', motivoTexto: 'detalle' });
+    retirar('mod@x.com', NE1);
+    const leerEventos = jest.fn(Eventos.fotosPozoEventosRepository_leerTodos);
+    const leerFotos = jest.fn(Repo.fotosPozosRepository_leerTodasLasFotos);
+    global.fotosPozoEventosRepository_leerTodos = leerEventos;
+    global.fotosPozosRepository_leerTodasLasFotos = leerFotos;
+    const r = retiradasPost('mod@x.com');
+    expect(leerEventos).toHaveBeenCalledTimes(1);
+    expect(leerFotos).toHaveBeenCalledTimes(1);
+    expect(r.data.items).toHaveLength(2);
+    expect(JSON.stringify(r)).not.toMatch(/@|DRIVE_|secuencia|clientRequestId|base64|https?:/i);
+  });
+
+  test('sin la hoja de eventos el listado es SERVICE_UNAVAILABLE sin detalle tecnico', () => {
+    montar([filaFoto(A1, '14-0001')], true);
+    const r = retiradasPost('mod@x.com');
+    expect(r.code).toBe('SERVICE_UNAVAILABLE');
+    expect(JSON.stringify(r)).not.toMatch(/FotosPozoEventos/);
+  });
+
+  test('el listado es una lectura: no escribe eventos', () => {
+    retirar('mod@x.com', A1);
+    const antes = filasEventos().length;
+    retiradasPost('mod@x.com');
+    expect(filasEventos()).toHaveLength(antes);
+  });
+});

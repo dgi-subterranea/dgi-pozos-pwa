@@ -1021,3 +1021,46 @@ describe('planificar: forma del evento escrito', () => {
     expect(() => M.fotosPozosModeracion_planificar(Object.assign({}, c), Object.assign({}, contexto, { nuevoEventoId: () => uuid(1) }))).toThrow(/nuevoEventoId|ahora/);
   });
 });
+
+describe('E8-5: derivacion del evento que dejo retirada a la foto (retiro)', () => {
+  const retiro = (eventos) => M.fotosPozosModeracion_derivar(eventos).porFoto[FOTO].retiro;
+
+  test('foto activa (sin eventos o solo con solicitud abierta o rechazada): retiro null', () => {
+    const s = solicitud();
+    expect(retiro([s])).toBeNull();
+    expect(retiro([s, resuelta(s, 'RECHAZADO')])).toBeNull();
+  });
+
+  test('retirada directa: el evento RETIRADA y sin solicitud', () => {
+    const r = retirada({ motivoCodigo: 'OTRO', motivoTexto: 'detalle', nombre: 'Moderadora' });
+    const x = retiro([r]);
+    expect(x.solicitud).toBeNull();
+    expect(x.ev).toMatchObject({ evento: 'RETIRADA', eventoId: r.eventoId, secuencia: r.secuencia, motivoCodigo: 'OTRO', motivoTexto: 'detalle', nombre: 'Moderadora' });
+  });
+
+  test('retirada por aprobar una solicitud: el evento de la resolucion y la solicitud que la origino', () => {
+    const s = solicitud({ motivoCodigo: 'OTRO', motivoTexto: 'razon', nombre: 'Ana' });
+    const a = resuelta(s, 'APROBADO', { nombre: 'Jefe' });
+    const x = retiro([s, a]);
+    expect(x.ev).toMatchObject({ evento: 'RETIRO_RESUELTO', resolucion: 'APROBADO', nombre: 'Jefe', eventoId: a.eventoId });
+    expect(x.solicitud).toMatchObject({ evento: 'RETIRO_SOLICITADO', eventoId: s.eventoId, motivoCodigo: 'OTRO', motivoTexto: 'razon', nombre: 'Ana' });
+  });
+
+  test('repuesta: vuelve a null, y una nueva retirada guarda la NUEVA', () => {
+    const r1 = retirada();
+    const rep = repuesta();
+    expect(retiro([r1, rep])).toBeNull();
+    const r2 = retirada({ motivoCodigo: 'DUPLICADA' });
+    expect(retiro([r1, rep, r2]).ev.eventoId).toBe(r2.eventoId);
+  });
+
+  test('foto NO derivable: retiro null', () => {
+    const der = M.fotosPozosModeracion_derivar([retirada(), retirada()]);
+    expect(der.porFoto[FOTO].integridad).toBe('NO_DERIVABLE');
+    expect(der.porFoto[FOTO].retiro).toBeNull();
+  });
+
+  test('el evento guardado no lleva el email (interno, pero tampoco se filtra)', () => {
+    expect(JSON.stringify(retiro([retirada({ email: 'secreto@x.com' })]))).not.toMatch(/secreto@x\.com|email/);
+  });
+});

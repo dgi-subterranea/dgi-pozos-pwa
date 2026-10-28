@@ -9,7 +9,7 @@ const SOL = '22222222-2222-4222-8222-222222222222';
 const CRID = 'req-12345678';
 const EMAIL = 'sesion@example.com';
 
-const OPS = ['ejecutar', 'historial', 'cola', 'imagen'];
+const OPS = ['ejecutar', 'historial', 'cola', 'retiradas', 'imagen'];
 
 beforeEach(() => {
   installAppsScriptFakes();
@@ -21,6 +21,7 @@ beforeEach(() => {
   });
   global.fotosPozosModeracionOps_historial = jest.fn().mockReturnValue({ ok: true, foto: { fotoId: FOTO }, estado: { estado: 'ACTIVA' }, eventos: [], extra: 'no sale' });
   global.fotosPozosModeracionOps_cola = jest.fn().mockReturnValue({ ok: true, total: 0, items: [], hayMas: false, cursor: null, extra: 'no sale' });
+  global.fotosPozosModeracionOps_retiradas = jest.fn().mockReturnValue({ ok: true, total: 0, items: [], hayMas: false, cursor: null, extra: 'no sale' });
   global.fotosPozosModeracionOps_imagen = jest.fn().mockReturnValue({ ok: true, imagen: { fotoId: FOTO, variante: 'thumb', mimeType: 'image/jpeg', imagenBase64: 'AAAA' } });
 });
 
@@ -41,6 +42,7 @@ const escrituras = {
 const lecturas = {
   getHistorialFotoPozo: () => Api.handleGetHistorialFotoPozo('t', FOTO),
   getFotosPozosPendientesModeracion: () => Api.handleGetFotosPozosPendientesModeracion('t', 10, undefined),
+  getFotosPozosRetiradasModeracion: () => Api.handleGetFotosPozosRetiradasModeracion('t', 10, undefined),
   getFotoPozoModeracion: () => Api.handleGetFotoPozoModeracion('t', FOTO, 'thumb')
 };
 const nadaSeEjecuto = () => OPS.forEach((o) => { expect(global['fotosPozosModeracionOps_' + o]).not.toHaveBeenCalled(); });
@@ -262,6 +264,22 @@ describe('lecturas de moderador', () => {
     expect(global.fotosPozosModeracionOps_cola).toHaveBeenCalledWith(20, 7);
   });
 
+  test('retiradas (E8-5): pasa limit y cursor y devuelve SOLO {total, items, hayMas, cursor}', () => {
+    expect(Api.handleGetFotosPozosRetiradasModeracion('t', 20, 7)).toEqual({ status: 'ok', data: { total: 0, items: [], hayMas: false, cursor: null } });
+    expect(global.fotosPozosModeracionOps_retiradas).toHaveBeenCalledWith(20, 7);
+    expect(global.fotosPozosModeracionOps_cola).not.toHaveBeenCalled();
+  });
+
+  test('retiradas: el listado de retiradas lo pide solo fotos + fotos_moderar (fotos_carga y fotos solos no, ni truthy)', () => {
+    [{ fotos: true }, { fotos: true, fotos_carga: true }, { fotos_moderar: true }, { fotos_carga: true, fotos_moderar: true }, {}].forEach((p) => {
+      como(p);
+      expect(Api.handleGetFotosPozosRetiradasModeracion('t', 10, undefined)).toMatchObject({ status: 'error', code: 'PERMISSION_DENIED' });
+    });
+    global.hasPermission.mockReturnValue('SI');
+    expect(Api.handleGetFotosPozosRetiradasModeracion('t', 10, undefined).code).toBe('PERMISSION_DENIED');
+    expect(global.fotosPozosModeracionOps_retiradas).not.toHaveBeenCalled();
+  });
+
   test('imagen de moderacion: devuelve solo la imagen', () => {
     expect(Api.handleGetFotoPozoModeracion('t', FOTO, 'thumb')).toEqual({ status: 'ok', data: { fotoId: FOTO, variante: 'thumb', mimeType: 'image/jpeg', imagenBase64: 'AAAA' } });
     expect(global.fotosPozosModeracionOps_imagen).toHaveBeenCalledWith(FOTO, 'thumb');
@@ -273,7 +291,7 @@ describe('lecturas de moderador', () => {
     expect(global.notificationService_notifyWellSearch).not.toHaveBeenCalled();
   });
 
-  test.each([['getHistorialFotoPozo', 'historial'], ['getFotosPozosPendientesModeracion', 'cola'], ['getFotoPozoModeracion', 'imagen']])('%s: error de validacion o inexistencia se devuelve sin auditar', (k, op) => {
+  test.each([['getHistorialFotoPozo', 'historial'], ['getFotosPozosPendientesModeracion', 'cola'], ['getFotosPozosRetiradasModeracion', 'retiradas'], ['getFotoPozoModeracion', 'imagen']])('%s: error de validacion o inexistencia se devuelve sin auditar', (k, op) => {
     global['fotosPozosModeracionOps_' + op].mockReturnValue({ ok: false, code: 'FOTO_NOT_FOUND', message: 'm' });
     expect(lecturas[k]()).toEqual({ status: 'error', code: 'FOTO_NOT_FOUND', message: 'm' });
     expect(global.logHistoryEvent).not.toHaveBeenCalled();
@@ -285,7 +303,7 @@ describe('lecturas de moderador', () => {
     expect(global.logHistoryEvent).toHaveBeenCalledWith(EMAIL, 'getFotoPozoModeracion', null, 'STORAGE_UNAVAILABLE');
   });
 
-  test.each([['getHistorialFotoPozo', 'historial'], ['getFotosPozosPendientesModeracion', 'cola'], ['getFotoPozoModeracion', 'imagen']])('%s: si la hoja de eventos no se puede leer -> SERVICE_UNAVAILABLE auditado y sin detalle', (k, op) => {
+  test.each([['getHistorialFotoPozo', 'historial'], ['getFotosPozosPendientesModeracion', 'cola'], ['getFotosPozosRetiradasModeracion', 'retiradas'], ['getFotoPozoModeracion', 'imagen']])('%s: si la hoja de eventos no se puede leer -> SERVICE_UNAVAILABLE auditado y sin detalle', (k, op) => {
     global['fotosPozosModeracionOps_' + op].mockImplementation(() => { throw new Error('No existe la hoja "FotosPozoEventos"'); });
     const r = lecturas[k]();
     expect(r).toMatchObject({ status: 'error', code: 'SERVICE_UNAVAILABLE' });
@@ -293,11 +311,13 @@ describe('lecturas de moderador', () => {
     expect(global.logHistoryEvent).toHaveBeenCalledWith(EMAIL, k, null, 'SERVICE_UNAVAILABLE');
   });
 
-  test('doPost enruta las tres lecturas', () => {
+  test('doPost enruta las cuatro lecturas', () => {
     const post = (body) => JSON.parse(Api.doPost({ postData: { contents: JSON.stringify(Object.assign({ sessionToken: 't' }, body)) } }).text);
     expect(post({ action: 'getHistorialFotoPozo', fotoId: FOTO, email: 'x@x.com' }).status).toBe('ok');
     expect(post({ action: 'getFotosPozosPendientesModeracion', limit: 5, cursor: 3, estado: 'x' }).status).toBe('ok');
     expect(global.fotosPozosModeracionOps_cola).toHaveBeenLastCalledWith(5, 3);
+    expect(post({ action: 'getFotosPozosRetiradasModeracion', limit: 4, cursor: 9, email: 'x@x.com' }).status).toBe('ok');
+    expect(global.fotosPozosModeracionOps_retiradas).toHaveBeenLastCalledWith(4, 9);
     expect(post({ action: 'getFotoPozoModeracion', fotoId: FOTO, variante: 'full' }).status).toBe('ok');
     expect(global.fotosPozosModeracionOps_imagen).toHaveBeenLastCalledWith(FOTO, 'full');
   });

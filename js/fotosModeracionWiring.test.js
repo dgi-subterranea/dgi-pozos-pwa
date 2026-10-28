@@ -1,5 +1,6 @@
-// Guardas baratas del cableado de la moderacion de fotos (E8-4): ids que usa el controlador, orden de scripts, service worker, wrappers de api.js, quien toca los endpoints, integracion con
-// fotosPozos.js y app.js, CSS acotado a .fotos-mod-* y privacidad del renderizado. El comportamiento esta en fotosModeracionController.test.js y fotosModeracionLogic.test.js.
+// Guardas baratas del cableado de la moderacion de fotos (E8-4, ajustadas en E8-5): ids que usa el controlador, orden de scripts, service worker, wrappers de api.js, quien toca los endpoints, integracion
+// con fotosPozos.js y app.js, CSS acotado a .fotos-mod-* y privacidad del renderizado. El comportamiento esta en fotosModeracionController.test.js y fotosModeracionLogic.test.js; la pantalla "Fotos
+// pendientes" (E8-5) tiene sus propias guardas en fotosModeracionColaWiring.test.js.
 const fs = require('fs');
 const path = require('path');
 
@@ -51,7 +52,7 @@ describe('index.html y controlador', () => {
     expect(html).toContain('Quedará marcada para revisión de borrado.');
     expect(html).toContain('¿Querés volver a mostrar esta foto en la galería?');
     expect(html).toContain('Las fotos ocultas históricamente no pueden reponerse desde este flujo.');
-    expect(html).toContain('Retiradas en esta sesión');
+    expect(html).not.toContain('Retiradas en esta sesión');      // E8-5: la bandeja de la sesion se reemplazo por la pantalla "Fotos pendientes" (listas del backend)
     expect(html).toMatch(/id="btn-fotos-mod-sugerir"[^>]*>Sugerir retiro</);
     expect(html).toMatch(/id="btn-fotos-mod-retirar"[^>]*>Retirar foto</);
     expect(html).toMatch(/id="btn-fotos-mod-historial"[^>]*>Ver historial</);
@@ -59,7 +60,7 @@ describe('index.html y controlador', () => {
   });
 
   test('las acciones del visor y los avisos estan ocultos por defecto (no se muestra nada que el usuario no pueda ejecutar)', () => {
-    ['fotos-mod-visor-acciones', 'btn-fotos-mod-sugerir', 'btn-fotos-mod-retirar', 'btn-fotos-mod-historial', 'fotos-mod-visor-estado', 'fotos-mod-aviso', 'fotos-mod-retiradas', 'btn-fotos-mod-hist-reponer', 'fotos-mod-rep-confirmar']
+    ['fotos-mod-visor-acciones', 'btn-fotos-mod-sugerir', 'btn-fotos-mod-retirar', 'btn-fotos-mod-historial', 'fotos-mod-visor-estado', 'fotos-mod-aviso', 'btn-fotos-mod-hist-reponer', 'fotos-mod-rep-confirmar']
       .forEach((id) => { expect(html).toMatch(new RegExp('<[a-z]+[^>]*\\sid="' + id + '"[^>]*\\shidden')); });
   });
 
@@ -70,9 +71,9 @@ describe('index.html y controlador', () => {
 
   test('sin handlers inline, sin estilos en linea y sin data-* en el markup nuevo', () => {
     const bloques = [
-      html.slice(html.indexOf('<!-- Moderacion de fotos (E8-4). Tres modales'), html.indexOf('<!-- Confirmacion antes de guardar')),
+      html.slice(html.indexOf('<!-- Moderacion de fotos (E8-4). Tres modales'), html.indexOf('<!-- Fotos pendientes (E8-5, solo')),
       html.slice(html.indexOf('<!-- Moderacion de fotos (E8-4). Controlador'), html.indexOf('<!-- Moderacion de fotos (E8-4). Controlador') + 1400),
-      html.slice(html.indexOf('<!-- Moderacion (E8-4, solo'), html.indexOf('<section id="fotos-galeria"'))
+      html.slice(html.indexOf('<!-- Fotos pendientes (E8-5, solo'), html.indexOf('<!-- Confirmacion antes de guardar'))
     ];
     bloques.forEach((b) => {
       expect(b.length).toBeGreaterThan(300);
@@ -94,6 +95,9 @@ describe('index.html y controlador', () => {
     const { SHELL_FILES } = require('../sw.js');
     expect(SHELL_FILES).toContain('./js/fotosModeracionLogic.js');
     expect(SHELL_FILES).toContain('./js/fotosModeracion.js');
+    expect(SHELL_FILES).toContain('./js/fotosModeracionColaLogic.js');
+    expect(SHELL_FILES).toContain('./js/fotosModeracionCola.js');
+    expect(SHELL_FILES.indexOf('./js/fotosModeracionCola.js')).toBeLessThan(SHELL_FILES.indexOf('./js/app.js'));
     expect(SHELL_FILES.indexOf('./js/fotosModeracion.js')).toBeLessThan(SHELL_FILES.indexOf('./js/app.js'));
     expect(sw).not.toMatch(/getFotoPozoModeracion|getHistorialFotoPozo/);      // el SW no cachea API ni imagenes
   });
@@ -107,6 +111,7 @@ describe('wrappers de api.js (contrato del backend)', () => {
     ['reponerFotoPozo', 'sessionToken: sessionToken, fotoId: fotoId, clientRequestId: clientRequestId'],
     ['getHistorialFotoPozo', 'sessionToken: sessionToken, fotoId: fotoId'],
     ['getFotosPozosPendientesModeracion', 'sessionToken: sessionToken, limit: limit, cursor: cursor'],
+    ['getFotosPozosRetiradasModeracion', 'sessionToken: sessionToken, limit: limit, cursor: cursor'],
     ['getFotoPozoModeracion', 'sessionToken: sessionToken, fotoId: fotoId, variante: variante']
   ];
   test.each(wrappers)('%s manda solo lo que es del cliente', (accion, campos) => {
@@ -118,12 +123,13 @@ describe('wrappers de api.js (contrato del backend)', () => {
     expect(bloque).not.toMatch(/\bemail:|\bnombre:|\bwellId:|\bmonitoringId:|\bestado:|\bsecuencia:|\btimestamp\w*:|\bentidad\w*:/);
   });
 
-  test('resolver y la cola global tienen wrapper pero E8-4 no los usa', () => {
+  test('resolver, la cola global y las retiradas las usa SOLO la pantalla de fotos pendientes (no la galeria)', () => {
     expect(api).toContain('function apiResolverRetiroFotoPozo(');
     expect(api).toContain('function apiGetFotosPozosPendientesModeracion(');
-    const archivos = fs.readdirSync(__dirname).filter((f) => f.endsWith('.js') && !f.endsWith('.test.js') && f !== 'api.js');
+    expect(api).toContain('function apiGetFotosPozosRetiradasModeracion(');
+    const archivos = fs.readdirSync(__dirname).filter((f) => f.endsWith('.js') && !f.endsWith('.test.js') && f !== 'api.js' && f !== 'fotosModeracionCola.js');
     archivos.forEach((f) => {
-      expect(sinComentarios(leer(__dirname, f))).not.toMatch(/apiResolverRetiroFotoPozo\(|apiGetFotosPozosPendientesModeracion\(/);
+      expect(sinComentarios(leer(__dirname, f))).not.toMatch(/apiResolverRetiroFotoPozo\(|apiGetFotosPozosPendientesModeracion\(|apiGetFotosPozosRetiradasModeracion\(/);
     });
   });
 });
@@ -132,8 +138,10 @@ describe('quien toca los endpoints de moderacion', () => {
   const archivos = fs.readdirSync(__dirname).filter((f) => f.endsWith('.js') && !f.endsWith('.test.js'));
   const usan = (re) => archivos.filter((f) => re.test(sinComentarios(leer(__dirname, f)))).sort();
 
-  test('solo api.js (define) y el controlador de moderacion (usa) tocan los wrappers de moderacion', () => {
-    expect(usan(/\b(apiSolicitarRetiroFotoPozo|apiRetirarFotoPozo|apiReponerFotoPozo|apiGetHistorialFotoPozo|apiGetFotoPozoModeracion)\(/)).toEqual(['api.js', 'fotosModeracion.js']);
+  test('solo api.js (define) y los controladores de moderacion (usan) tocan los wrappers de moderacion', () => {
+    expect(usan(/\b(apiSolicitarRetiroFotoPozo|apiRetirarFotoPozo|apiGetHistorialFotoPozo)\(/)).toEqual(['api.js', 'fotosModeracion.js']);
+    expect(usan(/\b(apiReponerFotoPozo|apiGetFotoPozoModeracion)\(/)).toEqual(['api.js', 'fotosModeracion.js', 'fotosModeracionCola.js']);
+    expect(usan(/\b(apiResolverRetiroFotoPozo|apiGetFotosPozosPendientesModeracion|apiGetFotosPozosRetiradasModeracion)\(/)).toEqual(['api.js', 'fotosModeracionCola.js']);
   });
 
   test('la imagen de una foto retirada solo se pide con el endpoint de moderacion; el visor normal sigue con getFotoPozo', () => {
@@ -144,7 +152,7 @@ describe('quien toca los endpoints de moderacion', () => {
   });
 
   test('ningun archivo del frontend escribe las acciones de moderacion por su cuenta (solo api.js)', () => {
-    const acciones = ['solicitarRetiroFotoPozo', 'retirarFotoPozo', 'resolverRetiroFotoPozo', 'reponerFotoPozo', 'getHistorialFotoPozo', 'getFotosPozosPendientesModeracion', 'getFotoPozoModeracion'];
+    const acciones = ['solicitarRetiroFotoPozo', 'retirarFotoPozo', 'resolverRetiroFotoPozo', 'reponerFotoPozo', 'getHistorialFotoPozo', 'getFotosPozosPendientesModeracion', 'getFotosPozosRetiradasModeracion', 'getFotoPozoModeracion'];
     expect(archivos.filter((f) => acciones.some((a) => sinComentarios(leer(__dirname, f)).indexOf("'" + a + "'") >= 0))).toEqual(['api.js']);
   });
 });
@@ -167,7 +175,7 @@ describe('integracion con la galeria y app.js', () => {
 
   test('refrescar vuelve a pedir getFotosPozo al backend, fuerza el contador y, si falla, NO deja la galeria vieja a la vista', () => {
     const i = galeria.indexOf('function fotosPozosController_refrescar');
-    const bloque = galeria.slice(i, galeria.indexOf('function fotosPozosController_repintar'));
+    const bloque = galeria.slice(i, galeria.indexOf('function sincronizarVisor'));
     expect(bloque).toMatch(/apiGetFotosPozo\(/);
     expect(bloque).toMatch(/fotosPozosResumenController_cargar\(true\)/);
     expect(bloque).toMatch(/if \(aperturaId !== estado\.aperturaId\) \{ return false; \}\s*if \(r\.status !== 'ok'\)/);
@@ -176,11 +184,22 @@ describe('integracion con la galeria y app.js', () => {
     expect(bloque).not.toMatch(/estado\.fotos = estado\.fotos\.filter|splice/);
     expect(galeria).toMatch(/window\.fotosPozosController_refrescar = fotosPozosController_refrescar/);
     expect(galeria).toMatch(/window\.fotosPozosController_cerrarVisor = cerrarVisor/);
-    expect(galeria).toMatch(/window\.fotosPozosController_repintar = fotosPozosController_repintar/);
+    expect(galeria).not.toMatch(/fotosPozosController_repintar/);
+  });
+
+  test('tras refrescar con el visor abierto, el visor pasa a la foto ACTUALIZADA (o se cierra si ya no esta) sin volver a pedir la imagen', () => {
+    const i = galeria.indexOf('function sincronizarVisor');
+    const bloque = galeria.slice(i, galeria.indexOf('// Cierre de sesion: nada de la galeria'));
+    expect(bloque).toMatch(/if \(visorEl\.hidden\) \{ return; \}/);
+    expect(bloque).toMatch(/if \(indice < 0\) \{\s*cerrarVisor\(\);\s*return;\s*\}/);
+    expect(bloque).toMatch(/fotosModeracionController_alMostrarFoto\(visibles\[indice\]\)/);
+    expect(bloque).not.toMatch(/apiGetFotoPozo|cargarFotoVisor/);
+    expect(galeria).toMatch(/renderTodo\(\);\s*sincronizarVisor\(\);/);
+    expect(galeria).toMatch(/fotosModeracionController_etiquetaItem\(f\)/);        // la etiqueta sale de la foto (booleano del backend), no de una memoria de sesion
   });
 
   test('app.js inicializa la moderacion con contexto fresco (sesion + permisos de hoy), los ganchos de la galeria y el logout global', () => {
-    expect(app).toMatch(/fotosModeracionController_inicializar\(function \(\) \{[\s\S]{0,260}permisos: permisosActuales[\s\S]{0,120}logout\(\)[\s\S]{0,200}refrescar: fotosPozosController_refrescar,\s*cerrarVisor: fotosPozosController_cerrarVisor,\s*repintar: fotosPozosController_repintar/);
+    expect(app).toMatch(/fotosModeracionController_inicializar\(function \(\) \{[\s\S]{0,260}permisos: permisosActuales[\s\S]{0,120}logout\(\)[\s\S]{0,200}refrescar: fotosPozosController_refrescar,\s*cerrarVisor: fotosPozosController_cerrarVisor\s*\}\);/);
   });
 
   test('cerrar sesion descarta la moderacion junto con la galeria', () => {
@@ -188,7 +207,7 @@ describe('integracion con la galeria y app.js', () => {
   });
 
   test('app.js no decide permisos de moderacion ni llama sus endpoints', () => {
-    expect(sinComentarios(app)).not.toMatch(/fotos_moderar|apiRetirar|apiSolicitar|apiReponer|apiGetHistorial/);
+    expect(sinComentarios(app)).not.toMatch(/fotos_moderar|apiRetirar|apiSolicitar|apiReponer|apiGetHistorial|apiResolver|apiGetFotosPozos(Pendientes|Retiradas)|apiGetFotoPozoModeracion/);
   });
 });
 
@@ -256,14 +275,13 @@ describe('CSS propio y responsive', () => {
   });
 
   test('sin scroll horizontal: textos que se parten, botones que envuelven, controles al ancho completo', () => {
-    ['.fotos-mod-hist-evento-texto', '.fotos-mod-hist-evento-meta', '.fotos-mod-error', '.fotos-mod-texto', '.fotos-mod-aviso', '.fotos-mod-retirada-cuerpo p'].forEach((s) => {
+    ['.fotos-mod-hist-evento-texto', '.fotos-mod-hist-evento-meta', '.fotos-mod-error', '.fotos-mod-texto', '.fotos-mod-aviso'].forEach((s) => {
       expect(regla(s)).toMatch(/overflow-wrap:\s*anywhere/);
     });
     expect(regla('.fotos-mod-hist-evento-texto')).toMatch(/white-space:\s*pre-wrap/);
     expect(regla('.fotos-mod-botones')).toMatch(/flex-wrap:\s*wrap/);
     expect(regla('.fotos-mod-texto') + regla('.fotos-mod-select')).toMatch(/width:\s*100%/);
     expect(regla('.fotos-mod-acciones')).toMatch(/flex-wrap:\s*wrap/);
-    expect(regla('.fotos-mod-retirada-cuerpo')).toMatch(/min-width:\s*0/);
     expect(regla('.fotos-mod-hist-datos')).toMatch(/min-width:\s*0/);
     expect(bloque.replace(/@media \(min-width: 640px\)/g, '')).not.toMatch(/white-space:\s*nowrap|min-width:\s*\d+px/);
   });

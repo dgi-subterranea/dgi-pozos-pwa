@@ -1,6 +1,6 @@
 # Moderación de fotos de pozos (E8)
 
-Estado: **E8-3 (backend) commiteado en local (`c254b7b`) y E8-4 (interfaz en el módulo Fotos) IMPLEMENTADO LOCALMENTE, sin commit, sin push y sin desplegar. NADA de esto es productivo.** Nada de esto está en producción: la hoja `FotosPozoEventos` **no está creada**, la columna `fotos_moderar` **no existe** en `Usuarios`, no se ejecutó `setupFotosPozoEventosSheet`, no hay deploy, y el storage y Drive no se tocaron (el frontend cambia recién en E8-4, ver más abajo). La cola global y la resolución de solicitudes son E8-5; el rollout, E8-6.
+Estado: **E8-3 (backend, `c254b7b`) y E8-4 (interfaz en el módulo Fotos, `69683d2`) commiteados en local; E8-5 (cola institucional «Fotos pendientes») IMPLEMENTADO LOCALMENTE, sin commit, sin push y sin desplegar. NADA de esto es productivo.** Nada de esto está en producción: la hoja `FotosPozoEventos` **no está creada**, la columna `fotos_moderar` **no existe** en `Usuarios`, no se ejecutó `setupFotosPozoEventosSheet`, no hay deploy, y el storage y Drive no se tocaron (el frontend cambia recién en E8-4, ver más abajo). La cola global, la resolución de solicitudes y el listado de retiradas son E8-5 (ver más abajo); el rollout, E8-6.
 
 Alcance de E8 v1 (cerrado en E8-1): **moderación productiva + cola + base para la curaduría histórica.** La subida sigue **directa** (sin aprobación previa).
 
@@ -122,6 +122,7 @@ Todos por `doPost` con `sessionToken`; el cliente es autoridad **solo** sobre lo
 | `reponerFotoPozo` | `fotoId`, `clientRequestId` | `{fotoId, duplicada}` |
 | `getHistorialFotoPozo` | `fotoId` | `{foto, estado, eventos}` |
 | `getFotosPozosPendientesModeracion` | `limit` (1..100, defecto 50), `cursor` | `{total, items, hayMas, cursor}` |
+| `getFotosPozosRetiradasModeracion` (E8-5) | `limit` (1..100, defecto 50), `cursor` | `{total, items, hayMas, cursor}` |
 | `getFotoPozoModeracion` | `fotoId`, `variante` (`thumb` / `full`) | `{fotoId, variante, mimeType, imagenBase64}` |
 
 Ninguna respuesta lleva email, secuencia, `clientRequestId`, claves de cache, ids de Drive ni URLs de storage. Códigos de error estables: `INVALID_*` de entrada, `PERMISSION_DENIED`, `FOTO_NOT_FOUND`, `SOLICITUD_NOT_FOUND`, `SOLICITUD_YA_ABIERTA`, `SOLICITUD_ABIERTA`, `SOLICITUD_YA_RESUELTA`, `FOTO_YA_RETIRADA`, `FOTO_NO_RETIRADA`, `REPOSICION_NO_PERMITIDA`, `ESTADO_NO_DERIVABLE`, `IDEMPOTENCY_CONFLICT`, `INCONSISTENT_STATE`, `SERVICE_UNAVAILABLE`.
@@ -167,6 +168,8 @@ Retiro lógico: oculta de inmediato, invalida el cache y deja `requiereRevisionB
 
 ## E8-4: interfaz de moderación en Fotos (local, sin desplegar)
 
+> **Nota (E8-5):** la bandeja «Retiradas en esta sesión» y la memoria de «solicitud enviada» que se describen abajo **fueron reemplazadas en E8-5** por el listado de retiradas del backend (pantalla «Fotos pendientes») y por `tieneSolicitudRetiro` en la galería; ver la sección E8-5. El resto de E8-4 (permisos, formularios, historial, reposición, ids, errores, accesibilidad) sigue vigente.
+
 **Qué hace** (sin rediseñar Fotos): en el visor de la galería, cada persona ve solo las acciones que puede ejecutar.
 
 | Permiso (booleanos exactos, `=== true`) | Acciones en el visor |
@@ -192,7 +195,7 @@ La moderación no se infiere de `fotos_carga`, del nombre ni de la autoría. El 
 **Imagen de una foto retirada.** Solo con `getFotoPozoModeracion` (miniatura en la bandeja y en el historial). El visor normal sigue usando `getFotoPozo`, que respeta la visibilidad: la UI nunca lo usa «con bypass». Tests y guardas estáticas fijan que solo `api.js` y `fotosModeracion.js` tocan los wrappers de moderación.
 
 **Decisiones por contrato real del backend (E8-3):**
-- `getFotosPozo` devuelve solo fotos visibles y **no informa** si una foto tiene una solicitud abierta. «Retiro sugerido» se recuerda únicamente cuando el backend lo confirma en la sesión (éxito de la sugerencia o rechazo por solicitud ya abierta); recargar la página lo olvida. No se agregó un endpoint por foto para saberlo: una segunda sugerencia la rechaza el backend (`SOLICITUD_YA_ABIERTA`) y la UI lo explica («Esta foto ya tiene una solicitud de retiro pendiente.»).
+- (**Reemplazado en E8-5**, ver abajo: `getFotosPozo` ahora trae `tieneSolicitudRetiro` y no se recuerda nada en memoria.) `getFotosPozo` devolvía solo fotos visibles y **no informaba** si una foto tenía una solicitud abierta. «Retiro sugerido» se recordaba únicamente cuando el backend lo confirmaba en la sesión (éxito de la sugerencia o rechazo por solicitud ya abierta); recargar la página lo olvida. No se agregó un endpoint por foto para saberlo: una segunda sugerencia la rechaza el backend (`SOLICITUD_YA_ABIERTA`) y la UI lo explica («Esta foto ya tiene una solicitud de retiro pendiente.»).
 - **No existe un listado de fotos retiradas** (el backend solo ofrece historial e imagen por `fotoId`). Para poder reponer sin inventar N pedidos, la **bandeja «Retiradas en esta sesión»** guarda las fotos que *esa persona* retiró durante la sesión (por entidad, solo en memoria; se descarta al cerrar sesión). El toggle «Ver retiradas» y la cola global quedan para **E8-5** (necesitan un endpoint de listado).
 - **Resolver solicitudes (aprobar / rechazar) no tiene UI en E8-4.** El wrapper `apiResolverRetiroFotoPozo` y el de la cola global existen para fijar el contrato, pero ningún archivo de la interfaz los usa todavía. Si un moderador intenta retirar una foto con solicitud abierta ve el mensaje de solicitud pendiente.
 
@@ -207,6 +210,50 @@ La moderación no se infiere de `fotos_carga`, del nombre ni de la autoría. El 
 **Para un usuario normal** nada de esto aparece fuera de «Sugerir retiro» y «Retiro sugerido»: ni la bandeja, ni el historial, ni el aviso de revisión de borrado.
 
 **No productivo todavía:** falta la hoja `FotosPozoEventos`, la columna `fotos_moderar` en `Usuarios`, el rollout y los permisos reales (E8-6).
+
+## E8-5: cola institucional «Fotos pendientes» (local, sin desplegar)
+
+Objetivo: cerrar el circuito institucional de moderación. **No hay rollout todavía** (hoja, columna y permisos reales son E8-6) y la hoja de ruta no cambia.
+
+### 1. `tieneSolicitudRetiro` en la galería normal (backend)
+
+`getFotosPozo` suma a cada foto visible **un solo booleano**: `tieneSolicitudRetiro`, `true` si el historial **derivable** de la foto tiene una solicitud de retiro **ABIERTA** y `false` en cualquier otro caso (activa sin solicitud, solicitud rechazada). Una foto retirada (incluida la que se retiró aprobando la solicitud) no aparece en la galería normal.
+
+- **No viaja nada de la solicitud:** ni `solicitudId`, ni motivo, ni texto, ni nombre, ni email, ni fecha. Las claves de cada foto de la galería son las de siempre más ese booleano (test de claves exactas). La respuesta de una **subida** no lo lleva.
+- **Sale de los eventos reales**, en la misma pasada y con la misma derivación que ya filtra la visibilidad (`fotosPozosModeracionOps_visiblesConSolicitud`): una sola lectura de la hoja de eventos por carga, **sin N+1** (test que mide lecturas de hoja con 2 y con 42 fotos). Una foto no derivable (corrupción, entidad que no coincide) **no se muestra** (fail-closed), aunque tenga la solicitud abierta.
+- **No cambia la semántica de E8-3:** una solicitud abierta no oculta la foto y **sigue contando** en el contador.
+- **Cache (auditado):** la lista de la galería **no se cachea**; solo se cachean los ids internos (`fotospozos_m_<fotoId>`), la miniatura (`fotospozos_t_<fotoId>`) y el resumen. El booleano se calcula en cada pedido, así que solicitar o rechazar **no invalidan nada** (test: con el cache lleno, solicitar → `true`, rechazar → `false`, sin ninguna llamada a `cache.remove`). Aprobar usa la invalidación completa de E8-3 (metadata, miniatura y resumen de esa foto).
+
+### 2. Listado de fotos retiradas (backend)
+
+Acción nueva `getFotosPozosRetiradasModeracion` (solo `fotos` + `fotos_moderar` exactos; mismos errores y la misma paginación que la cola: `limit` 1..100, defecto 50, `cursor` estable por la secuencia del evento que retiró la foto, la retirada más reciente primero, sin traer todo).
+
+- **Entran** solo las fotos retiradas **por eventos** que se pueden reponer: historial derivable, estado `RETIRADA` con origen `EVENTO`, baseline `ACTIVA`, vínculo `CONFIRMADO` y entidad coincidente. **No entran:** una `OCULTA` legacy (ningún evento la revive), una foto no derivable ni una sin fila en FotosPozos.
+- Por ítem: `fotoId`, `entidadTipo`, `entidadId`, `origenRetiro` (`EVENTO`), `motivoCodigo`, `motivoTexto`, `nombre`, `timestampUtc`, `viaSolicitud`, `requiereRevisionBorrado` y `foto: {tipoFoto, fuente, fechaFotoValor, fechaFotoPrecision}`. Si la foto se retiró **aprobando una solicitud**, el motivo y el detalle son los de la solicitud y `nombre` es **quien aprobó**; si la retiró un moderador directo, `nombre` es quien retiró. Sin email, `clientRequestId`, secuencia, ids de Drive, base64 ni URLs.
+- **Una lectura de cada hoja** (eventos y FotosPozos; esta última solo si hay candidatas), agrupando en memoria. Para saber qué evento dejó retirada a la foto, la derivación guarda ahora `retiro` (`{ev, solicitud}`; interno, sin email).
+
+### 3. Pantalla «Fotos pendientes» (frontend)
+
+- **Acceso:** tarjeta propia en la pantalla principal («Fotos pendientes» / «Revisá solicitudes de retiro»), visible **solo con `fotos` y `fotos_moderar` exactos** (`fotosModeracionLogic_puedeModerar`: la regla compartida; `app.js` no tiene el nombre del permiso). Al hacer click se vuelve a comprobar el permiso. **La tarjeta no carga nada:** la primera página se pide recién al abrir la pantalla.
+- **Pestañas** (`role="tablist"`, flechas / Inicio / Fin): **Pendientes** (solicitudes abiertas, `getFotosPozosPendientesModeracion`) y **Retiradas** (`getFotosPozosRetiradasModeracion`). Son listas **independientes**: una respuesta vieja de una no pisa la otra, y una respuesta vieja de la misma lista (recarga, salir de la pantalla, cerrar sesión) se descarta. Una pestaña ya cargada se muestra tal cual; tras **aprobar** la de Retiradas se marca para recargarse.
+- **Paginación honesta:** una página por vez (20), «Ver más» con el cursor del backend, dedupe por `solicitudId` / `fotoId`, un ítem resuelto no resucita si llegaba en una página en vuelo. **No hay filtros ni buscador:** filtrar solo la página cargada daría la impresión de buscar en toda la cola. El total que informa el backend se muestra como «N solicitudes pendientes» / «N fotos retiradas» **sin otra llamada** (no hay badge en la tarjeta: exigiría leer la cola al entrar al hub).
+- **Tarjetas:** miniatura (`getFotoPozoModeracion` thumb, **nunca** el endpoint normal; carga lazy con un máximo de 3 pedidos en paralelo; si falla, «Sin vista previa» y la solicitud sigue siendo resoluble), entidad («Pozo 14-0001» o «Punto NE …»), quién y cuándo, motivo humano, detalle y metadata de la foto. Pendientes: **Abrir foto**, **Ver historial**, **Aprobar retiro**, **Rechazar**. Retiradas: **Abrir foto**, **Ver historial**, **Reponer** y, si el backend lo marca (PRIVACIDAD), la etiqueta «Pendiente de revisión de borrado» (no hay botón de borrar).
+- **Abrir foto:** imagen completa con `getFotoPozoModeracion` (full), aunque otra persona la haya retirado mientras se miraba la cola; sin fallback al endpoint normal.
+- **Ver historial:** reutiliza el diálogo de E8-4 (`fotosModeracionController_abrirHistorial`); no hay un componente nuevo. Reponer desde ahí actualiza la lista y el contador compartido.
+- **Confirmaciones** (un diálogo, sin pedir motivo): aprobar («La foto dejará de mostrarse en la galería.»), rechazar («La foto seguirá visible en la galería.»), reponer («¿Querés volver a mostrar esta foto en la galería?», más «También dejará de quedar marcada para revisión de borrado.» si requiere revisión de borrado). `clientRequestId` `foto-res-<uuid>` (aprobar y rechazar) / `foto-rep-<uuid>`: estable en el reintento, nuevo al cancelar y reabrir o tras un éxito; doble clic = un solo pedido; botones deshabilitados mientras se envía.
+- **Resultados:** aprobar → sale de Pendientes, baja el total, la foto aparece en Retiradas al recargar esa pestaña y el contador compartido se vuelve a pedir; rechazar → sale de Pendientes y la foto sigue activa (`tieneSolicitudRetiro` vuelve a `false`); reponer → sale de Retiradas, vuelve a la galería y se refresca el contador. Si otro moderador ya resolvió: «La solicitud ya fue resuelta. Actualizamos la lista.» y se vuelve a pedir la primera página.
+- **Errores:** pantalla de error con texto fijo («No se pudo cargar la moderación de fotos.») y **Reintentar**, sin códigos técnicos. `UNAUTHORIZED` / `USER_DISABLED` usan el cierre de sesión global.
+- **Accesibilidad / responsive:** pestañas con `aria-selected` (la activa no depende solo del color: trazo grueso, peso y subrayado), botones reales con nombre propio por tarjeta, foco que vuelve al botón de origen (o al aviso si la tarjeta ya no está), Tab / Escape en los diálogos, mensajes anunciables (`role="status"` / `alert`), objetivos de 44 px. Verificado con el controlador real en el navegador a 375 / 768 / 1280 px con 0, 1, 8, 20 y 45 solicitudes, texto largo, nombre largo sin espacios, miniatura fallida, PRIVACIDAD y paginación: sin scroll horizontal.
+
+### 4. Cambios en la galería (E8-4 ajustada)
+
+- **Se eliminó «Retiradas en esta sesión»** (la bandeja en memoria): las retiradas salen del backend en «Fotos pendientes». Tampoco se recuerda en memoria «solicitud enviada».
+- «Retiro sugerido» sale de `foto.tieneSolicitudRetiro === true` (booleano exacto): **sobrevive a recargar y a una sesión nueva**. Con una solicitud abierta, un usuario con `fotos_carga` **no ve «Sugerir retiro»** y ve el estado discreto; un moderador no ve «Retirar foto» (el backend la rechazaría con `SOLICITUD_ABIERTA`) y ve «Retiro sugerido. Resolvelo desde Fotos pendientes.» más **Ver historial**. Un lector (solo `fotos`) no ve nada de esto.
+- Tras sugerir, la galería se vuelve a pedir y **el visor abierto pasa a mostrar la foto actualizada** (o se cierra si ya no está), sin volver a pedir la imagen.
+
+### 5. No productivo todavía
+
+Falta la hoja `FotosPozoEventos`, la columna `fotos_moderar` en `Usuarios`, el rollout y los permisos reales (E8-6). **No se implementó** borrado físico (la cola solo muestra la señal de revisión), ni «Ver pozo» desde la cola, ni filtros, ni el botón Inicio global del roadmap.
 
 ## FotosPozosCambios: legacy
 

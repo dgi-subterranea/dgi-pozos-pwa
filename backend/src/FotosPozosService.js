@@ -344,6 +344,14 @@ function fotosPozosService_sanitizar(f) {
   };
 }
 
+// Foto de la GALERIA (E8-5): la salida de siempre + tieneSolicitudRetiro, SOLO un booleano: true si la foto visible tiene una solicitud de retiro ABIERTA segun los eventos reales. Nada de la solicitud
+// (id, motivo, nombre, fecha) sale en la galeria. La respuesta de una subida NO lo lleva (es una foto recien creada).
+function fotosPozosService_sanitizarGaleria(f) {
+  var salida = fotosPozosService_sanitizar(f);
+  salida.tieneSolicitudRetiro = f.tieneSolicitudRetiro === true;
+  return salida;
+}
+
 // Clave de orden por fecha de la foto SOLO para ordenar (no es lo que se muestra):
 // un anio ordena como 1 de enero de ese anio, un mes como el dia 1. Sin fecha: ''.
 function fotosPozosService_claveFecha(f) {
@@ -398,9 +406,10 @@ function fotosPozosService_listar(wellId, monitoringId, orden) {
   }
   // visibilidad FINAL: baseline + vinculo (repositorio) Y estado derivado de la moderacion (E8). LANZA si la hoja de eventos no se puede leer: fail-closed, nunca se muestra "sin moderar".
   var derivacion = fotosPozosModeracionOps_cargarDerivacion();
-  var fotos = fotosPozosService_ordenar(fotosPozosModeracionOps_filtrarVisibles(fotosPozosRepository_listarVisiblesPorEntidad(entidad), derivacion), orden);
+  // y de paso, en la misma pasada y con la misma derivacion, si cada una tiene una solicitud de retiro abierta (booleano; no cambia la visibilidad ni el contador).
+  var fotos = fotosPozosService_ordenar(fotosPozosModeracionOps_visiblesConSolicitud(fotosPozosRepository_listarVisiblesPorEntidad(entidad), derivacion), orden);
   fotosPozosService_cachearMeta(fotos);
-  return { ok: true, entidad: entidad.clave, total: fotos.length, fotos: fotos.map(fotosPozosService_sanitizar) };
+  return { ok: true, entidad: entidad.clave, total: fotos.length, fotos: fotos.map(fotosPozosService_sanitizarGaleria) };
 }
 
 // Deja en cache los ids internos de las fotos listadas (lotes de 50: putAll tiene
@@ -643,6 +652,7 @@ if (typeof module !== 'undefined' && module.exports) {
     fotosPozosService_validarImagenes,
     fotosPozosService_validarSubida,
     fotosPozosService_sanitizar,
+    fotosPozosService_sanitizarGaleria,
     fotosPozosService_claveFecha,
     fotosPozosService_ordenar,
     fotosPozosService_listar,

@@ -680,3 +680,349 @@ describe('permitidaPorEventos (puerta previa a servir una imagen)', () => {
     expect(Ops.fotosPozosModeracionOps_permitidaPorEventos(F1.toUpperCase(), D())).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+// E8-5
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+// cuenta lecturas de las hojas (getRange / getDataRange) desde que se llama
+function contadorDeLecturas() {
+  let n = 0;
+  ['FotosPozos', 'FotosPozoEventos'].forEach((nombre) => {
+    const h = hojas[nombre];
+    if (!h) { return; }
+    const gr = h.getRange.bind(h);
+    const gd = h.getDataRange.bind(h);
+    h.getRange = (...a) => { n += 1; return gr(...a); };
+    h.getDataRange = (...a) => { n += 1; return gd(...a); };
+  });
+  return () => n;
+}
+
+describe('galeria: tieneSolicitudRetiro (booleano derivado de los eventos reales)', () => {
+  const galeria = () => Service.fotosPozosService_listar('14-0001', '', 'recientes');
+  const flags = () => {
+    const r = galeria();
+    const m = {};
+    r.fotos.forEach((f) => { m[f.fotoId] = f.tieneSolicitudRetiro; });
+    return m;
+  };
+
+  test('activa sin solicitud -> false', () => {
+    expect(flags()).toEqual({ [F1]: false, [F2]: false });
+  });
+
+  test('activa con solicitud ABIERTA -> true, la foto SIGUE en la galeria y el resto sigue en false', () => {
+    ejecutar('SOLICITAR_RETIRO', { fotoId: F1, motivoCodigo: 'DUPLICADA' }, ANA);
+    expect(flags()).toEqual({ [F1]: true, [F2]: false });
+    expect(galeria().total).toBe(2);
+  });
+
+  test('solicitud RECHAZADA -> false (y la foto sigue activa)', () => {
+    const sol = ejecutar('SOLICITAR_RETIRO', { fotoId: F1, motivoCodigo: 'DUPLICADA' }, ANA);
+    ejecutar('RESOLVER_RETIRO', { solicitudId: sol.evento.eventoId, resolucion: 'RECHAZADO' });
+    expect(flags()).toEqual({ [F1]: false, [F2]: false });
+  });
+
+  test('solicitud APROBADA -> la foto ya no aparece en la galeria normal', () => {
+    const sol = ejecutar('SOLICITAR_RETIRO', { fotoId: F1, motivoCodigo: 'DUPLICADA' }, ANA);
+    ejecutar('RESOLVER_RETIRO', { solicitudId: sol.evento.eventoId, resolucion: 'APROBADO' });
+    expect(flags()).toEqual({ [F2]: false });
+  });
+
+  test('rechazada y una NUEVA solicitud -> vuelve a true; aprobada y repuesta -> false', () => {
+    const a = ejecutar('SOLICITAR_RETIRO', { fotoId: F1, motivoCodigo: 'DUPLICADA' }, ANA);
+    ejecutar('RESOLVER_RETIRO', { solicitudId: a.evento.eventoId, resolucion: 'RECHAZADO' });
+    const b = ejecutar('SOLICITAR_RETIRO', { fotoId: F1, motivoCodigo: 'MALA_CALIDAD' }, ANA);
+    expect(flags()[F1]).toBe(true);
+    ejecutar('RESOLVER_RETIRO', { solicitudId: b.evento.eventoId, resolucion: 'APROBADO' });
+    ejecutar('REPONER', { fotoId: F1 });
+    expect(flags()[F1]).toBe(false);
+  });
+
+  test('retirada directa y repuesta -> false; una OCULTA legacy no aparece', () => {
+    instalar([filaFoto(F1), filaFoto(F2, { estado: 'OCULTA' })]);
+    ejecutar('RETIRAR', { fotoId: F1, motivoCodigo: 'DUPLICADA' });
+    expect(flags()).toEqual({});
+    ejecutar('REPONER', { fotoId: F1 });
+    expect(flags()).toEqual({ [F1]: false });
+  });
+
+  test('varias fotos con estados distintos a la vez: cada una con SU solicitud', () => {
+    instalar([filaFoto(F1), filaFoto(F2), filaFoto(uuid(4)), filaFoto(uuid(5)), filaFoto(F3, { wellId: '', monitoringId: 'INA 536' })]);
+    ejecutar('SOLICITAR_RETIRO', { fotoId: F1, motivoCodigo: 'DUPLICADA' }, ANA);
+    const r = ejecutar('SOLICITAR_RETIRO', { fotoId: F2, motivoCodigo: 'DUPLICADA' }, ANA);
+    ejecutar('RESOLVER_RETIRO', { solicitudId: r.evento.eventoId, resolucion: 'RECHAZADO' });
+    ejecutar('SOLICITAR_RETIRO', { fotoId: uuid(5), motivoCodigo: 'DUPLICADA' }, ANA);
+    ejecutar('SOLICITAR_RETIRO', { fotoId: F3, motivoCodigo: 'DUPLICADA' }, ANA);
+    expect(flags()).toEqual({ [F1]: true, [F2]: false, [uuid(4)]: false, [uuid(5)]: true });
+    expect(Service.fotosPozosService_listar('', 'INA 536', 'recientes').fotos.map((f) => f.tieneSolicitudRetiro)).toEqual([true]);
+  });
+
+  test('historial corrupto (secuencia duplicada) -> fail-closed: la foto no aparece, ni siquiera con la solicitud abierta', () => {
+    hojas.FotosPozoEventos.filas.push(evSol(1, F1), evSol(1, F1, { eventoId: uuid(777) }));
+    expect(flags()).toEqual({ [F2]: false });
+  });
+
+  test('una solicitud atribuida a OTRA entidad (no coincide con la foto) no es derivable: fail-closed, la foto no se muestra', () => {
+    hojas.FotosPozoEventos.filas.push(evSol(1, F1, { entidadId: '99-9999' }));
+    expect(flags()).toEqual({ [F2]: false });
+  });
+
+  test('sin hoja de eventos: la galeria lanza (nada de mostrar "sin moderar")', () => {
+    instalar([filaFoto(F1)], null, true);
+    expect(() => galeria()).toThrow();
+  });
+
+  test('SOLO un booleano: nada de la solicitud (id, motivo, texto, nombre, fecha, email) sale en la galeria y las claves son exactas', () => {
+    ejecutar('SOLICITAR_RETIRO', { fotoId: F1, motivoCodigo: 'OTRO', motivoTexto: 'texto privado de Ana' }, ANA);
+    const r = galeria();
+    r.fotos.forEach((f) => {
+      expect(Object.keys(f).sort()).toEqual(['alto', 'ancho', 'fechaFotoFuente', 'fechaFotoPrecision', 'fechaFotoValor', 'fotoId', 'fuente', 'observacion', 'tieneGps', 'tieneSolicitudRetiro', 'tipoFoto']);
+      expect(typeof f.tieneSolicitudRetiro).toBe('boolean');
+    });
+    expect(JSON.stringify(r)).not.toMatch(/ana@x\.com|texto privado|"Ana"|motivo|DRIVE_|clientRequestId|secuencia|timestamp|solicitudId/);
+  });
+
+  test('el booleano NO cambia el contador: una foto con solicitud abierta sigue contando', () => {
+    ejecutar('SOLICITAR_RETIRO', { fotoId: F1, motivoCodigo: 'DUPLICADA' }, ANA);
+    expect(Service.fotosPozosService_resumen()).toEqual({ '14-0001': 2, 'INA 536': 1 });
+    expect(galeria().total).toBe(2);
+  });
+
+  test('la imagen de una foto con solicitud abierta se sigue sirviendo', () => {
+    global.fotosStorageClient_obtenerPozo = jest.fn().mockReturnValue({ mimeType: 'image/jpeg', imagenBase64: 'AAAA' });
+    ejecutar('SOLICITAR_RETIRO', { fotoId: F1, motivoCodigo: 'DUPLICADA' }, ANA);
+    expect(Service.fotosPozosService_obtenerImagen(F1, 'thumb').ok).toBe(true);
+  });
+
+  test('sin N+1: leer la galeria cuesta las MISMAS lecturas de hoja con 2 fotos que con 42, y la hoja de eventos se lee una vez', () => {
+    const fotos40 = [];
+    for (let i = 10; i < 50; i++) { fotos40.push(filaFoto(uuid(i))); }
+    instalar([filaFoto(F1), filaFoto(F2)]);
+    ejecutar('SOLICITAR_RETIRO', { fotoId: F1, motivoCodigo: 'DUPLICADA' }, ANA);
+    const leidasPocas = contadorDeLecturas();
+    galeria();
+    const pocas = leidasPocas();
+
+    instalar([filaFoto(F1), filaFoto(F2)].concat(fotos40));
+    for (let i = 10; i < 30; i++) { ejecutar('SOLICITAR_RETIRO', { fotoId: uuid(i), motivoCodigo: 'DUPLICADA' }, ANA); }
+    const leidasMuchas = contadorDeLecturas();
+    const eventos = jest.fn(Eventos.fotosPozoEventosRepository_leerTodos);
+    global.fotosPozoEventosRepository_leerTodos = eventos;
+    const r = galeria();
+    expect(r.total).toBe(42);
+    expect(r.fotos.filter((f) => f.tieneSolicitudRetiro)).toHaveLength(20);
+    expect(leidasMuchas()).toBe(pocas);
+    expect(pocas).toBeGreaterThan(0);
+    expect(eventos).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('galeria: cache y solicitudes (auditoria de E8-5)', () => {
+  beforeEach(() => {
+    global.fotosStorageClient_obtenerPozo = jest.fn().mockReturnValue({ mimeType: 'image/jpeg', imagenBase64: 'AAAA' });
+  });
+  const flagF1 = () => Service.fotosPozosService_listar('14-0001', '', 'recientes').fotos.find((f) => f.fotoId === F1).tieneSolicitudRetiro;
+  const quitados = () => bitacora.filter((b) => b.indexOf('remove:') === 0);
+
+  test('la lista de la galeria NO se cachea: el booleano refleja la solicitud aunque el cache de ids / miniaturas / resumen este lleno', () => {
+    Service.fotosPozosService_resumen();
+    Service.fotosPozosService_obtenerImagen(F1, 'thumb');
+    expect(flagF1()).toBe(false);
+    ejecutar('SOLICITAR_RETIRO', { fotoId: F1, motivoCodigo: 'DUPLICADA' }, ANA);
+    expect(flagF1()).toBe(true);
+  });
+
+  test('solicitar y rechazar NO invalidan ninguna clave (no cambian la visibilidad): el booleano cambia igual, sin tocar el cache', () => {
+    Service.fotosPozosService_resumen();
+    Service.fotosPozosService_obtenerImagen(F1, 'thumb');
+    bitacora.length = 0;
+    const sol = ejecutar('SOLICITAR_RETIRO', { fotoId: F1, motivoCodigo: 'DUPLICADA' }, ANA);
+    expect(sol.cacheInvalidado).toEqual([]);
+    expect(flagF1()).toBe(true);
+    const rech = ejecutar('RESOLVER_RETIRO', { solicitudId: sol.evento.eventoId, resolucion: 'RECHAZADO' });
+    expect(rech.cacheInvalidado).toEqual([]);
+    expect(flagF1()).toBe(false);
+    expect(quitados()).toEqual([]);
+    expect(cache.get('fotospozos_resumen')).not.toBeNull();
+    expect(cache.get('fotospozos_t_' + F1)).not.toBeNull();
+  });
+
+  test('aprobar SI usa la invalidacion completa de E8-3 (metadata, miniatura y resumen de esa foto)', () => {
+    Service.fotosPozosService_resumen();
+    Service.fotosPozosService_obtenerImagen(F1, 'thumb');
+    const sol = ejecutar('SOLICITAR_RETIRO', { fotoId: F1, motivoCodigo: 'DUPLICADA' }, ANA);
+    bitacora.length = 0;
+    const ap = ejecutar('RESOLVER_RETIRO', { solicitudId: sol.evento.eventoId, resolucion: 'APROBADO' });
+    expect(ap.cacheInvalidado.slice().sort()).toEqual(['fotospozos_m_' + F1, 'fotospozos_resumen', 'fotospozos_t_' + F1].sort());
+    expect(quitados().sort()).toEqual(['remove:fotospozos_m_' + F1, 'remove:fotospozos_resumen', 'remove:fotospozos_t_' + F1].sort());
+  });
+});
+
+describe('fotos retiradas (listado institucional para moderadores)', () => {
+  const retiradas = (l, c) => Ops.fotosPozosModeracionOps_retiradas(l, c);
+
+  test('vacio: sin retiradas no lee FotosPozos y devuelve un listado vacio', () => {
+    const fotos = jest.fn(Repo.fotosPozosRepository_leerTodasLasFotos);
+    global.fotosPozosRepository_leerTodasLasFotos = fotos;
+    expect(retiradas()).toEqual({ ok: true, total: 0, items: [], hayMas: false, cursor: null });
+    expect(fotos).not.toHaveBeenCalled();
+  });
+
+  test('retirada directa: motivo, detalle, quien la retiro, metadata de la foto y entidad; la mas reciente primero', () => {
+    ejecutar('RETIRAR', { fotoId: F1, motivoCodigo: 'DUPLICADA' });
+    ejecutar('RETIRAR', { fotoId: F3, motivoCodigo: 'OTRO', motivoTexto: 'no es el punto' }, { email: 'otro@x.com', nombre: 'Otro Moderador', permisos: MOD.permisos });
+    const r = retiradas();
+    expect(r).toMatchObject({ ok: true, total: 2, hayMas: false, cursor: null });
+    expect(r.items.map((i) => i.fotoId)).toEqual([F3, F1]);
+    expect(r.items[0]).toEqual({
+      fotoId: F3, entidadTipo: 'MONITORING', entidadId: 'INA 536', origenRetiro: 'EVENTO', motivoCodigo: 'OTRO', motivoTexto: 'no es el punto', nombre: 'Otro Moderador',
+      timestampUtc: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/), viaSolicitud: false, requiereRevisionBorrado: false,
+      foto: { tipoFoto: 'OTRA', fuente: 'CAMPO_APP', fechaFotoValor: '2025-06', fechaFotoPrecision: 'MES' }
+    });
+    expect(r.items[1]).toMatchObject({ fotoId: F1, entidadTipo: 'WELL', entidadId: '14-0001', motivoCodigo: 'DUPLICADA', motivoTexto: '', nombre: 'Moderadora Uno' });
+  });
+
+  test('retirada por APROBAR una solicitud: el motivo es el de la solicitud y el nombre es de quien aprobo', () => {
+    const sol = ejecutar('SOLICITAR_RETIRO', { fotoId: F1, motivoCodigo: 'OTRO', motivoTexto: 'se ve una cara' }, ANA);
+    ejecutar('RESOLVER_RETIRO', { solicitudId: sol.evento.eventoId, resolucion: 'APROBADO' }, { email: 'jefe@x.com', nombre: 'Jefe Foto', permisos: MOD.permisos });
+    const [item] = retiradas().items;
+    expect(item).toMatchObject({ fotoId: F1, origenRetiro: 'EVENTO', motivoCodigo: 'OTRO', motivoTexto: 'se ve una cara', nombre: 'Jefe Foto', viaSolicitud: true });
+  });
+
+  test('una solicitud RECHAZADA o ABIERTA no es una retirada; tampoco una foto repuesta', () => {
+    const a = ejecutar('SOLICITAR_RETIRO', { fotoId: F1, motivoCodigo: 'DUPLICADA' }, ANA);
+    ejecutar('RESOLVER_RETIRO', { solicitudId: a.evento.eventoId, resolucion: 'RECHAZADO' });
+    ejecutar('SOLICITAR_RETIRO', { fotoId: F2, motivoCodigo: 'DUPLICADA' }, ANA);
+    ejecutar('RETIRAR', { fotoId: F3, motivoCodigo: 'DUPLICADA' });
+    ejecutar('REPONER', { fotoId: F3 });
+    expect(retiradas()).toMatchObject({ total: 0, items: [] });
+  });
+
+  test('PRIVACIDAD marca requiereRevisionBorrado (retirada directa y aprobada); los demas motivos no', () => {
+    ejecutar('RETIRAR', { fotoId: F1, motivoCodigo: 'PRIVACIDAD' });
+    const sol = ejecutar('SOLICITAR_RETIRO', { fotoId: F2, motivoCodigo: 'PRIVACIDAD' }, ANA);
+    ejecutar('RESOLVER_RETIRO', { solicitudId: sol.evento.eventoId, resolucion: 'APROBADO' });
+    ejecutar('RETIRAR', { fotoId: F3, motivoCodigo: 'MALA_CALIDAD' });
+    const m = {};
+    retiradas().items.forEach((i) => { m[i.fotoId] = i.requiereRevisionBorrado; });
+    expect(m).toEqual({ [F1]: true, [F2]: true, [F3]: false });
+  });
+
+  test('una OCULTA legacy NO aparece (ningun evento la revive): ni sola ni con eventos', () => {
+    instalar([filaFoto(F1, { estado: 'OCULTA' }), filaFoto(F2, { estado: 'OCULTA' }), filaFoto(F3, { wellId: '', monitoringId: 'INA 536' })]);
+    hojas.FotosPozoEventos.filas.push(evRet(1, F2));
+    ejecutar('RETIRAR', { fotoId: F3, motivoCodigo: 'DUPLICADA' });
+    expect(retiradas().items.map((i) => i.fotoId)).toEqual([F3]);
+    expect(retiradas().total).toBe(1);
+  });
+
+  test('una foto con historial NO derivable no aparece; una foto sin fila en FotosPozos tampoco; ni una con el vinculo sin confirmar', () => {
+    instalar([filaFoto(F1), filaFoto(F2, { estadoVinculo: 'PENDIENTE' }), filaFoto(F3, { wellId: '', monitoringId: 'INA 536' })]);
+    ejecutar('RETIRAR', { fotoId: F3, motivoCodigo: 'DUPLICADA' });
+    hojas.FotosPozoEventos.filas.push(evRet(11, F1), evRet(11, F1, { eventoId: uuid(888) }));      // secuencia duplicada
+    hojas.FotosPozoEventos.filas.push(evRet(12, F2));
+    hojas.FotosPozoEventos.filas.push(evRet(13, uuid(99)));                                        // sin fila en FotosPozos
+    expect(retiradas().items.map((i) => i.fotoId)).toEqual([F3]);
+  });
+
+  test('una foto retirada con eventos de OTRA entidad no es derivable y no aparece', () => {
+    hojas.FotosPozoEventos.filas.push(evRet(1, F1, { entidadId: '99-9999' }));
+    expect(retiradas().total).toBe(0);
+  });
+
+  test('la que se repone sale del listado y la que se vuelve a retirar vuelve a entrar (mas reciente primero)', () => {
+    ejecutar('RETIRAR', { fotoId: F1, motivoCodigo: 'DUPLICADA' });
+    ejecutar('RETIRAR', { fotoId: F2, motivoCodigo: 'DUPLICADA' });
+    ejecutar('REPONER', { fotoId: F1 });
+    expect(retiradas().items.map((i) => i.fotoId)).toEqual([F2]);
+    ejecutar('RETIRAR', { fotoId: F1, motivoCodigo: 'MALA_CALIDAD' });
+    expect(retiradas().items.map((i) => i.fotoId)).toEqual([F1, F2]);
+    expect(retiradas().items[0].motivoCodigo).toBe('MALA_CALIDAD');
+  });
+
+  test('paginacion por cursor: determinista, sin repetir ni saltear, y el cursor es estable aunque se agreguen retiradas nuevas', () => {
+    const fotos = [];
+    for (let i = 10; i < 17; i++) { fotos.push(filaFoto(uuid(i))); }
+    fotos.push(filaFoto(uuid(40)));
+    instalar(fotos);
+    for (let i = 10; i < 17; i++) { ejecutar('RETIRAR', { fotoId: uuid(i), motivoCodigo: 'DUPLICADA' }); }
+    const orden = [16, 15, 14, 13, 12, 11, 10].map(uuid);
+    const p1 = retiradas(3);
+    expect(p1).toMatchObject({ total: 7, hayMas: true });
+    expect(p1.items.map((i) => i.fotoId)).toEqual(orden.slice(0, 3));
+    const p2 = retiradas(3, p1.cursor);
+    expect(p2.items.map((i) => i.fotoId)).toEqual(orden.slice(3, 6));
+    expect(p2.hayMas).toBe(true);
+    const p3 = retiradas(3, p2.cursor);
+    expect(p3.items.map((i) => i.fotoId)).toEqual(orden.slice(6));
+    expect(p3).toMatchObject({ hayMas: false, cursor: null });
+    // una retirada nueva (secuencia mayor) no desplaza lo que falta de la pagina siguiente
+    ejecutar('RETIRAR', { fotoId: uuid(40), motivoCodigo: 'DUPLICADA' });
+    expect(retiradas(3, p1.cursor).items.map((i) => i.fotoId)).toEqual(orden.slice(3, 6));
+  });
+
+  test('limit y cursor invalidos se rechazan igual que en la cola (defecto 50, maximo 100)', () => {
+    [0, -1, 101, 1.5, '5', NaN, Infinity, {}].forEach((l) => { expect(retiradas(l)).toMatchObject({ ok: false, code: 'INVALID_LIMIT' }); });
+    [0, -3, 2.5, 'x', NaN].forEach((c) => { expect(retiradas(10, c)).toMatchObject({ ok: false, code: 'INVALID_CURSOR' }); });
+  });
+
+  test('con mas de 50 retiradas el defecto pagina en 50', () => {
+    const fotos = [];
+    for (let i = 100; i < 160; i++) { fotos.push(filaFoto(uuid(i))); }
+    instalar(fotos);
+    for (let i = 100; i < 160; i++) { ejecutar('RETIRAR', { fotoId: uuid(i), motivoCodigo: 'DUPLICADA' }); }
+    const r = retiradas();
+    expect(r.items).toHaveLength(50);
+    expect(r).toMatchObject({ total: 60, hayMas: true });
+    expect(retiradas(undefined, r.cursor).items).toHaveLength(10);
+  });
+
+  test('sin email / clientRequestId / secuencia / ids de Drive / base64 / URLs, y las claves del item son exactas', () => {
+    ejecutar('RETIRAR', { fotoId: F1, motivoCodigo: 'OTRO', motivoTexto: 'detalle' });
+    const r = retiradas();
+    expect(Object.keys(r.items[0]).sort()).toEqual(['entidadId', 'entidadTipo', 'foto', 'fotoId', 'motivoCodigo', 'motivoTexto', 'nombre', 'origenRetiro', 'requiereRevisionBorrado', 'timestampUtc', 'viaSolicitud']);
+    expect(Object.keys(r.items[0].foto).sort()).toEqual(['fechaFotoPrecision', 'fechaFotoValor', 'fuente', 'tipoFoto']);
+    expect(JSON.stringify(r)).not.toMatch(/mod@x\.com|ana@x\.com|clientRequestId|secuencia|DRIVE_|base64|https?:|req-0000/i);
+  });
+
+  test('un nombre que parece un email se muestra neutro', () => {
+    ejecutar('RETIRAR', { fotoId: F1, motivoCodigo: 'DUPLICADA' }, { email: 'mod@x.com', nombre: 'mod@x.com', permisos: MOD.permisos });
+    expect(retiradas().items[0].nombre).toBe('Usuario');
+  });
+
+  test('lee la hoja de eventos UNA vez y FotosPozos UNA vez (sin N+1)', () => {
+    ejecutar('RETIRAR', { fotoId: F1, motivoCodigo: 'DUPLICADA' });
+    ejecutar('RETIRAR', { fotoId: F2, motivoCodigo: 'DUPLICADA' });
+    ejecutar('RETIRAR', { fotoId: F3, motivoCodigo: 'DUPLICADA' });
+    const eventos = jest.fn(Eventos.fotosPozoEventosRepository_leerTodos);
+    const fotos = jest.fn(Repo.fotosPozosRepository_leerTodasLasFotos);
+    global.fotosPozoEventosRepository_leerTodos = eventos;
+    global.fotosPozosRepository_leerTodasLasFotos = fotos;
+    expect(retiradas().total).toBe(3);
+    expect(eventos).toHaveBeenCalledTimes(1);
+    expect(fotos).toHaveBeenCalledTimes(1);
+  });
+
+  test('la cantidad de lecturas de hoja NO crece con la cantidad de retiradas (sin N+1)', () => {
+    ejecutar('RETIRAR', { fotoId: F1, motivoCodigo: 'DUPLICADA' });
+    const unaLectura = contadorDeLecturas();
+    retiradas();
+    const conUna = unaLectura();
+    const fotos = [];
+    for (let i = 10; i < 40; i++) { fotos.push(filaFoto(uuid(i))); }
+    instalar([filaFoto(F1), filaFoto(F2), filaFoto(F3)].concat(fotos));
+    ejecutar('RETIRAR', { fotoId: F1, motivoCodigo: 'DUPLICADA' });
+    for (let i = 10; i < 40; i++) { ejecutar('RETIRAR', { fotoId: uuid(i), motivoCodigo: 'DUPLICADA' }); }
+    const muchas = contadorDeLecturas();
+    expect(retiradas(100).items).toHaveLength(31);
+    expect(muchas()).toBe(conUna);
+    expect(conUna).toBeGreaterThan(0);
+  });
+
+  test('sin la hoja de eventos el listado lanza (fail-closed)', () => {
+    instalar([filaFoto(F1)], null, true);
+    expect(() => retiradas()).toThrow();
+  });
+});

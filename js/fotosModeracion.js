@@ -1,34 +1,33 @@
-// Controlador DOM de la MODERACION de fotos de pozos (E8-4): "Sugerir retiro" (fotos + fotos_carga), "Retirar foto" y "Ver historial" (fotos + fotos_moderar) en el visor de la galeria, la bandeja de
-// fotos retiradas EN ESTA SESION y la reposicion con confirmacion. Toda la logica (permisos, motivos, ids, errores, historial, maquina de estados) vive en js/fotosModeracionLogic.js, con tests; aca solo
-// se pinta. Las acciones NO tocan la galeria por su cuenta: avisan a js/fotosPozos.js, que vuelve a pedir getFotosPozo (la verdad es del backend; el frontend no conserva una copia "optimista").
+// Controlador DOM de la MODERACION de fotos de pozos en la galeria (E8-4, ajustado en E8-5): "Sugerir retiro" (fotos + fotos_carga), "Retirar foto" y "Ver historial" (fotos + fotos_moderar) en el visor de
+// la galeria, y el dialogo de historial con la reposicion con confirmacion (que tambien reutiliza la pantalla "Fotos pendientes", js/fotosModeracionCola.js). Toda la logica (permisos, motivos, ids,
+// errores, historial, maquina de estados) vive en js/fotosModeracionLogic.js, con tests; aca solo se pinta. Las acciones NO tocan la galeria por su cuenta: avisan a js/fotosPozos.js, que vuelve a pedir
+// getFotosPozo (la verdad es del backend; el frontend no conserva una copia "optimista").
 //
-// Contrato real del backend en E8-3 (por que la UI es asi):
-//  - getFotosPozo entrega SOLO fotos visibles y NO dice si una foto tiene una solicitud abierta. Por eso "Retiro sugerido" se recuerda unicamente cuando el backend lo CONFIRMA en esta sesion (exito de
-//    la sugerencia o rechazo por solicitud ya abierta). Una segunda sugerencia sobre la misma foto la rechaza el backend y la UI lo explica; no hay un endpoint por foto solo para saberlo.
-//  - No existe todavia un listado de fotos retiradas. Para poder reponer sin inventar N pedidos, la bandeja guarda las fotos que ESTA persona retiro en la sesion; el listado/cola global llega en E8-5.
-//  - La imagen de una foto retirada SOLO se pide con getFotoPozoModeracion (nunca con el endpoint normal) y solo desde la bandeja y el historial. El visor normal usa getFotoPozo, siempre.
+// Contrato del backend (por que la UI es asi):
+//  - getFotosPozo entrega SOLO fotos visibles y, desde E8-5, `tieneSolicitudRetiro` (booleano derivado de los eventos reales). "Retiro sugerido" sale de ahi: sobrevive a recargar y a una sesion nueva,
+//    y NO se recuerda nada en memoria. Con una solicitud abierta no se ofrece "Sugerir retiro" (ni "Retirar foto": se resuelve desde "Fotos pendientes").
+//  - La imagen de una foto retirada SOLO se pide con getFotoPozoModeracion (nunca con el endpoint normal) y solo desde el historial y la pantalla de fotos pendientes. El visor normal usa getFotoPozo.
 //
 // Privacidad: todo texto de datos se pinta con textContent (jamas innerHTML). No se muestran emails, ids ni codigos crudos. Nada se escribe en storage, ni se loguea.
 //
 // API (window.fotosModeracionController_*):
-//   _inicializar(obtenerContexto, hooks)   obtenerContexto() -> {sessionToken, permisos, onSessionExpired}; hooks = {refrescar(): Promise, cerrarVisor(), repintar()}
+//   _inicializar(obtenerContexto, hooks)   obtenerContexto() -> {sessionToken, permisos, onSessionExpired}; hooks = {refrescar(): Promise, cerrarVisor()}
 //   _alAbrir(entidad)                       se abrio la pantalla de fotos de esa entidad
 //   _alMostrarFoto(foto|null)               el visor muestra esa foto (o se cerro)
-//   _etiquetaItem(fotoId)                   texto discreto para la miniatura ("Retiro sugerido") o ''
+//   _etiquetaItem(foto)                     texto discreto para la miniatura ("Retiro sugerido") o ''
+//   _abrirHistorial(fotoId, boton, opc)     abre el historial de una foto desde otra pantalla; opc = {alReponer(), alEstadoCambiado(code), alCerrar()}
 //   _hayModalAbierto()                      para que Escape / flechas del visor no actuen debajo de un modal
 //   _cerrar() / _reset()                    salir de la pantalla / cerrar sesion
 (function () {
   var obtenerContexto = null;
-  var hooks = { refrescar: null, cerrarVisor: null, repintar: null };
+  var hooks = { refrescar: null, cerrarVisor: null };
   var estado = {
     entidad: null,
     foto: null,                  // foto que muestra el visor
-    sugeridas: {},               // fotoId -> true (confirmado por el backend en esta sesion)
-    retiradas: {},               // claveEntidad -> [{fotoId, fecha, detalle, motivo}] (retiradas por esta persona en esta sesion)
-    miniaturas: {},              // fotoId -> dataURL (imagen de moderacion, solo de la bandeja y el historial)
+    miniaturas: {},              // fotoId -> dataURL (imagen de moderacion, solo del historial)
     tokenMiniaturas: 0,
     aviso: { texto: '', error: false },
-    historialObjetivo: null      // item de la bandeja desde el que se abrio el historial (o null si vino del visor)
+    externo: null                // callbacks de la pantalla que abrio el historial (o null si vino del visor de la galeria)
   };
 
   function $(id) { return document.getElementById(id); }
@@ -41,8 +40,6 @@
   var visorEstadoEl = $('fotos-mod-visor-estado');
   // pantalla
   var avisoEl = $('fotos-mod-aviso');
-  var retiradasEl = $('fotos-mod-retiradas');
-  var retiradasListaEl = $('fotos-mod-retiradas-lista');
   // formulario (sugerir / retirar)
   var formOverlayEl = $('fotos-mod-form-overlay');
   var formEl = $('fotos-mod-form');
@@ -101,10 +98,6 @@
     return ctx().permisos;
   }
 
-  function claveEntidad() {
-    return estado.entidad && typeof fotosPozosLogic_claveEntidad === 'function' ? fotosPozosLogic_claveEntidad(estado.entidad) : '';
-  }
-
   function sesionVencida() {
     var c = ctx();
     if (typeof c.onSessionExpired === 'function') { c.onSessionExpired(); }
@@ -114,18 +107,19 @@
   // Acciones del visor
   // =====================================================================
 
+  // Los botones salen de los permisos de HOY y de `foto.tieneSolicitudRetiro === true` (lo informa el backend en la galeria): con una solicitud abierta no se sugiere otra ni se retira directo (el backend lo
+  // rechazaria): se muestra "Retiro sugerido" y el moderador la resuelve desde "Fotos pendientes". "Ver historial" sigue disponible para el moderador.
   function pintarAccionesVisor() {
     var p = permisos();
     var foto = estado.foto;
-    var id = foto ? fotosModeracionLogic_idNormalizado(foto.fotoId) : '';
-    var sugerida = id !== '' && estado.sugeridas[id] === true;
-    btnSugerirEl.hidden = !(foto && fotosModeracionLogic_puedeSugerir(p) && !sugerida);
+    var conSolicitud = !!foto && foto.tieneSolicitudRetiro === true;
+    btnSugerirEl.hidden = !(foto && fotosModeracionLogic_puedeSugerir(p) && !conSolicitud);
     var moderador = !!foto && fotosModeracionLogic_puedeModerar(p);
-    btnRetirarEl.hidden = !moderador;
+    btnRetirarEl.hidden = !(moderador && !conSolicitud);
     btnHistorialEl.hidden = !moderador;
     visorAccionesEl.hidden = btnSugerirEl.hidden && btnRetirarEl.hidden && btnHistorialEl.hidden;
-    if (foto && sugerida && fotosModeracionLogic_puedeSugerir(p)) {
-      visorEstadoEl.textContent = FOTOS_MODERACION_MENSAJE_ESTADO_SUGERIDO;
+    if (conSolicitud && fotosModeracionLogic_puedeVerEstadoSolicitud(p)) {
+      visorEstadoEl.textContent = moderador ? FOTOS_MODERACION_MENSAJE_SUGERIDO_MODERADOR : FOTOS_MODERACION_MENSAJE_ESTADO_SUGERIDO;
       visorEstadoEl.hidden = false;
     } else {
       visorEstadoEl.textContent = '';
@@ -220,7 +214,7 @@
   }
 
   // =====================================================================
-  // Avisos, bandeja de retiradas y refresco de la galeria
+  // Avisos y refresco de la galeria
   // =====================================================================
 
   function avisar(texto, error) {
@@ -228,10 +222,6 @@
     avisoEl.textContent = estado.aviso.texto;
     avisoEl.className = 'fotos-mod-aviso' + (error === true ? ' fotos-mod-aviso-error' : '');
     avisoEl.hidden = !texto || !fotosModeracionLogic_puedeVer(permisos());
-  }
-
-  function listaRetiradas() {
-    return estado.retiradas[claveEntidad()] || [];
   }
 
   function cargarMiniaturaModeracion(fotoId) {
@@ -250,56 +240,10 @@
     });
   }
 
-  function pintarBandeja() {
-    var moderador = fotosModeracionLogic_puedeModerar(permisos());
-    var items = moderador ? listaRetiradas() : [];
-    retiradasEl.hidden = items.length === 0;
-    retiradasListaEl.textContent = '';
-    items.forEach(function (it) {
-      var li = nodo('li', 'fotos-mod-retirada');
-      var img = nodo('img', 'fotos-mod-retirada-mini');
-      img.alt = 'Foto retirada del ' + (it.fecha || 'pozo');
-      li.appendChild(img);
-      cargarMiniaturaModeracion(it.fotoId).then(function (url) { img.src = url; }, function () { /* sin miniatura: queda el recuadro */ });
-      var cuerpo = nodo('div', 'fotos-mod-retirada-cuerpo');
-      cuerpo.appendChild(nodo('p', '', 'Foto del ' + (it.fecha || 'sin fecha') + (it.detalle ? ' · ' + it.detalle : '')));
-      if (it.motivo) { cuerpo.appendChild(nodo('p', '', 'Motivo: ' + it.motivo)); }
-      var boton = nodo('button', 'button-secondary', 'Ver historial');
-      boton.type = 'button';
-      boton.setAttribute('aria-haspopup', 'dialog');
-      boton.addEventListener('click', function () { abrirHistorial(it.fotoId, boton, it); });
-      cuerpo.appendChild(boton);
-      li.appendChild(cuerpo);
-      retiradasListaEl.appendChild(li);
-    });
-  }
-
-  function agregarRetirada(foto, codigoMotivo) {
-    var clave = claveEntidad();
-    if (clave === '' || !foto) { return; }
-    var id = fotosModeracionLogic_idNormalizado(foto.fotoId);
-    var lista = (estado.retiradas[clave] || []).filter(function (it) { return it.fotoId !== id; });
-    lista.unshift({
-      fotoId: id,
-      fecha: typeof fotosPozosLogic_formatearFecha === 'function' ? fotosPozosLogic_formatearFecha(foto.fechaFotoValor, foto.fechaFotoPrecision) : '',
-      detalle: typeof fotosPozosLogic_etiquetaFuente === 'function' ? fotosPozosLogic_etiquetaFuente(foto.fuente) + ' · ' + fotosPozosLogic_etiquetaTipo(foto.tipoFoto) : '',
-      motivo: codigoMotivo ? fotosModeracionLogic_etiquetaMotivo(codigoMotivo) : ''
-    });
-    estado.retiradas[clave] = lista;
-  }
-
-  function quitarRetirada(fotoId) {
-    var clave = claveEntidad();
-    var id = fotosModeracionLogic_idNormalizado(fotoId);
-    if (estado.retiradas[clave]) {
-      estado.retiradas[clave] = estado.retiradas[clave].filter(function (it) { return it.fotoId !== id; });
-    }
-  }
-
   // La galeria (y su contador) se vuelven a pedir al backend: no se confia en quitar un nodo del DOM. Devuelve una promesa que nunca rechaza.
   function refrescarGaleria() {
     var p = hooks.refrescar ? hooks.refrescar() : null;
-    return Promise.resolve(p).then(function () { pintarBandeja(); }, function () { pintarBandeja(); });
+    return Promise.resolve(p).then(function () { return undefined; }, function () { return undefined; });
   }
 
   function enfocarAviso() {
@@ -312,14 +256,13 @@
 
   function alExito(info) {
     if (info.tipo === 'SUGERIR') {
-      estado.sugeridas[fotosModeracionLogic_idNormalizado(info.fotoId)] = true;      // el backend lo confirmo: solicitud abierta
-      pintarAccionesVisor();
+      // una solicitud abierta NO oculta la foto: sigue en la galeria. El estado "Retiro sugerido" lo trae el backend: se vuelve a pedir la galeria (y el visor se sincroniza con la foto actualizada).
+      btnSugerirEl.hidden = true;
       mensajeVisor(FOTOS_MODERACION_MENSAJE_ESTADO_SUGERIDO);
-      if (hooks.repintar) { hooks.repintar(); }
-      return;                                       // una solicitud abierta NO oculta la foto: sigue en la galeria
+      refrescarGaleria();
+      return;
     }
     if (info.tipo === 'RETIRAR') {
-      agregarRetirada(info.foto, info.motivoCodigo);
       if (hooks.cerrarVisor) { hooks.cerrarVisor(); }
       avisar(FOTOS_MODERACION_MENSAJE_EXITO_RETIRAR, false);
       refrescarGaleria().then(enfocarAviso);
@@ -328,9 +271,9 @@
 
   function alEstadoCambiado(info) {
     if (info.tipo === 'SUGERIR' && info.code === 'SOLICITUD_YA_ABIERTA') {
-      estado.sugeridas[fotosModeracionLogic_idNormalizado(info.fotoId)] = true;      // el backend dice que ya hay una solicitud abierta
-      pintarAccionesVisor();
+      // el backend dice que ya hay una solicitud abierta (otra persona se adelanto): la galeria se actualiza y el visor muestra el estado real
       mensajeVisor(fotosModeracionLogic_mensajeError(info.code));
+      refrescarGaleria();
       return;
     }
     avisar(fotosModeracionLogic_mensajeError(info.code), true);
@@ -353,7 +296,13 @@
       histImgEl.removeAttribute('src');
       histImgEl.hidden = true;
       repConfirmarEl.hidden = true;
-      if (estabaAbierto) { devolverFoco(abridorHist); abridorHist = null; estado.historialObjetivo = null; }
+      if (estabaAbierto) {
+        devolverFoco(abridorHist);
+        abridorHist = null;
+        var externo = estado.externo;
+        estado.externo = null;
+        if (externo && typeof externo.alCerrar === 'function') { externo.alCerrar(); }
+      }
       return;
     }
     histCargandoEl.hidden = !e.cargando;
@@ -409,13 +358,24 @@
     });
   }
 
-  function abrirHistorial(fotoId, boton, objetivo) {
-    if (!historial || formAbierto) { return; }
+  // externo: callbacks de otra pantalla (la cola de fotos pendientes) que abre el mismo dialogo; null si se abre desde el visor de la galeria.
+  function abrirHistorial(fotoId, boton, externo) {
+    if (!historial || formAbierto) {
+      if (externo && typeof externo.alCerrar === 'function') { externo.alCerrar(); }
+      return;
+    }
     abridorHist = boton;
-    estado.historialObjetivo = objetivo || null;
+    estado.externo = externo || null;
     histImgEl.removeAttribute('data-foto-id');
     historial.abrir(fotoId).then(function (abrio) {
-      if (!abrio) { abridorHist = null; pintarAccionesVisor(); return; }
+      if (!abrio) {
+        abridorHist = null;
+        var ext = estado.externo;
+        estado.externo = null;
+        pintarAccionesVisor();
+        if (ext && typeof ext.alCerrar === 'function') { ext.alCerrar(); }
+        return;
+      }
       if (typeof btnHistCerrarEl.focus === 'function') { btnHistCerrarEl.focus(); }
     });
   }
@@ -456,17 +416,26 @@
     }
   }
 
+  // Al cerrarse el historial se llama a externo.alCerrar; por eso se toma el externo ANTES de cerrarlo.
   function alReponer(info) {
-    quitarRetirada(info.fotoId);
+    var externo = estado.externo;
     if (historial) { historial.cerrar(); }
+    if (externo) {
+      if (typeof externo.alReponer === 'function') { externo.alReponer(info); }        // la pantalla de fotos pendientes se actualiza sola
+      return;
+    }
     avisar(FOTOS_MODERACION_MENSAJE_EXITO_REPONER, false);
     refrescarGaleria().then(enfocarAviso);
   }
 
   function alReposicionCambio(info) {
     // la foto ya no esta retirada / no existe: se refresca todo y se explica
+    var externo = estado.externo;
     if (historial) { historial.cerrar(); }
-    if (info.code === 'FOTO_NO_RETIRADA' || info.code === 'FOTO_NOT_FOUND') { quitarRetirada(info.fotoId); }
+    if (externo) {
+      if (typeof externo.alEstadoCambiado === 'function') { externo.alEstadoCambiado(info.code); }
+      return;
+    }
     avisar(fotosModeracionLogic_mensajeError(info.code), true);
     refrescarGaleria().then(enfocarAviso);
   }
@@ -532,7 +501,7 @@
 
   function fotosModeracionController_inicializar(ctxFn, h) {
     obtenerContexto = ctxFn;
-    hooks = { refrescar: (h && h.refrescar) || null, cerrarVisor: (h && h.cerrarVisor) || null, repintar: (h && h.repintar) || null };
+    hooks = { refrescar: (h && h.refrescar) || null, cerrarVisor: (h && h.cerrarVisor) || null };
     poblarMotivos();
     var comunes = {
       obtenerContexto: ctxFn,
@@ -571,7 +540,6 @@
     estado.foto = null;
     avisar('', false);
     pintarAccionesVisor();
-    pintarBandeja();
   }
 
   function descartarModales() {
@@ -591,26 +559,26 @@
     pintarAccionesVisor();
   }
 
-  // Cierre de sesion: nada de la moderacion sobrevive (ni lo recordado, ni imagenes de fotos retiradas).
+  // Cierre de sesion: nada de la moderacion sobrevive (ni modales abiertos, ni imagenes de fotos retiradas).
   function fotosModeracionController_reset() {
     descartarModales();
     estado.entidad = null;
     estado.foto = null;
-    estado.sugeridas = {};
-    estado.retiradas = {};
     estado.miniaturas = {};
     estado.tokenMiniaturas += 1;
-    estado.historialObjetivo = null;
+    estado.externo = null;
     avisar('', false);
-    retiradasListaEl.textContent = '';
-    retiradasEl.hidden = true;
-    visorAccionesEl.hidden = true;
+    pintarAccionesVisor();
     mensajeVisor('');
   }
 
-  function fotosModeracionController_etiquetaItem(fotoId) {
-    var id = fotosModeracionLogic_idNormalizado(fotoId);
-    return id !== '' && estado.sugeridas[id] === true && fotosModeracionLogic_puedeSugerir(permisos()) ? FOTOS_MODERACION_MENSAJE_ESTADO_SUGERIDO : '';
+  // Texto discreto bajo la miniatura: sale del booleano que trae la galeria (no de memoria) y solo lo ve quien puede sugerir o moderar.
+  function fotosModeracionController_etiquetaItem(foto) {
+    return !!foto && foto.tieneSolicitudRetiro === true && fotosModeracionLogic_puedeVerEstadoSolicitud(permisos()) ? FOTOS_MODERACION_MENSAJE_ESTADO_SUGERIDO : '';
+  }
+
+  function fotosModeracionController_abrirHistorial(fotoId, boton, externo) {
+    abrirHistorial(fotoId, boton, externo);
   }
 
   function fotosModeracionController_hayModalAbierto() {
@@ -644,6 +612,7 @@
   window.fotosModeracionController_alAbrir = fotosModeracionController_alAbrir;
   window.fotosModeracionController_alMostrarFoto = fotosModeracionController_alMostrarFoto;
   window.fotosModeracionController_etiquetaItem = fotosModeracionController_etiquetaItem;
+  window.fotosModeracionController_abrirHistorial = fotosModeracionController_abrirHistorial;
   window.fotosModeracionController_hayModalAbierto = fotosModeracionController_hayModalAbierto;
   window.fotosModeracionController_cerrar = fotosModeracionController_cerrar;
   window.fotosModeracionController_reset = fotosModeracionController_reset;

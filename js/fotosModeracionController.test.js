@@ -1,4 +1,4 @@
-// Controlador DOM de la moderacion de fotos (E8-4): js/fotosModeracion.js ejecutado de verdad con un DOM minimo falso (que LANZA ante innerHTML / insertAdjacentHTML). Cubre quien ve cada boton, el
+// Controlador DOM de la moderacion de fotos (E8-4, ajustado en E8-5): js/fotosModeracion.js ejecutado de verdad con un DOM minimo falso (que LANZA ante innerHTML / insertAdjacentHTML). Cubre quien ve cada boton, el
 // modal de sugerencia y el de retiro, los ids, el historial (orden, etiquetas, XSS), la reposicion, la imagen de moderador, la galeria que se refresca desde el backend, el foco y el teclado, y la
 // sesion vencida. La logica fina esta en fotosModeracionLogic.test.js.
 const fs = require('fs');
@@ -18,7 +18,8 @@ const FOTO = '11111111-1111-4111-8111-111111111111';
 const OTRA = '22222222-2222-4222-8222-222222222222';
 const W = '14-0001';
 const ENTIDAD = { wellId: W, monitoringId: '', etiqueta: W, esNE: false };
-const FOTO_GRILLA = { fotoId: FOTO, fuente: 'CAMPO_APP', tipoFoto: 'OTRA', fechaFotoValor: '2025-06', fechaFotoPrecision: 'MES', observacion: '' };
+const FOTO_GRILLA = { fotoId: FOTO, fuente: 'CAMPO_APP', tipoFoto: 'OTRA', fechaFotoValor: '2025-06', fechaFotoPrecision: 'MES', observacion: '', tieneSolicitudRetiro: false };
+const CON_SOLICITUD = Object.assign({}, FOTO_GRILLA, { tieneSolicitudRetiro: true });
 const flush = async () => { for (let i = 0; i < 10; i += 1) { await new Promise((r) => setImmediate(r)); } };
 
 class Nodo {
@@ -82,8 +83,7 @@ function cargar(opc) {
   contexto.onSessionExpired = sesion;
   const hooks = {
     refrescar: jest.fn(() => Promise.resolve(true)),
-    cerrarVisor: jest.fn(() => { ctx.fotosModeracionController_alMostrarFoto(null); }),
-    repintar: jest.fn()
+    cerrarVisor: jest.fn(() => { ctx.fotosModeracionController_alMostrarFoto(null); })
   };
   fuentes.forEach((src) => vm.runInContext(src, ctx));
   ctx.fotosModeracionController_inicializar(() => contexto, hooks);
@@ -255,7 +255,7 @@ describe('sugerir retiro (fotos + fotos_carga)', () => {
     expect(t.llamadas.solicitar).toHaveLength(0);
   });
 
-  test('exito: envia con id foto-sol-<uuid>, cierra el modal, NO oculta la foto (no refresca ni cierra el visor) y muestra "Retiro sugerido"', async () => {
+  test('exito: envia con id foto-sol-<uuid>, cierra el modal, NO oculta la foto (no cierra el visor), muestra "Retiro sugerido" y VUELVE A PEDIR la galeria al backend', async () => {
     const t = cargar({ permisos: { fotos: true, fotos_carga: true }, reemplazarPermisos: true });
     abrirVisor(t);
     sugerir(t).click();
@@ -271,17 +271,27 @@ describe('sugerir retiro (fotos + fotos_carga)', () => {
     await flush();
     expect(abiertoForm(t)).toBe(false);
     expect(t.bodyClases.has('fotos-mod-abierto')).toBe(false);
-    expect(t.hooks.refrescar).not.toHaveBeenCalled();
+    expect(t.hooks.refrescar).toHaveBeenCalledTimes(1);          // el estado real lo trae el backend (tieneSolicitudRetiro), no una copia local
     expect(t.hooks.cerrarVisor).not.toHaveBeenCalled();
     expect(sugerir(t).hidden).toBe(true);
     expect(E(t, 'fotos-mod-visor-estado').hidden).toBe(false);
     expect(texto(t, 'fotos-mod-visor-estado')).toBe('Retiro sugerido');
-    expect(t.ctx.fotosModeracionController_etiquetaItem(FOTO)).toBe('Retiro sugerido');
-    expect(t.hooks.repintar).toHaveBeenCalled();
     expect(Nodo.enFoco).toBe(E(t, 'fotos-mod-visor-estado'));
   });
 
-  test('la etiqueta "Retiro sugerido" solo la ve quien puede sugerir; reabrir la misma foto no ofrece sugerir otra vez', async () => {
+  test('"Retiro sugerido" sale del booleano del backend: con tieneSolicitudRetiro === true no se ofrece sugerir otra vez y se ve el estado', () => {
+    const t = conPermisos({ fotos: true, fotos_carga: true });
+    abrirVisor(t, CON_SOLICITUD);
+    expect(sugerir(t).hidden).toBe(true);
+    expect(E(t, 'fotos-mod-visor-estado').hidden).toBe(false);
+    expect(texto(t, 'fotos-mod-visor-estado')).toBe('Retiro sugerido');
+    expect(E(t, 'fotos-mod-visor-acciones').hidden).toBe(true);
+    abrirVisor(t, FOTO_GRILLA);
+    expect(sugerir(t).hidden).toBe(false);
+    expect(E(t, 'fotos-mod-visor-estado').hidden).toBe(true);
+  });
+
+  test('NO hay memoria de sesion: tras sugerir, una foto que el backend aun no marca (sin flag) vuelve a ofrecer "Sugerir retiro"', async () => {
     const t = cargar({ permisos: { fotos: true, fotos_carga: true }, reemplazarPermisos: true });
     abrirVisor(t);
     sugerir(t).click();
@@ -290,11 +300,51 @@ describe('sugerir retiro (fotos + fotos_carga)', () => {
     t.pend.solicitar[0](respOk());
     await flush();
     abrirVisor(t);
-    expect(sugerir(t).hidden).toBe(true);
-    expect(texto(t, 'fotos-mod-visor-estado')).toBe('Retiro sugerido');
-    expect(t.ctx.fotosModeracionController_etiquetaItem(OTRA)).toBe('');
-    abrirVisor(t, Object.assign({}, FOTO_GRILLA, { fotoId: OTRA }));
     expect(sugerir(t).hidden).toBe(false);
+    expect(texto(t, 'fotos-mod-visor-estado')).toBe('');
+    expect(codigoControlador).not.toMatch(/sugeridas/);
+  });
+
+  test('solo el booleano EXACTO true marca la solicitud (truthy no alcanza)', () => {
+    ['true', 1, 'SI', {}].forEach((v) => {
+      const t = conPermisos({ fotos: true, fotos_carga: true });
+      abrirVisor(t, Object.assign({}, FOTO_GRILLA, { tieneSolicitudRetiro: v }));
+      expect(sugerir(t).hidden).toBe(false);
+      expect(t.ctx.fotosModeracionController_etiquetaItem(Object.assign({}, FOTO_GRILLA, { tieneSolicitudRetiro: v }))).toBe('');
+    });
+  });
+
+  test('etiqueta de la miniatura: sale del flag de ESA foto y solo la ve quien puede sugerir o moderar', () => {
+    const carga = conPermisos({ fotos: true, fotos_carga: true });
+    expect(carga.ctx.fotosModeracionController_etiquetaItem(CON_SOLICITUD)).toBe('Retiro sugerido');
+    expect(carga.ctx.fotosModeracionController_etiquetaItem(FOTO_GRILLA)).toBe('');
+    expect(carga.ctx.fotosModeracionController_etiquetaItem(null)).toBe('');
+    expect(carga.ctx.fotosModeracionController_etiquetaItem(undefined)).toBe('');
+    const mod = conPermisos({ fotos: true, fotos_moderar: true });
+    expect(mod.ctx.fotosModeracionController_etiquetaItem(CON_SOLICITUD)).toBe('Retiro sugerido');
+    const lector = conPermisos({ fotos: true });
+    expect(lector.ctx.fotosModeracionController_etiquetaItem(CON_SOLICITUD)).toBe('');
+    const sinFotos = conPermisos({ fotos_carga: true });
+    expect(sinFotos.ctx.fotosModeracionController_etiquetaItem(CON_SOLICITUD)).toBe('');
+  });
+
+  test('el moderador con una solicitud abierta: no ve "Retirar foto" (se resuelve en Fotos pendientes) pero si "Ver historial"; el estado lo orienta', () => {
+    const t = conPermisos({ fotos: true, fotos_moderar: true });
+    abrirVisor(t, CON_SOLICITUD);
+    expect(visibles(t)).toEqual({ sugerir: false, retirar: false, historial: true });
+    expect(texto(t, 'fotos-mod-visor-estado')).toBe('Retiro sugerido. Resolvelo desde Fotos pendientes.');
+    const ambos = cargar();
+    abrirVisor(ambos, CON_SOLICITUD);
+    expect(visibles(ambos)).toEqual({ sugerir: false, retirar: false, historial: true });
+    abrirVisor(ambos, FOTO_GRILLA);
+    expect(visibles(ambos)).toEqual({ sugerir: true, retirar: true, historial: true });
+  });
+
+  test('un lector (solo fotos) no ve el estado de la solicitud ni ninguna accion', () => {
+    const t = conPermisos({ fotos: true });
+    abrirVisor(t, CON_SOLICITUD);
+    expect(visibles(t)).toEqual({ sugerir: false, retirar: false, historial: false });
+    expect(E(t, 'fotos-mod-visor-estado').hidden).toBe(true);
   });
 
   test('doble clic: un solo pedido; el boton queda deshabilitado mientras se envia', () => {
@@ -350,7 +400,7 @@ describe('sugerir retiro (fotos + fotos_carga)', () => {
     expect(t.llamadas.solicitar[1][4]).not.toBe(t.llamadas.solicitar[0][4]);
   });
 
-  test('segunda sugerencia (el backend la rechaza): se cierra, queda "Retiro sugerido" y el mensaje de solicitud pendiente', async () => {
+  test('segunda sugerencia (el backend la rechaza): se cierra, se explica y la galeria se actualiza con el estado real (sin cerrar el visor)', async () => {
     const t = cargar();
     abrirVisor(t);
     sugerir(t).click();
@@ -359,10 +409,10 @@ describe('sugerir retiro (fotos + fotos_carga)', () => {
     t.pend.solicitar[0](respErr('SOLICITUD_YA_ABIERTA'));
     await flush();
     expect(abiertoForm(t)).toBe(false);
-    expect(sugerir(t).hidden).toBe(true);
     expect(texto(t, 'fotos-mod-visor-estado')).toBe('Esta foto ya tiene una solicitud de retiro pendiente.');
-    expect(t.hooks.refrescar).not.toHaveBeenCalled();
-    expect(t.ctx.fotosModeracionController_etiquetaItem(FOTO)).toBe('Retiro sugerido');
+    expect(t.hooks.refrescar).toHaveBeenCalledTimes(1);
+    expect(t.hooks.cerrarVisor).not.toHaveBeenCalled();
+    expect(E(t, 'fotos-mod-aviso').hidden).toBe(true);
   });
 
   test.each([['FOTO_NOT_FOUND', 'La foto ya no está disponible.'], ['INVALID_TRANSITION', 'El estado de la foto cambió. Actualizamos la galería.'], ['FOTO_YA_RETIRADA', 'El estado de la foto cambió. Actualizamos la galería.']])('%s: la foto cambio -> se cierra el modal y el visor, se avisa y se refresca la galeria', async (code, mensaje) => {
@@ -452,7 +502,7 @@ describe('retirar foto (fotos + fotos_moderar)', () => {
     expect(E(t, 'fotos-mod-privacidad').hidden).toBe(true);
   });
 
-  test('exito: id foto-ret-<uuid>, cierra el modal y el visor, agrega la foto a la bandeja y VUELVE A PEDIR la galeria al backend', async () => {
+  test('exito: id foto-ret-<uuid>, cierra el modal y el visor y VUELVE A PEDIR la galeria al backend (sin bandeja de sesion)', async () => {
     const t = cargar();
     abrirVisor(t);
     retirar(t).click();
@@ -468,14 +518,11 @@ describe('retirar foto (fotos + fotos_moderar)', () => {
     expect(t.hooks.cerrarVisor).toHaveBeenCalledTimes(1);
     expect(t.hooks.refrescar).toHaveBeenCalledTimes(1);
     expect(texto(t, 'fotos-mod-aviso')).toBe('Foto retirada. El archivo no se eliminó.');
-    expect(E(t, 'fotos-mod-retiradas').hidden).toBe(false);
-    expect(E(t, 'fotos-mod-retiradas-lista').children).toHaveLength(1);
-    expect(E(t, 'fotos-mod-retiradas-lista').children[0].textContent).toContain('Motivo: Privacidad');
     expect(visibles(t)).toEqual({ sugerir: false, retirar: false, historial: false });
     expect(Nodo.enFoco).toBe(E(t, 'fotos-mod-aviso'));
   });
 
-  test('la bandeja pide la imagen con el endpoint de MODERACION y nunca con el normal', async () => {
+  test('la galeria NO pide ninguna imagen de la foto retirada (ni con el endpoint normal ni con el de moderacion): las retiradas se ven en Fotos pendientes', async () => {
     const t = cargar();
     abrirVisor(t);
     retirar(t).click();
@@ -483,10 +530,9 @@ describe('retirar foto (fotos + fotos_moderar)', () => {
     enviarForm(t);
     t.pend.retirar[0](respOk());
     await flush();
-    expect(t.llamadas.imagen).toEqual([['tok', FOTO, 'thumb']]);
+    expect(t.llamadas.imagen).toHaveLength(0);
     expect(t.llamadas.normal).toHaveLength(0);
-    const img = E(t, 'fotos-mod-retiradas-lista').children[0].children[0];
-    expect(img.src).toBe('data:image/jpeg;base64,AAAA');
+    expect(html).not.toContain('fotos-mod-retiradas');
   });
 
   test('la foto retirada NO queda como activa en el frontend: no hay copia optimista (se cerro el visor y la galeria depende del refresco)', async () => {
@@ -529,7 +575,7 @@ describe('retirar foto (fotos + fotos_moderar)', () => {
     expect(t.llamadas.retirar[2][4]).not.toBe(t.llamadas.retirar[0][4]);
   });
 
-  test('con una solicitud abierta el moderador ve el mensaje y el modal sigue (hasta E8-5 no hay UI para resolverla)', async () => {
+  test('si igual llega SOLICITUD_ABIERTA (la solicitud se abrio despues de pintar la galeria), el moderador ve el mensaje y el modal sigue', async () => {
     const t = cargar();
     abrirVisor(t);
     retirar(t).click();
@@ -552,7 +598,6 @@ describe('retirar foto (fotos + fotos_moderar)', () => {
     await flush();
     expect(abiertoForm(t)).toBe(true);
     expect(t.hooks.cerrarVisor).not.toHaveBeenCalled();
-    expect(E(t, 'fotos-mod-retiradas').hidden).toBe(true);
     expect(texto(t, 'fotos-mod-form-error')).not.toMatch(/FotosPozoEventos|SERVICE_UNAVAILABLE|hoja/);
   });
 
@@ -565,7 +610,6 @@ describe('retirar foto (fotos + fotos_moderar)', () => {
     t.pend.retirar[0](respErr('UNAUTHORIZED'));
     await flush();
     expect(t.sesion).toHaveBeenCalledTimes(1);
-    expect(E(t, 'fotos-mod-retiradas').hidden).toBe(true);
   });
 
   test('quien no es moderador no puede abrir el retiro ni aunque el boton fuera accesible', () => {
@@ -577,9 +621,8 @@ describe('retirar foto (fotos + fotos_moderar)', () => {
     expect(t.llamadas.retirar).toHaveLength(0);
   });
 
-  test('la bandeja no se muestra a quien no modera', () => {
-    const t = conPermisos({ fotos: true, fotos_carga: true });
-    expect(E(t, 'fotos-mod-retiradas').hidden).toBe(true);
+  test('tras un retiro exitoso la UI del moderador no conserva nada de la foto: ni bandeja ni lista local', () => {
+    expect(codigoControlador).not.toMatch(/retiradas|agregarRetirada|quitarRetirada|bandeja/i);
   });
 });
 
@@ -729,19 +772,13 @@ describe('reposicion', () => {
   async function conRetirada(estadoExtra) {
     const t = cargar();
     abrirVisor(t);
-    retirar(t).click();
-    elegirMotivo(t, 'DUPLICADA');
-    enviarForm(t);
-    t.pend.retirar[0](respOk());
-    await flush();
-    const abrir = E(t, 'fotos-mod-retiradas-lista').children[0].children[1].children.filter((c) => c.tag === 'button')[0];
-    abrir.click();
+    verHistorial(t).click();
     t.pend.historial[0](historialOk([evento()], estadoExtra));
     await flush();
     return t;
   }
 
-  test('desde la bandeja: historial -> "Reponer foto" -> confirmacion con el copy pedido', async () => {
+  test('historial -> "Reponer foto" -> confirmacion con el copy pedido', async () => {
     const t = await conRetirada();
     expect(E(t, 'btn-fotos-mod-hist-reponer').hidden).toBe(false);
     E(t, 'btn-fotos-mod-hist-reponer').click();
@@ -753,7 +790,7 @@ describe('reposicion', () => {
     expect(t.llamadas.reponer).toHaveLength(0);
   });
 
-  test('confirmar: id foto-rep-<uuid>, sin motivo; exito -> cierra, quita la foto de la bandeja, refresca la galeria y avisa', async () => {
+  test('confirmar: id foto-rep-<uuid>, sin motivo; exito -> cierra, refresca la galeria y avisa', async () => {
     const t = await conRetirada();
     E(t, 'btn-fotos-mod-hist-reponer').click();
     E(t, 'btn-fotos-mod-rep-confirmar').click();
@@ -765,7 +802,6 @@ describe('reposicion', () => {
     t.pend.reponer[0](respOk());
     await flush();
     expect(abiertoHist(t)).toBe(false);
-    expect(E(t, 'fotos-mod-retiradas').hidden).toBe(true);
     expect(t.hooks.refrescar).toHaveBeenCalledTimes(1);
     expect(texto(t, 'fotos-mod-aviso')).toBe('Foto repuesta en la galería.');
     expect(t.ctx.fotosModeracionController_hayModalAbierto()).toBe(false);
@@ -813,7 +849,6 @@ describe('reposicion', () => {
     expect(abiertoHist(t)).toBe(false);
     expect(texto(t, 'fotos-mod-aviso')).toBe('El estado de la foto cambió. Actualizamos la galería.');
     expect(t.hooks.refrescar).toHaveBeenCalledTimes(1);
-    expect(E(t, 'fotos-mod-retiradas').hidden).toBe(true);
   });
 
   test('REPOSICION_NO_PERMITIDA: el error se explica dentro de la confirmacion', async () => {
@@ -917,7 +952,7 @@ describe('teclado, foco y bloqueo', () => {
 });
 
 describe('ciclo de vida', () => {
-  test('reset (cerrar sesion): modales, bandeja, sugerencias recordadas e imagenes se descartan', async () => {
+  test('reset (cerrar sesion): modales, historial, imagenes y avisos se descartan', async () => {
     const t = cargar();
     abrirVisor(t);
     retirar(t).click();
@@ -930,26 +965,10 @@ describe('ciclo de vida', () => {
     t.ctx.fotosModeracionController_reset();
     expect(abiertoForm(t)).toBe(false);
     expect(abiertoHist(t)).toBe(false);
-    expect(E(t, 'fotos-mod-retiradas').hidden).toBe(true);
-    expect(E(t, 'fotos-mod-retiradas-lista').children).toHaveLength(0);
+    expect(texto(t, 'fotos-mod-aviso')).toBe('');
+    expect(E(t, 'fotos-mod-aviso').hidden).toBe(true);
+    expect(visibles(t)).toEqual({ sugerir: false, retirar: false, historial: false });
     expect(t.bodyClases.has('fotos-mod-abierto')).toBe(false);
-    t.ctx.fotosModeracionController_alAbrir(ENTIDAD);
-    expect(E(t, 'fotos-mod-retiradas').hidden).toBe(true);
-  });
-
-  test('la bandeja es por entidad: otra entidad no ve las retiradas de esta', async () => {
-    const t = cargar();
-    abrirVisor(t);
-    retirar(t).click();
-    elegirMotivo(t, 'DUPLICADA');
-    enviarForm(t);
-    t.pend.retirar[0](respOk());
-    await flush();
-    expect(E(t, 'fotos-mod-retiradas').hidden).toBe(false);
-    t.ctx.fotosModeracionController_alAbrir({ wellId: '14-0002', monitoringId: '', etiqueta: '14-0002' });
-    expect(E(t, 'fotos-mod-retiradas').hidden).toBe(true);
-    t.ctx.fotosModeracionController_alAbrir(ENTIDAD);
-    expect(E(t, 'fotos-mod-retiradas').hidden).toBe(false);
   });
 
   test('salir de la pantalla (cerrar) descarta los modales abiertos y lo que vuelve despues', async () => {
@@ -963,7 +982,6 @@ describe('ciclo de vida', () => {
     await flush();
     expect(abiertoForm(t)).toBe(false);
     expect(t.hooks.refrescar).not.toHaveBeenCalled();
-    expect(E(t, 'fotos-mod-retiradas').hidden).toBe(true);
   });
 
   test('el aviso solo lo ve quien puede ver fotos', () => {
@@ -1019,78 +1037,37 @@ describe('permisos que cambian y ciclo de vida (huecos cerrados por mutacion)', 
     expect(abiertoForm(t)).toBe(true);
   });
 
-  test.each([['UNAUTHORIZED'], ['USER_DISABLED']])('%s al cargar la miniatura de la bandeja: logout global', async (code) => {
+  test.each([['UNAUTHORIZED'], ['USER_DISABLED']])('%s al cargar la imagen del historial: logout global', async (code) => {
     const t = cargar({ imagen: () => Promise.resolve({ status: 'error', code: code }) });
-    abrirVisor(t);
-    retirar(t).click();
-    elegirMotivo(t, 'DUPLICADA');
-    enviarForm(t);
-    t.pend.retirar[0](respOk());
-    await flush();
+    await abrirHistorialConDatos(t);
     expect(t.sesion).toHaveBeenCalledTimes(1);
   });
 
-  test('la etiqueta "Retiro sugerido" de la miniatura depende del permiso de hoy', async () => {
+  test('la etiqueta "Retiro sugerido" de la miniatura depende del permiso de hoy', () => {
     const t = cargar();
-    abrirVisor(t);
-    sugerir(t).click();
-    elegirMotivo(t, 'DUPLICADA');
-    enviarForm(t);
-    t.pend.solicitar[0](respOk());
-    await flush();
-    expect(t.ctx.fotosModeracionController_etiquetaItem(FOTO)).toBe('Retiro sugerido');
+    expect(t.ctx.fotosModeracionController_etiquetaItem(CON_SOLICITUD)).toBe('Retiro sugerido');
     t.contexto.permisos = { fotos: true };
-    expect(t.ctx.fotosModeracionController_etiquetaItem(FOTO)).toBe('');
+    expect(t.ctx.fotosModeracionController_etiquetaItem(CON_SOLICITUD)).toBe('');
     t.contexto.permisos = { fotos: true, fotos_moderar: true };
-    expect(t.ctx.fotosModeracionController_etiquetaItem(FOTO)).toBe('');
+    expect(t.ctx.fotosModeracionController_etiquetaItem(CON_SOLICITUD)).toBe('Retiro sugerido');
+    t.contexto.permisos = { fotos_carga: true };
+    expect(t.ctx.fotosModeracionController_etiquetaItem(CON_SOLICITUD)).toBe('');
   });
 
-  test('la bandeja de retiradas se oculta si el permiso de moderar se pierde', async () => {
+  test('reset: las imagenes del historial no sobreviven (la proxima vez se vuelven a pedir)', async () => {
     const t = cargar();
-    abrirVisor(t);
-    retirar(t).click();
-    elegirMotivo(t, 'DUPLICADA');
-    enviarForm(t);
-    t.pend.retirar[0](respOk());
-    await flush();
-    expect(E(t, 'fotos-mod-retiradas').hidden).toBe(false);
-    t.contexto.permisos = { fotos: true, fotos_carga: true };
-    t.ctx.fotosModeracionController_alAbrir(ENTIDAD);
-    expect(E(t, 'fotos-mod-retiradas').hidden).toBe(true);
-    expect(E(t, 'fotos-mod-retiradas-lista').children).toHaveLength(0);
-  });
-
-  test('reset: las sugerencias recordadas se olvidan (la foto vuelve a ofrecer "Sugerir retiro")', async () => {
-    const t = cargar();
-    abrirVisor(t);
-    sugerir(t).click();
-    elegirMotivo(t, 'DUPLICADA');
-    enviarForm(t);
-    t.pend.solicitar[0](respOk());
-    await flush();
-    expect(t.ctx.fotosModeracionController_etiquetaItem(FOTO)).toBe('Retiro sugerido');
-    t.ctx.fotosModeracionController_reset();
-    t.ctx.fotosModeracionController_alAbrir(ENTIDAD);
-    expect(t.ctx.fotosModeracionController_etiquetaItem(FOTO)).toBe('');
-    abrirVisor(t);
-    expect(sugerir(t).hidden).toBe(false);
-  });
-
-  test('reset: las imagenes de fotos retiradas no sobreviven (la proxima vez se vuelven a pedir)', async () => {
-    const t = cargar();
-    const retirarYEsperar = async () => {
+    const abrirYEsperar = async () => {
       abrirVisor(t);
-      retirar(t).click();
-      elegirMotivo(t, 'DUPLICADA');
-      enviarForm(t);
-      t.pend.retirar[t.pend.retirar.length - 1](respOk());
+      verHistorial(t).click();
+      t.pend.historial[t.pend.historial.length - 1](historialOk([evento()]));
       await flush();
+      E(t, 'btn-fotos-mod-hist-cerrar2').click();
     };
-    await retirarYEsperar();
+    await abrirYEsperar();
     expect(t.llamadas.imagen).toHaveLength(1);
     t.ctx.fotosModeracionController_reset();
     t.ctx.fotosModeracionController_alAbrir(ENTIDAD);
-    await retirarYEsperar();
+    await abrirYEsperar();
     expect(t.llamadas.imagen).toHaveLength(2);
   });
 
@@ -1114,5 +1091,89 @@ describe('permisos que cambian y ciclo de vida (huecos cerrados por mutacion)', 
     t.pend.solicitar[0](respErr('FOTO_NOT_FOUND'));
     await flush();
     expect(E(t, 'fotos-mod-aviso').hidden).toBe(true);
+  });
+});
+
+describe('historial abierto desde otra pantalla (Fotos pendientes): fotosModeracionController_abrirHistorial', () => {
+  const externo = () => ({ alReponer: jest.fn(), alEstadoCambiado: jest.fn(), alCerrar: jest.fn() });
+  const abrirDesde = async (t, ext, estado) => {
+    const boton = new Nodo('button');
+    t.ctx.fotosModeracionController_abrirHistorial(FOTO, boton, ext);
+    t.pend.historial[t.pend.historial.length - 1](historialOk([evento()], estado));
+    await flush();
+    return boton;
+  };
+
+  test('abre el mismo dialogo de historial (sin pasar por el visor) y avisa al cerrarse; el foco vuelve al boton de origen', async () => {
+    const t = cargar();
+    const ext = externo();
+    const boton = await abrirDesde(t, ext);
+    expect(abiertoHist(t)).toBe(true);
+    expect(t.llamadas.historial).toEqual([['tok', FOTO]]);
+    expect(t.ctx.fotosModeracionController_hayModalAbierto()).toBe(true);
+    E(t, 'btn-fotos-mod-hist-cerrar2').click();
+    expect(abiertoHist(t)).toBe(false);
+    expect(ext.alCerrar).toHaveBeenCalledTimes(1);
+    expect(Nodo.enFoco).toBe(boton);
+  });
+
+  test('reponer desde ahi: avisa a la otra pantalla (que se actualiza sola) y NO toca la galeria ni su aviso', async () => {
+    const t = cargar();
+    const ext = externo();
+    await abrirDesde(t, ext);
+    E(t, 'btn-fotos-mod-hist-reponer').click();
+    E(t, 'btn-fotos-mod-rep-confirmar').click();
+    expect(t.llamadas.reponer[0][2]).toMatch(/^foto-rep-/);
+    t.pend.reponer[0](respOk());
+    await flush();
+    expect(abiertoHist(t)).toBe(false);
+    expect(ext.alReponer).toHaveBeenCalledTimes(1);
+    expect(ext.alCerrar).toHaveBeenCalledTimes(1);
+    expect(t.hooks.refrescar).not.toHaveBeenCalled();
+    expect(E(t, 'fotos-mod-aviso').hidden).toBe(true);
+  });
+
+  test('si el estado cambio (otro moderador la repuso), la otra pantalla recibe el CODIGO y la galeria no se toca', async () => {
+    const t = cargar();
+    const ext = externo();
+    await abrirDesde(t, ext);
+    E(t, 'btn-fotos-mod-hist-reponer').click();
+    E(t, 'btn-fotos-mod-rep-confirmar').click();
+    t.pend.reponer[0](respErr('FOTO_NO_RETIRADA'));
+    await flush();
+    expect(ext.alEstadoCambiado).toHaveBeenCalledWith('FOTO_NO_RETIRADA');
+    expect(ext.alReponer).not.toHaveBeenCalled();
+    expect(ext.alCerrar).toHaveBeenCalledTimes(1);
+    expect(t.hooks.refrescar).not.toHaveBeenCalled();
+    expect(E(t, 'fotos-mod-aviso').hidden).toBe(true);
+  });
+
+  test('sin fotos_moderar no se abre nada y la otra pantalla se entera (alCerrar), sin pedir red', async () => {
+    const t = conPermisos({ fotos: true, fotos_carga: true });
+    const ext = externo();
+    t.ctx.fotosModeracionController_abrirHistorial(FOTO, new Nodo('button'), ext);
+    await flush();
+    expect(t.llamadas.historial).toHaveLength(0);
+    expect(abiertoHist(t)).toBe(false);
+    expect(ext.alCerrar).toHaveBeenCalledTimes(1);
+  });
+
+  test('desde el visor de la galeria (sin externo) la reposicion SI refresca la galeria y avisa ahi', async () => {
+    const t = await (async () => { const x = cargar(); abrirVisor(x); verHistorial(x).click(); x.pend.historial[0](historialOk([evento()])); await flush(); return x; })();
+    E(t, 'btn-fotos-mod-hist-reponer').click();
+    E(t, 'btn-fotos-mod-rep-confirmar').click();
+    t.pend.reponer[0](respOk());
+    await flush();
+    expect(t.hooks.refrescar).toHaveBeenCalledTimes(1);
+    expect(texto(t, 'fotos-mod-aviso')).toBe('Foto repuesta en la galería.');
+  });
+
+  test('el cierre de sesion descarta el historial abierto desde otra pantalla', async () => {
+    const t = cargar();
+    const ext = externo();
+    await abrirDesde(t, ext);
+    t.ctx.fotosModeracionController_reset();
+    expect(abiertoHist(t)).toBe(false);
+    expect(t.bodyClases.has('fotos-mod-abierto')).toBe(false);
   });
 });
