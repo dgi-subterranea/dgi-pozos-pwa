@@ -1216,6 +1216,14 @@
         </div>
       </form>
 
+      <!-- Moderacion (E8-4, solo fotos + fotos_moderar): aviso de la ultima accion y fotos retiradas EN ESTA SESION (el backend todavia no tiene un listado de retiradas: llega con la cola de E8-5). -->
+      <p id="fotos-mod-aviso" class="fotos-mod-aviso" role="status" tabindex="-1" hidden></p>
+      <section id="fotos-mod-retiradas" class="fotos-mod-retiradas" aria-labelledby="fotos-mod-retiradas-titulo" hidden>
+        <h2 id="fotos-mod-retiradas-titulo" class="fotos-mod-retiradas-titulo">Retiradas en esta sesión</h2>
+        <p class="fotos-nota">Solo vos ves estas fotos. Podés revisar su historial o reponerlas.</p>
+        <ul id="fotos-mod-retiradas-lista" class="fotos-mod-retiradas-lista"></ul>
+      </section>
+
       <section id="fotos-galeria" class="fotos-galeria" aria-label="Galería de fotos" hidden>
         <div id="fotos-filtros" class="fotos-filtros" hidden>
           <label class="fotos-filtro">Fuente
@@ -1371,6 +1379,78 @@
       <p id="fotos-visor-fecha" class="fotos-visor-fecha"></p>
       <p id="fotos-visor-detalle" class="fotos-visor-detalle"></p>
       <p id="fotos-visor-obs" class="fotos-visor-obs" hidden></p>
+      <!-- Moderacion de fotos (E8-4). Controlador: js/fotosModeracion.js. Cada boton aparece SOLO si el usuario puede ejecutar la accion (fotos + fotos_carga: sugerir; fotos + fotos_moderar: retirar / historial). -->
+      <div id="fotos-mod-visor-acciones" class="fotos-mod-acciones" hidden>
+        <button type="button" id="btn-fotos-mod-sugerir" class="fotos-mod-boton" aria-haspopup="dialog" hidden>Sugerir retiro</button>
+        <button type="button" id="btn-fotos-mod-retirar" class="fotos-mod-boton fotos-mod-boton-retirar" aria-haspopup="dialog" hidden>Retirar foto</button>
+        <button type="button" id="btn-fotos-mod-historial" class="fotos-mod-boton" aria-haspopup="dialog" hidden>Ver historial</button>
+      </div>
+      <p id="fotos-mod-visor-estado" class="fotos-mod-visor-estado" role="status" tabindex="-1" hidden></p>
+    </div>
+  </div>
+
+  <!-- Moderacion de fotos (E8-4). Tres modales propios, por ENCIMA del visor (z-index). Fuera de #screen-fotos. Todo el texto de datos se pone con textContent / .value. -->
+  <!-- Formulario compartido: "Sugerir retiro de foto" (fotos + fotos_carga) y "Retirar foto" (fotos + fotos_moderar). Son dos modos con titulo, texto y boton distintos. -->
+  <div id="fotos-mod-form-overlay" class="fotos-mod-overlay" role="dialog" aria-modal="true" aria-labelledby="fotos-mod-form-titulo" hidden>
+    <div class="fotos-mod-panel">
+      <div class="fotos-mod-cabecera">
+        <h2 id="fotos-mod-form-titulo" class="fotos-mod-titulo"></h2>
+        <button type="button" id="btn-fotos-mod-form-cerrar" class="fotos-mod-cerrar" aria-label="Cerrar">&times;</button>
+      </div>
+      <p id="fotos-mod-form-intro" class="fotos-mod-intro"></p>
+      <form id="fotos-mod-form" autocomplete="off" novalidate>
+        <label for="fotos-mod-motivo" class="fotos-mod-label">Motivo</label>
+        <select id="fotos-mod-motivo" class="fotos-mod-select" aria-required="true" aria-invalid="false" aria-describedby="fotos-mod-form-error"></select>
+        <label for="fotos-mod-detalle" id="fotos-mod-detalle-label" class="fotos-mod-label">Detalle (opcional)</label>
+        <textarea id="fotos-mod-detalle" class="fotos-mod-texto" rows="4" autocomplete="off" aria-invalid="false" aria-describedby="fotos-mod-contador fotos-mod-form-error"></textarea>
+        <p id="fotos-mod-contador" class="fotos-mod-contador">0 / 300</p>
+        <p id="fotos-mod-privacidad" class="fotos-mod-privacidad" hidden>Quedará marcada para revisión de borrado.</p>
+        <p id="fotos-mod-form-error" class="error-message fotos-mod-error" role="alert" tabindex="-1" hidden></p>
+        <div class="fotos-mod-botones">
+          <button type="button" id="btn-fotos-mod-form-cancelar" class="button-secondary">Cancelar</button>
+          <button type="submit" id="btn-fotos-mod-form-enviar" class="button" disabled></button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Historial de una foto (solo fotos + fotos_moderar) y reposicion con confirmacion. La imagen sale de getFotoPozoModeracion; el historial muestra etiquetas, nunca codigos, emails ni ids. -->
+  <div id="fotos-mod-hist-overlay" class="fotos-mod-overlay" role="dialog" aria-modal="true" aria-labelledby="fotos-mod-hist-titulo" hidden>
+    <div class="fotos-mod-panel">
+      <div class="fotos-mod-cabecera">
+        <h2 id="fotos-mod-hist-titulo" class="fotos-mod-titulo">Historial de la foto</h2>
+        <button type="button" id="btn-fotos-mod-hist-cerrar" class="fotos-mod-cerrar" aria-label="Cerrar">&times;</button>
+      </div>
+      <div id="fotos-mod-hist-cargando" class="cargando cargando-sm" data-cargando hidden>Cargando historial…</div>
+      <p id="fotos-mod-hist-error" class="error-message fotos-mod-error" role="alert" tabindex="-1" hidden></p>
+      <div id="fotos-mod-hist-contenido" hidden>
+        <div class="fotos-mod-hist-foto">
+          <div class="fotos-mod-hist-img-caja">
+            <img id="fotos-mod-hist-img" class="fotos-mod-hist-img" alt="Foto de la que se muestra el historial" hidden>
+            <p id="fotos-mod-hist-img-error" class="fotos-nota" hidden></p>
+          </div>
+          <div class="fotos-mod-hist-datos">
+            <p id="fotos-mod-hist-fecha" class="fotos-mod-hist-fecha"></p>
+            <p id="fotos-mod-hist-detalle" class="fotos-nota"></p>
+            <ul id="fotos-mod-hist-insignias" class="fotos-mod-insignias"></ul>
+          </div>
+        </div>
+        <ol id="fotos-mod-hist-lista" class="fotos-mod-hist-lista" aria-label="Movimientos de moderación, del más reciente al más antiguo"></ol>
+        <p id="fotos-mod-hist-vacio" class="fotos-nota" hidden>Esta foto todavía no tiene movimientos de moderación.</p>
+      </div>
+      <div id="fotos-mod-rep-confirmar" class="fotos-mod-confirmar" role="group" aria-labelledby="fotos-mod-rep-pregunta" hidden>
+        <p id="fotos-mod-rep-pregunta" class="fotos-mod-confirmar-pregunta">¿Querés volver a mostrar esta foto en la galería?</p>
+        <p class="fotos-nota">Las fotos ocultas históricamente no pueden reponerse desde este flujo.</p>
+        <p id="fotos-mod-rep-error" class="error-message fotos-mod-error" role="alert" tabindex="-1" hidden></p>
+        <div class="fotos-mod-botones">
+          <button type="button" id="btn-fotos-mod-rep-cancelar" class="button-secondary">Cancelar</button>
+          <button type="button" id="btn-fotos-mod-rep-confirmar" class="button">Reponer foto</button>
+        </div>
+      </div>
+      <div id="fotos-mod-hist-botones" class="fotos-mod-botones">
+        <button type="button" id="btn-fotos-mod-hist-reponer" class="button" hidden>Reponer foto</button>
+        <button type="button" id="btn-fotos-mod-hist-cerrar2" class="button-secondary">Cerrar</button>
+      </div>
     </div>
   </div>
 
@@ -1742,6 +1822,8 @@
   <script src="js/ubicacionSugerencias.js"></script>
   <script src="js/observacionesPozoLogic.js"></script>
   <script src="js/observacionesPozo.js"></script>
+  <script src="js/fotosModeracionLogic.js"></script>
+  <script src="js/fotosModeracion.js"></script>
   <script src="js/lineaTiempoPozoLogic.js"></script>
   <script src="js/lineaTiempoPozoLoader.js"></script>
   <script src="js/lineaTiempoPozoVistaLogic.js"></script>

@@ -374,3 +374,37 @@ function apiAgregarObservacionPozo(sessionToken, wellId, texto, clientRequestId)
 function apiAnularObservacionPozo(sessionToken, observacionId, motivo, clientRequestId) {
   return callBackend('anularObservacionPozo', { sessionToken: sessionToken, observacionId: observacionId, motivo: motivo, clientRequestId: clientRequestId });
 }
+
+// --- Moderacion de fotos de pozos (E8) ---
+// El cliente manda SOLO lo que es suyo: la foto (o la solicitud), el motivo y un clientRequestId por intencion. La identidad, el nombre, la entidad, el estado y el timestamp los deriva el backend de la
+// sesion y de la hoja de eventos. Permisos: sugerir = fotos + fotos_carga; retirar / resolver / reponer / historial / imagen de moderacion = fotos + fotos_moderar (el backend los vuelve a exigir).
+function apiSolicitarRetiroFotoPozo(sessionToken, fotoId, motivoCodigo, motivoTexto, clientRequestId) {
+  return callBackend('solicitarRetiroFotoPozo', { sessionToken: sessionToken, fotoId: fotoId, motivoCodigo: motivoCodigo, motivoTexto: motivoTexto, clientRequestId: clientRequestId });
+}
+
+function apiRetirarFotoPozo(sessionToken, fotoId, motivoCodigo, motivoTexto, clientRequestId) {
+  return callBackend('retirarFotoPozo', { sessionToken: sessionToken, fotoId: fotoId, motivoCodigo: motivoCodigo, motivoTexto: motivoTexto, clientRequestId: clientRequestId });
+}
+
+// Se usa recien en E8-5 (cola de solicitudes): el wrapper ya fija el contrato. La foto sale de la solicitud, el cliente NO la manda.
+function apiResolverRetiroFotoPozo(sessionToken, solicitudId, resolucion, clientRequestId) {
+  return callBackend('resolverRetiroFotoPozo', { sessionToken: sessionToken, solicitudId: solicitudId, resolucion: resolucion, clientRequestId: clientRequestId });
+}
+
+function apiReponerFotoPozo(sessionToken, fotoId, clientRequestId) {
+  return callBackend('reponerFotoPozo', { sessionToken: sessionToken, fotoId: fotoId, clientRequestId: clientRequestId });
+}
+
+function apiGetHistorialFotoPozo(sessionToken, fotoId) {
+  return callBackend('getHistorialFotoPozo', { sessionToken: sessionToken, fotoId: fotoId });
+}
+
+// Se usa recien en E8-5 (cola global).
+function apiGetFotosPozosPendientesModeracion(sessionToken, limit, cursor) {
+  return callBackend('getFotosPozosPendientesModeracion', { sessionToken: sessionToken, limit: limit, cursor: cursor });
+}
+
+// Imagen de una foto ACTIVA o RETIRADA, solo para moderadores. El visor normal NUNCA la usa (getFotoPozo respeta la visibilidad). variante: 'thumb' | 'full'.
+function apiGetFotoPozoModeracion(sessionToken, fotoId, variante) {
+  return callBackend('getFotoPozoModeracion', { sessionToken: sessionToken, fotoId: fotoId, variante: variante });
+}

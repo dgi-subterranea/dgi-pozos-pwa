@@ -4407,6 +4407,367 @@ button.ucorr-pendientes[hidden] {
   margin-bottom: 8px;
 }
 
+/* --- Moderacion de fotos de pozos (E8-4). Clases propias .fotos-mod-*; los modales van por encima del visor (z-index 80). --- */
+body.fotos-mod-abierto {
+  overflow: hidden;
+}
+.fotos-mod-acciones {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+/* sobre el fondo oscuro del visor */
+.fotos-mod-boton {
+  min-height: 44px;
+  padding: 8px 14px;
+  border: 1.5px solid rgba(255, 255, 255, 0.55);
+  border-radius: 12px;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: none;
+}
+.fotos-mod-boton:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+.fotos-mod-boton:focus-visible {
+  outline: 3px solid #ffd27a;
+  outline-offset: 2px;
+}
+.fotos-mod-boton-retirar {
+  border-color: #ffd27a;
+  color: #ffd27a;
+}
+.fotos-mod-visor-estado {
+  margin: 10px 0 0;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #ffd27a;
+  overflow-wrap: anywhere;
+}
+.fotos-mod-aviso {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--color-primary-tint);
+  color: var(--color-primary-dark);
+  font-size: 0.9rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.fotos-mod-aviso-error {
+  background: var(--color-warn-tint);
+  color: var(--color-warn);
+}
+.fotos-mod-retiradas {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1.5px dashed var(--color-border);
+  border-radius: 14px;
+  background: var(--color-bg);
+}
+.fotos-mod-retiradas-titulo {
+  margin: 0 0 4px;
+  font-size: 1rem;
+}
+.fotos-mod-retiradas-lista {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.fotos-mod-retirada {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px;
+  border-radius: 12px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+}
+.fotos-mod-retirada-mini {
+  flex: none;
+  width: 72px;
+  height: 72px;
+  border-radius: 10px;
+  background: var(--color-border-soft);
+  object-fit: cover;
+  overflow: hidden;
+}
+.fotos-mod-retirada-cuerpo {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.fotos-mod-retirada-cuerpo p {
+  margin: 0 0 4px;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+.fotos-mod-retirada-cuerpo .button-secondary {
+  min-height: 44px;
+}
+.fotos-mod-insignias {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.fotos-mod-insignia {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--color-primary-tint);
+  color: var(--color-primary-dark);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+.fotos-mod-insignia-alerta {
+  background: var(--color-warn-tint);
+  color: var(--color-warn);
+}
+.fotos-mod-item-estado {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--color-warn);
+}
+.fotos-mod-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(22, 33, 42, 0.6);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.fotos-mod-panel {
+  background: var(--color-surface);
+  color: var(--color-text);
+  width: 100%;
+  max-width: 560px;
+  max-height: 94vh;
+  max-height: 94dvh;
+  overflow-y: auto;
+  border-radius: 20px 20px 0 0;
+  padding: 16px 18px 22px;
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.25);
+}
+.fotos-mod-cabecera {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.fotos-mod-titulo {
+  margin: 0;
+  font-size: 1.1rem;
+}
+.fotos-mod-cerrar {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  border-radius: 12px;
+  font-size: 1.6rem;
+  line-height: 1;
+  background: transparent;
+  color: var(--color-text-soft);
+  box-shadow: none;
+  border: 0;
+  cursor: pointer;
+}
+.fotos-mod-cerrar:hover {
+  background: var(--color-border-soft);
+  color: var(--color-text);
+}
+.fotos-mod-intro {
+  margin: 10px 0 0;
+  font-size: 0.92rem;
+  color: var(--color-text-soft);
+}
+.fotos-mod-label {
+  display: block;
+  margin: 12px 0 6px;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+.fotos-mod-select,
+.fotos-mod-texto {
+  display: block;
+  width: 100%;
+  font: inherit;
+  font-size: 1rem;
+  padding: 10px 12px;
+  border: 1.5px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+.fotos-mod-select {
+  min-height: 44px;
+}
+.fotos-mod-texto {
+  min-height: 96px;
+  resize: vertical;
+  overflow-wrap: anywhere;
+}
+.fotos-mod-select:focus,
+.fotos-mod-texto:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+.fotos-mod-select[aria-invalid="true"],
+.fotos-mod-texto[aria-invalid="true"] {
+  border-color: var(--color-error);
+  border-width: 2px;
+}
+.fotos-mod-contador {
+  margin: 4px 0 0;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-soft);
+  text-align: right;
+}
+.fotos-mod-contador-excede {
+  font-weight: 700;
+  color: var(--color-error);
+}
+.fotos-mod-privacidad {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--color-warn-tint);
+  color: var(--color-warn);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+.fotos-mod-error {
+  margin: 8px 0 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.fotos-mod-botones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+.fotos-mod-botones .button,
+.fotos-mod-botones .button-secondary {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+.fotos-mod-botones .button:disabled,
+.fotos-mod-botones .button:disabled:hover {
+  background: var(--color-primary);
+  opacity: 0.4;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.fotos-mod-botones .button-secondary:disabled,
+.fotos-mod-botones .button-secondary:disabled:hover {
+  background: transparent;
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.fotos-mod-hist-foto {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-top: 12px;
+}
+.fotos-mod-hist-img-caja {
+  flex: none;
+  width: 96px;
+  min-height: 96px;
+  border-radius: 12px;
+  background: var(--color-border-soft);
+  overflow: hidden;
+}
+.fotos-mod-hist-img {
+  display: block;
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+}
+.fotos-mod-hist-datos {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.fotos-mod-hist-datos p {
+  margin: 0 0 4px;
+  overflow-wrap: anywhere;
+}
+.fotos-mod-hist-fecha {
+  font-weight: 800;
+}
+.fotos-mod-hist-lista {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.fotos-mod-hist-evento {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-soft);
+}
+.fotos-mod-hist-evento-titulo {
+  margin: 0;
+  font-weight: 800;
+}
+.fotos-mod-hist-evento-meta {
+  margin: 2px 0 0;
+  font-size: 0.82rem;
+  color: var(--color-text-soft);
+  overflow-wrap: anywhere;
+}
+.fotos-mod-hist-evento-texto {
+  margin: 6px 0 0;
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.fotos-mod-confirmar {
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 14px;
+  background: var(--color-warn-tint);
+}
+.fotos-mod-confirmar-pregunta {
+  margin: 0 0 6px;
+  font-weight: 800;
+}
+@media (min-width: 640px) {
+  .fotos-mod-overlay {
+    align-items: center;
+  }
+  .fotos-mod-panel {
+    border-radius: 18px;
+    max-height: 90vh;
+    max-height: 90dvh;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .fotos-mod-panel {
+    animation: fotos-mod-subir 0.18s ease-out;
+  }
+  @keyframes fotos-mod-subir {
+    from { transform: translateY(24px); opacity: 0.4; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+}
+
 /* --- Modal "Corregir ubicacion": hoja inferior en celular, centrado en pantallas grandes --- */
 body.ucorr-abierto {
   overflow: hidden;

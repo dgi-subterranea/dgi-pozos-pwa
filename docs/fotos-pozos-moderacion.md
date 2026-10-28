@@ -1,6 +1,6 @@
 # Moderación de fotos de pozos (E8)
 
-Estado: **E8-3 — backend cableado (endpoints, permiso, integración con la galería), SIN UI y SIN desplegar.** Nada de esto está en producción: la hoja `FotosPozoEventos` **no está creada**, la columna `fotos_moderar` **no existe** en `Usuarios`, no se ejecutó `setupFotosPozoEventosSheet`, no hay deploy ni commit, y el frontend, el storage y Drive no se tocaron. La UI es E8-4; el rollout, E8-6.
+Estado: **E8-3 (backend) commiteado en local (`c254b7b`) y E8-4 (interfaz en el módulo Fotos) IMPLEMENTADO LOCALMENTE, sin commit, sin push y sin desplegar. NADA de esto es productivo.** Nada de esto está en producción: la hoja `FotosPozoEventos` **no está creada**, la columna `fotos_moderar` **no existe** en `Usuarios`, no se ejecutó `setupFotosPozoEventosSheet`, no hay deploy, y el storage y Drive no se tocaron (el frontend cambia recién en E8-4, ver más abajo). La cola global y la resolución de solicitudes son E8-5; el rollout, E8-6.
 
 Alcance de E8 v1 (cerrado en E8-1): **moderación productiva + cola + base para la curaduría histórica.** La subida sigue **directa** (sin aprobación previa).
 
@@ -164,6 +164,49 @@ Retiro lógico: oculta de inmediato, invalida el cache y deja `requiereRevisionB
 ## Setup de la hoja (no ejecutado)
 
 `setupFotosPozoEventosSheet()` es manual: si la hoja falta, la crea con los 14 encabezados exactos, fila 1 congelada, texto plano y `secuencia` numérica (`CREADA`); si existe y es correcta, devuelve `YA_EXISTE`; si existe mal, falla sin repararla. **No se ejecutó.**
+
+## E8-4: interfaz de moderación en Fotos (local, sin desplegar)
+
+**Qué hace** (sin rediseñar Fotos): en el visor de la galería, cada persona ve solo las acciones que puede ejecutar.
+
+| Permiso (booleanos exactos, `=== true`) | Acciones en el visor |
+|---|---|
+| `fotos` solo | ninguna |
+| `fotos` + `fotos_carga` | **Sugerir retiro** |
+| `fotos` + `fotos_moderar` | **Retirar foto**, **Ver historial** (y **Reponer foto** desde el historial de una foto retirada) |
+| los tres | todas |
+| `fotos_carga` o `fotos_moderar` sin `fotos`, o valores truthy (`"SI"`, `1`…) | ninguna |
+
+La moderación no se infiere de `fotos_carga`, del nombre ni de la autoría. El backend vuelve a exigir cada permiso.
+
+**Archivos:** `js/fotosModeracionLogic.js` (lógica pura con tests), `js/fotosModeracion.js` (controlador DOM), 7 wrappers en `js/api.js`, markup en `index.html` (acciones del visor, bandeja y dos modales), estilos `.fotos-mod-*` en `css/styles.css`, integración mínima en `js/fotosPozos.js` y cableado en `js/app.js` (contexto fresco, ganchos de la galería y reseteo al cerrar sesión). Los dos scripts nuevos están en el shell del service worker. No hay cache de API ni de imágenes nuevas.
+
+**Sugerir retiro.** Modal propio («Sugerir retiro de foto»): motivo obligatorio con etiquetas humanas (`No corresponde al pozo`, `Duplicada`, `Mala calidad`, `Sin contenido útil`, `Privacidad`, `Desactualizada`, `Otro`); detalle opcional, **obligatorio con `Otro`**, 3 a 300 caracteres normalizados (un emoji cuenta 1). Al éxito se cierra el modal, **la foto sigue visible** (una solicitud abierta no oculta nada) y aparece el estado discreto «Retiro sugerido».
+
+**Retirar foto.** Modal claramente distinto («Retirar foto», «Esta foto dejará de mostrarse en la galería. El archivo no se eliminará.»). Con `Privacidad` agrega el aviso discreto «Quedará marcada para revisión de borrado.» (nunca dice que se borrará). Al éxito: se cierra el modal y el visor, la foto pasa a la bandeja de la sesión y la galería **se vuelve a pedir a `getFotosPozo`** (junto con el contador compartido, forzado): no hay copia optimista ni se confía en quitar un nodo. Si ese refresco falla, la galería pasa al estado de error con «Reintentar» (no queda a la vista una galería vieja que podría mostrar la foto retirada).
+
+**Historial** (solo moderadores). Más reciente primero, con etiquetas fijas: `RETIRO_SOLICITADO` → «Retiro sugerido», `RETIRADA` → «Foto retirada», `RETIRO_RESUELTO` + `APROBADO` / `RECHAZADO` → «Retiro aprobado» / «Retiro rechazado», `REPUESTA` → «Foto repuesta». Por evento: nombre, fecha y hora, motivo (etiqueta) y detalle. **Nunca** email, `clientRequestId`, secuencia, ids ni códigos crudos. El mapeo vive en un solo lugar (`fotosModeracionLogic_*`). Una foto retirada por `PRIVACIDAD` muestra «Pendiente de revisión de borrado» (solo en este contexto de moderador).
+
+**Reposición.** Desde el historial de una foto retirada por eventos: «Reponer foto» → confirmación («¿Querés volver a mostrar esta foto en la galería?», más la nota «Las fotos ocultas históricamente no pueden reponerse desde este flujo.»). El botón solo existe si el backend lo habilita (`puedeReponerse`) y la retiro un evento: una `OCULTA` legacy o una foto activa **no** ofrecen reponer. Al éxito: se quita de la bandeja y se refresca la galería.
+
+**Imagen de una foto retirada.** Solo con `getFotoPozoModeracion` (miniatura en la bandeja y en el historial). El visor normal sigue usando `getFotoPozo`, que respeta la visibilidad: la UI nunca lo usa «con bypass». Tests y guardas estáticas fijan que solo `api.js` y `fotosModeracion.js` tocan los wrappers de moderación.
+
+**Decisiones por contrato real del backend (E8-3):**
+- `getFotosPozo` devuelve solo fotos visibles y **no informa** si una foto tiene una solicitud abierta. «Retiro sugerido» se recuerda únicamente cuando el backend lo confirma en la sesión (éxito de la sugerencia o rechazo por solicitud ya abierta); recargar la página lo olvida. No se agregó un endpoint por foto para saberlo: una segunda sugerencia la rechaza el backend (`SOLICITUD_YA_ABIERTA`) y la UI lo explica («Esta foto ya tiene una solicitud de retiro pendiente.»).
+- **No existe un listado de fotos retiradas** (el backend solo ofrece historial e imagen por `fotoId`). Para poder reponer sin inventar N pedidos, la **bandeja «Retiradas en esta sesión»** guarda las fotos que *esa persona* retiró durante la sesión (por entidad, solo en memoria; se descarta al cerrar sesión). El toggle «Ver retiradas» y la cola global quedan para **E8-5** (necesitan un endpoint de listado).
+- **Resolver solicitudes (aprobar / rechazar) no tiene UI en E8-4.** El wrapper `apiResolverRetiroFotoPozo` y el de la cola global existen para fijar el contrato, pero ningún archivo de la interfaz los usa todavía. Si un moderador intenta retirar una foto con solicitud abierta ve el mensaje de solicitud pendiente.
+
+**clientRequestId.** `foto-sol-<uuid>`, `foto-ret-<uuid>`, `foto-rep-<uuid>` (y `foto-res-<uuid>` reservado para E8-5): espacios separados por acción, siempre dentro de `^[A-Za-z0-9_-]{8,64}$`. Un id por **intención**: abrir el modal, cancelar y reabrir, o un éxito generan uno nuevo; reintentar el mismo contenido tras un error recuperable (red, servidor) reutiliza el mismo id; cambiar el motivo o el detalle después de un intento genera uno nuevo; tras `IDEMPOTENCY_CONFLICT` el id queda «quemado» y el siguiente envío usa otro (nunca se reenvía solo). Mientras hay un pedido en vuelo no se lanza otro (doble clic).
+
+**Errores.** Texto humano, nunca códigos, stack, nombres de hoja ni el `message` crudo: `PERMISSION_DENIED` → «Ya no tenés permiso para realizar esta acción.»; `FOTO_NOT_FOUND` → «La foto ya no está disponible.»; `SOLICITUD_ABIERTA` / `SOLICITUD_YA_ABIERTA` → «Esta foto ya tiene una solicitud de retiro pendiente.»; `FOTO_YA_RETIRADA`, `FOTO_NO_RETIRADA`, `SOLICITUD_YA_RESUELTA`, `INVALID_TRANSITION` → «El estado de la foto cambió. Actualizamos la galería.» (cierra el modal y refresca); `SERVICE_UNAVAILABLE` → «No se pudo consultar la moderación de fotos. Intentá nuevamente.» (en desarrollo local aparece mientras la hoja `FotosPozoEventos` no exista: no hay ningún fallback que muestre o modere ignorando eventos). `UNAUTHORIZED` / `USER_DISABLED` usan el cierre de sesión global y no se muestran como error de moderación.
+
+**Accesibilidad y teclado.** Dialogos `role="dialog" aria-modal`, `label` en cada campo, errores con `role="alert"`, foco inicial en el motivo, Tab/Shift+Tab sin salir del modal, Escape cancela **sin** cerrar el visor de abajo (el visor ignora el teclado mientras hay un modal), el foco vuelve al botón que abrió el modal (o al mensaje de estado si ese botón ya no está), botones deshabilitados durante el envío y objetivos de 44 px. Todo texto de datos se pinta con `textContent` (se probó HTML, script, `&`, emoji y multilínea); no hay `innerHTML`.
+
+**Responsive** (verificado con el controlador real en el navegador, 375 / 768 / 1280 px): hoja inferior en celular, centrado desde 640 px; sin scroll horizontal (palabras largas partidas, botones que envuelven); historial largo con scroll interno del panel.
+
+**Para un usuario normal** nada de esto aparece fuera de «Sugerir retiro» y «Retiro sugerido»: ni la bandeja, ni el historial, ni el aviso de revisión de borrado.
+
+**No productivo todavía:** falta la hoja `FotosPozoEventos`, la columna `fotos_moderar` en `Usuarios`, el rollout y los permisos reales (E8-6).
 
 ## FotosPozosCambios: legacy
 

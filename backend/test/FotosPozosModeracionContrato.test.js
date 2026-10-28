@@ -238,7 +238,7 @@ describe('integracion dominio + repositorio sobre una hoja en memoria', () => {
 describe('E8-3: alcance del cableado (backend si; frontend, storage, Drive y legacy no)', () => {
   const api = sinComentarios(leer('backend', 'src', 'Api.js'));
   const ACCIONES = ['solicitarRetiroFotoPozo', 'retirarFotoPozo', 'resolverRetiroFotoPozo', 'reponerFotoPozo', 'getHistorialFotoPozo', 'getFotosPozosPendientesModeracion', 'getFotoPozoModeracion'];
-  const jsFrontend = () => fs.readdirSync(path.join(raiz, 'js')).filter((f) => /\\.js$/.test(f));
+  const jsFrontend = () => fs.readdirSync(path.join(raiz, 'js')).filter((f) => /\.js$/.test(f));
 
   test('Api.js enruta las 7 acciones y exporta sus handlers', () => {
     ACCIONES.forEach((a) => { expect(api).toContain("body.action === '" + a + "'"); });
@@ -254,18 +254,20 @@ describe('E8-3: alcance del cableado (backend si; frontend, storage, Drive y leg
     });
   });
 
-  test('fotos_moderar existe en el backend de permisos y NO en el frontend (sin UI en E8-3)', () => {
+  // E8-4 agrego la UI: el frontend conoce el permiso y las acciones SOLO en api.js (wrappers) y en los dos archivos de moderacion. Nada mas (ni app.js, ni fotosPozos.js) decide permisos ni llama endpoints.
+  test('fotos_moderar existe en el backend de permisos y en el frontend SOLO en la logica de moderacion', () => {
     ['AuthService.js', 'SheetUserRepository.js'].forEach((f) => {
       expect(leer('backend', 'src', f)).toContain('fotos_moderar');
     });
-    jsFrontend().forEach((f) => { expect(leer('js', f)).not.toMatch(/fotos_moderar/); });
-    expect(leer('index.html')).not.toMatch(/fotos_moderar|moderacion/i);
-    expect(leer('sw.js')).not.toMatch(/fotos_moderar|moderacion/i);
-    fs.readdirSync(path.join(raiz, 'css')).forEach((f) => { expect(leer('css', f)).not.toMatch(/moderacion/i); });
+    const conPermiso = jsFrontend().filter((f) => !/\.test\.js$/.test(f) && /fotos_moderar/.test(sinComentarios(leer('js', f))));
+    expect(conPermiso).toEqual(['fotosModeracionLogic.js']);
   });
 
-  test('ningun archivo del frontend llama a las acciones nuevas', () => {
-    jsFrontend().forEach((f) => { ACCIONES.forEach((a) => { expect(leer('js', f)).not.toContain(a); }); });
+  test('las acciones de moderacion las llaman solo api.js (wrappers) y los archivos de moderacion', () => {
+    const conAccion = jsFrontend().filter((f) => !/\.test\.js$/.test(f) && ACCIONES.some((a) => sinComentarios(leer('js', f)).indexOf(a) >= 0));
+    expect(conAccion).toEqual(['api.js']);
+    const conWrapper = jsFrontend().filter((f) => !/\.test\.js$/.test(f) && /api(SolicitarRetiro|RetirarFoto|ReponerFoto|GetHistorialFoto|GetFotoPozoModeracion|ResolverRetiro|GetFotosPozosPendientes)\w*\(/.test(sinComentarios(leer('js', f)))).sort();
+    expect(conWrapper).toEqual(['api.js', 'fotosModeracion.js']);
   });
 
   test('FotosPozosService consume SOLO las lecturas de la moderacion: no escribe eventos ni conoce sus constantes', () => {

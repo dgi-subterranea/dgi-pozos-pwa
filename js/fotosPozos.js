@@ -140,6 +140,8 @@
     estado.mensajeExito = '';
     cerrarVisor();
     entidadEl.textContent = entidad.etiqueta || fotosPozosLogic_claveEntidad(entidad);
+    // moderacion (E8-4): descarta modales de otra entidad y arma la bandeja de esta
+    if (typeof fotosModeracionController_alAbrir === 'function') { fotosModeracionController_alAbrir(entidad); }
 
     var permisos = (ctx && ctx.permisos) || {};
     estado.puedeVer = permisos.fotos === true;
@@ -194,6 +196,41 @@
     estado.aperturaId += 1;
     estado.gps.token += 1;
     cerrarVisor();
+    if (typeof fotosModeracionController_cerrar === 'function') { fotosModeracionController_cerrar(); }
+  }
+
+  // Vuelve a pedir la galeria al backend SIN pasar por la pantalla de "cargando" (la verdad es del backend: una foto retirada o repuesta se refleja con lo que devuelve getFotosPozo, no quitando
+  // un nodo). Tambien fuerza el contador compartido. Si no se puede refrescar, NO se deja la galeria vieja a la vista (podria seguir mostrando la foto retirada): se pasa al estado de error con Reintentar.
+  function fotosPozosController_refrescar() {
+    var aperturaId = estado.aperturaId;
+    var ctx = contexto();
+    if (!ctx || !estado.entidad || !estado.puedeVer) { return Promise.resolve(false); }
+    return apiGetFotosPozo(ctx.sessionToken, estado.entidad.wellId || '', estado.entidad.wellId ? '' : (estado.entidad.monitoringId || ''), 'recientes')
+      .then(function (r) {
+        if (aperturaId !== estado.aperturaId) { return false; }
+        if (r.status !== 'ok') {
+          if (r.code === 'UNAUTHORIZED' || r.code === 'USER_DISABLED') {
+            if (ctx.onSessionExpired) { ctx.onSessionExpired(); }
+            return false;
+          }
+          mostrarError('No se pudo actualizar la galería. Intentá nuevamente.', true);
+          return false;
+        }
+        estado.fotos = r.data.fotos || [];
+        mostrarSolo('contenido');
+        renderTodo();
+        if (typeof fotosPozosResumenController_cargar === 'function') { fotosPozosResumenController_cargar(true); }
+        return true;
+      })
+      .catch(function () {
+        if (aperturaId !== estado.aperturaId) { return false; }
+        mostrarError('No se pudo actualizar la galería. Revisá tu conexión.', true);
+        return false;
+      });
+  }
+
+  function fotosPozosController_repintar() {
+    if (estado.puedeVer && estado.entidad) { renderGaleria(); }
   }
 
   // Cierre de sesion: nada de la galeria ni de la cola sobrevive
@@ -292,6 +329,10 @@
     if (f.observacion) {
       item.appendChild(el('p', 'fotos-item-obs', f.observacion));
     }
+    var etiquetaMod = typeof fotosModeracionController_etiquetaItem === 'function' ? fotosModeracionController_etiquetaItem(f.fotoId) : '';
+    if (etiquetaMod) {
+      item.appendChild(el('p', 'fotos-mod-item-estado', etiquetaMod));
+    }
     var obs = observadorMiniaturas();
     if (estado.miniaturas[f.fotoId]) {
       img.src = estado.miniaturas[f.fotoId];
@@ -377,6 +418,7 @@
     visorEl.hidden = true;
     visorImgEl.removeAttribute('src');
     document.body.style.overflow = '';
+    if (typeof fotosModeracionController_alMostrarFoto === 'function') { fotosModeracionController_alMostrarFoto(null); }
   }
 
   function cargarFotoVisor() {
@@ -384,6 +426,7 @@
     v.token += 1;
     var token = v.token;
     var foto = v.fotos[v.indice];
+    if (typeof fotosModeracionController_alMostrarFoto === 'function') { fotosModeracionController_alMostrarFoto(foto); }
     visorContadorEl.textContent = 'Foto ' + (v.indice + 1) + ' de ' + v.fotos.length;
     visorFechaEl.textContent = fotosPozosLogic_formatearFecha(foto.fechaFotoValor, foto.fechaFotoPrecision);
     visorDetalleEl.textContent = fotosPozosLogic_etiquetaFuente(foto.fuente) + ' · ' + fotosPozosLogic_etiquetaTipo(foto.tipoFoto);
@@ -788,6 +831,7 @@
   }, { passive: true });
   document.addEventListener('keydown', function (e) {
     if (visorEl.hidden) { return; }
+    if (typeof fotosModeracionController_hayModalAbierto === 'function' && fotosModeracionController_hayModalAbierto()) { return; }   // el modal de moderacion maneja su propio teclado
     if (e.key === 'Escape') { cerrarVisor(); }
     else if (e.key === 'ArrowLeft') { navegarVisor(-1); }
     else if (e.key === 'ArrowRight') { navegarVisor(1); }
@@ -818,4 +862,7 @@
   window.fotosPozosController_abrir = fotosPozosController_abrir;
   window.fotosPozosController_cerrar = fotosPozosController_cerrar;
   window.fotosPozosController_reset = fotosPozosController_reset;
+  window.fotosPozosController_refrescar = fotosPozosController_refrescar;
+  window.fotosPozosController_cerrarVisor = cerrarVisor;
+  window.fotosPozosController_repintar = fotosPozosController_repintar;
 })();

@@ -1272,6 +1272,8 @@
     // ni el resumen de fotos, la galeria abierta o la cola de subida
     fotosPozosResumenController_reset();
     fotosPozosController_reset();
+    // ni la moderacion de fotos (modales abiertos, fotos retiradas de la sesion, sugerencias recordadas)
+    fotosModeracionController_reset();
     // ni las observaciones abiertas (se descartan las respuestas en vuelo)
     observacionesPozoController_reset();
     // ni la linea de tiempo abierta (se cancela lo que este en vuelo)
@@ -1809,6 +1811,21 @@
         logout();
       }
     };
+  });
+
+  // Moderacion de fotos (E8-4): contexto fresco propio (sesion + permisos de HOY). Las acciones avisan a la galeria, que vuelve a pedir getFotosPozo; la sesion vencida usa el logout de siempre.
+  fotosModeracionController_inicializar(function () {
+    return {
+      sessionToken: sessionToken,
+      permisos: permisosActuales,
+      onSessionExpired: function () {
+        logout();
+      }
+    };
+  }, {
+    refrescar: fotosPozosController_refrescar,
+    cerrarVisor: fotosPozosController_cerrarVisor,
+    repintar: fotosPozosController_repintar
   });
 
   // Resumen de fotos compartido (hub, ficha NE, popup NE, Buscar reemplazo, Cerca
