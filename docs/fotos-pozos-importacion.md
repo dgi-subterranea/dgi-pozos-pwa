@@ -1,7 +1,33 @@
 # Importación histórica a FotosPozos (piloto y lote completo)
 
-Estado: **implementado y testeado, todavía NO ejecutado contra producción.** No se subió ninguna foto, no se creó la hoja
-de staging y no se importó nada a `FotosPozos`.
+Estado: **importación ejecutada y comprobada (28/10/2026).** Las 4.116 fotos `CONFIRMADO` del corpus están subidas al storage y
+representadas en la hoja `FotosPozos` actual. Las 1.073 `POR_REVISAR` **no** se incorporaron (fuera de esta etapa). Ver
+"Reconciliación contra la hoja actual".
+
+## Reconciliación contra la hoja actual (28/10/2026)
+
+Se exportó la hoja `FotosPozos` productiva (CSV, solo lectura; el export es privado y queda en `scripts/out/`) y se contrastó con
+`python scripts/fotos/reconciliar_hoja.py --hoja scripts/out/fotos/FotosPozos_actual.csv` (de solo lectura; el reporte no incluye
+e-mails ni ids de Drive). Solo se afirma lo que esta evidencia demuestra, en cuatro niveles distintos:
+
+| Nivel | Cifra | Evidencia |
+|---|---|---|
+| Contenidos únicos del corpus | 5.203 = 4.116 `CONFIRMADO` + 1.073 `POR_REVISAR` + 14 `EXCLUIDA_IMPORTACION` | `corpus.json`, manifiestos y `revision/` |
+| `CONFIRMADO` subidos al storage | **4.116** (4.074 `SUBIDA` + 42 `YA_EXISTE`; 0 `FALLIDA`) | `estado_subida.jsonl` de los 4 lotes: `piloto30` 31, `validacion100` 100, `produccion500` 500, `produccion_final` 3.485; sin repetidos entre lotes |
+| Filas comprobadas en `FotosPozos` actual | **4.119** filas = 4.116 importadas + 3 `CAMPO_APP` | export de la hoja |
+| `POR_REVISAR` | 1.073, **no incorporadas** | fuera de esta etapa |
+
+Resultado (**VERDE**): de las 4.116 esperadas, **4.116 presentes y 0 faltantes**; sin diferencias contra el staging (pozo, fuente, sha1, ids
+de Drive, vínculo, estado, fecha); 0 `fotoId` duplicados; 0 duplicados por contenido (`sha1Original`) en la misma entidad; 0 ids de Drive
+duplicados; 0 filas sin id de Drive; 0 entidades inválidas; las 4.119 filas son `ACTIVA` y `CONFIRMADO` (no hay `OCULTA`). Por fuente:
+`MONITOREO_NE` 1.760, `RELEVAMIENTO_2018` 2.356, `CAMPO_APP` 3. Por lote: `PILOTO-2026-10` 31, `VALIDACION-2026-10` 100,
+`PRODUCCION-2026-10` 500, `PRODUCCION-FINAL-2026-10` 3.485.
+
+Las 3 filas fuera del universo importado son cargas desde la app (`CAMPO_APP`), no importación: una foto de prueba del 07/10 (pozo 13-0638,
+observación «Prueba») y dos cargas del 27/10. No se tocan. **No se corrigió nada** en la hoja ni en el storage.
+
+Qué NO demuestra esta reconciliación: que cada archivo de Drive exista y abra (se contrastaron los ids registrados, no se descargó cada
+imagen) ni la calidad de la asociación foto↔pozo de las `CONFIRMADO` más allá de las reglas del clasificador.
 
 ## Flujo de punta a punta
 
@@ -150,7 +176,7 @@ Ejemplo (valores de relleno): `00000000-0000-5000-8000-000000000001,,15-0268,,RE
 * `gpsLat/gpsLon/gpsOrigen`: vacíos, o ambas coordenadas y `EXIF_ORIGINAL`.
 * Sin rutas, sin nombres originales, sin secreto. Solo filas con subida confirmada.
 
-## Apps Script (nuevo, NO se ejecuta hasta aprobar)
+## Apps Script de la importación (código)
 
 | Archivo | Cambio |
 |---|---|
@@ -167,7 +193,7 @@ resultado por fila (`INSERTADA` / `YA_EXISTE` / `INVALIDA` + motivo) y registra 
 `fotoId`** (también cuenta una foto `OCULTA`: no revive), por contenido de la misma entidad y por id de Drive. No borra el
 staging ni modifica nada más que esas dos columnas; no toca `FotosReemplazo`.
 
-## Pasos manuales (después de aprobar el piloto y la prueba en iPhone)
+## Pasos manuales (procedimiento de la importación)
 
 1. **Storage:** pegar `StorageDrive.js` y publicar nueva versión de la Web App (misma URL).
 2. **Principal:** pegar `RegistryRepository.js` y `FotosPozosImport.js`; ejecutar **una vez** `setupFotosPozosImportStaging()`.
