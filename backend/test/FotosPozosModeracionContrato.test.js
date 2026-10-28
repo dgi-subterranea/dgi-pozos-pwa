@@ -331,7 +331,13 @@ describe('documentacion', () => {
     expect(doc()).toContain(tema);
   });
 
-  test('no corrige todavia la cifra productiva de FotosPozos (queda para la reconciliacion previa al rollout)', () => {
-    expect(doc()).toMatch(/no se afirma|sin afirmar|a reconciliar/i);
+  test('registra la reconciliacion productiva de FotosPozos (4.116 / 4.116) y el rollout (v46)', () => {
+    expect(doc()).toMatch(/4\.116 \/ 4\.116/);
+    expect(doc()).toMatch(/v46/);
+    expect(doc()).toMatch(/E8 PRODUCTIVO/);
+  });
+
+  test('la documentacion no contiene emails', () => {
+    expect(doc()).not.toMatch(/[\w.+-]+@[\w-]+\.[\w.]+/);
   });
 });

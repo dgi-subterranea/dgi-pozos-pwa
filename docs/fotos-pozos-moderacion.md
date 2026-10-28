@@ -1,8 +1,56 @@
 # Moderación de fotos de pozos (E8)
 
-Estado: **E8-3 (backend, `c254b7b`) y E8-4 (interfaz en el módulo Fotos, `69683d2`) commiteados en local; E8-5 (cola institucional «Fotos pendientes») IMPLEMENTADO LOCALMENTE, sin commit, sin push y sin desplegar. NADA de esto es productivo.** Nada de esto está en producción: la hoja `FotosPozoEventos` **no está creada**, la columna `fotos_moderar` **no existe** en `Usuarios`, no se ejecutó `setupFotosPozoEventosSheet`, no hay deploy, y el storage y Drive no se tocaron (el frontend cambia recién en E8-4, ver más abajo). La cola global, la resolución de solicitudes y el listado de retiradas son E8-5 (ver más abajo); el rollout, E8-6.
+Estado: **E8 PRODUCTIVO (rollout E8-6 cerrado el 28/10/2026).** Backend en producción (Apps Script **v46**), frontend publicado en GitHub Pages, hoja `FotosPozoEventos` creada y permiso `fotos_moderar` habilitado inicialmente **solo** para la persona que hizo el smoke. Ver «Rollout productivo (E8-6)».
 
 Alcance de E8 v1 (cerrado en E8-1): **moderación productiva + cola + base para la curaduría histórica.** La subida sigue **directa** (sin aprobación previa).
+
+## Rollout productivo (E8-6)
+
+**Estado: E8 productivo desde el 28/10/2026.** Las secciones de más abajo (E8-3, E8-4, E8-5) describen el diseño; las frases del tipo «local, sin desplegar» o «no productivo todavía» son históricas de esas etapas y quedan superadas por esta sección.
+
+| Concepto | Resultado |
+|---|---|
+| Commits | backend `c254b7b`, interfaz `69683d2`, cola `7d98b26`, reconciliación de la importación `b70e450` (todos en `origin/main`) |
+| Apps Script | **producción v46**, en el **mismo deployment numerado productivo** (se actualizó con `update-deployment`; no se creó ninguno) y la **misma URL `/exec`**. `@HEAD` (pruebas) y el storage no se tocaron. Versión anterior: v45 |
+| Frontend | GitHub Pages servía el service worker y los scripts nuevos (`fotosModeracionColaLogic.js`, `fotosModeracionCola.js`) tras el push |
+| Hoja `FotosPozoEventos` | creada con `setupFotosPozoEventosSheet()` (resultado: `Hoja FotosPozoEventos creada.`), esquema de 14 columnas fijado por el código del setup y por los tests |
+| Permiso | columna `fotos_moderar` agregada a `Usuarios`; `SI` **solo** en la fila de la persona que hizo el smoke (que ya tenía `fotos`). No se modificó ningún otro usuario ni permiso. Ampliarlo a otras personas es una decisión pendiente |
+| Respaldo previo | copia verificada de `scripts/out/fotos` (8.672 archivos, ~1,5 GB, hashes de los archivos clave coincidentes) fuera del repo; el original no se movió |
+| Reconciliación previa | `FotosPozos` actual: 4.119 filas = **4.116 / 4.116 `CONFIRMADO` presentes**, 0 faltantes, 0 duplicados (`fotoId`, contenido, id de Drive), 0 diferencias contra el staging, 3 filas `CAMPO_APP` (cargas desde la app), todas `ACTIVA` y `CONFIRMADO` (detalle en `docs/fotos-pozos-importacion.md`) |
+
+### Orden seguido
+1. Tests (Jest completo, Python, `git diff --check`), commit de E8-5, respaldo y reconciliación **antes** de cualquier escritura en Google.
+2. `gas:push` a HEAD (no cambia producción: el deployment numerado seguía en v45) para que existiera `setupFotosPozoEventosSheet()`.
+3. La persona operadora ejecutó el setup y agregó la columna `fotos_moderar` con su sesión de Google (las únicas acciones que la requerían).
+4. `gas:version` → **v46** (Apps Script informó el número real; la lista de versiones lo mostró con un pequeño retraso) → `gas:deploy` al deployment productivo existente (también con confirmación diferida). La URL productiva no cambió; un token inválido contra las rutas nuevas responde `UNAUTHORIZED` (en v45 serían «acción desconocida»).
+5. `push` a `origin/main` y verificación de Pages (service worker con los archivos nuevos, HTTP 200 en los scripts, tarjeta en `index.html`).
+6. Smoke interactivo en producción con sesión nueva (`fotos` + `fotos_moderar`).
+
+### Smoke en producción (foto de prueba)
+Foto usada: la de **prueba** del pozo **13-0638** (panorámica del 07/10/2026, observación «Prueba», `fotoId` que empieza con `57a70c0b`), cargada desde la app (`CAMPO_APP`) con esa observación; no es una foto de la importación histórica. Resultado informado por quien lo ejecutó, paso a paso:
+
+1. **Sesión nueva:** la tarjeta «Fotos pendientes» aparece; Pendientes y Retiradas vacías al inicio.
+2. **Galería del pozo 13-0638** abre con normalidad y se identifica la foto de prueba.
+3. **Sugerir retiro** (motivo `Otro`): funciona; la foto sigue visible, queda «Retiro sugerido» y **persiste al recargar**; la solicitud aparece en «Fotos pendientes»; Abrir foto y Ver historial funcionan.
+4. **Rechazar:** funciona; la foto sigue visible.
+5. **Retirar foto** (motivo `Otro`): funciona; la foto desaparece de la galería normal y aparece en Retiradas; Abrir foto y Ver historial funcionan desde Retiradas.
+6. **Reponer:** funciona; la foto vuelve a la galería.
+7. **Estado final:** foto de prueba **visible y activa**, sin solicitud abierta, fuera de Retiradas. El archivo **no se borró** (el retiro es lógico; no se llamó a `trashFotoPozo`; el storage no se tocó).
+
+Los eventos del smoke **quedan en `FotosPozoEventos` como auditoría** (no se borran): una solicitud, su rechazo, un retiro directo y una reposición. No se hizo un retiro por `PRIVACIDAD` (cubierto por tests).
+
+Tiempos: **no se midieron en milisegundos**; el smoke interactivo no reportó latencias anómalas.
+
+### Verificaciones que quedan pendientes (menores)
+- **Contraste de las hojas por CSV:** no se exportaron `FotosPozoEventos` ni `Historial` al cierre, así que no se verificó fila por fila (eventoId únicos, secuencia, actor, timestamps, `clientRequestId`, sin duplicados) más allá de lo que el circuito productivo demostró funcionalmente. Se puede hacer en cualquier momento exportándolas.
+- **Idempotencia en producción** (mismo `clientRequestId` sin duplicar) y **un usuario con `fotos` sin `fotos_moderar`** (no ve la tarjeta ni las acciones): no se probaron en vivo; el contrato está fijado por tests y no se modificó otro usuario solo para esto.
+
+### Limitaciones y deudas de E8 v1
+- **Curaduría de las 1.073 `POR_REVISAR`:** fuera de E8 v1 (E8.x posterior); no se subieron.
+- **No hay borrado físico:** retirar (incluso por `PRIVACIDAD`) es solo lógico; `PRIVACIDAD` enciende la señal «Pendiente de revisión de borrado» y no existe todavía un flujo de borrado.
+- **No hay foto principal** ni **moderación previa de nuevas subidas** (la subida sigue directa).
+- **`fotos_moderar` solo para la persona del smoke:** ampliarlo a otros usuarios queda para cuando se decida.
+- La cola no tiene filtros ni buscador, ni «Ver pozo» desde la tarjeta; sin badge en el hub.
 
 ## Archivos
 
@@ -162,7 +210,7 @@ Una fila resumida (`usuario`, acción, entidad, `OK`) por cada escritura **exito
 
 Retiro lógico: oculta de inmediato, invalida el cache y deja `requiereRevisionBorrado = true` para el moderador. El archivo **permanece**: moderar no usa `trashFotoPozo`, `DriveApp` ni el storage (salvo la lectura explícita de imagen). Hay una guarda por test.
 
-## Setup de la hoja (no ejecutado)
+## Setup de la hoja (ejecutado en E8-6)
 
 `setupFotosPozoEventosSheet()` es manual: si la hoja falta, la crea con los 14 encabezados exactos, fila 1 congelada, texto plano y `secuencia` numérica (`CREADA`); si existe y es correcta, devuelve `YA_EXISTE`; si existe mal, falla sin repararla. **No se ejecutó.**
 
@@ -264,7 +312,7 @@ La hoja `FotosPozosCambios` (6 columnas, repositorio sin endpoint ni UI) queda c
 - **POR_REVISAR (1.073):** no se suben ni hay herramienta todavía (E8.x). El modelo está pensado para que una asociación aprobada termine en una foto **ACTIVA normal** (baseline ACTIVA + vínculo CONFIRMADO, sin eventos).
 - **Foto principal**, **hash SHA-256**, **vista pública (E10)**: sin cambios en E8-3; la imagen, el pipeline y el storage no se tocan.
 
-## Requisitos PRE-ROLLOUT (E8-6)
+## Requisitos PRE-ROLLOUT (E8-6, cumplidos; ver «Rollout productivo»)
 
 1. **Reconciliación de `FotosPozos`:** obtener el export CSV actual de la hoja y contrastarlo con los 4.116 CONFIRMADO subidos al storage. La cifra productiva no se afirma acá: **a reconciliar** (la documentación de importación está desactualizada; ver `docs/fotos-pozos-importacion.md`).
 2. **Respaldo fuera del repo de `scripts/out/fotos`**: está en `.gitignore` y contiene la evidencia de la importación (manifiestos, estados de subida, reportes). No se agrega al repo.
