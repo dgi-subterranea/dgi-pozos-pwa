@@ -97,6 +97,22 @@ function doPost(e) {
           procesamiento: body.procesamiento,
           tamanoOriginalBytes: body.tamanoOriginalBytes
         });
+      } else if (body.action === 'solicitarRetiroFotoPozo') {
+        // Lista BLANCA (E8-3): NUNCA entidad, estado, email, nombre ni solicitudId del cliente; la foto la identifica fotoId y la entidad la deriva el servidor.
+        response = handleSolicitarRetiroFotoPozo(body.sessionToken, { fotoId: body.fotoId, motivoCodigo: body.motivoCodigo, motivoTexto: body.motivoTexto, clientRequestId: body.clientRequestId });
+      } else if (body.action === 'retirarFotoPozo') {
+        response = handleRetirarFotoPozo(body.sessionToken, { fotoId: body.fotoId, motivoCodigo: body.motivoCodigo, motivoTexto: body.motivoTexto, clientRequestId: body.clientRequestId });
+      } else if (body.action === 'resolverRetiroFotoPozo') {
+        // la foto y la entidad salen de la SOLICITUD (servidor): el cliente solo manda solicitudId + resolucion
+        response = handleResolverRetiroFotoPozo(body.sessionToken, { solicitudId: body.solicitudId, resolucion: body.resolucion, clientRequestId: body.clientRequestId });
+      } else if (body.action === 'reponerFotoPozo') {
+        response = handleReponerFotoPozo(body.sessionToken, { fotoId: body.fotoId, clientRequestId: body.clientRequestId });
+      } else if (body.action === 'getHistorialFotoPozo') {
+        response = handleGetHistorialFotoPozo(body.sessionToken, body.fotoId);
+      } else if (body.action === 'getFotosPozosPendientesModeracion') {
+        response = handleGetFotosPozosPendientesModeracion(body.sessionToken, body.limit, body.cursor);
+      } else if (body.action === 'getFotoPozoModeracion') {
+        response = handleGetFotoPozoModeracion(body.sessionToken, body.fotoId, body.variante);
       } else if (body.action === 'proponerCorreccionUbicacion') {
         // Lista BLANCA de campos: la identidad sale de la sesion; irrLat/irrLon/irrEstado/distanciaM/estado... que mande el
         // cliente se ignoran (el snapshot de Irrigacion, la distancia y las banderas las calcula el backend). coordenadaOriginal es el valor tipeado de
@@ -1124,6 +1140,146 @@ function handleSubirFotoPozo(sessionToken, datos) {
   return { status: 'ok', data: { foto: resultado.foto, duplicada: resultado.duplicada } };
 }
 
+// --- Moderacion de fotos de pozos (E8-3) ---
+// Gates (todos exactos, `=== true`, y siempre CON `fotos`: quien no puede ver las fotos no solicita ni decide a ciegas):
+//   solicitar retiro ........... fotos + fotos_carga
+//   retirar / resolver / reponer / historial / cola / imagen de moderacion ... fotos + fotos_moderar
+// Orden de chequeos, igual que el resto: sesion -> permisos -> contenido -> estado (DENTRO del lock en las escrituras). email / nombre SIEMPRE de la sesion + hoja Usuarios; el cliente nunca manda
+// entidad, estado, email, nombre ni la foto de una resolucion. La hoja FotosPozoEventos es PARTE NECESARIA del contrato: si falta, esta rota o no se puede leer, SERVICE_UNAVAILABLE (nunca se ignora la
+// moderacion). Historial: UNA fila por escritura exitosa (accion + entidad + OK), sin motivo, sin fotoId, sin email redundante; un reintento idempotente NO escribe otra. Sin Telegram.
+// Codigos de error estables: INVALID_ACCION / INVALID_FOTO_ID / INVALID_SOLICITUD_ID / INVALID_RESOLUCION / INVALID_MOTIVO / INVALID_MOTIVO_TEXTO / INVALID_CLIENT_REQUEST_ID / INVALID_REQUEST (entrada),
+// PERMISSION_DENIED, FOTO_NOT_FOUND (para quien solicita cubre inexistente, oculta, retirada, no derivable o sin vinculo: sin oraculo), SOLICITUD_NOT_FOUND, SOLICITUD_YA_ABIERTA, SOLICITUD_ABIERTA,
+// SOLICITUD_YA_RESUELTA, FOTO_YA_RETIRADA, FOTO_NO_RETIRADA, REPOSICION_NO_PERMITIDA, ESTADO_NO_DERIVABLE (transiciones, solo moderador), IDEMPOTENCY_CONFLICT, INCONSISTENT_STATE, SERVICE_UNAVAILABLE.
+
+// Permisos de moderacion: TODOS los modulos deben valer exactamente `true` (un valor truthy que no sea boolean true, p. ej. "SI" o 1, no habilita). Mismo mensaje y auditoria que validarPermiso.
+function api_validarPermisosEstrictos(session, accion, modulos) {
+  for (var i = 0; i < modulos.length; i++) {
+    if (hasPermission(session.email, modulos[i]) !== true) {
+      logHistoryEvent(session.email, accion, null, 'PERMISSION_DENIED');
+      return { ok: false, response: { status: 'error', code: 'PERMISSION_DENIED', message: 'usuario sin permiso "' + modulos[i] + '": ' + session.email } };
+    }
+  }
+  return { ok: true };
+}
+
+// Lista blanca de campos de entrada (el cliente solo es autoridad sobre estos): el resto de `datos` NO llega al servicio.
+function api_camposModeracion(datos, campos) {
+  var d = datos && typeof datos === 'object' ? datos : {};
+  var salida = {};
+  campos.forEach(function (c) {
+    if (Object.prototype.hasOwnProperty.call(d, c)) {
+      salida[c] = d[c];
+    }
+  });
+  return salida;
+}
+
+// Escritura de moderacion: accionApi (nombre del action), accionDominio (FOTOS_MOD_ACCIONES) y modulos (permisos exigidos). datos YA es la lista blanca de la ruta.
+function api_escrituraModeracionFotoPozo(sessionToken, accionApi, accionDominio, modulos, datos) {
+  var validation = validateSession(sessionToken, accionApi, null);
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+  var permisos = api_validarPermisosEstrictos(session, accionApi, modulos);
+  if (!permisos.ok) {
+    return permisos.response;
+  }
+  var access = getUserAccess(session.email);
+  var resultado;
+  try {
+    resultado = fotosPozosModeracionOps_ejecutar(Object.assign({ accion: accionDominio }, datos), {
+      email: session.email,
+      nombre: access.nombre,
+      permisos: {
+        fotos: hasPermission(session.email, 'fotos') === true,
+        fotos_carga: hasPermission(session.email, 'fotos_carga') === true,
+        fotos_moderar: hasPermission(session.email, 'fotos_moderar') === true
+      }
+    });
+  } catch (err) {
+    // mensaje fijo: el detalle tecnico va a Logger (recortado, sin URLs) y jamas lleva el motivo
+    Logger.log(accionApi + ': excepcion: ' + api_limpiarMensajeLog(err));
+    logHistoryEvent(session.email, accionApi, null, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'no se pudo completar la accion: intenta de nuevo en unos minutos' };
+  }
+  if (!resultado.ok) {
+    logHistoryEvent(session.email, accionApi, null, resultado.code);
+    return { status: 'error', code: resultado.code, message: resultado.message };
+  }
+  if (!resultado.duplicada) {
+    logHistoryEvent(session.email, accionApi, resultado.entidad ? resultado.entidad.id : null, 'OK');
+  }
+  var data = { fotoId: resultado.evento.fotoId, duplicada: resultado.duplicada === true };
+  if (accionDominio === 'SOLICITAR_RETIRO' || accionDominio === 'RESOLVER_RETIRO') {
+    data.solicitudId = accionDominio === 'SOLICITAR_RETIRO' ? resultado.evento.eventoId : resultado.evento.solicitudId;
+  }
+  if (accionDominio === 'RESOLVER_RETIRO') {
+    data.resolucion = resultado.evento.resolucion;
+  }
+  return { status: 'ok', data: data };
+}
+
+function handleSolicitarRetiroFotoPozo(sessionToken, datos) {
+  return api_escrituraModeracionFotoPozo(sessionToken, 'solicitarRetiroFotoPozo', 'SOLICITAR_RETIRO', ['fotos', 'fotos_carga'], api_camposModeracion(datos, ['fotoId', 'motivoCodigo', 'motivoTexto', 'clientRequestId']));
+}
+
+function handleRetirarFotoPozo(sessionToken, datos) {
+  return api_escrituraModeracionFotoPozo(sessionToken, 'retirarFotoPozo', 'RETIRAR', ['fotos', 'fotos_moderar'], api_camposModeracion(datos, ['fotoId', 'motivoCodigo', 'motivoTexto', 'clientRequestId']));
+}
+
+function handleResolverRetiroFotoPozo(sessionToken, datos) {
+  return api_escrituraModeracionFotoPozo(sessionToken, 'resolverRetiroFotoPozo', 'RESOLVER_RETIRO', ['fotos', 'fotos_moderar'], api_camposModeracion(datos, ['solicitudId', 'resolucion', 'clientRequestId']));
+}
+
+function handleReponerFotoPozo(sessionToken, datos) {
+  return api_escrituraModeracionFotoPozo(sessionToken, 'reponerFotoPozo', 'REPONER', ['fotos', 'fotos_moderar'], api_camposModeracion(datos, ['fotoId', 'clientRequestId']));
+}
+
+// Lectura de moderador: sesion -> permisos (fotos + fotos_moderar) -> servicio. Las lecturas OK no se auditan; permisos denegados y fallas si.
+function api_lecturaModeracionFotoPozo(sessionToken, accionApi, fn) {
+  var validation = validateSession(sessionToken, accionApi, null);
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+  var permisos = api_validarPermisosEstrictos(session, accionApi, ['fotos', 'fotos_moderar']);
+  if (!permisos.ok) {
+    return permisos.response;
+  }
+  var resultado;
+  try {
+    resultado = fn();
+  } catch (err) {
+    Logger.log(accionApi + ': excepcion: ' + api_limpiarMensajeLog(err));
+    logHistoryEvent(session.email, accionApi, null, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'no se pudo completar la accion: intenta de nuevo en unos minutos' };
+  }
+  if (!resultado.ok) {
+    if (resultado.code === 'STORAGE_UNAVAILABLE') {
+      logHistoryEvent(session.email, accionApi, null, resultado.code);
+    }
+    return { status: 'error', code: resultado.code, message: resultado.message };
+  }
+  return { status: 'ok', data: resultado };
+}
+
+function handleGetHistorialFotoPozo(sessionToken, fotoId) {
+  var r = api_lecturaModeracionFotoPozo(sessionToken, 'getHistorialFotoPozo', function () { return fotosPozosModeracionOps_historial(fotoId); });
+  return r.status === 'ok' ? { status: 'ok', data: { foto: r.data.foto, estado: r.data.estado, eventos: r.data.eventos } } : r;
+}
+
+function handleGetFotosPozosPendientesModeracion(sessionToken, limit, cursor) {
+  var r = api_lecturaModeracionFotoPozo(sessionToken, 'getFotosPozosPendientesModeracion', function () { return fotosPozosModeracionOps_cola(limit, cursor); });
+  return r.status === 'ok' ? { status: 'ok', data: { total: r.data.total, items: r.data.items, hayMas: r.data.hayMas, cursor: r.data.cursor } } : r;
+}
+
+// Imagen de una foto para el moderador, activa o RETIRADA (el endpoint normal getFotoPozo sigue respetando la visibilidad). Solo la imagen: ni ids de Drive ni metadata de storage.
+function handleGetFotoPozoModeracion(sessionToken, fotoId, variante) {
+  var r = api_lecturaModeracionFotoPozo(sessionToken, 'getFotoPozoModeracion', function () { return fotosPozosModeracionOps_imagen(fotoId, variante); });
+  return r.status === 'ok' ? { status: 'ok', data: r.data.imagen } : r;
+}
+
 // --- Correcciones de ubicacion de pozos (etapa backend base) ---
 // La ubicacion corregida en campo NUNCA toca el padron: vive en dos hojas append-only (ver UbicacionCorreccionRepository.js) y
 // su estado se deriva del log. Permisos (todos fail-closed, mas el usuario activo que ya exige validateSession):
@@ -1796,6 +1952,13 @@ if (typeof module !== 'undefined' && module.exports) {
     handleValidarCorreccionUbicacion,
     handleRechazarCorreccionUbicacion,
     handleRevertirCorreccionUbicacion,
+    handleSolicitarRetiroFotoPozo,
+    handleRetirarFotoPozo,
+    handleResolverRetiroFotoPozo,
+    handleReponerFotoPozo,
+    handleGetHistorialFotoPozo,
+    handleGetFotosPozosPendientesModeracion,
+    handleGetFotoPozoModeracion,
     handleGetFotosPozo,
     handleGetFotoPozo,
     handleGetResumenFotosPozos,

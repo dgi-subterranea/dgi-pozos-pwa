@@ -396,7 +396,9 @@ function fotosPozosService_listar(wellId, monitoringId, orden) {
   if (!entidad.ok) {
     return entidad;
   }
-  var fotos = fotosPozosService_ordenar(fotosPozosRepository_listarVisiblesPorEntidad(entidad), orden);
+  // visibilidad FINAL: baseline + vinculo (repositorio) Y estado derivado de la moderacion (E8). LANZA si la hoja de eventos no se puede leer: fail-closed, nunca se muestra "sin moderar".
+  var derivacion = fotosPozosModeracionOps_cargarDerivacion();
+  var fotos = fotosPozosService_ordenar(fotosPozosModeracionOps_filtrarVisibles(fotosPozosRepository_listarVisiblesPorEntidad(entidad), derivacion), orden);
   fotosPozosService_cachearMeta(fotos);
   return { ok: true, entidad: entidad.clave, total: fotos.length, fotos: fotos.map(fotosPozosService_sanitizar) };
 }
@@ -425,7 +427,15 @@ function fotosPozosService_resumen() {
   if (cacheado) {
     return JSON.parse(cacheado);
   }
-  var cuenta = fotosPozosRepository_contarVisiblesPorEntidad();
+  // solo fotos VISIBLES segun la moderacion (no cuenta OCULTA legacy, RETIRADA ni NO_DERIVABLE); una solicitud abierta sigue contando mientras la foto este activa
+  var derivacion = fotosPozosModeracionOps_cargarDerivacion();
+  var cuenta = {};
+  fotosPozosModeracionOps_filtrarVisibles(fotosPozosRepository_listarVisiblesBase(), derivacion).forEach(function (f) {
+    var clave = f.wellId || f.monitoringId;
+    if (clave) {
+      cuenta[clave] = (cuenta[clave] || 0) + 1;
+    }
+  });
   var json = JSON.stringify(cuenta);
   if (json.length <= FOTOS_POZOS_CACHE_MAX_CHARS) {
     cache.put(FOTOS_POZOS_RESUMEN_CLAVE, json, FOTOS_POZOS_RESUMEN_CACHE_SEG);
@@ -438,7 +448,7 @@ function fotosPozosService_invalidarResumen() {
 }
 
 // Ids internos de una foto visible (cache primero; si no, la hoja). null si no existe/oculta.
-function fotosPozosService_idsInternos(fotoId, cache) {
+function fotosPozosService_idsInternos(fotoId, cache, derivacion) {
   var cacheada = cache.get('fotospozos_m_' + fotoId);
   if (cacheada) {
     try {
@@ -448,7 +458,7 @@ function fotosPozosService_idsInternos(fotoId, cache) {
     }
   }
   var foto = fotosPozosRepository_buscarVisiblePorFotoId(fotoId);
-  if (!foto) {
+  if (!foto || !fotosPozosModeracion_visible(foto, derivacion)) {
     return null;
   }
   var ids = { d: foto.driveFileId, t: foto.driveThumbId };
@@ -465,8 +475,13 @@ function fotosPozosService_obtenerImagen(fotoId, variante) {
   if (variante !== 'thumb' && variante !== 'full') {
     return fotosPozosService_error('INVALID_VARIANTE', 'variante invalida');
   }
+  // PRIMERO los eventos (aun con el cache lleno): una foto retirada por moderacion o con historial no derivable no se sirve jamas, ni miniatura ni completa. LANZA si no se pueden leer (fail-closed).
+  var derivacion = fotosPozosModeracionOps_cargarDerivacion();
+  if (!fotosPozosModeracionOps_permitidaPorEventos(fotoId, derivacion)) {
+    return fotosPozosService_error('FOTO_NOT_FOUND', 'no existe la foto');
+  }
   var cache = CacheService.getScriptCache();
-  var ids = fotosPozosService_idsInternos(fotoId, cache);
+  var ids = fotosPozosService_idsInternos(fotoId, cache, derivacion);
   if (!ids) {
     return fotosPozosService_error('FOTO_NOT_FOUND', 'no existe la foto');
   }

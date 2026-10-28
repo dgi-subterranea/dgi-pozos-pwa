@@ -1,10 +1,10 @@
 // Unica funcion que sabe que existe una hoja "Usuarios" en Sheets.
 // Columnas esperadas (header en la fila 1, CUALQUIER orden):
-//   email | nombre | estado | fecha_alta | perfil | datos | ubicacion | ne | reemplazo | fotos | fotos_carga | ubicacion_corregir | ubicacion_validar | observaciones | observaciones_agregar | observaciones_anular
+//   email | nombre | estado | fecha_alta | perfil | datos | ubicacion | ne | reemplazo | fotos | fotos_carga | fotos_moderar | ubicacion_corregir | ubicacion_validar | observaciones | observaciones_agregar | observaciones_anular
 // Las columnas se buscan por el TEXTO del encabezado (normalizado a
 // minuscula/trim), nunca por posicion fija - reordenar columnas en la
 // hoja no rompe nada. Si falta alguna de las columnas de permiso (por ejemplo
-// fotos / fotos_carga / ubicacion_corregir / ubicacion_validar / observaciones* antes de agregarlas a la hoja), ese permiso da false para
+// fotos / fotos_carga / fotos_moderar / ubicacion_corregir / ubicacion_validar / observaciones* antes de agregarlas a la hoja), ese permiso da false para
 // todos (fail-closed), sin lanzar error.
 //
 // "estado" debe valer exactamente "activo" (normalizado) para
@@ -15,8 +15,8 @@
 // dat true. Cualquier otra cosa da false: "NO", vacio, "1", "true",
 // texto desconocido, o la columna directamente inexistente en el header.
 // No hay ningun valor que se interprete como "permitido por defecto".
-var USUARIOS_COLUMNAS = ['email', 'nombre', 'estado', 'fecha_alta', 'perfil', 'datos', 'ubicacion', 'ne', 'reemplazo', 'fotos', 'fotos_carga', 'ubicacion_corregir', 'ubicacion_validar', 'observaciones', 'observaciones_agregar', 'observaciones_anular'];
-var USUARIOS_COLUMNAS_PERMISO = ['perfil', 'datos', 'ubicacion', 'ne', 'reemplazo', 'fotos', 'fotos_carga', 'ubicacion_corregir', 'ubicacion_validar', 'observaciones', 'observaciones_agregar', 'observaciones_anular'];
+var USUARIOS_COLUMNAS = ['email', 'nombre', 'estado', 'fecha_alta', 'perfil', 'datos', 'ubicacion', 'ne', 'reemplazo', 'fotos', 'fotos_carga', 'fotos_moderar', 'ubicacion_corregir', 'ubicacion_validar', 'observaciones', 'observaciones_agregar', 'observaciones_anular'];
+var USUARIOS_COLUMNAS_PERMISO = ['perfil', 'datos', 'ubicacion', 'ne', 'reemplazo', 'fotos', 'fotos_carga', 'fotos_moderar', 'ubicacion_corregir', 'ubicacion_validar', 'observaciones', 'observaciones_agregar', 'observaciones_anular'];
 
 function sheetUserRepository_indiceColumnas(headerRow) {
   var normalizados = headerRow.map(function (h) { return String(h).trim().toLowerCase(); });
@@ -36,7 +36,7 @@ function sheetUserRepository_leerPermiso(row, indices, nombreColumna) {
 }
 
 function sheetUserRepository_permisosVacios() {
-  return { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false, ubicacion_corregir: false, ubicacion_validar: false, observaciones: false, observaciones_agregar: false, observaciones_anular: false };
+  return { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false, fotos_moderar: false, ubicacion_corregir: false, ubicacion_validar: false, observaciones: false, observaciones_agregar: false, observaciones_anular: false };
 }
 
 function sheetUserRepository_getUserStatus(email) {

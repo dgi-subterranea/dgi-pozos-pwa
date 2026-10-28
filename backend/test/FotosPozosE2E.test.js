@@ -103,7 +103,8 @@ beforeEach(() => {
   StorageApi = require('../../storage/src/StorageApi');
 
   // Scope global compartido (Apps Script)
-  Object.assign(global, StorageAuth, StorageDrive, Repo, Service, Client);
+  const Eventos = require('../src/FotosPozoEventosRepository');
+  Object.assign(global, StorageAuth, StorageDrive, Repo, Service, Client, Eventos, require('../src/FotosPozosModeracionService'), require('../src/FotosPozosModeracionOperaciones'));
   global.fotosService_bytesDeBase64 = Reemplazo.fotosService_bytesDeBase64;
   global.fotosService_esJpeg = Reemplazo.fotosService_esJpeg;
   global.fotosService_limpiar = Reemplazo.fotosService_limpiar;
@@ -129,7 +130,7 @@ beforeEach(() => {
   };
 
   // Hoja FotosPozos en memoria (con el repositorio real)
-  hojas = instalarSheetsFalsos({ FotosPozos: [Repo.FOTOS_POZOS_COLUMNAS] });
+  hojas = instalarSheetsFalsos({ FotosPozos: [Repo.FOTOS_POZOS_COLUMNAS], FotosPozoEventos: [Eventos.FOTOS_POZO_EVENTOS_COLUMNAS] });
   const sheetsAppend = global.SpreadsheetApp;
   global.SpreadsheetApp = {
     openById: (id) => {
@@ -430,8 +431,8 @@ describe('revision de seguridad (aprobacion de FotosPozos v1)', () => {
     expect(fila[columna('gpsLat')]).toBe(-33.987654);
     expect(fila[columna('gpsLon')]).toBe(-68.123456);
     expect(fila[columna('gpsOrigen')]).toBe('DISPOSITIVO_CARGA');
-    // unica hoja que existe/se escribio: FotosPozos (la del padron/NE ni se abre)
-    expect(Object.keys(hojas)).toEqual(['FotosPozos']);
+    // unicas hojas que existen: FotosPozos y FotosPozoEventos (E8, solo lectura aqui; la del padron/NE ni se abre)
+    expect(Object.keys(hojas)).toEqual(['FotosPozos', 'FotosPozoEventos']);
     // las unicas funciones externas de padron/red NE que el servicio puede llamar son las de LECTURA
     const src = ['FotosPozosService.js', 'FotosPozosRepository.js'].map((f) => fs.readFileSync(path.join(ROOT, 'backend/src', f), 'utf8')).join('\n');
     const externas = new Set(src.match(/\b(?:registry|nivelesEstaticos|mapa|mapaNE|ubicacion|location|well)\w*(?:Repository|Service)_\w+/g) || []);

@@ -9,6 +9,9 @@ global.fotosService_bytesDeBase64 = Reemplazo.fotosService_bytesDeBase64;
 global.fotosService_esJpeg = Reemplazo.fotosService_esJpeg;
 global.fotosService_limpiar = Reemplazo.fotosService_limpiar;
 const Service = require('../src/FotosPozosService');
+// moderacion (E8): en Apps Script son archivos del mismo proyecto (globales)
+Object.assign(global, require('../src/FotosPozosModeracionService'), require('../src/FotosPozosModeracionOperaciones'));
+let eventosModeracion;
 
 const WELL = '04-0263';
 const AHORA = new Date('2026-10-06T15:00:00Z');
@@ -44,6 +47,9 @@ beforeEach(() => {
   global.fotosPozosRepository_listarVisiblesPorEntidad = jest.fn().mockReturnValue([]);
   global.fotosPozosRepository_buscarVisiblePorFotoId = jest.fn().mockReturnValue(null);
   global.fotosPozosRepository_contarVisiblesPorEntidad = jest.fn().mockReturnValue({});
+  global.fotosPozosRepository_listarVisiblesBase = jest.fn().mockReturnValue([]);
+  eventosModeracion = [];
+  global.fotosPozoEventosRepository_leerTodos = jest.fn(() => ({ eventos: eventosModeracion }));
   global.fotosPozosRepository_buscarDuplicado = jest.fn().mockReturnValue(null);
   global.fotosPozosRepository_agregarSinDuplicar = jest.fn().mockReturnValue({ agregada: true });
   global.fotosStorageClient_subirPozo = jest.fn().mockReturnValue({ driveFileId: 'DRIVE_FILE_ID_0001', driveThumbId: 'DRIVE_THUMB_ID_0001', tamanoBytes: 123456 });
@@ -346,9 +352,11 @@ describe('orden', () => {
   });
 });
 
+const U = (s) => '00000000-0000-4000-8000-' + Buffer.from(String(s)).toString('hex').padStart(12, '0').slice(-12);
+
 describe('listar', () => {
   const guardada = (id, extra) => Object.assign({
-    fotoId: id, fuente: 'CAMPO_APP', tipoFoto: 'CERCA', fechaFotoValor: '2026-10-05', fechaFotoPrecision: 'DIA', fechaFotoFuente: 'USUARIO',
+    fotoId: U(id), estado: 'ACTIVA', estadoVinculo: 'CONFIRMADO', wellId: WELL, monitoringId: '', fuente: 'CAMPO_APP', tipoFoto: 'CERCA', fechaFotoValor: '2026-10-05', fechaFotoPrecision: 'DIA', fechaFotoFuente: 'USUARIO',
     observacion: '', ancho: 1600, alto: 1200, gpsLat: null, gpsLon: null, timestampRegistro: '2026-10-06T00:00:00.000Z',
     emailUsuarioCarga: 'x@x.com', driveFileId: 'DRIVE_FILE_ID_' + id, driveThumbId: 'DRIVE_THUMB_ID_' + id, sha1Original: 'a'.repeat(40)
   }, extra || {});
@@ -365,7 +373,7 @@ describe('listar', () => {
     ]);
     const r = Service.fotosPozosService_listar(WELL, '', 'recientes');
     expect(r.total).toBe(2);
-    expect(r.fotos.map((f) => f.fotoId)).toEqual(['f2', 'f1']);
+    expect(r.fotos.map((f) => f.fotoId)).toEqual([U('f2'), U('f1')]);
     expect(global.fotosPozosRepository_listarVisiblesPorEntidad).toHaveBeenCalledWith({ ok: true, wellId: WELL, monitoringId: '', clave: WELL });
     expect(JSON.stringify(r)).not.toMatch(/DRIVE_|x@x\.com|a{40}/);
   });
@@ -380,7 +388,7 @@ describe('listar', () => {
   test('deja en cache los ids internos de las fotos listadas (para no releer la hoja por cada miniatura)', () => {
     global.fotosPozosRepository_listarVisiblesPorEntidad.mockReturnValue([guardada('f1')]);
     Service.fotosPozosService_listar(WELL, '', 'recientes');
-    expect(JSON.parse(cacheStore.get('fotospozos_m_f1'))).toEqual({ d: 'DRIVE_FILE_ID_f1', t: 'DRIVE_THUMB_ID_f1' });
+    expect(JSON.parse(cacheStore.get('fotospozos_m_' + U('f1')))).toEqual({ d: 'DRIVE_FILE_ID_f1', t: 'DRIVE_THUMB_ID_f1' });
   });
   test('muchas fotos: el cache se carga en lotes (limite de putAll)', () => {
     const muchas = [];
@@ -396,14 +404,23 @@ describe('listar', () => {
 });
 
 describe('resumen', () => {
-  test('devuelve {clave: n} desde la hoja y lo cachea', () => {
-    global.fotosPozosRepository_contarVisiblesPorEntidad.mockReturnValue({ '01-0012': 4, '03-0652': 12 });
+  const foto = (n, wellId, extra) => Object.assign({ fotoId: U('r' + n), estado: 'ACTIVA', estadoVinculo: 'CONFIRMADO', wellId: wellId, monitoringId: '' }, extra || {});
+
+  test('devuelve {clave: n} desde la hoja (solo fotos visibles) y lo cachea', () => {
+    const fotos = [foto(1, '01-0012'), foto(2, '01-0012'), foto(3, '01-0012'), foto(4, '01-0012')];
+    for (let i = 0; i < 12; i++) { fotos.push(foto(10 + i, '03-0652')); }
+    global.fotosPozosRepository_listarVisiblesBase.mockReturnValue(fotos);
     expect(Service.fotosPozosService_resumen()).toEqual({ '01-0012': 4, '03-0652': 12 });
     expect(Service.fotosPozosService_resumen()).toEqual({ '01-0012': 4, '03-0652': 12 });
-    expect(global.fotosPozosRepository_contarVisiblesPorEntidad).toHaveBeenCalledTimes(1);
+    expect(global.fotosPozosRepository_listarVisiblesBase).toHaveBeenCalledTimes(1);
+    expect(global.fotosPozoEventosRepository_leerTodos).toHaveBeenCalledTimes(1);
+  });
+  test('un punto NE especial cuenta por monitoringId', () => {
+    global.fotosPozosRepository_listarVisiblesBase.mockReturnValue([foto(1, '', { monitoringId: 'INA 2055' })]);
+    expect(Service.fotosPozosService_resumen()).toEqual({ 'INA 2055': 1 });
   });
   test('invalidarResumen fuerza releer', () => {
-    global.fotosPozosRepository_contarVisiblesPorEntidad.mockReturnValueOnce({ a: 1 }).mockReturnValueOnce({ a: 2 });
+    global.fotosPozosRepository_listarVisiblesBase.mockReturnValueOnce([foto(1, 'a')]).mockReturnValueOnce([foto(1, 'a'), foto(2, 'a')]);
     expect(Service.fotosPozosService_resumen()).toEqual({ a: 1 });
     Service.fotosPozosService_invalidarResumen();
     expect(Service.fotosPozosService_resumen()).toEqual({ a: 2 });
@@ -412,9 +429,9 @@ describe('resumen', () => {
     expect(Service.fotosPozosService_resumen()).toEqual({});
   });
   test('un resumen demasiado grande para el cache se devuelve igual, sin cachear (no falla)', () => {
-    const grande = {};
-    for (let i = 0; i < 9000; i++) { grande['01-' + String(i).padStart(4, '0')] = 1; }
-    global.fotosPozosRepository_contarVisiblesPorEntidad.mockReturnValue(grande);
+    const fotos = [];
+    for (let i = 0; i < 9000; i++) { fotos.push(foto(i, '01-' + String(i).padStart(4, '0'))); }
+    global.fotosPozosRepository_listarVisiblesBase.mockReturnValue(fotos);
     expect(Object.keys(Service.fotosPozosService_resumen())).toHaveLength(9000);
     expect(cacheStore.get('fotospozos_resumen')).toBeNull();
   });
@@ -422,7 +439,7 @@ describe('resumen', () => {
 
 describe('obtenerImagen (proxy)', () => {
   const ID = '11111111-1111-4111-8111-111111111111';
-  const visible = { fotoId: ID, driveFileId: 'DRIVE_FILE_ID_0001', driveThumbId: 'DRIVE_THUMB_ID_0001' };
+  const visible = { fotoId: ID, estado: 'ACTIVA', estadoVinculo: 'CONFIRMADO', wellId: WELL, monitoringId: '', driveFileId: 'DRIVE_FILE_ID_0001', driveThumbId: 'DRIVE_THUMB_ID_0001' };
 
   test.each([['no UUID', 'abc', 'thumb', 'INVALID_FOTO_ID'], ['variante invalida', ID, 'original', 'INVALID_VARIANTE'], ['no string', null, 'thumb', 'INVALID_FOTO_ID']])('%s', (n, id, variante, codigo) => {
     expect(Service.fotosPozosService_obtenerImagen(id, variante).code).toBe(codigo);

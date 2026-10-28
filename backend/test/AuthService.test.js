@@ -411,7 +411,7 @@ describe('permiso reemplazo (Modulo Reemplazos v1)', () => {
   test('sin permisos en el repositorio, los permisos vacios incluyen reemplazo=false', () => {
     global.sheetUserRepository_getUserStatus.mockReturnValue({ found: true, active: true });
     expect(AuthService.getUserAccess('f@example.com').permisos).toEqual({
-      perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false,
+      perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false, fotos_moderar: false,
       ubicacion_corregir: false, ubicacion_validar: false, observaciones: false, observaciones_agregar: false, observaciones_anular: false
     });
   });

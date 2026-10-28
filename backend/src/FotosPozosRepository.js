@@ -180,6 +180,29 @@ function fotosPozosRepository_listarVisiblesPorEntidad(entidad) {
   });
 }
 
+// TODAS las fotos de la hoja (cualquier estado y vinculo), en una sola lectura. Uso INTERNO (moderacion E8): trae ids de Drive, nunca sale hacia el cliente tal cual.
+function fotosPozosRepository_leerTodasLasFotos() {
+  return fotosPozosRepository_leerTodas(fotosPozosRepository_abrirHoja());
+}
+
+// Una foto por fotoId en CUALQUIER estado (null si no existe). Compara en minuscula. Una sola lectura de la hoja.
+function fotosPozosRepository_buscarPorFotoId(fotoId) {
+  var id = String(fotoId === null || fotoId === undefined ? '' : fotoId).trim().toLowerCase();
+  var todas = fotosPozosRepository_leerTodasLasFotos();
+  for (var i = 0; i < todas.length; i++) {
+    if (todas[i].fotoId.toLowerCase() === id) {
+      return todas[i];
+    }
+  }
+  return null;
+}
+
+// Fotos que el BASELINE de la hoja considera visibles (ACTIVA y vinculo CONFIRMADO), de todas las entidades, en una sola lectura. La visibilidad final ademas pasa por la moderacion
+// (fotosPozosModeracion_visible): este es solo el universo candidato.
+function fotosPozosRepository_listarVisiblesBase() {
+  return fotosPozosRepository_leerTodasLasFotos().filter(fotosPozosRepository_esVisible);
+}
+
 // Foto VISIBLE por id (null si no existe, esta oculta o sin confirmar).
 function fotosPozosRepository_buscarVisiblePorFotoId(fotoId) {
   var todas = fotosPozosRepository_leerTodas(fotosPozosRepository_abrirHoja());
@@ -359,6 +382,9 @@ if (typeof module !== 'undefined' && module.exports) {
     fotosPozosCambiosRepository_filaDesdeCambio,
     fotosPozosRepository_abrirHoja,
     fotosPozosRepository_leerTodas,
+    fotosPozosRepository_leerTodasLasFotos,
+    fotosPozosRepository_buscarPorFotoId,
+    fotosPozosRepository_listarVisiblesBase,
     fotosPozosRepository_listarVisiblesPorEntidad,
     fotosPozosRepository_buscarVisiblePorFotoId,
     fotosPozosRepository_contarVisiblesPorEntidad,
