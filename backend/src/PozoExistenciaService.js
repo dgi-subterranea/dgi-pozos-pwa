@@ -116,6 +116,8 @@ function pozoExistenciaService_porCorreccionPrevia(wellId) {
 }
 
 // opciones.padron (opcional): el resultado de registryService_getWellLocation que quien llama YA obtuvo ({found, location}); evita consultar el padron dos veces.
+// opciones.excluirFuentes (opcional, E9-3): fuentes que NO se consultan ni se aceptan desde el cache (por ejemplo ['ITF']). Lo usan los ITF colaborativos: ningun ITF (ni el archivo legacy ni un
+// documento nuevo) puede ser la evidencia de que el pozo existe. Sin esta opcion nada cambia.
 function pozoExistenciaService_verificar(wellId, opciones) {
   if (!pozoExistenciaService_wellIdValido(wellId)) {
     return pozoExistenciaService_resultado(false, false, [], false, []);
@@ -137,10 +139,15 @@ function pozoExistenciaService_verificar(wellId, opciones) {
     return enPadron;
   }
 
-  // positivo cacheado de las demas fuentes
+  var excluidas = opciones && Array.isArray(opciones.excluirFuentes) ? opciones.excluirFuentes : [];
+
+  // positivo cacheado de las demas fuentes (los de una fuente excluida no valen)
   var cacheadas = pozoExistenciaService_leerCache(wellId);
   if (cacheadas) {
-    return pozoExistenciaService_resultado(true, false, cacheadas, false, []);
+    cacheadas = cacheadas.filter(function (f) { return excluidas.indexOf(f) < 0; });
+    if (cacheadas.length > 0) {
+      return pozoExistenciaService_resultado(true, false, cacheadas, false, []);
+    }
   }
 
   // 2..4 en orden; se corta en la primera que confirma
@@ -148,7 +155,7 @@ function pozoExistenciaService_verificar(wellId, opciones) {
     [POZO_EXISTENCIA_FUENTES.ITF, pozoExistenciaService_porItf],
     [POZO_EXISTENCIA_FUENTES.NE, pozoExistenciaService_porNe],
     [POZO_EXISTENCIA_FUENTES.CORRECCION_PREVIA, pozoExistenciaService_porCorreccionPrevia]
-  ];
+  ].filter(function (c) { return excluidas.indexOf(c[0]) < 0; });
   var noVerificadas = [];
   for (var i = 0; i < consultas.length; i++) {
     var nombre = consultas[i][0];

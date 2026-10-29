@@ -36,6 +36,52 @@ function driveProfileRepository_listarArchivosThumb() {
   return nombres;
 }
 
+// E9-3 (ITF colaborativos): TODAS las coincidencias exactas por nombre en la carpeta institucional, no solo la primera. Drive permite dos archivos con el mismo nombre y getFile() se queda
+// en silencio con el primero; el proveedor legacy de ITF (ItfLegacyProvider.js) necesita contarlos para no inventar un ITF ambiguo. Devuelve descriptores {fileId, nombre, leerBlob()}: el
+// fileId es una referencia INTERNA del backend (nunca sale hacia el cliente). Lanza si Drive falla. Todavia no la usa ningun endpoint.
+function driveProfileRepository_buscarPorNombre(nombre) {
+  var folder = DriveApp.getFolderById(getFolderId());
+  var files = folder.getFilesByName(nombre);
+  var out = [];
+  while (files.hasNext()) {
+    var f = files.next();
+    out.push({ fileId: f.getId(), nombre: f.getName(), leerBlob: (function (archivo) { return function () { return archivo.getBlob(); }; })(f) });
+  }
+  return out;
+}
+
+// E9-3: lee un archivo de la carpeta institucional POR ID (el que quedo registrado en ITF_LEGACY_REGISTRADO). Solo devuelve archivos que estan dentro de FOLDER_ID: un id cualquiera de Drive
+// no sirve para leer otra cosa con los permisos de la cuenta del backend. {found:false} si no existe o no esta en la carpeta; lanza si Drive falla.
+function driveProfileRepository_leerPorId(fileId) {
+  var file;
+  try {
+    file = DriveApp.getFileById(fileId);
+  } catch (err) {
+    if (/No item with the given ID|could not be found|not found/i.test(String(err))) {
+      return { found: false };
+    }
+    throw err;                                      // un error de Drive jamas se vuelve "no existe"
+  }
+  var carpetaId = getFolderId();
+  var padres = file.getParents();
+  var dentro = false;
+  while (padres.hasNext()) {
+    if (padres.next().getId() === carpetaId) {
+      dentro = true;
+    }
+  }
+  if (!dentro) {
+    return { found: false };
+  }
+  return { found: true, nombre: file.getName(), blob: file.getBlob() };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { driveProfileRepository_getFile, driveProfileRepository_existe, driveProfileRepository_listarArchivosThumb };
+  module.exports = {
+    driveProfileRepository_getFile,
+    driveProfileRepository_existe,
+    driveProfileRepository_listarArchivosThumb,
+    driveProfileRepository_buscarPorNombre,
+    driveProfileRepository_leerPorId
+  };
 }

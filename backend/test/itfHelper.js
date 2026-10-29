@@ -46,16 +46,17 @@ const archivo = (n) => ({ mimeType: 'image/jpeg', bytes: 5000 + n, sha256: sha(n
 
 function crearSim(D, opciones) {
   const o = opciones || {};
-  const sim = { eventos: o.eventos || [], legacy: { disponible: true, snapshot: SNAP }, pozoExiste: true, llamadasId: 0, docs: 0, ahora: new Date(ISO) };
+  const sim = { eventos: o.eventos || [], legacy: { disponible: true, snapshot: SNAP, huellaCoincide: true }, pozoExiste: true, proponentes: {}, llamadasId: 0, docs: 0, ahora: new Date(ISO) };
   if (o.legacy) { Object.assign(sim.legacy, o.legacy); }
   const nuevoUuid = (base) => () => { sim.llamadasId += 1; return uuid(base + sim.llamadasId); };
   sim.existentes = (email, crid) => {
     const coinciden = sim.eventos.filter((e) => String(e.email).toLowerCase() === email && e.clientRequestId === crid);
     return { total: coinciden.length, eventos: coinciden.slice(0, 2) };
   };
+  sim.proponenteDe = (documentoId) => { const e = sim.eventos.find((x) => x.evento === 'ITF_PROPUESTO' && x.documentoId === documentoId); return e ? String(e.email).trim().toLowerCase() : ''; };
   sim.contexto = (usuario, extra) => Object.assign({
     email: usuario.email, nombre: usuario.nombre, permisos: usuario.permisos, ahora: sim.ahora, derivacion: D.itfDominio_derivar(sim.eventos),
-    existentes: { total: 0, eventos: [] }, nuevoEventoId: nuevoUuid(20000), nuevoDocumentoId: nuevoUuid(30000), legacy: sim.legacy, pozoExiste: sim.pozoExiste
+    existentes: { total: 0, eventos: [] }, proponenteDe: sim.proponenteDe, nuevoEventoId: nuevoUuid(20000), nuevoDocumentoId: nuevoUuid(30000), legacy: sim.legacy, pozoExiste: sim.pozoExiste
   }, extra || {});
   sim.ejecutar = (usuario, comando, extra) => {
     const ctx = sim.contexto(usuario, extra);

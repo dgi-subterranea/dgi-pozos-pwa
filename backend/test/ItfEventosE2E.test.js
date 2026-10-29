@@ -43,7 +43,7 @@ function ejecutar(usuario, comando, extra) {
     const wellId = comando.wellId || (e.wellId || WELL);
     const plan = D.itfDominio_planificar(comando, {
       email: usuario.email, nombre: usuario.nombre, permisos: usuario.permisos, ahora: new Date(H.ISO), derivacion: D.itfDominio_derivar(todos), existentes: existentes,
-      nuevoEventoId: nuevoId(40000), nuevoDocumentoId: nuevoId(60000), legacy: { disponible: legacyEstado[wellId] === undefined ? false : legacyEstado[wellId], snapshot: SNAP },
+      nuevoEventoId: nuevoId(40000), nuevoDocumentoId: nuevoId(60000), legacy: { disponible: legacyEstado[wellId] === undefined ? false : legacyEstado[wellId], snapshot: SNAP, huellaCoincide: true }, proponenteDe: () => '',
       archivo: e.archivo, pozoExiste: e.pozoExiste === undefined ? true : e.pozoExiste
     });
     if (plan.ok && plan.accion === 'ESCRIBIR') {

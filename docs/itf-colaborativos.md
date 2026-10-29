@@ -1,8 +1,8 @@
 # ITF colaborativos (E9): propuesta, validación y vigente
 
-Estado: **E9-2 (dominio puro + repositorio + tests; NO productivo).** No hay endpoints, ni permisos nuevos en `Usuarios`, ni hoja `ItfEventos` en producción, ni interfaz, ni cambios en Drive. El Perfil ITF funciona **exactamente igual que antes**. La función `setupItfEventosSheet()` está escrita y probada pero **NO se ejecutó** (se corre a mano en el rollout, E9-8).
+Estado: **E9-3 (servicio orquestador + proveedor legacy + contrato de storage; local, NO productivo)** sobre **E9-2 (dominio puro + repositorio + tests; commit local)**. No hay endpoints, ni permisos nuevos en `Usuarios`, ni hoja `ItfEventos` en producción, ni interfaz, ni cambios en Drive. El Perfil ITF funciona **exactamente igual que antes**. La función `setupItfEventosSheet()` está escrita y probada pero **NO se ejecutó** (se corre a mano en el rollout, E9-8).
 
-Etapas: E9-1 (auditoría y diseño, cerrada) → **E9-2 (este documento: modelo, dominio, repositorio, tests)** → E9-3 (propuestas: backend) → E9-4 (validación y versionado: backend) → E9-5 (interfaz del Perfil) → E9-6 (cola de validadores) → E9-7 (baseline y migración si hiciera falta) → E9-8 (rollout).
+Etapas: E9-1 (auditoría y diseño, cerrada) → E9-2 (modelo, dominio, repositorio, tests; cerrada) → **E9-3 (este documento, §14: servicio y proveedor legacy; local)** → E9-4 (propuestas y storage reales, cableado a `Api.js`) → E9-5 (interfaz del Perfil) → E9-6 (cola de validadores) → E9-7 (baseline y migración si hiciera falta) → E9-8 (rollout).
 
 ## 1. Decisiones cerradas
 
@@ -15,6 +15,7 @@ Etapas: E9-1 (auditoría y diseño, cerrada) → **E9-2 (este documento: modelo,
 | 5 | **Baseline legacy:** el `<wellId>.jpg` actual es el **vigente legacy implícito**. Sin migración masiva, sin hashear miles de archivos, sin mover la carpeta. |
 | 6 | **«Tiene ITF» = existe un ITF VIGENTE.** Una propuesta pendiente no cuenta. |
 | 7 | Las cargas manuales directas a la carpeta legacy quedan **fuera del flujo institucional**: no se bloquean técnicamente, pero no deben usarse (ver §10). |
+| 8 | **El proponente puede retirar SU PROPIA propuesta**, solo mientras siga `PROPUESTO` (ownership por el email normalizado del `ITF_PROPUESTO`, nunca por el nombre), con `perfil` + `perfil_subir` (sin `perfil_validar`), con el mismo `ITF_RETIRADO` y el motivo reservado `CANCELADO_POR_PROPONENTE` (sin texto obligatorio). Un validador retira cualquier propuesta pendiente (catalogo institucional); retirar un **vigente** es solo del validador. Detalle en 14.5. |
 
 ## 2. Arquitectura actual del Perfil ITF (auditada en E9-1, no cambia)
 
@@ -150,7 +151,7 @@ Todo dentro de un `ScriptLock`: buscar `clientRequestId` → leer todos los even
 
 ## 8. Permisos futuros (no existen todavía)
 
-`perfil_subir` (proponer) y `perfil_validar` (aprobar, rechazar, retirar, revertir). Cada uno **exige `perfil === true`** y se compara con `=== true`. Con ambos se puede aprobar lo propio (§1). No se agregan a `Usuarios` ni a `Auth` en esta etapa; el permiso `perfil` sigue gobernando la consulta y el acceso a Pozos Provincia.
+`perfil_subir` (proponer y retirar la propia propuesta pendiente) y `perfil_validar` (aprobar, rechazar, retirar cualquier propuesta o un vigente, revertir). Cada uno **exige `perfil === true`** y se compara con `=== true`. Con ambos se puede aprobar lo propio (§1). No se agregan a `Usuarios` ni a `Auth` en esta etapa; el permiso `perfil` sigue gobernando la consulta y el acceso a Pozos Provincia.
 
 ## 9. Lo que ve cada rol (DTO)
 
@@ -196,3 +197,158 @@ Subir o reemplazar a mano un `<wellId>.jpg` en la carpeta de Drive **queda fuera
 6. **Fuente de existencia del pozo** para proponer (padrón, NE, corrección previa o el ITF legacy actual; nunca la propuesta).
 7. Decidir si quien propone puede retirar su propia propuesta (hoy solo un validador).
 8. Medir en Apps Script el costo del SHA-256 y de la lectura completa de `ItfEventos`.
+
+## 14. E9-3: servicio orquestador y proveedor legacy (local, NO productivo)
+
+Objetivo: conectar el dominio de E9-2 con la arquitectura actual del Perfil **sin** subir documentos, sin endpoints de propuesta, sin permisos reales, sin hoja productiva, sin interfaz y sin deploy. Con **cero eventos E9** el resultado es el del ITF legacy de hoy.
+
+### 14.1 Piezas
+
+| Archivo | Rol |
+|---|---|
+| `backend/src/ItfService.js` | Orquestador. `itfService_resolverVigente(wellId)`, `itfService_getProfile(wellId)`, `itfService_disponibilidad(wellIds)`, `itfService_obtenerDocumento(documentoId)`, `itfService_ejecutar(sesion, comando, opciones)`, `itfService_pozoExiste(wellId)`. Todo con dependencias inyectables. No tiene reglas de dominio ni escribe `Historial`. |
+| `backend/src/ItfLegacyProvider.js` | El único lugar nuevo que sabe resolver el `<wellId>.jpg`: existencia, archivo, disponibilidad en lote, huella y verificación. Usa `DriveProfileRepository.js` para hablar con Drive. |
+| `backend/src/ItfStorageProvider.js` | **Contrato** del storage de los documentos E9 (`guardarPropuesta`, `leerDocumento`, `obtenerMetadata`, `eliminarTemporal`) y un proveedor por defecto `itfStorage_noConfigurado()`. No hay implementación real todavía. |
+| `backend/src/DriveProfileRepository.js` | Se agregan `driveProfileRepository_buscarPorNombre` (todas las coincidencias, no la primera) y `driveProfileRepository_leerPorId` (solo archivos dentro de `FOLDER_ID`). `getFile`, `existe` y `listarArchivosThumb` **no cambian**. |
+| `backend/src/PozoExistenciaService.js` | Opción nueva y opcional `excluirFuentes` en `pozoExistenciaService_verificar` (sin ella, comportamiento idéntico). |
+| `backend/src/ItfDominioService.js` | Se agregan `RETIRAR_PROPUESTA`, el motivo `CANCELADO_POR_PROPONENTE`, la verificación de huella al restaurar el legacy (`LEGACY_CAMBIO`) y la lista blanca de campos del comando. |
+
+### 14.2 `itfService_resolverVigente(wellId)`
+
+Devuelve **una** decisión institucional por pozo:
+`{wellId, estado: 'SI'|'NO'|'DESCONOCIDO', origen: 'LEGACY'|'E9'|null, documentoId, storageRef, mimeType, bytes, integridad: 'OK'|'NO_DERIVABLE', codigo, legacy}`.
+
+- `storageRef` es **interno** (id de Drive del legacy o `storageFileId` del documento E9) y nunca sale hacia el cliente. `abrir()` (no enumerable) entrega el blob del legacy ya encontrado, sin una segunda llamada a Drive.
+- **A.** Sin eventos + legacy único → `SI`, origen `LEGACY`. **B.** Sin eventos + sin legacy → `NO` (`ITF_NOT_FOUND`). **C.** Documento E9 vigente → `SI`, origen `E9` (no se toca Drive). **D.** Historial `NO_DERIVABLE` → `DESCONOCIDO` (`ITF_STATE_UNKNOWN`), aunque el archivo legacy exista.
+- Lanza si Drive o Sheets fallan: un error de infraestructura nunca se vuelve «no existe».
+
+### 14.3 Interruptor `ITF_E9_ACTIVO` y «sin fallback inseguro»
+
+Propiedad de script `ITF_E9_ACTIVO === 'SI'` (exacto; vive solo en `ItfService.js`, `Config.js` no cambia).
+- **Apagado o ausente = modo legacy puro:** nunca se lee `ItfEventos` (ni siquiera tiene que existir la hoja). Es el estado de producción hasta el rollout.
+- **Encendido:** `ItfEventos` es **parte del contrato**. Si no se puede leer (hoja inexistente, esquema roto, error de Sheets) **no hay fallback al legacy**: se lanza o se responde «no se sabe». Un fallback podría mostrar como vigente un ITF ya reemplazado o retirado. Sin eventos para un pozo, el legacy es el vigente (con la hoja vacía el comportamiento es el de hoy).
+
+### 14.4 Política única de nombre legacy y ambigüedad
+
+Auditoría del código de E9-1: el índice aceptaba `.jpg` y `.JPG` (`/i`), la descarga buscaba `<wellId>.jpg` exacto y `getFile()` tomaba en silencio el primer archivo. El comportamiento real de Drive ante mayúsculas **no se pudo verificar** (el repo no tiene acceso a Drive); la política no depende de eso.
+
+- Un ITF legacy es **exactamente `<wellId>.jpg`** con la extensión en minúscula. Se **reconoce** sin importar mayúsculas al indexar, pero las variantes (`.JPG`, `.Jpg`…) **no son descargables**: el pozo queda `NO_CANONICO` (`LEGACY_NOMBRE_NO_CANONICO`, «no se sabe»), nunca «Sí» ni un «No» engañoso.
+- Un archivo canónico → `UNICO`; ninguno → `NO`; **dos o más con el mismo nombre → `AMBIGUO`** (`LEGACY_AMBIGUO`, «no se sabe»). No se toma el primero.
+- La disponibilidad nunca dice «Sí» si después no se puede resolver un archivo único descargable (el índice y la resolución usan la misma regla).
+- Resolución de un pozo: **una** llamada a Drive (`getFilesByName`) filtrada por nombre exacto. Índice en lote: clave `itf_leg_v1_DD` (propia; no toca `itf_idx_`), una pasada por la carpeta.
+- **Diferencia con hoy, documentada:** un pozo con archivo duplicado o con extensión en mayúscula pasa de «Sí (y a veces la descarga falla)» a «no se sabe». Es la única diferencia; por eso `Api.js` todavía no se conecta (§14.9).
+- **Q4 (implementado en el proveedor nuevo):** reconstrucción *single-flight* con una bandera corta en el caché; las demás ejecuciones esperan hasta ~6 s a que aparezca el índice. **No** usa el `ScriptLock`: es el lock global que serializa todas las escrituras de hojas y recorrer la carpeta lleva segundos. Sin disparador horario.
+
+### 14.5 Retiro de la propia propuesta (`RETIRAR_PROPUESTA`)
+
+- Acción futura, **sin evento nuevo**: produce `ITF_RETIRADO` con `motivoCodigo = CANCELADO_POR_PROPONENTE` (fijado por el servidor; el cliente no lo elige; texto opcional de 3 a 300 caracteres).
+- Autorización: `perfil === true` y `perfil_subir === true` **y** `email normalizado de la sesión == email del ITF_PROPUESTO` **y** documento en `PROPUESTO`. **Nunca por nombre.** No requiere `perfil_validar`.
+- Un documento ajeno o inexistente da el **mismo** `PERMISSION_DENIED` (no se filtra que existe). Aprobado, vigente, reemplazado, rechazado o ya retirado → `DOCUMENTO_NO_RETIRABLE`.
+- La derivación aplica la misma regla: un `ITF_RETIRADO` con ese motivo hecho por otra persona, o sobre un documento que ya no está `PROPUESTO`, deja el pozo `NO_DERIVABLE` (`CANCELACION_INVALIDA`). El motivo no está en el catálogo institucional: un validador no puede elegirlo ni en `RETIRAR` ni en `REVERTIR`.
+- Un **validador** retira cualquier propuesta pendiente con `RETIRAR` y el catálogo institucional; retirar un **vigente** es solo del validador.
+
+### 14.6 Modelo de autenticación (futuro)
+
+`itfService_ejecutar(sesion, comando, opciones)`: `sesion = {email, nombre, permisos}` lo arma `Api.js` a partir del token (nunca del cuerpo del pedido). El comando tiene una **lista blanca de campos**: cualquier otro (`email`, `actor`, `nombre`, `sha256`, `storageFileId`, ...) se rechaza con `INVALID_REQUEST`; no se ignora en silencio. El actor de cada evento es siempre la sesión.
+
+### 14.7 Escritura: lock, relectura, atomicidad
+
+Todo adentro del `ScriptLock` y **releyendo** el estado adentro: buscar `clientRequestId` → leer todos los eventos → derivar → (legacy: estado, huella, verificación) → planificar → escribir (1 o 2 eventos consecutivos en **una** operación) → invalidar. Nada decidido antes del lock se reutiliza.
+- **Primer reemplazo del legacy:** si el plan necesita la huella (`LEGACY_SNAPSHOT_REQUERIDO`) se lee el archivo, se calcula el SHA-256 de los bytes reales y se replanifica con `[ITF_LEGACY_REGISTRADO, ITF_APROBADO]`. Si el registro ya existe (reintento tras un corte) no se duplica. **Un `ITF_LEGACY_REGISTRADO` sin aprobación posterior no reemplaza nada: el legacy sigue vigente.**
+- **Restaurar el legacy:** se vuelve a leer el archivo por el id registrado, se verifica que exista, que sea el mismo archivo que hoy resuelve `<wellId>.jpg` y que el SHA-256 coincida; si no, `LEGACY_CAMBIO`/`LEGACY_NO_DISPONIBLE`. Nunca se restaura en silencio un archivo distinto.
+- **Fallo parcial:** si la primera fila se escribe y la segunda no, el estado sigue siendo consistente (legacy vigente) y el reintento completa solo lo que falta. Si el lock no se obtiene o la escritura falla: `SERVICE_UNAVAILABLE`, sin escribir y sin invalidar.
+- **Qué garantiza (y qué no) la escritura de dos filas.** Las dos filas se arman con secuencias consecutivas bajo el mismo lock y se escriben con **una sola llamada** (`setValues` sobre un rango contiguo). Sheets/Apps Script **no ofrece transacciones**: no se puede *afirmar* que esa llamada sea todo-o-nada si la ejecución se corta (tiempo máximo, caída). Lo que sí está garantizado, y probado, es que **cualquiera de los estados parciales posibles es seguro**: (a) ninguna fila → no pasó nada, el reintento escribe las dos; (b) solo `ITF_LEGACY_REGISTRADO` → el legacy sigue vigente (el registro no reemplaza nada) y el reintento escribe solo la aprobación; (c) las dos → completo. La segunda fila sola es imposible (se escriben en orden, y la derivación la declararía huérfana: `LEGACY_NO_REGISTRADO`, el pozo quedaría `NO_DERIVABLE`, nunca con un vigente inventado). Recuperación: el reintento con el mismo `clientRequestId` (idempotente) o, si el cliente no reintenta, una nueva acción del validador; `ItfEventos` nunca se corrige a mano.
+- **Invalidación:** `invalidarCaches([wellId])` se llama una vez por escritura exitosa y nunca en reintentos, planes fallidos o errores. En E9-3 **no existe un caché de la derivación** (una lectura de `ItfEventos` por pedido, no por pozo; sin evidencia de que haga falta); el gancho queda para E9-4.
+
+### 14.8 Compensación del archivo temporal (propuestas futuras)
+
+Orden de `PROPONER`: validar archivo → hash → el pozo existe → **reintento exacto sin subir nada** → `storage.guardarPropuesta` → lock + escribir. Si el evento no se escribe (duplicado, estado, error) el servicio llama a `storage.eliminarTemporal` (papelera, no borrado físico). **Si la escritura lanzó pero la fila pudo haberse escrito, no se borra nada** (se relee `ItfEventos` y solo se borra si ninguna fila referencia el archivo). Si la compensación falla se informa (`compensacion: 'FALLO'`) y queda registrado en el log. Todo probado con un storage falso; **no hay acceso real a storage**.
+
+### 14.9 Por qué `Api.js` todavía no se conecta
+
+1. La política nueva de nombre legacy cambia el resultado en casos exóticos (duplicados, extensión en mayúscula): se decide al cablear.
+2. Con E9 activo `ItfEventos` pasa a ser parte del contrato y todavía no existe la hoja ni el storage.
+3. Cablear es una línea (`ProfileService` delega en `itfService_getProfile` / `itfService_disponibilidad`) más el mapeo de códigos; se hace en E9-4.
+
+`getProfile` y `getItfAvailability` de producción siguen exactamente igual. `itfService_getProfile` devuelve la misma forma que `profileService_getProfile` (`{found, blob}`; blob con `getBytes()` / `getContentType()`), más `unknown:true` + `code` cuando no se puede afirmar. El cliente no necesita saber si el ITF viene de la carpeta legacy o del storage E9 y no se expone `documentoId`.
+
+### 14.10 Disponibilidad: «no se sabe» sin romper clientes
+
+El contrato actual devuelve `{wellId: boolean}`. Opciones evaluadas: **A. omitir la clave**, B. `null`, C. error parcial, D. endpoint nuevo. Se elige **A**: el frontend (E7, `seleccionLogic_combinarDisponibilidadItf`) ya trata la ausencia de un booleano como «desconocido» (celda vacía), nunca «No». Un pozo `NO_DERIVABLE`, con legacy ambiguo o no canónico, o con el legacy sin comprobar, **se omite**. Regla: legacy vigente → `true`; E9 vigente → `true`; solo propuesta → `false`; rechazado → `false`; retirado sin vigente → `false`.
+
+Lecturas independientes de la cantidad de pozos (probado con 1, 50, 500 y 700): **una** de `ItfEventos`, **una** pasada por la carpeta (la primera vez; después el índice), **cero** búsquedas por nombre; derivación en memoria. En modo legacy puro, cero lecturas de hoja.
+
+### 14.11 Auditoría actual (qué escribe cada flujo) y propuesta
+
+| Flujo | Qué escribe hoy |
+|---|---|
+| `getProfile` | Una fila de `Historial` por llamada (`OK`, `PROFILE_NOT_FOUND` o `SERVICE_UNAVAILABLE`): `appendRow` + `getLastRow` + formato + valor (4 operaciones de Sheets). Sin Telegram. |
+| ZIP masivo | El navegador llama `getProfile` por cada pozo (cada uno escribe su fila) y al final `registerDescargaItf`. |
+| `registerDescargaItf` | Una fila de `Historial` (`OK` o `TELEGRAM_ERROR`) y un aviso de Telegram (con deduplicación de 10 s). |
+| `getItfAvailability` | Una fila de `Historial` por lote; sin Telegram. |
+
+**Propuesta (Q3), sin implementar y sin perder trazabilidad:** el parámetro «no auditar este `getProfile`» **nunca** puede venir del cliente (cualquiera lo apagaría). Modelo seguro: un `iniciarDescargaItf` auditado (una fila + Telegram al comenzar) que devuelve un ticket firmado con HMAC, ligado a email + lista de pozos + vencimiento; `getProfile` con ticket válido y un pozo de la lista omite la fila individual y suma a un contador del ticket; `registerDescargaItf` cierra con los conteos reales. `itfService_*` no escribe `Historial`: la decisión de auditar sigue en `Api.js`.
+
+### 14.12 Q1 y Q2: qué archivos tocarían (no implementados)
+
+- **Q1** (renderizar la tabla antes de la disponibilidad ITF): `js/seleccion.js` (el `then(continuarConDisponibilidad)` de `asegurarDisponibilidadItf`, ~línea 400, y el pintado de la columna «Tiene ITF» con «verificando…»), `js/seleccionLogic.js` solo si hace falta un estado «verificando» puro, y sus tests (`js/seleccionItfLotes.test.js`, `js/seleccionLoteItfLogic.test.js` y los de controlador). Sin cambios de backend ni de `sw.js`.
+- **Q2** (el hub decide con la disponibilidad y baja la imagen al abrir Perfil): `js/app.js` (`buscarPozo`, ~línea 1376, que hoy llama `apiGetProfile`; `renderPerfil`, ~línea 456, y el render del hub, ~línea 378) y sus tests de cableado; `js/api.js` y el backend ya sirven (`getItfAvailability` acepta un solo pozo). **Contrato:** la tarjeta Perfil aparece con `getItfAvailability([wellId])[wellId] === true`; la clave ausente es «no se sabe» (no oculta la tarjeta con un falso «No»); `getProfile` se llama recién al abrir Perfil.
+
+### 14.12 bis Cierre de diseño de Q1, Q2 y Q3 (ninguno implementado)
+
+| Id | Qué | Archivos | Riesgo | Cuándo |
+|---|---|---|---|---|
+| Q1 | Tabla de «Mi selección» progresiva: se pinta primero y «Tiene ITF» se completa después («verificando…»; clave ausente = vacío, nunca «No») | `js/seleccion.js`, `js/seleccionLogic.js` (solo si hace falta un estado puro «verificando») y sus tests | Bajo: solo frontend; hay que mantener que ordenar / filtrar / exportar esperen o traten la columna como desconocida hasta que llegue la respuesta | Antes del rollout E9; puede ir antes de E9-4, es independiente del backend |
+| Q2 | La tarjeta Perfil sale de `getItfAvailability([wellId])`; `getProfile` recién al abrir Perfil | `js/app.js` (`buscarPozo`, `renderPerfil`, render del hub) y sus tests de cableado; `js/api.js` y el backend ya sirven | Medio: cambia cuándo aparece la tarjeta y deja de usar `getProfile` como prueba de existencia; con la clave ausente (no se sabe) no hay que ocultarla con un falso «No» | Antes del rollout E9, después del cableado de E9-4 (para que la disponibilidad ya sepa de E9); con imágenes de hasta 3 MB es la mejora que más pesa |
+| Q3 | Auditoría del ZIP sin perder trazabilidad (ticket de descarga firmado, §14.11) | `Api.js` (`iniciarDescargaItf`, `getProfile`, `registerDescargaItf`), `js/seleccion.js` (pedir el ticket y mandarlo), tests de Api y del frontend | Medio-alto: es seguridad y auditoría; el parámetro nunca puede ser del cliente | Antes del rollout E9 **solo si** las mediciones muestran que las filas de `Historial` por pozo son un cuello; si no, después |
+
+### 14.12 ter Matriz de casos (todos con prueba)
+
+| Caso | Resolución | Disponibilidad | getProfile |
+|---|---|---|---|
+| A. legacy existe + 0 eventos | `SI`, `LEGACY` | `true` | bytes del legacy |
+| B. legacy no existe + 0 eventos | `NO` (`ITF_NOT_FOUND`) | `false` | `found:false` |
+| C. legacy ambiguo | `DESCONOCIDO` (`LEGACY_AMBIGUO`) | clave **omitida** | `found:false, unknown:true` |
+| D. legacy + propuesta | `SI`, `LEGACY` | `true` | bytes del legacy |
+| E. legacy registrado solamente | `SI`, `LEGACY` | `true` | bytes del legacy |
+| F. legacy reemplazado por E9 | `SI`, `E9` | `true` | bytes del storage E9 |
+| G. E9 vigente + legacy físico presente | `SI`, `E9` (no se toca Drive) | `true` | **solo** el E9 |
+| H. E9 retirado sin restauración | `NO` | `false` | `found:false` |
+| I. historial corrupto | `DESCONOCIDO` (`ITF_STATE_UNKNOWN`, `NO_DERIVABLE`) | clave **omitida** | `found:false, unknown:true` |
+
+`DESCONOCIDO` jamás se convierte en `false`. **Estado de integración: B, preparado pero SIN cableado productivo** (§14.9). Contadores probados con 1, 50, 500 y 700 pozos: una lectura de `ItfEventos`, una llamada al proveedor legacy, una derivación, cero búsquedas o huellas por pozo; el crecimiento es de CPU / memoria.
+
+### 14.13 Existencia del pozo para propuestas futuras
+
+Auditado: `PozoExistenciaService` acepta como evidencia el padrón, **el `<wellId>.jpg` legacy (fuente `ITF`)**, el punto NE y las correcciones previas. Ninguna lee `ItfEventos` ni el storage E9, y un documento E9 nunca está en la carpeta legacy: una propuesta **no** puede probar que el pozo existe. Aun así, como esa fuente es un ITF, **E9 excluye la rama ITF**: `pozoExistenciaService_verificar` ganó la opción `excluirFuentes` (sin ella nada cambia, mismo cache y mismo fail-closed; un positivo cacheado de una fuente excluida no vale y no se pisa) y `itfService_pozoExiste(wellId)` la llama con `['ITF']` → `{existe, indeterminado}`. Fuente elegida para las propuestas futuras: **padrón, punto NE o corrección previa**. Un vigente E9 tampoco cuenta.
+**Consecuencia a decidir:** un pozo conocido *solo* por su ITF legacy (no está en el padrón, ni en NE, ni tiene correcciones) no admite propuestas, ni de «nueva versión». Hoy se desconoce cuántos hay (necesita lectura de producción); si fueran relevantes, se puede levantar la exclusión **solo** para «nueva versión» de un pozo con legacy vigente (el legacy preexistente no es el documento propuesto, así que no hay circularidad).
+
+### 14.14 Catálogo de códigos del servicio
+
+`ITF_NOT_FOUND`, `ITF_STATE_UNKNOWN`, `LEGACY_AMBIGUO`, `LEGACY_NOMBRE_NO_CANONICO`, `LEGACY_CAMBIO`, `LEGACY_FORMATO_INVALIDO`, `VIGENTE_CAMBIO`, `DUPLICADO_DOCUMENTO`, `IDEMPOTENCY_CONFLICT`, `INCONSISTENT_STATE`, `SERVICE_UNAVAILABLE`, `ITF_E9_INACTIVO`, `ITF_STORAGE_NO_CONFIGURADO`, más los de validación y permisos del dominio (`PERMISSION_DENIED`, `INVALID_*`, `POZO_NOT_FOUND`, `DOCUMENTO_NO_PROPUESTO`, `DOCUMENTO_NO_RETIRABLE`, `DESTINO_INVALIDO`, `LEGACY_NO_DISPONIBLE`...). Los mensajes nunca incluyen ids de Drive, rutas ni el texto de una excepción.
+
+### 14.15 Cambios respecto del diseño de E9-2
+
+| Tema | E9-2 | E9-3 | Por qué |
+|---|---|---|---|
+| Comando | campos extra ignorados | **lista blanca**: campo desconocido → `INVALID_REQUEST` | El actor y los datos del archivo no pueden venir del cliente. |
+| Retiro de propuesta | solo validador | + el proponente, solo la propia pendiente | Decisión cerrada tras E9-2. |
+| Restaurar legacy | disponible | además `huellaCoincide === true` | Nunca restaurar en silencio un archivo distinto. |
+| Nombre legacy | `/i` en el índice, exacto en la descarga | política única; ambiguo / no canónico = «no se sabe» | Consistencia disponibilidad ↔ descarga. |
+| Q4 | pendiente | single-flight en el proveedor nuevo (sin `ScriptLock`) | El `ScriptLock` es el lock global de las hojas. |
+| Existencia del pozo | «reutilizar `PozoExistenciaService` sin modificarlo» | `excluirFuentes` (opción nueva y opcional) y E9 excluye la rama ITF | Ningún ITF puede ser evidencia de existencia; sin la opción nada cambia. Limitación en §14.13. |
+
+### 14.16 Bloqueos y pendientes para E9-4
+
+1. Cableado de `Api.js` / `ProfileService` y mapeo de códigos a respuestas (decidir la diferencia de §14.4).
+2. Storage real de las propuestas (segunda cuenta; hoy solo JPEG) con raíz privada y nombres generados, y su implementación de `eliminarTemporal`.
+3. Permisos reales `perfil_subir` y `perfil_validar` en `Usuarios` / `Auth` y la guarda de frontend que hoy los prohíbe.
+4. Crear la hoja `ItfEventos` (`setupItfEventosSheet`) y activar `ITF_E9_ACTIVO` solo después.
+5. Mediciones reales (sesión) y la decisión de Q1–Q3 con cifras; ticket de descarga si se hace Q3.
+6. Si las mediciones lo justifican, caché de la derivación (el gancho `invalidarCaches` ya está).
+
+### 14.17 Verificación de E9-3 (local)
+
+- Jest completo en serie: 163 suites, 10.812 tests verdes; Python: 97 + 224 verdes; `git diff --check` limpio.
+- Mutaciones: E9-2 **75 de 75 muertas** (repetidas tras cambiar el dominio); E9-3 **59 de 59 muertas**. Una de las 52 primeras sobrevivió (el proveedor legacy se leía una vez por pozo; los contadores solo miraban Drive y la hoja, y con el índice en caché esa lectura no toca Drive): era una falta de test, y se agregó un contador de llamadas al proveedor. Se agregaron 7 mutantes más (exclusión de la rama ITF, caché, single-flight).
+- No se repitieron todas las mutaciones de E9-3 después de agregar tests y la exclusión de la rama ITF: los tests solo se ampliaron y el único código común tocado fue `PozoExistenciaService` (sus mutantes se corrieron).

@@ -30,6 +30,10 @@
 // "TIENE ITF" (contrato): SI solo si existe un ITF VIGENTE valido y derivable. Una propuesta pendiente, un rechazado, un retirado, un reemplazado o un historial corrupto NO cuentan.
 // Ante un historial no derivable o un legacy de estado desconocido la respuesta es DESCONOCIDO (en E7 la celda queda vacia), nunca SI.
 //
+// RETIRO DE LA PROPIA PROPUESTA (E9-3): quien propuso (email del ITF_PROPUESTO, nunca el nombre) con perfil + perfil_subir puede retirarla SOLO mientras siga PROPUESTO, con el mismo evento
+// ITF_RETIRADO y el motivo reservado CANCELADO_POR_PROPONENTE (sin texto obligatorio). NO puede retirar algo aprobado, vigente, reemplazado, rechazado ni retirado. Un validador (perfil_validar)
+// puede retirar cualquier propuesta pendiente y es el UNICO que retira un vigente, con el catalogo institucional.
+//
 // AUTORIZACION: permisos exactos (=== true). Proponer: perfil + perfil_subir. Aprobar / rechazar / retirar / revertir: perfil + perfil_validar. Quien tiene ambos puede aprobar su propia
 // propuesta (AUTOAPROBACION): son dos acciones y dos eventos distintos, con su propio clientRequestId, y la derivacion lo marca (autoaprobado:true) sin crear un estado especial. No existe una
 // accion "proponer y aprobar".
@@ -50,13 +54,16 @@ var ITF_ESTADOS_POZO = { SIN_ITF: 'SIN_ITF', PENDIENTE: 'PENDIENTE', VIGENTE: 'V
 var ITF_INTEGRIDAD = { OK: 'OK', NO_DERIVABLE: 'NO_DERIVABLE' };
 var ITF_ORIGEN = { LEGACY: 'LEGACY', E9: 'E9' };
 var ITF_TIENE_ITF = { SI: 'SI', NO: 'NO', DESCONOCIDO: 'DESCONOCIDO' };
-var ITF_ACCIONES = { PROPONER: 'PROPONER', APROBAR: 'APROBAR', RECHAZAR: 'RECHAZAR', RETIRAR: 'RETIRAR', REVERTIR: 'REVERTIR' };
-var ITF_EVENTO_DE_ACCION = { PROPONER: 'ITF_PROPUESTO', APROBAR: 'ITF_APROBADO', RECHAZAR: 'ITF_RECHAZADO', RETIRAR: 'ITF_RETIRADO', REVERTIR: 'ITF_REVERTIDO' };
+var ITF_ACCIONES = { PROPONER: 'PROPONER', APROBAR: 'APROBAR', RECHAZAR: 'RECHAZAR', RETIRAR: 'RETIRAR', RETIRAR_PROPUESTA: 'RETIRAR_PROPUESTA', REVERTIR: 'REVERTIR' };
+var ITF_EVENTO_DE_ACCION = { PROPONER: 'ITF_PROPUESTO', APROBAR: 'ITF_APROBADO', RECHAZAR: 'ITF_RECHAZADO', RETIRAR: 'ITF_RETIRADO', RETIRAR_PROPUESTA: 'ITF_RETIRADO', REVERTIR: 'ITF_REVERTIDO' };
 
 // Catalogos de motivos (TENTATIVOS: se ajustan con los casos reales de E9-8). OTRO exige texto.
 var ITF_MOTIVOS_RECHAZO = ['NO_CORRESPONDE_POZO', 'INCOMPLETO', 'ILEGIBLE', 'DUPLICADO', 'VERSION_INCORRECTA', 'OTRO'];
 var ITF_MOTIVOS_REEMPLAZO = ['ACTUALIZACION', 'CORRECCION', 'MEJOR_CALIDAD', 'DOCUMENTO_COMPLETO', 'OTRO'];
 var ITF_MOTIVOS_RETIRO = ['ERROR_DE_APROBACION', 'DOCUMENTO_INCORRECTO', 'NO_CORRESPONDE_POZO', 'DESACTUALIZADO', 'OTRO'];
+// Motivo RESERVADO al retiro voluntario de la propia propuesta (RETIRAR_PROPUESTA). No es del catalogo institucional: un validador no puede elegirlo, y la derivacion lo acepta SOLO si
+// quien retira es quien propuso (email del ITF_PROPUESTO) y el documento sigue PROPUESTO. No exige texto.
+var ITF_MOTIVO_CANCELACION = 'CANCELADO_POR_PROPONENTE';
 
 var ITF_MOTIVO_TEXTO_MIN = 3;
 var ITF_MOTIVO_TEXTO_MAX = 300;
@@ -225,15 +232,15 @@ function itfDominio_validarMotivo(catalogo, motivoCodigo, motivoTexto) {
 
 // --- Permisos (exactos; nunca por nombre) ---
 
-// PROPONER: perfil === true Y perfil_subir === true. APROBAR / RECHAZAR / RETIRAR / REVERTIR: perfil === true Y perfil_validar === true. Cualquier otro valor (truthy, "SI", 1) o accion
+// PROPONER y RETIRAR_PROPUESTA (retirar la PROPIA propuesta, solo mientras siga PROPUESTA): perfil === true Y perfil_subir === true (NO exige perfil_validar). APROBAR / RECHAZAR / RETIRAR / REVERTIR: perfil === true Y perfil_validar === true. Cualquier otro valor (truthy, "SI", 1) o accion
 // desconocida -> false. Tener ambos permisos habilita la autoaprobacion, pero siempre como DOS acciones.
 function itfDominio_puede(accion, permisos) {
   var p = permisos !== null && typeof permisos === 'object' ? permisos : {};
   if (p.perfil !== true) {
     return false;
   }
-  if (accion === ITF_ACCIONES.PROPONER) {
-    return p.perfil_subir === true;
+  if (accion === ITF_ACCIONES.PROPONER || accion === ITF_ACCIONES.RETIRAR_PROPUESTA) {
+    return p.perfil_subir === true;                           // RETIRAR_PROPUESTA ademas exige ser el proponente (se comprueba contra el evento, no aca)
   }
   if (accion === ITF_ACCIONES.APROBAR || accion === ITF_ACCIONES.RECHAZAR || accion === ITF_ACCIONES.RETIRAR || accion === ITF_ACCIONES.REVERTIR) {
     return p.perfil_validar === true;
@@ -316,7 +323,8 @@ function itfDominio_parsearEvento(e, orden) {
       return falla('MOTIVO_INVALIDO');
     }
   } else if (evento === ITF_EVENTO.RETIRADO || evento === ITF_EVENTO.REVERTIDO) {
-    if (!itfDominio_motivoAlmacenadoValido(ITF_MOTIVOS_RETIRO, motivoCodigo, motivoTexto)) {
+    var catalogoRetiro = evento === ITF_EVENTO.RETIRADO ? ITF_MOTIVOS_RETIRO.concat([ITF_MOTIVO_CANCELACION]) : ITF_MOTIVOS_RETIRO;
+    if (!itfDominio_motivoAlmacenadoValido(catalogoRetiro, motivoCodigo, motivoTexto)) {
       return falla('MOTIVO_INVALIDO');
     }
   } else if (evento === ITF_EVENTO.APROBADO && reemplazado !== null) {
@@ -460,7 +468,9 @@ function itfDominio_aplicarEventos(lista) {
       }
     } else if (x.evento === ITF_EVENTO.RETIRADO) {
       d = exige(x.documentoId);
-      if (d !== null) {
+      if (d !== null && x.motivoCodigo === ITF_MOTIVO_CANCELACION && (d.estado !== ITF_ESTADOS_DOCUMENTO.PROPUESTO || proponentes[d.documentoId] !== x.actor)) {
+        invalido = 'CANCELACION_INVALIDA';                      // el motivo de cancelacion es solo del proponente y solo sobre su propuesta pendiente
+      } else if (d !== null) {
         if (d.estado === ITF_ESTADOS_DOCUMENTO.VIGENTE) {
           st.vigenteId = null;
         } else if (d.estado !== ITF_ESTADOS_DOCUMENTO.PROPUESTO) {
@@ -837,7 +847,35 @@ function itfDominio_validarComando(datos) {
     return itfDominio_error('INVALID_CLIENT_REQUEST_ID', 'clientRequestId obligatorio (8 a 64 caracteres: letras, numeros, guion y guion bajo)');
   }
   function ausente(v) { return v === undefined || v === null || v === ''; }
+  // Lista blanca de campos: un campo desconocido (email, actor, nombre, sha256, storageFileId, ...) se RECHAZA, no se ignora en silencio. El actor y los datos del archivo salen de la sesion / del servidor.
+  var permitidos = ['accion', 'clientRequestId', 'wellId', 'documentoId', 'documentoReemplazadoId', 'motivoCodigo', 'motivoTexto'];
+  var desconocido = Object.keys(d).some(function (k) { return permitidos.indexOf(k) < 0; });
+  if (desconocido) {
+    return itfDominio_error('INVALID_REQUEST', 'campos que no corresponden a la accion');
+  }
   var valores = { accion: accion, clientRequestId: d.clientRequestId };
+  if (accion === ITF_ACCIONES.RETIRAR_PROPUESTA) {
+    var propia = itfDominio_idDocumento(d.documentoId);
+    if (propia === null || propia.tipo !== ITF_ORIGEN.E9) {
+      return itfDominio_error('INVALID_DOCUMENTO_ID', 'documentoId invalido');
+    }
+    if (!ausente(d.wellId) || !ausente(d.documentoReemplazadoId) || !ausente(d.motivoCodigo)) {
+      return itfDominio_error('INVALID_REQUEST', 'campos que no corresponden a la accion');
+    }
+    var textoPropia = '';
+    if (!ausente(d.motivoTexto)) {
+      var m = itfDominio_validarMotivo(['OTRO'], 'OTRO', d.motivoTexto);
+      if (!m.ok) {
+        return itfDominio_error('INVALID_MOTIVO_TEXTO', m.message);
+      }
+      textoPropia = m.motivoTexto;
+    }
+    valores.documentoId = propia.id;
+    valores.documentoReemplazadoId = '';
+    valores.motivoCodigo = ITF_MOTIVO_CANCELACION;
+    valores.motivoTexto = textoPropia;
+    return { ok: true, valores: valores };
+  }
   if (accion === ITF_ACCIONES.PROPONER) {
     if (typeof d.wellId !== 'string' || !ITF_WELLID_REGEX.test(d.wellId)) {
       return itfDominio_error('INVALID_WELL_ID', 'wellId invalido');
@@ -1071,6 +1109,17 @@ function itfDominio_planificar(comando, contexto) {
     return { ok: true, accion: 'ESCRIBIR', eventos: eventos, resultado: { evento: ITF_EVENTO.PROPUESTO, documentoId: documentoId, wellId: wellId }, advertencias: advertencias };
   }
 
+  // RETIRAR_PROPUESTA: solo el PROPONENTE (el email del evento ITF_PROPUESTO, nunca el nombre) y solo mientras siga PROPUESTO. El documento de otra persona, o inexistente, da el MISMO error:
+  // no se filtra que existe. ctx.proponenteDe(documentoId) -> email normalizado del ITF_PROPUESTO ('' si no hay): lo arma el servicio con los eventos crudos.
+  if (accion === ITF_ACCIONES.RETIRAR_PROPUESTA) {
+    if (typeof ctx.proponenteDe !== 'function') {
+      throw new Error('itfDominio_planificar: RETIRAR_PROPUESTA necesita ctx.proponenteDe');
+    }
+    var proponente = itfDominio_normalizarEmail(ctx.proponenteDe(valores.documentoId));
+    if (proponente === '' || proponente !== email) {
+      return itfDominio_error('PERMISSION_DENIED', 'permiso insuficiente');
+    }
+  }
   // acciones sobre un documento existente: el pozo sale del documento, nunca del cliente
   var destino = itfDominio_idDocumento(valores.documentoId);
   var pozoDelDocumento = destino.tipo === ITF_ORIGEN.LEGACY ? destino.wellId : (ctx.derivacion && ctx.derivacion.documentoPozo ? ctx.derivacion.documentoPozo[destino.id] : undefined);
@@ -1129,6 +1178,13 @@ function itfDominio_planificar(comando, contexto) {
     eventos = [itfDominio_eventoBase(comun, {
       evento: ITF_EVENTO.RECHAZADO, documentoId: documentoId, wellId: wellId, motivoCodigo: valores.motivoCodigo, motivoTexto: valores.motivoTexto, clientRequestId: valores.clientRequestId
     })];
+  } else if (accion === ITF_ACCIONES.RETIRAR_PROPUESTA) {
+    if (doc === undefined || doc.estado !== ITF_ESTADOS_DOCUMENTO.PROPUESTO) {
+      return itfDominio_error('DOCUMENTO_NO_RETIRABLE', 'solo se puede retirar una propuesta que sigue pendiente');
+    }
+    eventos = [itfDominio_eventoBase(comun, {
+      evento: ITF_EVENTO.RETIRADO, documentoId: documentoId, wellId: wellId, motivoCodigo: valores.motivoCodigo, motivoTexto: valores.motivoTexto, clientRequestId: valores.clientRequestId
+    })];
   } else if (accion === ITF_ACCIONES.RETIRAR) {
     var retirable = destino.tipo === ITF_ORIGEN.LEGACY
       ? cx.vigenteId === documentoId
@@ -1152,6 +1208,9 @@ function itfDominio_planificar(comando, contexto) {
     }
     if (doc.origen === ITF_ORIGEN.LEGACY && itfDominio_legacyDisponible(ctx.legacy ? ctx.legacy.disponible : null) !== true) {
       return itfDominio_error('LEGACY_NO_DISPONIBLE', 'el archivo legacy ya no esta disponible');
+    }
+    if (doc.origen === ITF_ORIGEN.LEGACY && ctx.legacy.huellaCoincide !== true) {
+      return itfDominio_error('LEGACY_CAMBIO', 'el archivo legacy ya no es el que se registro: no se restaura');          // nunca se restaura en silencio un archivo distinto
     }
     if (valores.documentoReemplazadoId !== cx.vigenteId) {
       return itfDominio_error('VIGENTE_CAMBIO', 'el ITF vigente del pozo cambio: revisar antes de restaurar');
@@ -1190,10 +1249,12 @@ if (typeof module !== 'undefined' && module.exports) {
     ITF_MOTIVOS_RECHAZO,
     ITF_MOTIVOS_REEMPLAZO,
     ITF_MOTIVOS_RETIRO,
+    ITF_MOTIVO_CANCELACION,
     ITF_MOTIVO_TEXTO_MIN,
     ITF_MOTIVO_TEXTO_MAX,
     ITF_PROPUESTAS_PENDIENTES_MAX,
     ITF_CLIENT_REQUEST_ID_REGEX,
+    ITF_EMAIL_REGEX,
     itfDominio_texto,
     itfDominio_uuid,
     itfDominio_normalizarEmail,

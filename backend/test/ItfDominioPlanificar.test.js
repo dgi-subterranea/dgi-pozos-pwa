@@ -146,11 +146,16 @@ describe('PROPONER', () => {
     expect(plan.resultado).toEqual({ evento: 'ITF_PROPUESTO', documentoId: e.documentoId, wellId: WELL });
     expect('secuencia' in e).toBe(false);
   });
-  test('el servidor decide el archivo: el cliente no puede mandar metadata, hash ni ids de storage', () => {
-    const plan = sim.ejecutar(ana, { accion: 'PROPONER', wellId: WELL, clientRequestId: crid(), sha256: 'a'.repeat(64), storageFileId: 'robado' }, { archivo: archivo(1) });
-    expect(plan.ok).toBe(true);
+  test('el servidor decide el archivo y el actor: un campo desconocido (sha256, storageFileId, email, actor, nombre, mimeType...) se RECHAZA, no se ignora', () => {
+    ['sha256', 'storageFileId', 'email', 'actor', 'nombre', 'mimeType', 'bytes', 'secuencia', 'eventoId', 'timestampUtc'].forEach((campo) => {
+      const plan = sim.ejecutar(ana, { accion: 'PROPONER', wellId: WELL, clientRequestId: crid(), [campo]: 'x' }, { archivo: archivo(1) });
+      expect(codigo(plan)).toBe('INVALID_REQUEST');
+    });
+    expect(sim.eventos).toHaveLength(0);
+    const plan = proponer(1);
     expect(plan.eventos[0].sha256).toBe(sha(1));
     expect(plan.eventos[0].storageFileId).toBe(H.storageId(1));
+    expect(plan.eventos[0].email).toBe('ana@x.com');
   });
   test('los datos del archivo del servidor se validan: solo JPEG / PNG, hash, storage, tamano, nombre', () => {
     [{ mimeType: 'application/pdf' }, { bytes: 0 }, { bytes: 3 * 1024 * 1024 + 1 }, { sha256: 'xx' }, { storageFileId: 'c' }, { nombreOriginal: '' }, null, undefined, 'texto'].forEach((cambio) => {
@@ -726,5 +731,120 @@ describe('cadena completa y propiedades del historial', () => {
     aprobar(a, LEGACY_ID);
     const columnas = require('../src/ItfEventosRepository').ITF_EVENTOS_COLUMNAS.filter((c) => c !== 'secuencia');
     sim.eventos.forEach((e) => expect(Object.keys(e).filter((k) => k !== 'secuencia' && k !== 'fila').sort()).toEqual(columnas.slice().sort()));
+  });
+});
+
+describe('RETIRAR_PROPUESTA (E9-3): el proponente retira SOLO su propia propuesta pendiente', () => {
+  const retirarPropia = (documentoId, usuario, extra) => sim.ejecutar(usuario || ana, Object.assign({ accion: 'RETIRAR_PROPUESTA', documentoId: documentoId, clientRequestId: crid() }, extra || {}));
+  test('permiso: perfil + perfil_subir (NO exige perfil_validar); el validador solo, no', () => {
+    expect(D.itfDominio_puede('RETIRAR_PROPUESTA', { perfil: true, perfil_subir: true })).toBe(true);
+    expect(D.itfDominio_puede('RETIRAR_PROPUESTA', { perfil: true, perfil_validar: true })).toBe(false);
+    expect(D.itfDominio_puede('RETIRAR_PROPUESTA', { perfil_subir: true })).toBe(false);
+    expect(D.itfDominio_puede('RETIRAR_PROPUESTA', { perfil: true, perfil_subir: 'SI' })).toBe(false);
+  });
+  test('genera el MISMO ITF_RETIRADO con el motivo reservado, sin texto obligatorio', () => {
+    const a = docDe(proponer(1));
+    const plan = retirarPropia(a);
+    expect(plan.ok).toBe(true);
+    expect(plan.eventos).toHaveLength(1);
+    expect(plan.eventos[0]).toMatchObject({ evento: 'ITF_RETIRADO', documentoId: a, motivoCodigo: D.ITF_MOTIVO_CANCELACION, motivoTexto: '', documentoReemplazadoId: '', email: 'ana@x.com' });
+    expect(D.ITF_MOTIVO_CANCELACION).toBe('CANCELADO_POR_PROPONENTE');
+    expect(D.ITF_MOTIVOS_RETIRO).not.toContain('CANCELADO_POR_PROPONENTE');
+    expect(D.ITF_EVENTO_DE_ACCION.RETIRAR_PROPUESTA).toBe('ITF_RETIRADO');
+    expect(D.ITF_EVENTOS).toHaveLength(6);
+  });
+  test('la derivacion lo deja RETIRADO (no historico: nunca fue vigente) y el pozo conserva su vigente', () => {
+    const a = docDe(proponer(1));
+    retirarPropia(a);
+    const e = sim.estado();
+    expect(e.retirados.map((d) => d.documentoId)).toEqual([a]);
+    expect(e.historicos).toEqual([]);
+    expect(e.propuestasPendientes).toEqual([]);
+    expect(e.vigente.documentoId).toBe(LEGACY_ID);
+  });
+  test('ownership: email del ITF_PROPUESTO normalizado; otra persona o un documento inexistente: el MISMO PERMISSION_DENIED', () => {
+    const a = docDe(proponer(1));
+    expect(codigo(retirarPropia(a, Object.assign({}, ana, { email: 'otra@x.com' })))).toBe('PERMISSION_DENIED');
+    expect(codigo(retirarPropia(a, ambos))).toBe('PERMISSION_DENIED');
+    expect(codigo(retirarPropia(doc(77)))).toBe('PERMISSION_DENIED');
+    expect(retirarPropia(a, Object.assign({}, ana, { email: ' ANA@x.com ' })).ok).toBe(true);
+  });
+  test('sin ctx.proponenteDe el dominio no adivina: lanza (nunca permite por omision)', () => {
+    const a = docDe(proponer(1));
+    const ctx = sim.contexto(ana);
+    delete ctx.proponenteDe;
+    expect(() => D.itfDominio_planificar({ accion: 'RETIRAR_PROPUESTA', documentoId: a, clientRequestId: crid() }, ctx)).toThrow(/proponenteDe/);
+  });
+  test('solo mientras sea PROPUESTO: aprobado / vigente / reemplazado / rechazado / retirado -> DOCUMENTO_NO_RETIRABLE', () => {
+    sim.legacy.disponible = false;
+    const vig = docDe(proponer(1, ambos));
+    aprobar(vig, null, ambos);
+    const reemp = docDe(proponer(2, ambos));
+    aprobar(reemp, vig, ambos);
+    const rech = docDe(proponer(3, ambos));
+    rechazar(rech);
+    const ret = docDe(proponer(4, ambos));
+    retirarPropia(ret, ambos);
+    [vig, reemp, rech, ret].forEach((id) => expect(codigo(retirarPropia(id, ambos))).toBe('DOCUMENTO_NO_RETIRABLE'));
+  });
+  test('reglas de comando: documentoId E9 obligatorio; sin motivoCodigo ni reemplazo ni wellId; texto opcional de 3 a 300', () => {
+    const v = (extra) => D.itfDominio_validarComando(Object.assign({ accion: 'RETIRAR_PROPUESTA', clientRequestId: 'abcdefgh', documentoId: doc(1) }, extra));
+    expect(v({}).ok).toBe(true);
+    expect(v({ documentoId: LEGACY_ID }).code).toBe('INVALID_DOCUMENTO_ID');
+    expect(v({ documentoId: 'x' }).code).toBe('INVALID_DOCUMENTO_ID');
+    expect(v({ motivoCodigo: 'OTRO' }).code).toBe('INVALID_REQUEST');
+    expect(v({ documentoReemplazadoId: doc(2) }).code).toBe('INVALID_REQUEST');
+    expect(v({ wellId: WELL }).code).toBe('INVALID_REQUEST');
+    expect(v({ motivoTexto: 'ab' }).code).toBe('INVALID_MOTIVO_TEXTO');
+    expect(v({ motivoTexto: 'Me equivoque' })).toMatchObject({ ok: true, valores: { motivoCodigo: 'CANCELADO_POR_PROPONENTE', motivoTexto: 'Me equivoque' } });
+  });
+  test('un validador retira cualquier propuesta pendiente con RETIRAR y el catalogo institucional; no puede usar el motivo de cancelacion', () => {
+    const a = docDe(proponer(1));
+    expect(codigo(sim.ejecutar(val, { accion: 'RETIRAR', documentoId: a, motivoCodigo: 'CANCELADO_POR_PROPONENTE', clientRequestId: crid() }))).toBe('INVALID_MOTIVO');
+    expect(sim.ejecutar(val, { accion: 'RETIRAR', documentoId: a, motivoCodigo: 'DESACTUALIZADO', clientRequestId: crid() }).ok).toBe(true);
+  });
+  test('retirar un VIGENTE: solo perfil_validar (el proponente, ni siquiera de su propio documento)', () => {
+    sim.legacy.disponible = false;
+    const a = docDe(proponer(1));
+    aprobar(a);
+    expect(codigo(sim.ejecutar(ana, { accion: 'RETIRAR', documentoId: a, motivoCodigo: 'OTRO', motivoTexto: 'mal', clientRequestId: crid() }))).toBe('PERMISSION_DENIED');
+    expect(codigo(retirarPropia(a))).toBe('DOCUMENTO_NO_RETIRABLE');
+  });
+  test('la derivacion exige la misma regla: motivo de cancelacion de otra persona, o sobre un documento ya aprobado, deja el pozo NO_DERIVABLE', () => {
+    const eventos = [H.propuesto(1), H.retirado(1, { motivoCodigo: 'CANCELADO_POR_PROPONENTE', email: 'val@x.com' })];
+    expect(D.itfDominio_derivar(eventos).porPozo[WELL].inconsistencias).toContain('CANCELACION_INVALIDA');
+    H.reiniciar();
+    const propio = [H.propuesto(1), H.aprobado(1), H.retirado(1, { motivoCodigo: 'CANCELADO_POR_PROPONENTE', email: 'ana@x.com' })];
+    expect(D.itfDominio_derivar(propio).porPozo[WELL].inconsistencias).toContain('CANCELACION_INVALIDA');
+    H.reiniciar();
+    const bien = [H.propuesto(1), H.retirado(1, { motivoCodigo: 'CANCELADO_POR_PROPONENTE', email: ' ANA@x.com ' })];
+    expect(D.itfDominio_derivar(bien).porPozo[WELL].integridad).toBe('OK');
+    H.reiniciar();
+    expect(D.itfDominio_derivar([H.propuesto(1), H.revertido(1, null, { motivoCodigo: 'CANCELADO_POR_PROPONENTE', email: 'ana@x.com' })]).porPozo[WELL].inconsistencias).toContain('MOTIVO_INVALIDO');
+  });
+  test('el motivo reservado no exige texto', () => {
+    const e = [H.propuesto(1), H.retirado(1, { motivoCodigo: 'CANCELADO_POR_PROPONENTE', motivoTexto: '', email: 'ana@x.com' })];
+    expect(D.itfDominio_derivar(e).porPozo[WELL].integridad).toBe('OK');
+  });
+});
+
+describe('REVERTIR al legacy: la huella tiene que coincidir (LEGACY_CAMBIO)', () => {
+  test('sin huellaCoincide === true no se restaura en silencio', () => {
+    const a = docDe(proponer(1));
+    aprobar(a, LEGACY_ID);
+    const plan = (huella) => D.itfDominio_planificar({ accion: 'REVERTIR', documentoId: LEGACY_ID, documentoReemplazadoId: a, motivoCodigo: 'ERROR_DE_APROBACION', clientRequestId: crid() },
+      sim.contexto(val, { legacy: Object.assign({}, sim.legacy, { huellaCoincide: huella }) }));
+    expect(plan(true).ok).toBe(true);
+    [false, undefined, null, 'true', 1].forEach((h) => expect(codigo(plan(h))).toBe('LEGACY_CAMBIO'));
+  });
+  test('restaurar un documento E9 no depende de la huella del legacy', () => {
+    sim.legacy.disponible = false;
+    const a = docDe(proponer(1));
+    aprobar(a);
+    const b = docDe(proponer(2));
+    aprobar(b, a);
+    const plan = D.itfDominio_planificar({ accion: 'REVERTIR', documentoId: a, documentoReemplazadoId: b, motivoCodigo: 'ERROR_DE_APROBACION', clientRequestId: crid() },
+      sim.contexto(val, { legacy: { disponible: false, huellaCoincide: false } }));
+    expect(plan.ok).toBe(true);
   });
 });

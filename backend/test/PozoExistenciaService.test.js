@@ -302,7 +302,13 @@ describe('el helper es el UNICO lugar: nadie mas consulta ITF por existencia', (
 
   test('solo lo llaman: la correccion de ubicacion (snapshot), el handler de getWellLocation y -desde E5-2- agregar una observacion (la anulacion de E5-3 NO)', () => {
     const usuarios = fs.readdirSync(path.join(__dirname, '..', 'src')).filter((f) => f !== 'PozoExistenciaService.js' && /pozoExistenciaService_/.test(src(f)));
-    expect(usuarios.sort()).toEqual(['Api.js', 'ObservacionesPozoService.js', 'UbicacionCorreccionService.js']);
+    expect(usuarios.sort()).toEqual(['Api.js', 'ItfService.js', 'ObservacionesPozoService.js', 'UbicacionCorreccionService.js']);
+  });
+
+  test('E9-3: ItfService lo usa con la fuente ITF EXCLUIDA (ningun ITF es evidencia de existencia) y nada mas', () => {
+    const codigo = src('ItfService.js').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+    const llamadas = codigo.match(/pozoExistenciaService_verificar\([^)]*\)[^;]*;/g);
+    expect(llamadas).toEqual(["pozoExistenciaService_verificar(wellId, { excluirFuentes: [POZO_EXISTENCIA_FUENTES.ITF] });"]);
   });
 
   test('Observaciones lo usa SOLO al escribir (agregar): la lectura no verifica existencia, y no es una de sus fuentes', () => {
@@ -322,5 +328,64 @@ describe('el helper es el UNICO lugar: nadie mas consulta ITF por existencia', (
   test('driveProfileRepository_existe solo lo usa el helper (y se define en el repositorio de ITF)', () => {
     const usuarios = fs.readdirSync(path.join(__dirname, '..', 'src')).filter((f) => /driveProfileRepository_existe/.test(src(f)));
     expect(usuarios.sort()).toEqual(['DriveProfileRepository.js', 'PozoExistenciaService.js']);
+  });
+});
+
+describe('opciones.excluirFuentes (E9-3): ningun ITF puede ser la evidencia de que el pozo existe', () => {
+  test('sin la opcion nada cambia: el ITF sigue confirmando', () => {
+    global.driveProfileRepository_existe = jest.fn(() => true);
+    expect(verificar()).toMatchObject({ existe: true, fuentes: ['ITF'] });
+    expect(verificar(W, { excluirFuentes: [] })).toMatchObject({ existe: true, fuentes: ['ITF'] });
+    expect(verificar(W, { excluirFuentes: 'ITF' })).toMatchObject({ existe: true, fuentes: ['ITF'] });
+  });
+
+  test('con ITF excluido: el archivo legacy NO se consulta ni confirma; las otras fuentes siguen en su orden', () => {
+    global.driveProfileRepository_existe = jest.fn(() => { orden.push('ITF'); return true; });
+    const r = verificar(W, { excluirFuentes: ['ITF'] });
+    expect(r).toEqual({ existe: false, enPadron: false, fuentes: [], indeterminado: false, noVerificadas: [] });
+    expect(global.driveProfileRepository_existe).not.toHaveBeenCalled();
+    expect(orden).toEqual(['PADRON', 'NE', 'CORRECCION_PREVIA']);
+  });
+
+  test('con ITF excluido, NE y la correccion previa y el padron siguen confirmando', () => {
+    global.driveProfileRepository_existe = jest.fn(() => true);
+    global.nivelesEstaticosRepository_getPunto = jest.fn(() => ({ found: true }));
+    expect(verificar(W, { excluirFuentes: ['ITF'] })).toMatchObject({ existe: true, fuentes: ['NE'] });
+    global.nivelesEstaticosRepository_getPunto = jest.fn(() => ({ found: false }));
+    global.ubicacionCorreccionRepository_listarCorrecciones = jest.fn(() => [{ wellId: '14-0200' }]);
+    expect(verificar('14-0124', { excluirFuentes: ['ITF'] })).toMatchObject({ existe: false });
+    expect(verificar('14-0200', { excluirFuentes: ['ITF'] })).toMatchObject({ existe: true, fuentes: ['CORRECCION_PREVIA'] });
+    global.registryService_getWellLocation = jest.fn(() => ({ found: true, location: {} }));
+    expect(verificar('14-0300', { excluirFuentes: ['ITF'] })).toMatchObject({ existe: true, enPadron: true });
+  });
+
+  test('un positivo de ITF que ya estaba en el cache NO vale cuando ITF esta excluido (y no se pisa)', () => {
+    global.driveProfileRepository_existe = jest.fn(() => true);
+    verificar();                                                                        // cachea ['ITF']
+    expect(cacheAlmacen[P.POZO_EXISTENCIA_CACHE_PREFIJO + W]).toBe('["ITF"]');
+    global.driveProfileRepository_existe.mockClear();
+    expect(verificar(W, { excluirFuentes: ['ITF'] })).toMatchObject({ existe: false });
+    expect(global.driveProfileRepository_existe).not.toHaveBeenCalled();
+    expect(cacheAlmacen[P.POZO_EXISTENCIA_CACHE_PREFIJO + W]).toBe('["ITF"]');          // el cache de los otros usuarios sigue igual
+    expect(verificar()).toMatchObject({ existe: true, fuentes: ['ITF'] });
+  });
+
+  test('un cache con ITF y NE confirma por NE cuando ITF esta excluido', () => {
+    cacheAlmacen[P.POZO_EXISTENCIA_CACHE_PREFIJO + W] = '["ITF","NE"]';
+    expect(verificar(W, { excluirFuentes: ['ITF'] })).toEqual({ existe: true, enPadron: false, fuentes: ['NE'], indeterminado: false, noVerificadas: [] });
+  });
+
+  test('con ITF excluido, un positivo nuevo se cachea con su fuente real (nunca ITF)', () => {
+    global.driveProfileRepository_existe = jest.fn(() => true);
+    global.nivelesEstaticosRepository_getPunto = jest.fn(() => ({ found: true }));
+    verificar(W, { excluirFuentes: ['ITF'] });
+    expect(cacheAlmacen[P.POZO_EXISTENCIA_CACHE_PREFIJO + W]).toBe('["NE"]');
+  });
+
+  test('fail-closed: si lo unico que queda por consultar falla, es indeterminado (no "no existe"); lo excluido no cuenta como no verificable', () => {
+    global.nivelesEstaticosRepository_getPunto = jest.fn(() => { throw new Error('hoja NE caida'); });
+    expect(verificar(W, { excluirFuentes: ['ITF'] })).toEqual({ existe: false, enPadron: false, fuentes: [], indeterminado: true, noVerificadas: ['NE'] });
+    global.driveProfileRepository_existe = jest.fn(() => { throw new Error('Drive caido'); });
+    expect(verificar(W, { excluirFuentes: ['ITF'] }).noVerificadas).toEqual(['NE']);    // Drive caido no importa: ITF no se consulta
   });
 });

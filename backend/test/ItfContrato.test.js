@@ -10,22 +10,31 @@ const DOC = () => leer('docs', 'itf-colaborativos.md');
 // codigo sin comentarios (los comentarios documentan y nombran cosas; las guardas miran lo que se EJECUTA)
 const CODIGO = (nombre) => SRC(nombre).replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
 
-const MODULOS_NUEVOS = ['ItfArchivoLogic.js', 'ItfDominioService.js', 'ItfEventosRepository.js'];
-const MARCAS_E9 = /itfDominio_|itfEventosRepository_|itfArchivo_|setupItfEventosSheet|ItfEventos|ItfArchivoLogic|ItfDominioService|perfil_subir|perfil_validar|itfTieneVigente/;
+const MODULOS_NUEVOS = ['ItfArchivoLogic.js', 'ItfDominioService.js', 'ItfEventosRepository.js', 'ItfLegacyProvider.js', 'ItfStorageProvider.js', 'ItfService.js'];
+const MARCAS_E9 = /itfDominio_|itfEventosRepository_|itfArchivo_|itfLegacy_|itfStorage_|itfService_|setupItfEventosSheet|ItfEventos|ItfArchivoLogic|ItfDominioService|ItfLegacyProvider|ItfStorageProvider|ItfService|ITF_E9_ACTIVO|perfil_subir|perfil_validar|itfTieneVigente/;
 
 describe('E9-2 no esta cableado: ningun archivo vivo de la app lo referencia', () => {
   test.each([
-    'Api.js', 'Config.js', 'AuthService.js', 'SheetUserRepository.js', 'ProfileService.js', 'DriveProfileRepository.js', 'ItfAvailabilityService.js', 'PozoExistenciaService.js',
+    'Api.js', 'Config.js', 'AuthService.js', 'SheetUserRepository.js', 'ProfileService.js', 'ItfAvailabilityService.js', 'PozoExistenciaService.js',
     'SheetHistoryRepository.js', 'HistoryService.js', 'NotificationService.js', 'MapaService.js', 'FotosPozosService.js', 'FotosPozosModeracionService.js', 'RegistryService.js'
   ])('backend/src/%s no usa los modulos de E9', (archivo) => {
     expect(SRC(archivo)).not.toMatch(MARCAS_E9);
+  });
+
+  test('DriveProfileRepository: getFile / existe / listarArchivosThumb siguen IGUAL; solo se agregaron buscarPorNombre y leerPorId (que usa el proveedor legacy) y el codigo no menciona a E9', () => {
+    const src = CODIGO('DriveProfileRepository.js');
+    expect(src).toMatch(/folder\.getFilesByName\(wellId \+ '\.jpg'\);\n  if \(!files\.hasNext\(\)\) \{\n    return \{ found: false \};\n  \}\n  var file = files\.next\(\);\n  return \{ found: true, blob: file\.getBlob\(\) \};/);
+    expect(src).toMatch(/return folder\.getFilesByName\(wellId \+ '\.jpg'\)\.hasNext\(\);/);
+    expect(src).not.toMatch(MARCAS_E9);
+    const m = require('../src/DriveProfileRepository');
+    expect(Object.keys(m).sort()).toEqual(['driveProfileRepository_buscarPorNombre', 'driveProfileRepository_existe', 'driveProfileRepository_getFile', 'driveProfileRepository_leerPorId', 'driveProfileRepository_listarArchivosThumb']);
   });
 
   test('el frontend (index.html, sw.js, js/*.js, css) no menciona E9 ni los permisos futuros', () => {
     const archivos = ['index.html', 'sw.js', path.join('css', 'styles.css')];
     fs.readdirSync(path.join(RAIZ, 'js')).filter((f) => f.endsWith('.js') && !f.endsWith('.test.js')).forEach((f) => archivos.push(path.join('js', f)));
     archivos.forEach((f) => {
-      expect({ archivo: f, menciona: /perfil_subir|perfil_validar|ItfEventos|itfDominio_|itfTieneVigente/.test(leer(f)) }).toEqual({ archivo: f, menciona: false });
+      expect({ archivo: f, menciona: /perfil_subir|perfil_validar|ItfEventos|itfDominio_|itfService_|itfLegacy_|itfTieneVigente|ITF_E9_ACTIVO/.test(leer(f)) }).toEqual({ archivo: f, menciona: false });
     });
   });
 
@@ -60,9 +69,9 @@ describe('E9-2 no esta cableado: ningun archivo vivo de la app lo referencia', (
 });
 
 describe('los modulos nuevos', () => {
-  test('existen exactamente estos tres archivos nuevos de E9 en backend/src', () => {
+  test('existen exactamente estos archivos de E9 (mas el ItfAvailabilityService existente) en backend/src', () => {
     const itf = fs.readdirSync(path.join(RAIZ, 'backend', 'src')).filter((f) => /^Itf/.test(f)).sort();
-    expect(itf).toEqual(['ItfArchivoLogic.js', 'ItfAvailabilityService.js', 'ItfDominioService.js', 'ItfEventosRepository.js'].sort());
+    expect(itf).toEqual(['ItfArchivoLogic.js', 'ItfAvailabilityService.js', 'ItfDominioService.js', 'ItfEventosRepository.js', 'ItfLegacyProvider.js', 'ItfService.js', 'ItfStorageProvider.js'].sort());
   });
 
   test.each(MODULOS_NUEVOS)('%s es ES5 de Apps Script (sin import / export / async / arrow / const / let)', (archivo) => {
@@ -85,11 +94,28 @@ describe('los modulos nuevos', () => {
     const dominio = CODIGO('ItfDominioService.js');
     expect(dominio).not.toMatch(/itfEventosRepository_|SpreadsheetApp|DriveApp|CacheService|LockService|UrlFetchApp|PropertiesService|Utilities/);
     expect(dominio).not.toMatch(/\bitfArchivo_/);       // solo usa las CONSTANTES ITF_* de ItfArchivoLogic, no sus funciones
+    expect(CODIGO('ItfDominioService.js')).not.toMatch(/itfLegacy_|itfService_|itfStorage_/);                // el dominio no conoce a quien lo usa
   });
 
   test('el dominio y los validadores no dependen de Apps Script salvo el digest inyectable', () => {
     expect(CODIGO('ItfArchivoLogic.js')).not.toMatch(/SpreadsheetApp|DriveApp|CacheService|LockService|UrlFetchApp/);
     expect(CODIGO('ItfArchivoLogic.js').match(/Utilities\./g)).toHaveLength(2);                // computeDigest + DigestAlgorithm, solo como valor por defecto
+  });
+
+  test('E9-3: el servicio y el proveedor legacy no hablan con Drive ni con Sheets directamente (solo por los repositorios) y el servicio no usa Drive para los documentos E9', () => {
+    expect(CODIGO('ItfService.js')).not.toMatch(/DriveApp|SpreadsheetApp|CacheService|LockService|UrlFetchApp/);
+    expect(CODIGO('ItfLegacyProvider.js')).not.toMatch(/DriveApp|SpreadsheetApp|LockService|UrlFetchApp|PropertiesService/);
+    expect(CODIGO('ItfStorageProvider.js')).not.toMatch(/DriveApp|SpreadsheetApp|CacheService|LockService|UrlFetchApp|PropertiesService|Utilities/);
+    expect(CODIGO('ItfService.js').match(/PropertiesService/g)).toHaveLength(1);                  // solo el interruptor ITF_E9_ACTIVO
+  });
+
+  test('E9-3: el servicio NO escribe Historial ni manda Telegram (esa auditoria sigue siendo de Api.js)', () => {
+    expect(CODIGO('ItfService.js')).not.toMatch(/logHistoryEvent|sheetHistoryRepository|notificationService|telegram/i);
+  });
+
+  test('E9-3: el interruptor ITF_E9_ACTIVO vive solo en ItfService.js (Config.js no cambia)', () => {
+    expect(SRC('Config.js')).not.toMatch(/ITF_E9/);
+    expect(CODIGO('ItfService.js')).toMatch(/getProperty\(ITF_E9_PROPIEDAD\) === 'SI'/);
   });
 
   test('solo el repositorio sabe que existe la hoja ItfEventos', () => {
@@ -143,6 +169,19 @@ describe('docs/itf-colaborativos.md', () => {
     const d = DOC();
     expect(d).toMatch(/medir_itf_consola/);
     expect(d).toMatch(/no se pudo medir|NO se midio|sin sesion/i);
+  });
+
+  test('E9-3: documenta la etapa como local y no productiva, el interruptor, el retiro propio y la politica del legacy', () => {
+    const d = DOC();
+    expect(d).toMatch(/E9-3/);
+    expect(d).toMatch(/ITF_E9_ACTIVO/);
+    expect(d).toMatch(/RETIRAR_PROPUESTA/);
+    expect(d).toMatch(/CANCELADO_POR_PROPONENTE/);
+    ['LEGACY_AMBIGUO', 'LEGACY_CAMBIO', 'LEGACY_NOMBRE_NO_CANONICO', 'ITF_STATE_UNKNOWN', 'ITF_NOT_FOUND', 'VIGENTE_CAMBIO', 'ITF_STORAGE_NO_CONFIGURADO'].forEach((c) => expect(d).toContain(c));
+    expect(d).toMatch(/itfService_resolverVigente/);
+    expect(d).toMatch(/Q1/);
+    expect(d).toMatch(/Q2/);
+    expect(d).not.toMatch(/E9 PRODUCTIVO/);
   });
 
   test('el tamano maximo documentado coincide con el codigo', () => {
