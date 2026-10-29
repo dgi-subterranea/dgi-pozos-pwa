@@ -54,6 +54,7 @@ describe('puertas de entrada (antes de tocar nada)', () => {
     expect(eventos()[0].nombre).toBe('Ana');
   });
   test('una excepcion interna se traduce a SERVICE_UNAVAILABLE sin detalles (ni texto del error)', () => {
+    entorno({ archivos: [] });                                                                    // sin vigente: la existencia sale de las fuentes independientes
     const r = proponer(ana, 1, {}, depsDe(E, { existencia: () => { throw new Error('SECRETO-INTERNO'); } }));
     expect(r).toEqual({ ok: false, code: 'SERVICE_UNAVAILABLE', message: 'servicio no disponible' });
     expect(JSON.stringify(r)).not.toContain('SECRETO');
@@ -85,7 +86,8 @@ describe('PROPONER (con storage falso)', () => {
     expect(E.storage.guardados).toBe(0);
     expect(filas()).toHaveLength(0);
   });
-  test('el pozo tiene que existir por una fuente previa; si no se puede comprobar, SERVICE_UNAVAILABLE; el storage no se toca', () => {
+  test('sin ITF vigente el pozo tiene que existir por una fuente INDEPENDIENTE; si no se puede comprobar, SERVICE_UNAVAILABLE; el storage no se toca', () => {
+    entorno({ archivos: [] });
     expect(proponer(ana, 1, {}, depsDe(E, { existencia: () => ({ existe: false, indeterminado: false }) })).code).toBe('POZO_NOT_FOUND');
     expect(proponer(ana, 1, {}, depsDe(E, { existencia: () => ({ existe: false, indeterminado: true }) })).code).toBe('SERVICE_UNAVAILABLE');
     expect(E.storage.guardados).toBe(0);
@@ -107,13 +109,33 @@ describe('PROPONER (con storage falso)', () => {
     expect(filas()).toHaveLength(1);
     expect(E.storage.guardados).toBe(1);
   });
-  test('duplicado documental (mismo hash, otro clientRequestId): DUPLICADO_DOCUMENTO y se COMPENSA el archivo recien subido', () => {
+  test('duplicado documental (mismo hash, otro clientRequestId): DUPLICADO_DOCUMENTO ANTES de subir (no se guarda nada que despues no se pueda registrar)', () => {
     proponer(ana, 1);
     const r = proponer(ana, 1);
+    expect(r).toMatchObject({ ok: false, code: 'DUPLICADO_DOCUMENTO' });
+    expect(r.compensacion).toBeUndefined();
+    expect(E.storage.guardados).toBe(1);
+    expect(E.storage.eliminados).toEqual([]);
+    expect(E.storage.docs['e9-storage-000001']).toBeDefined();
+    expect(filas()).toHaveLength(1);
+  });
+  // simula una carrera: entre la prevalidacion (sin lock) y el lock aparece una propuesta con el MISMO archivo de otra persona
+  const conPropuestaIntermedia = (relleno) => {
+    const deps = depsDe(E);
+    const rep = deps.repo;
+    let interferir = true;
+    deps.repo = Object.assign({}, rep, { conLock: (fn) => rep.conLock(() => {
+      if (interferir) { interferir = false; expect(ej(ambos, { accion: 'PROPONER', wellId: W, clientRequestId: crid() }, { archivo: archivoJpeg(relleno) }, depsDe(E)).ok).toBe(true); }
+      return fn();
+    }) });
+    return deps;
+  };
+  test('CARRERA: el mismo archivo lo registra otra persona entre la prevalidacion y el lock -> DUPLICADO_DOCUMENTO y se COMPENSA el archivo recien subido', () => {
+    const r = proponer(ana, 1, {}, conPropuestaIntermedia(1));
     expect(r).toMatchObject({ ok: false, code: 'DUPLICADO_DOCUMENTO', compensacion: 'OK' });
     expect(E.storage.guardados).toBe(2);
-    expect(E.storage.eliminados).toEqual(['e9-storage-000002']);
-    expect(E.storage.docs['e9-storage-000001']).toBeDefined();                // el primero (referenciado) NO se toca
+    expect(E.storage.eliminados).toEqual(['e9-storage-000001']);              // el archivo de ESTA solicitud (subido antes del lock) se retira
+    expect(E.storage.docs['e9-storage-000002']).toBeDefined();                // el de la otra persona (referenciado por su fila) NO se toca
     expect(filas()).toHaveLength(1);
   });
   test('el storage falla al guardar: error del storage, sin fila', () => {
@@ -156,9 +178,8 @@ describe('PROPONER (con storage falso)', () => {
     expect(E.storage.eliminados).toEqual([]);
   });
   test('la compensacion puede fallar: se informa (compensacion:FALLO) y no se oculta el motivo original', () => {
-    proponer(ana, 1);
     E.storage.fallarEliminar = true;
-    expect(proponer(ana, 1)).toMatchObject({ ok: false, code: 'DUPLICADO_DOCUMENTO', compensacion: 'FALLO' });
+    expect(proponer(ana, 1, {}, conPropuestaIntermedia(1))).toMatchObject({ ok: false, code: 'DUPLICADO_DOCUMENTO', compensacion: 'FALLO' });
     expect(Logger.log).toHaveBeenCalledWith(expect.stringMatching(/huerfano/));
   });
 });

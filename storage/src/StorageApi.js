@@ -4,7 +4,7 @@
 // OAuth): por eso NINGUNA operacion se ejecuta sin una solicitud firmada
 // valida (ver StorageAuth.js). Un GET o un POST sin firma no revelan nada.
 // Acciones: putFoto, getFoto, trashFoto (Reemplazos) y putFotoPozo, putFotosPozoLote (varias fotos por solicitud), getFotoPozo,
-// trashFotoPozo (galeria general de pozos, otra raiz de Drive).
+// trashFotoPozo (galeria general de pozos, otra raiz de Drive) y putItf, getItf, metaItf, trashItf (ITF colaborativos, tercera raiz: ItfPropuestas).
 function doGet() {
   return ContentService.createTextOutput('ok').setMimeType(ContentService.MimeType.TEXT);
 }
@@ -51,6 +51,14 @@ function storageApi_procesar(contenido) {
     resultado = storageDrive_getFotoPozo(auth.payload);
   } else if (auth.accion === 'trashFotoPozo') {
     resultado = storageDrive_trashFotoPozo(auth.payload);
+  } else if (auth.accion === 'putItf') {
+    resultado = storageDrive_putItf(auth.payload, new Date().getFullYear());
+  } else if (auth.accion === 'getItf') {
+    resultado = storageDrive_getItf(auth.payload);
+  } else if (auth.accion === 'metaItf') {
+    resultado = storageDrive_metaItf(auth.payload);
+  } else if (auth.accion === 'trashItf') {
+    resultado = storageDrive_trashItf(auth.payload);
   } else {
     resultado = { status: 'error', code: 'UNKNOWN_ACTION' };
   }

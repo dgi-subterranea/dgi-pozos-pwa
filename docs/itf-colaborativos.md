@@ -352,3 +352,129 @@ Auditado: `PozoExistenciaService` acepta como evidencia el padrón, **el `<wellI
 - Jest completo en serie: 163 suites, 10.812 tests verdes; Python: 97 + 224 verdes; `git diff --check` limpio.
 - Mutaciones: E9-2 **75 de 75 muertas** (repetidas tras cambiar el dominio); E9-3 **59 de 59 muertas**. Una de las 52 primeras sobrevivió (el proveedor legacy se leía una vez por pozo; los contadores solo miraban Drive y la hoja, y con el índice en caché esa lectura no toca Drive): era una falta de test, y se agregó un contador de llamadas al proveedor. Se agregaron 7 mutantes más (exclusión de la rama ITF, caché, single-flight).
 - No se repitieron todas las mutaciones de E9-3 después de agregar tests y la exclusión de la rama ITF: los tests solo se ampliaron y el único código común tocado fue `PozoExistenciaService` (sus mutantes se corrieron).
+
+## 15. E9-4: proponer un ITF de punta a punta (local, NO productivo)
+
+Estado: implementado y probado **en local**. No hay push, `gas:*`, despliegue, hoja `ItfEventos` real, `ITF_E9_ACTIVO` encendido, pantalla ni columnas productivas de permisos. Con la bandera apagada el endpoint responde `ITF_E9_INACTIVO` **antes** de tocar ninguna hoja.
+
+### 15.1 Qué hace
+
+Un usuario autorizado manda una imagen → el backend la valida → el storage privado la guarda → el servidor calcula el SHA-256 → se agrega **un** evento `ITF_PROPUESTO` → la propuesta queda **pendiente**. Todavía no existe aprobar, rechazar, reemplazar ni revertir: nada de lo propuesto se vuelve ITF vigente.
+
+### 15.2 Endpoint `proponerItf`
+
+- Acceso: sesión válida y `perfil === true && perfil_subir === true`. `perfil_subir` solo no alcanza (sin `perfil` no se ve el pozo). El backend entiende ya `perfil_subir` y `perfil_validar` (valor exacto `SI` → `true`; cualquier otra cosa → `false`) **sin** crear las columnas productivas: si la hoja `Usuarios` no las tiene, ambos permisos son `false`.
+- Campos admitidos, **y solo estos**: `wellId`, `imageBase64`, `mimeType`, `nombreOriginal`, `clientRequestId` (más `action` y `sessionToken`). Cualquier otro campo (`documentoId`, hash, `bytes`, `storageFileId`, `email`, `nombre`, `timestamp`, `estado`...) → `INVALID_REQUEST`. El actor sale **siempre** de la sesión.
+- `imageBase64` se valida antes de decodificar: alfabeto base64, largo múltiplo de 4, tope de 4.194.304 caracteres (3 MB en base64).
+- Respuesta segura (DTO): `{documentoId, wellId, estado:'PROPUESTO', mimeType, bytes, nombreOriginal, timestampUtc, warnings}`. **No** sale `storageFileId`, el hash completo, el email, `clientRequestId`, la secuencia ni ninguna advertencia interna (`warnings` va siempre `[]`: `MISMO_HASH_OTRO_POZO` queda como marca de revisión interna).
+- Historial: **una** fila `OK` por propuesta nueva (un reintento no duplica); sin base64, hash, id de storage ni nombre original. Sin Telegram.
+
+### 15.3 Storage real (segunda cuenta)
+
+- Raíz **propia y aislada** `ItfPropuestas/` (carpeta por año del servidor), separada de `FotosReemplazo/` y de `FotosPozos/`. Mismo Web App y **mismo esquema HMAC-SHA256 v1** de Fotos (un solo secreto, un solo cliente: `fotosStorageClient_llamar`), con acciones propias: `putItf`, `getItf`, `metaItf`, `trashItf`. Las acciones de Fotos no operan sobre la raíz de ITF ni viceversa (probado en los dos sentidos); un archivo de otra raíz responde `NOT_FOUND`.
+- **JPEG y PNG**, verificados por los bytes reales en el backend **y otra vez en el storage** (un PDF dicho `image/jpeg` se rechaza en ambos). Vacío, MIME falso, firma de bytes rota y tamaño > 3 MB se rechazan. Fotos mantiene su comportamiento: JPEG sí, PNG no (probado).
+- Nombre físico: `<documentoId>.<jpg|png>`, con el `documentoId` generado por el servidor. **El nombre original nunca se usa como ruta ni como nombre de archivo.** Archivos privados (sin compartir). `trashItf` solo manda a la papelera (no borra definitivamente).
+- `putItf` es idempotente por `documentoId`: el mismo id con el mismo contenido devuelve la misma referencia (una sola copia); con otro contenido se rechaza.
+- Un storage sin las acciones nuevas se informa como `ITF_STORAGE_NO_CONFIGURADO`; una raíz sin configurar falla con `INTERNAL` sin detalle.
+- Configuración que hará falta al desplegar (no hecha): propiedad `ITF_ROOT_FOLDER_ID` en el storage, que crea `setupItfPropuestasStorage()` una vez.
+- Autenticación probada también para ITF: firma válida / inválida, acción desconocida, marca de tiempo vencida o futura, repetición del mismo pedido y acción alterada (`putFoto` firmada reusada como `putItf`) → `UNAUTHORIZED` sin escribir nada.
+
+### 15.4 Límite de 3 MB y tamaño real de la solicitud (provisional)
+
+- 3 MB de imagen = 3.145.728 bytes = **4.194.304 caracteres de base64** (+33 %), más el sobre JSON. El mismo contenido viaja **dos veces**: navegador → backend, y backend → storage (como string JSON dentro de otro JSON, más la firma): unos **4,0 MB** por tramo (benchmark local `scripts/medir_itf_propuesta.js`: factor 1,333 sobre la imagen en 100 KB, 500 KB, 1 MB y 3 MB).
+- **Se mantiene 3 MB como límite PROVISIONAL.** No se pudo medir en Apps Script (no hay sesión de Google en esta etapa): ni el tiempo de `Utilities.base64Decode`, `computeDigest`, `UrlFetchApp` y Drive para 3 MB, ni el tope real del cuerpo de un `doPost` entrante. Lo único medido es CPU local de Node (decodificar 3 MB ≈ 84 ms, SHA-256 ≈ 45 ms, firmar ≈ 8 ms): sirve para comparar tamaños, **no** para estimar segundos en Apps Script.
+- Evidencia para el valor: los ITF legacy pesan 37–170 KB; las fotos normalizadas del sistema, ≤ 1,55 MB; los originales de celular llegan a ~4 MB en el p99. Por eso en E9-5 el **cliente debe reducir** la foto antes de enviarla (apuntar a ≤ 1 MB). Si la medición real obligara a bajar el tope, hay que cambiarlo en `ItfArchivoLogic.js` **y** en `StorageDrive.js` (un test exige que sean iguales).
+- Cómo medir en producción cuando se pueda: proponer con un token real un JPEG de 100 KB, 1 MB y 3 MB y leer el tiempo total y el de cada paso; medir también `getItf`.
+
+### 15.5 Auditoría de la carpeta legacy (solo lectura, pendiente de correr)
+
+`backend/src/ItfLegacyAuditoria.js` → `auditarCarpetaItfLegacy()`, para correr **a mano** desde el editor de Apps Script (ningún endpoint ni trigger la llama). Lee nombres y tamaños de la carpeta `FOLDER_ID`, no abre archivos y no escribe nada. Informa: total de archivos, canónicos (`<wellId>.jpg`), variantes de extensión (`.JPG`, `.Jpg`...), duplicados canónicos, nombres que no coinciden, archivos sin pozo válido (departamento fuera de 01–19 o `0000`), pozos con más de un candidato, pozos por estado (`UNICO` / `AMBIGUO` / `NO_CANONICO`, **la misma regla** que el proveedor legacy: lo exige un test) y la distribución de tamaños (mínimo, mediana, p95, p99, máximo, tramos, cuántos superan 3 MB). Sin ids de Drive; ejemplos acotados a 10 por categoría; se corta a los 4,5 minutos y entonces declara `incompleto: true`. **No se pudo ejecutar** (sin sesión de Google): sus cifras son el primer dato a obtener antes de activar E9, y deciden el límite real y cuántos pozos quedarían en «no se sabe».
+
+### 15.6 Reglas de existencia (A–D)
+
+Una propuesta **nunca prueba** que el pozo existe (el documento aún no existe ni es válido).
+
+| Caso | Estado del ITF del pozo | ¿Se puede proponer? |
+|---|---|---|
+| A | No hay ITF vigente (ni legacy ni E9) | Solo si el pozo existe por una fuente **independiente**: padrón, punto NE o corrección previa (la rama ITF de `PozoExistenciaService` queda excluida con `excluirFuentes`). Si no → `POZO_NOT_FOUND`; si no se puede comprobar → `SERVICE_UNAVAILABLE`. |
+| B | Legacy **único y canónico** (`<wellId>.jpg`) y legible | **Sí**: un ITF vigente preexistente es evidencia suficiente para proponer una *nueva versión* (no es circular: el legacy ya estaba). Se registra su huella como `ITF_LEGACY_REGISTRADO` en la misma operación si aún no estaba. |
+| C | Legacy ambiguo, de nombre no canónico, ilegible, o historial no derivable | **No**: requiere revisión (`LEGACY_AMBIGUO` / `LEGACY_NOMBRE_NO_CANONICO` / `LEGACY_FORMATO_INVALIDO` / `ITF_STATE_UNKNOWN`). |
+| D | Hay un documento E9 vigente | Sí (nueva versión). |
+
+Esto resuelve la «consecuencia a decidir» de §14.13: un pozo conocido solo por su ITF legacy único admite propuestas de nueva versión; sigue sin habilitarse proponer un ITF para un pozo sin ITF ni otra fuente de existencia.
+
+### 15.7 Orden real del flujo (A–Q)
+
+| | Paso | Dónde |
+|---|---|---|
+| A | Sesión válida y permisos `perfil` + `perfil_subir` (hojas `Sesiones` / `Usuarios`, nunca `ItfEventos`) | `Api.handleProponerItf`; el dominio lo repite con `itfDominio_puede` |
+| B | Bandera `ITF_E9_ACTIVO === 'SI'`, si no `ITF_E9_INACTIVO`: **antes** de mirar el cuerpo, de tocar `ItfEventos` o el storage | `Api.handleProponerItf` |
+| C | Lista blanca de campos; forma de `wellId`, `clientRequestId`, `mimeType` | `Api` / dominio |
+| D | Parseo base64 (alfabeto, múltiplo de 4, tope) y decodificación | `Api` |
+| E | Magic bytes, MIME declarado vs real, vacío y tamaño | `itfArchivo_validar` |
+| F | SHA-256 **del servidor** sobre los bytes aceptados (el cliente no manda hash) | `itfService_proponer` |
+| G | Existencia / estado del pozo (A–D) y prevalidación sin escribir (derivar, duplicado, pendientes, idempotencia) con el planificador en seco | `itfService_evidenciaPropuesta`, `itfService_planificar` |
+| H | Idempotencia conocida: si ya hay un evento de ese `clientRequestId`, se decide **sin subir nada** | `itfService_proponer` |
+| I | `documentoId` generado por el servidor | `itfService_proponer` |
+| J | **Subida al storage, FUERA del lock** (es lenta) | `d.storage.guardarPropuesta` |
+| K | Se toma el `ScriptLock` | `d.repo.conLock` |
+| L | **Se relee `ItfEventos` y se revalida todo** (existencia, duplicado de hash, tope de pendientes, idempotencia): nada decidido antes del lock se reutiliza | `itfService_dentroDelLock` |
+| M | Append de `ITF_PROPUESTO` | `d.repo.escribirEventos` |
+| N | Se libera el lock | |
+| O | Se invalidan las cachés (si falla, la escritura ya hecha sigue siendo éxito) | `invalidarCaches` |
+| P | Una fila OK en Historial | `Api` |
+| Q | Respuesta con el DTO seguro | `Api` |
+
+**Desviaciones respecto de la lista pedida (y por qué):** (0) la sesión y los permisos (A) se comprueban **antes** que la bandera (B), y no al revés: es el orden de todos los endpoints de la app (sesión → permiso → contenido) y evita que alguien sin sesión pueda averiguar si E9 está encendido; la bandera sigue cortando antes de cualquier lectura de `ItfEventos`, del cuerpo o del storage (probado con una hoja inexistente). (1) el hash (F) se calcula **antes** de comprobar la idempotencia conocida (H): hace falta para distinguir un reintento exacto de un mismo `clientRequestId` con otro contenido (`IDEMPOTENCY_CONFLICT`). (2) La prevalidación (G) y la idempotencia (H) se resuelven con el **mismo planificador** que usa el lock, en seco, para no mantener dos implementaciones de la regla; un reintento pasa por el lock solo para devolver el evento original, sin subir ni escribir. (3) El tope de 10 pendientes se comprueba en G (antes de subir) **y** otra vez en L (la carrera). Los tests fijan el orden de las llamadas (`ORDEN DE LLAMADAS`).
+
+### 15.8 Concurrencia
+
+- **Mismo archivo, dos usuarios a la vez (A/B):** ambos pasan la prevalidación y ambos suben. El primero que toma el lock escribe; el segundo, ya dentro del lock, ve el hash duplicado → `DUPLICADO_DOCUMENTO`, **no** escribe evento y **compensa su propio archivo** (se manda a la papelera solo el suyo, que ninguna fila referencia; el del primero no se toca).
+- **Tope de 10 pendientes:** dos solicitudes ven 9; la primera crea la 10.ª; la segunda falla con `TOO_MANY_PENDING` dentro del lock y compensa su archivo.
+- **Sin atomicidad entre archivo y fila:** Drive y Sheets no son transaccionales. Si el append *lanza*, no se sabe si se escribió (un timeout posterior): se **relee** `ItfEventos` y solo se borra el archivo si ninguna fila lo referencia; si no se puede comprobar, **no se borra nada** (un huérfano se limpia a mano; uno referenciado que desaparece no se recupera). Un append de varias filas (legacy + propuesta) no está probado como atómico en Sheets: los estados parciales son seguros (el legacy registrado solo es información).
+- La compensación solo ocurre cuando no hubo escritura, o cuando se puede probar que no hay fila que apunte al archivo.
+
+### 15.9 Idempotencia (casos A–F, todos con prueba)
+
+Clave: `(email normalizado, clientRequestId)`.
+
+1. Reintento cuando el evento ya existe → devuelve **la misma propuesta**; sin subida, sin evento, sin llamada de storage.
+2. Se perdió la respuesta y se reintenta → mismo `documentoId`, 0 eventos nuevos, 0 archivos nuevos.
+3. Mismo `clientRequestId` con **otros bytes** → `IDEMPOTENCY_CONFLICT`.
+4. Mismo `clientRequestId` y **mismo hash pero otro `wellId`** → `IDEMPOTENCY_CONFLICT`.
+5. El email se compara sin distinguir mayúsculas.
+6. Otro usuario puede reutilizar el mismo `clientRequestId`.
+
+### 15.10 Duplicados y advertencias
+
+- Mismo hash en el mismo pozo (propuesto, vigente, reemplazado o retirado tras ser vigente) → `DUPLICADO_DOCUMENTO`, sin guardar nada.
+- Mismo hash en **otro** pozo → se permite y queda una marca de revisión interna (`MISMO_HASH_OTRO_POZO`); no sale al cliente. No se agregó columna.
+
+### 15.11 Seguridad (resumen verificable)
+
+El cliente no elige actor, ids, hash, estado ni referencias de storage. Ni el `storageFileId` ni el hash completo salen del servidor. El nombre original es solo texto de auditoría, normalizado y acotado. Las raíces de storage están aisladas y toda llamada va firmada y con marca de tiempo anti-replay. Los mensajes de error no contienen ids de Drive, rutas ni excepciones.
+
+### 15.12 Decisiones de E9-4 (y diferencias con el diseño anterior)
+
+| Tema | Antes | E9-4 |
+|---|---|---|
+| Legacy único y nueva versión | pendiente de decidir (§14.13) | permitido (regla B) |
+| Pendientes por pozo | tope «defensivo» sin código | `TOO_MANY_PENDING` a 10, antes de subir y dentro del lock |
+| Storage de propuestas | solo JPEG, contrato abstracto | PNG además; raíz aislada; acciones propias; nombre = `documentoId` |
+| Permisos | no existían | `perfil_subir` / `perfil_validar` entendidos por el backend, sin columnas productivas |
+| Invalidación de cachés | dentro de la operación | **después** de liberar el lock, con `try/catch` |
+| Advertencias al cliente | a definir | siempre `[]`; `MISMO_HASH_OTRO_POZO` solo interno |
+
+### 15.13 Bloqueos y pendientes para E9-5
+
+1. Correr `auditarCarpetaItfLegacy()` y medir en Apps Script (decide el límite real).
+2. Desplegar el storage con las acciones de ITF y crear `ITF_ROOT_FOLDER_ID`; crear la hoja `ItfEventos` y las columnas `perfil_subir` / `perfil_validar` en `Usuarios`; recién entonces encender `ITF_E9_ACTIVO`.
+3. Aprobar / rechazar / reemplazar / revertir expuestos por la API y la **cola de pendientes** para quien valida.
+4. Pantalla: carga con reducción de la foto en el cliente, estado «pendiente» visible para quien propuso, y la guarda de frontend que hoy prohíbe subir.
+5. Ver/descargar una propuesta pendiente por quien valida (hoy el servicio solo la lee internamente por `leerDocumento`).
+
+### 15.14 Verificación de E9-4 (local)
+
+- Jest completo en serie: 167 suites, 11.049 tests verdes; Python: 97 + 224 verdes; `git diff --check` limpio.
+- Mutaciones: E9-4 **62 de 62 muertas**; E9-3 **59 de 59** y E9-2 **75 de 75** repetidas sobre el código actual (el código compartido cambió). En la primera corrida de E9-4 sobrevivieron 6: tres eran faltas de test reales (un `sha256` que acompañe al archivo, los argumentos exactos que recibe el storage, el nombre original en el payload del storage) y se agregaron los tests; dos eran mutantes que no cambiaban el comportamiento por la lista blanca o por el UUID exigido (se reescribieron para que prueben la defensa en profundidad); uno eran cuatro guardas redundantes contra el archivo vacío (se anularon juntas).
+- No se corrió nada contra Google: ni storage desplegado, ni hoja real, ni la auditoría de la carpeta legacy ni la medición en Apps Script. El benchmark de `scripts/medir_itf_propuesta.js` es CPU local de Node.

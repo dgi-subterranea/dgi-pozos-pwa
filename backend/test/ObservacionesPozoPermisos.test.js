@@ -7,7 +7,7 @@ let Repo;
 
 const BASE = ['email', 'nombre', 'estado', 'fecha_alta', 'perfil', 'datos', 'ubicacion', 'ne', 'reemplazo', 'fotos', 'fotos_carga', 'fotos_moderar', 'ubicacion_corregir', 'ubicacion_validar'];
 const NUEVOS = ['observaciones', 'observaciones_agregar', 'observaciones_anular'];
-const PERMISOS_VIEJOS = ['perfil', 'datos', 'ubicacion', 'ne', 'reemplazo', 'fotos', 'fotos_carga', 'fotos_moderar', 'ubicacion_corregir', 'ubicacion_validar'];
+const PERMISOS_VIEJOS = ['perfil', 'perfil_subir', 'perfil_validar', 'datos', 'ubicacion', 'ne', 'reemplazo', 'fotos', 'fotos_carga', 'fotos_moderar', 'ubicacion_corregir', 'ubicacion_validar'];
 
 function usuarios(header, filas) {
   instalarSheetsFalsos({ Usuarios: [header].concat(filas) });
@@ -62,7 +62,7 @@ describe('compatibilidad: la hoja Usuarios SIN las columnas nuevas (todavia no a
     expect(s.found).toBe(true);
     expect(s.active).toBe(true);
     expect(s.permisos).toEqual({
-      perfil: true, datos: true, ubicacion: true, ne: false, reemplazo: true, fotos: true, fotos_carga: false, fotos_moderar: false, ubicacion_corregir: true, ubicacion_validar: false,
+      perfil: true, perfil_subir: false, perfil_validar: false, datos: true, ubicacion: true, ne: false, reemplazo: true, fotos: true, fotos_carga: false, fotos_moderar: false, ubicacion_corregir: true, ubicacion_validar: false,
       observaciones: false, observaciones_agregar: false, observaciones_anular: false
     });
   });
@@ -86,7 +86,7 @@ describe('compatibilidad: la hoja Usuarios SIN las columnas nuevas (todavia no a
     usuarios(header2, [fila(header2, Object.assign({ email: 'b@x.com', estado: 'activo' }, todos))]);
     const q = Repo.sheetUserRepository_getUserStatus('b@x.com').permisos;
     expect(Object.keys(q).sort()).toEqual(PERMISOS_VIEJOS.concat(NUEVOS).sort());
-    Object.keys(q).forEach((k) => expect(q[k]).toBe(true));
+    Object.keys(q).forEach((k) => expect(q[k]).toBe(k !== 'perfil_subir' && k !== 'perfil_validar'));      // E9-4: esas dos columnas todavia no estan en la hoja -> false (fail-closed)
   });
 });
 

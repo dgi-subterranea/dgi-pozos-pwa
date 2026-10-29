@@ -952,7 +952,11 @@ function itfDominio_atenderExistente(existentes, valores, archivo) {
   if (!mismo) {
     return itfDominio_error('IDEMPOTENCY_CONFLICT', 'clientRequestId ya usado con otro contenido');
   }
-  return { ok: true, accion: 'REINTENTO', eventos: [], resultado: { evento: e.evento, documentoId: e.documentoId, wellId: e.wellId }, advertencias: [] };
+  var salida = { ok: true, accion: 'REINTENTO', eventos: [], resultado: { evento: e.evento, documentoId: e.documentoId, wellId: e.wellId }, advertencias: [] };
+  if (valores.accion === ITF_ACCIONES.PROPONER) {
+    salida.propuesta = { mimeType: e.mimeType, bytes: Number(e.bytes), nombreOriginal: e.nombreOriginal, timestampUtc: e.timestampUtc };
+  }
+  return salida;
 }
 
 // El contexto de un pozo para decidir: el vigente EFECTIVO (el que hay que declarar al reemplazar) y si es el legacy implicito (que hay que registrar antes de tocarlo).
@@ -1106,7 +1110,10 @@ function itfDominio_planificar(comando, contexto) {
       evento: ITF_EVENTO.PROPUESTO, documentoId: documentoId, wellId: wellId, mimeType: archivo.mimeType, bytes: archivo.bytes, sha256: archivo.sha256,
       storageFileId: archivo.storageFileId, nombreOriginal: archivo.nombreOriginal, clientRequestId: valores.clientRequestId
     }));
-    return { ok: true, accion: 'ESCRIBIR', eventos: eventos, resultado: { evento: ITF_EVENTO.PROPUESTO, documentoId: documentoId, wellId: wellId }, advertencias: advertencias };
+    return {
+      ok: true, accion: 'ESCRIBIR', eventos: eventos, resultado: { evento: ITF_EVENTO.PROPUESTO, documentoId: documentoId, wellId: wellId }, advertencias: advertencias,
+      propuesta: { mimeType: archivo.mimeType, bytes: archivo.bytes, nombreOriginal: archivo.nombreOriginal, timestampUtc: comun.timestampUtc }
+    };
   }
 
   // RETIRAR_PROPUESTA: solo el PROPONENTE (el email del evento ITF_PROPUESTO, nunca el nombre) y solo mientras siga PROPUESTO. El documento de otra persona, o inexistente, da el MISMO error:

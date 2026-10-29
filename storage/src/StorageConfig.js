@@ -15,8 +15,11 @@
 //                          de pozos/puntos NE; lo crea setupFotosPozosStorage). Es OTRA
 //                          raiz, aparte de la de Reemplazos: cada familia de acciones solo
 //                          alcanza archivos bajo SU raiz (ver StorageDrive.js).
+//   ITF_ROOT_FOLDER_ID     id de la carpeta raiz "ItfPropuestas" (documentos de los ITF colaborativos, E9-4; la crea
+//                          setupItfPropuestasStorage). TERCERA raiz, aislada de las otras dos: ni Fotos ni Reemplazos la alcanzan y viceversa.
 var STORAGE_ROOT_FOLDER_NAME = 'FotosReemplazo';
 var STORAGE_POZOS_ROOT_FOLDER_NAME = 'FotosPozos';
+var STORAGE_ITF_ROOT_FOLDER_NAME = 'ItfPropuestas';
 var STORAGE_SECRET_MIN_LENGTH = 32;
 
 function getStorageSecret() {
@@ -60,6 +63,30 @@ function setupFotosStorage() {
   Logger.log('Carpeta raiz lista: ' + carpeta.getName() + ' (' + carpeta.getId() + ')');
 }
 
+function getStorageItfRootFolderId() {
+  var id = PropertiesService.getScriptProperties().getProperty('ITF_ROOT_FOLDER_ID');
+  if (!id) {
+    throw new Error('ITF_ROOT_FOLDER_ID no configurado: correr setupItfPropuestasStorage() una vez');
+  }
+  return id;
+}
+
+// Correr UNA VEZ manualmente (con la SEGUNDA cuenta) para los ITF colaborativos (E9-4): crea (o reutiliza) la carpeta "ItfPropuestas" en Mi unidad y guarda su id en
+// ITF_ROOT_FOLDER_ID. IDEMPOTENTE y no toca las otras raices. NO se ejecuta hasta el rollout.
+function setupItfPropuestasStorage() {
+  var props = PropertiesService.getScriptProperties();
+  Logger.log('Cuenta efectiva: ' + Session.getEffectiveUser().getEmail());
+  var existente = props.getProperty('ITF_ROOT_FOLDER_ID');
+  if (existente) {
+    Logger.log('ITF_ROOT_FOLDER_ID ya configurado, no se modifico.');
+    return;
+  }
+  var carpetas = DriveApp.getRootFolder().getFoldersByName(STORAGE_ITF_ROOT_FOLDER_NAME);
+  var carpeta = carpetas.hasNext() ? carpetas.next() : DriveApp.getRootFolder().createFolder(STORAGE_ITF_ROOT_FOLDER_NAME);
+  props.setProperty('ITF_ROOT_FOLDER_ID', carpeta.getId());
+  Logger.log('Carpeta raiz de ITF lista: ' + carpeta.getName());
+}
+
 // Correr UNA VEZ manualmente (con la SEGUNDA cuenta) para la galeria general de
 // pozos: crea (o reutiliza) la carpeta "FotosPozos" en Mi unidad y guarda su id
 // en FOTOS_POZOS_ROOT_FOLDER_ID. IDEMPOTENTE y no toca la raiz de Reemplazos.
@@ -89,5 +116,5 @@ function diagnosticarCuotaStorage() {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { STORAGE_ROOT_FOLDER_NAME, STORAGE_POZOS_ROOT_FOLDER_NAME, getStorageSecret, getStorageRootFolderId, getStoragePozosRootFolderId };
+  module.exports = { STORAGE_ROOT_FOLDER_NAME, STORAGE_POZOS_ROOT_FOLDER_NAME, STORAGE_ITF_ROOT_FOLDER_NAME, getStorageSecret, getStorageRootFolderId, getStoragePozosRootFolderId, getStorageItfRootFolderId, setupItfPropuestasStorage };
 }

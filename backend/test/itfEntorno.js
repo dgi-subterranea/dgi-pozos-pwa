@@ -51,9 +51,9 @@ function crearDrive(archivos, opciones) {
 
 // Storage E9 falso: guarda en memoria, con contadores, y se puede hacer fallar.
 function crearStorage() {
-  const st = { docs: {}, guardados: 0, eliminados: [], leidos: 0, n: 0, fallarGuardar: false, fallarLeer: false, fallarEliminar: false };
+  const st = { docs: {}, guardados: 0, argumentos: [], eliminados: [], leidos: 0, n: 0, fallarGuardar: false, fallarLeer: false, fallarEliminar: false };
   st.proveedor = {
-    guardarPropuesta: (p) => { if (st.fallarGuardar) { return { ok: false, code: 'SERVICE_UNAVAILABLE' }; } st.n += 1; st.guardados += 1; const ref = 'e9-storage-' + String(st.n).padStart(6, '0'); st.docs[ref] = { bytes: p.bytes, mimeType: p.mimeType }; return { ok: true, storageRef: ref }; },
+    guardarPropuesta: (p) => { st.argumentos.push(Object.keys(p).sort()); if (st.fallarGuardar) { return { ok: false, code: 'SERVICE_UNAVAILABLE' }; } st.n += 1; st.guardados += 1; const ref = 'e9-storage-' + String(st.n).padStart(6, '0'); st.docs[ref] = { bytes: p.bytes, mimeType: p.mimeType }; return { ok: true, storageRef: ref }; },
     leerDocumento: (ref) => { st.leidos += 1; if (st.fallarLeer || !st.docs[ref]) { return { ok: false, code: 'SERVICE_UNAVAILABLE' }; } return { ok: true, bytes: st.docs[ref].bytes, mimeType: st.docs[ref].mimeType }; },
     obtenerMetadata: (ref) => (st.docs[ref] ? { ok: true, bytes: st.docs[ref].bytes.length, mimeType: st.docs[ref].mimeType } : { ok: false, code: 'ITF_NOT_FOUND' }),
     eliminarTemporal: (ref) => { if (st.fallarEliminar) { return { ok: false, code: 'SERVICE_UNAVAILABLE' }; } st.eliminados.push(ref); delete st.docs[ref]; return { ok: true }; }

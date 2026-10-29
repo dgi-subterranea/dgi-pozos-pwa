@@ -21,7 +21,7 @@
 var ITF_E9_PROPIEDAD = 'ITF_E9_ACTIVO';
 var ITF_SERVICE_CODIGOS = [
   'ITF_NOT_FOUND', 'ITF_STATE_UNKNOWN', 'LEGACY_AMBIGUO', 'LEGACY_NOMBRE_NO_CANONICO', 'LEGACY_CAMBIO', 'LEGACY_FORMATO_INVALIDO', 'VIGENTE_CAMBIO', 'DUPLICADO_DOCUMENTO',
-  'IDEMPOTENCY_CONFLICT', 'INCONSISTENT_STATE', 'SERVICE_UNAVAILABLE', 'ITF_E9_INACTIVO', 'ITF_STORAGE_NO_CONFIGURADO'
+  'IDEMPOTENCY_CONFLICT', 'INCONSISTENT_STATE', 'SERVICE_UNAVAILABLE', 'ITF_E9_INACTIVO', 'ITF_STORAGE_NO_CONFIGURADO', 'TOO_MANY_PENDING'
 ];
 var ITF_SIN_STORAGE_REF = 'sin-storage-aun';        // valor de relleno valido para el dominio cuando la decision es solo "reintento / conflicto" y no se guardo ningun archivo
 
@@ -56,7 +56,7 @@ function itfService_depsReales() {
       verificarHuella: itfLegacy_verificarHuella,
       leerRegistrado: itfLegacy_leerRegistrado
     },
-    storage: itfStorage_noConfigurado(),
+    storage: itfStorage_crearReal(),
     existencia: itfService_pozoExiste,
     // Cache: E9-3 NO cachea la derivacion (una lectura de ItfEventos por pedido, no por pozo; sin evidencia de que haga falta). Este gancho se llama despues de CADA escritura exitosa y de ninguna otra cosa:
     // si E9-4 agrega un cache de estado, se invalida aca. Nunca se cachea un pozo corrupto como vigente.
@@ -89,6 +89,9 @@ function itfService_traducirCodigo(code, legacyEstado) {
   }
   if (code === 'DOCUMENTO_NOT_FOUND') {
     return 'ITF_NOT_FOUND';
+  }
+  if (code === 'PROPUESTAS_PENDIENTES_MAX') {
+    return 'TOO_MANY_PENDING';
   }
   if (code === 'LEGACY_ESTADO_DESCONOCIDO') {
     return legacyEstado === ITF_LEGACY_ESTADOS.AMBIGUO ? 'LEGACY_AMBIGUO' : (legacyEstado === ITF_LEGACY_ESTADOS.NO_CANONICO ? 'LEGACY_NOMBRE_NO_CANONICO' : 'ITF_STATE_UNKNOWN');
@@ -270,53 +273,85 @@ function itfService_pozoDelComando(valores, derivacion) {
   return derivacion.documentoPozo[id.id] === undefined ? '' : derivacion.documentoPozo[id.id];
 }
 
-// TODO adentro del lock: buscar clientRequestId -> leer TODOS los eventos -> derivar -> (legacy: estado, huella, verificacion) -> planificar -> escribir (1 o 2 eventos consecutivos en UNA operacion)
-// -> invalidar. El estado se RELEE aca adentro: nada de lo decidido antes del lock se reutiliza. archivoMeta: solo PROPONER (metadata ya validada + storageFileId). Devuelve el resultado del servicio;
-// puede lanzar (Sheets / Drive / lock): quien llama lo traduce a SERVICE_UNAVAILABLE.
-function itfService_dentroDelLock(s, email, comando, valores, archivoMeta, d) {
-  return d.repo.conLock(function () {
-    var existentes = d.repo.buscarPorClientRequestId(email, valores.clientRequestId);
-    var eventos = d.repo.leerTodos().eventos;
-    var derivacion = itfDominio_derivar(eventos);
-    var wellId = itfService_pozoDelComando(valores, derivacion);
-    var accion = valores.accion;
-    var legacy = { disponible: null, huellaCoincide: false };
-    var legacyEstado = null;
-    if (wellId !== '' && (accion === ITF_ACCIONES.APROBAR || accion === ITF_ACCIONES.RETIRAR || accion === ITF_ACCIONES.REVERTIR)) {
-      var info = d.legacy.buscar(wellId);
-      legacyEstado = info.estado;
-      legacy.disponible = itfLegacy_aDisponible(info.estado);
-      var p = derivacion.porPozo[wellId];
-      var registrado = p !== undefined && valores.documentoId === itfDominio_idLegacy(wellId) ? p.documentos[valores.documentoId] : undefined;
-      if (accion === ITF_ACCIONES.REVERTIR && registrado !== undefined) {
-        // restaurar el legacy: se vuelve a LEER el archivo y se verifica contra la huella registrada; nunca se restaura en silencio uno distinto
-        legacy.huellaCoincide = info.estado === ITF_LEGACY_ESTADOS.UNICO && info.fileId === registrado.storageFileId && d.legacy.verificarHuella(registrado) === 'COINCIDE';
-      }
+// Lee el estado y PLANIFICA (nunca escribe): buscar clientRequestId -> leer TODOS los eventos -> derivar -> (legacy: estado, huella, verificacion) -> planificar. Lo usan la prevalidacion de una
+// propuesta (SIN lock, antes de subir nada) y la decision definitiva (adentro del lock). extra (solo PROPONER): {archivo: metadata + storageFileId, documentoId (generado por el servidor ANTES de
+// subir, para nombrar el archivo), legacySha256 (huella del legacy vigente, para detectar el mismo archivo)}. Devuelve {plan, legacyEstado, wellId} | {falla}. Puede lanzar (Sheets / Drive).
+function itfService_planificar(s, email, comando, valores, d, extra) {
+  var e = extra || {};
+  var existentes = d.repo.buscarPorClientRequestId(email, valores.clientRequestId);
+  var eventos = d.repo.leerTodos().eventos;
+  var derivacion = itfDominio_derivar(eventos);
+  var wellId = itfService_pozoDelComando(valores, derivacion);
+  var accion = valores.accion;
+  var legacy = { disponible: null, huellaCoincide: false };
+  if (typeof e.legacySha256 === 'string') {
+    legacy.sha256 = e.legacySha256;
+  }
+  var legacyEstado = null;
+  if (wellId !== '' && (accion === ITF_ACCIONES.APROBAR || accion === ITF_ACCIONES.RETIRAR || accion === ITF_ACCIONES.REVERTIR)) {
+    var info = d.legacy.buscar(wellId);
+    legacyEstado = info.estado;
+    legacy.disponible = itfLegacy_aDisponible(info.estado);
+    var p = derivacion.porPozo[wellId];
+    var registrado = p !== undefined && valores.documentoId === itfDominio_idLegacy(wellId) ? p.documentos[valores.documentoId] : undefined;
+    if (accion === ITF_ACCIONES.REVERTIR && registrado !== undefined) {
+      // restaurar el legacy: se vuelve a LEER el archivo y se verifica contra la huella registrada; nunca se restaura en silencio uno distinto
+      legacy.huellaCoincide = info.estado === ITF_LEGACY_ESTADOS.UNICO && info.fileId === registrado.storageFileId && d.legacy.verificarHuella(registrado) === 'COINCIDE';
     }
-    var ctx = {
-      email: email, nombre: s.nombre, permisos: s.permisos, ahora: d.ahora(), derivacion: derivacion, existentes: existentes, legacy: legacy,
-      nuevoEventoId: d.nuevoEventoId, nuevoDocumentoId: d.nuevoDocumentoId, proponenteDe: itfService_proponentes(eventos),
-      archivo: archivoMeta, pozoExiste: true
-    };
-    var plan = itfDominio_planificar(comando, ctx);
-    if (!plan.ok && plan.code === 'LEGACY_SNAPSHOT_REQUERIDO') {
-      var h = d.legacy.huella(wellId);
-      if (!h.ok) {
-        return itfService_falla(h.code, h.message);
-      }
-      ctx.legacy.snapshot = h.huella;
-      plan = itfDominio_planificar(comando, ctx);
+  }
+  var ctx = {
+    email: email, nombre: s.nombre, permisos: s.permisos, ahora: d.ahora(), derivacion: derivacion, existentes: existentes, legacy: legacy,
+    nuevoEventoId: d.nuevoEventoId, nuevoDocumentoId: e.documentoId ? function () { return e.documentoId; } : d.nuevoDocumentoId, proponenteDe: itfService_proponentes(eventos),
+    archivo: e.archivo, pozoExiste: true       // la existencia ya se comprobo ANTES (itfService_evidenciaPropuesta): una propuesta nunca es evidencia de existencia
+  };
+  var plan = itfDominio_planificar(comando, ctx);
+  if (!plan.ok && plan.code === 'LEGACY_SNAPSHOT_REQUERIDO') {
+    var h = d.legacy.huella(wellId);
+    if (!h.ok) {
+      return { falla: itfService_falla(h.code, h.message) };
     }
-    if (!plan.ok) {
-      return itfService_falla(itfService_traducirCodigo(plan.code, legacyEstado), plan.message);
+    ctx.legacy.snapshot = h.huella;
+    plan = itfDominio_planificar(comando, ctx);
+  }
+  if (!plan.ok) {
+    return { falla: itfService_falla(itfService_traducirCodigo(plan.code, legacyEstado), plan.message) };
+  }
+  return { plan: plan, legacyEstado: legacyEstado, wellId: wellId };
+}
+
+function itfService_resultadoDe(plan, escritos) {
+  var r = { ok: true, accion: plan.accion, resultado: plan.resultado, advertencias: plan.advertencias, eventosEscritos: escritos };
+  if (plan.propuesta) {
+    r.propuesta = plan.propuesta;
+  }
+  return r;
+}
+
+// TODO adentro del lock: el estado se RELEE aca (nada de lo decidido antes del lock se reutiliza), se planifica y se escribe (1 o 2 eventos consecutivos en UNA operacion); se invalida la cache DESPUES de liberar el lock. Devuelve el
+// resultado del servicio; puede lanzar (Sheets / Drive / lock): quien llama lo traduce a SERVICE_UNAVAILABLE.
+function itfService_dentroDelLock(s, email, comando, valores, d, extra) {
+  var invalidar = null;
+  var res = d.repo.conLock(function () {
+    var r = itfService_planificar(s, email, comando, valores, d, extra);
+    if (r.falla) {
+      return r.falla;
     }
-    if (plan.accion !== 'ESCRIBIR') {
-      return { ok: true, accion: plan.accion, resultado: plan.resultado, advertencias: plan.advertencias, eventosEscritos: 0 };
+    if (r.plan.accion !== 'ESCRIBIR') {
+      return itfService_resultadoDe(r.plan, 0);
     }
-    d.repo.escribirEventos(plan.eventos);
-    d.invalidarCaches([plan.resultado.wellId]);
-    return { ok: true, accion: plan.accion, resultado: plan.resultado, advertencias: plan.advertencias, eventosEscritos: plan.eventos.length };
+    d.repo.escribirEventos(r.plan.eventos);
+    invalidar = [r.plan.resultado.wellId];
+    return itfService_resultadoDe(r.plan, r.plan.eventos.length);
   });
+  // la cache se invalida DESPUES de liberar el lock; si la invalidacion falla, la escritura (ya hecha) no se vuelve un error
+  if (invalidar !== null) {
+    try {
+      d.invalidarCaches(invalidar);
+    } catch (err) {
+      itfService_log('no se pudo invalidar la cache tras escribir: ' + String(err));
+    }
+  }
+  return res;
 }
 
 // Compensacion: SOLO si ninguna fila referencia el archivo. Si la escritura lanzo, puede haberse escrito igual (timeout despues del append): se vuelve a leer ItfEventos y, si no se puede asegurar que
@@ -346,8 +381,40 @@ function itfService_compensar(storageRef, d, seguroNoReferenciado) {
   return 'FALLO';
 }
 
-// opciones.archivo = {bytes, mimeType, nombreOriginal} (lo que mandaria el cliente al proponer). Orden: validar el archivo -> hash -> el pozo existe (fuente previa) -> reintento exacto SIN subir nada ->
-// guardar en el storage -> lock + decidir + escribir -> si no se escribio, COMPENSAR (retirar el temporal).
+// REGLA DE EVIDENCIA para proponer (ver docs): una propuesta NUNCA prueba la existencia del pozo.
+//   B/D. Hay un ITF vigente: un legacy UNICO / canonico y legible (preexistente a la propuesta: no es circular) o un documento E9 derivable -> se puede proponer una nueva version.
+//   C.   Legacy ambiguo, de nombre no canonico, ilegible, o historial no derivable -> NO habilita nada: LEGACY_AMBIGUO / LEGACY_NOMBRE_NO_CANONICO / LEGACY_FORMATO_INVALIDO / ITF_STATE_UNKNOWN (requiere revision).
+//   A.   No hay vigente (ni legacy ni E9) -> el pozo debe existir por una fuente institucional INDEPENDIENTE: padron, punto NE o correccion previa (PozoExistenciaService con la rama ITF excluida).
+// {ok:true, legacySha256?} | {ok:false, falla}. Lee (eventos, Drive, fuentes) pero no escribe.
+function itfService_evidenciaPropuesta(wellId, d) {
+  var v = itfService_resolverVigente(wellId, d);
+  if (v.estado === 'SI') {
+    if (v.origen === ITF_ORIGEN.LEGACY) {
+      var h = d.legacy.huella(wellId);
+      if (!h.ok) {
+        return { ok: false, falla: itfService_falla(h.code, h.message) };
+      }
+      return { ok: true, legacySha256: h.huella.sha256 };
+    }
+    return { ok: true };
+  }
+  if (v.estado === 'DESCONOCIDO') {
+    return { ok: false, falla: itfService_falla(v.codigo, 'el estado del ITF del pozo requiere revision') };
+  }
+  var ex = d.existencia(wellId);
+  if (ex.existe !== true && ex.indeterminado === true) {
+    return { ok: false, falla: itfService_falla('SERVICE_UNAVAILABLE', 'no se pudo comprobar el pozo') };
+  }
+  if (ex.existe !== true) {
+    return { ok: false, falla: itfService_falla('POZO_NOT_FOUND', 'el pozo no existe') };
+  }
+  return { ok: true };
+}
+
+// opciones.archivo = {bytes, mimeType, nombreOriginal} (lo que mandaria el cliente al proponer). Orden (nada se sube hasta saber que se puede registrar):
+//   1 validar el archivo (JPEG / PNG por los bytes reales, tamano) -> 2 hash SHA-256 de los bytes aceptados (nunca el del cliente) -> 3 reintento exacto (no se sube nada)
+//   -> 4 evidencia / existencia -> 5 PREVALIDACION sin lock (derivar, duplicado, pendientes, idempotencia) -> 6 generar documentoId -> 7 subir al storage (FUERA del lock: es lento)
+//   -> 8 lock: releer, revalidar, escribir ITF_PROPUESTO -> 9 invalidar -> si no se escribio, COMPENSAR (retirar el temporal).
 function itfService_proponer(s, email, comando, valores, archivo, d) {
   var a = archivo !== null && typeof archivo === 'object' ? archivo : {};
   var v = itfArchivo_validar({ mimeType: a.mimeType, bytes: a.bytes });
@@ -355,25 +422,34 @@ function itfService_proponer(s, email, comando, valores, archivo, d) {
     return itfService_falla(v.code, v.message);
   }
   var base = { mimeType: v.mimeType, bytes: v.bytes, sha256: itfArchivo_sha256Hex(a.bytes, d.calcularDigest), nombreOriginal: itfArchivo_nombreOriginal(a.nombreOriginal) };
-  var ex = d.existencia(valores.wellId);
-  if (ex.indeterminado === true && ex.existe !== true) {
-    return itfService_falla('SERVICE_UNAVAILABLE', 'no se pudo comprobar el pozo');
-  }
-  if (ex.existe !== true) {
-    return itfService_falla('POZO_NOT_FOUND', 'el pozo no existe');
-  }
   var previos = d.repo.buscarPorClientRequestId(email, valores.clientRequestId);
   if (previos.total > 0) {
-    // reintento o conflicto: se decide con el MISMO camino (adentro del lock) pero SIN subir otra copia al storage
-    return itfService_dentroDelLock(s, email, comando, valores, Object.assign({ storageFileId: ITF_SIN_STORAGE_REF }, base), d);
+    // reintento (p. ej. se perdio la respuesta) o conflicto: se decide con el MISMO camino, SIN subir otra copia y SIN generar otro documentoId (devuelve el evento original)
+    return itfService_dentroDelLock(s, email, comando, valores, d, { archivo: Object.assign({ storageFileId: ITF_SIN_STORAGE_REF }, base) });
   }
-  var guardado = d.storage.guardarPropuesta({ bytes: a.bytes, mimeType: v.mimeType, nombreSugerido: base.nombreOriginal });
+  var documentoId = itfDominio_uuid(d.nuevoDocumentoId());
+  if (documentoId === '') {
+    throw new Error('itfService_proponer: nuevoDocumentoId() no devolvio un UUID');
+  }
+  var evidencia = itfService_evidenciaPropuesta(valores.wellId, d);
+  if (!evidencia.ok) {
+    return evidencia.falla;
+  }
+  var extra = { archivo: Object.assign({ storageFileId: ITF_SIN_STORAGE_REF }, base), documentoId: documentoId, legacySha256: evidencia.legacySha256 };
+  var pre = itfService_planificar(s, email, comando, valores, d, extra);             // sin lock y sin escribir: si ya sabemos que no se puede registrar, no se sube nada
+  if (pre.falla) {
+    return pre.falla;
+  }
+  if (pre.plan.accion !== 'ESCRIBIR') {
+    return itfService_resultadoDe(pre.plan, 0);
+  }
+  var guardado = d.storage.guardarPropuesta({ documentoId: documentoId, bytes: a.bytes, mimeType: v.mimeType });
   if (!guardado || guardado.ok !== true) {
     return itfService_falla(guardado && guardado.code ? guardado.code : 'SERVICE_UNAVAILABLE', 'no se pudo guardar el archivo');
   }
   var res;
   try {
-    res = itfService_dentroDelLock(s, email, comando, valores, Object.assign({ storageFileId: guardado.storageRef }, base), d);
+    res = itfService_dentroDelLock(s, email, comando, valores, d, { archivo: Object.assign({}, base, { storageFileId: guardado.storageRef }), documentoId: documentoId, legacySha256: evidencia.legacySha256 });
   } catch (err) {
     itfService_compensar(guardado.storageRef, d, false);
     throw err;
@@ -409,7 +485,7 @@ function itfService_ejecutar(sesion, comando, opciones, deps) {
     if (v.valores.accion === ITF_ACCIONES.PROPONER) {
       return itfService_proponer(s, email, comando, v.valores, op.archivo, d);
     }
-    return itfService_dentroDelLock(s, email, comando, v.valores, undefined, d);
+    return itfService_dentroDelLock(s, email, comando, v.valores, d);
   } catch (err) {
     itfService_log('fallo la ejecucion de ' + v.valores.accion + ': ' + String(err));
     return itfService_falla('SERVICE_UNAVAILABLE', 'servicio no disponible');
@@ -431,6 +507,9 @@ if (typeof module !== 'undefined' && module.exports) {
     itfService_disponibilidad,
     itfService_obtenerDocumento,
     itfService_proponentes,
+    itfService_planificar,
+    itfService_evidenciaPropuesta,
+    itfService_proponer,
     itfService_ejecutar
   };
 }

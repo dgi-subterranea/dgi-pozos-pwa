@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const SECRET = 'a'.repeat(40);
 const ROOT_ID = 'ROOT_FOLDER_ID_0001';
 const POZOS_ROOT_ID = 'POZOS_ROOT_FOLDER_0001';
+const ITF_ROOT_ID = 'ITF_ROOT_FOLDER_00001';
 
 // --- Fakes de Apps Script ---
 let idSeq = 0;
@@ -60,11 +61,14 @@ function crearDriveEnMemoria() {
   const raizPozos = crearCarpeta('FotosPozos', null);
   raizPozos._id = POZOS_ROOT_ID;
   carpetas[POZOS_ROOT_ID] = raizPozos;
+  const raizItf = crearCarpeta('ItfPropuestas', null);
+  raizItf._id = ITF_ROOT_ID;
+  carpetas[ITF_ROOT_ID] = raizItf;
   const otraCarpeta = crearCarpeta('PrivadoDeLaCuenta', null);
   const archivoAjeno = otraCarpeta.createFile({ nombre: 'secreto.jpg', bytes: Buffer.from([0xff, 0xd8, 0xff, 1]), mime: 'image/jpeg' });
 
   return {
-    raiz, raizPozos, archivos, archivoAjeno,
+    raiz, raizPozos, raizItf, archivos, archivoAjeno,
     DriveApp: {
       Access: { PRIVATE: 'PRIVATE' }, Permission: { NONE: 'NONE' },
       getFolderById: (id) => carpetas[id],
@@ -95,6 +99,7 @@ function instalarGlobals() {
   global.getStorageSecret = () => SECRET;
   global.getStorageRootFolderId = () => ROOT_ID;
   global.getStoragePozosRootFolderId = () => POZOS_ROOT_ID;
+  global.getStorageItfRootFolderId = () => ITF_ROOT_ID;
   global.getFotosStorageSecret = () => SECRET;
   global.getFotosStorageUrl = () => 'https://script.google.com/macros/s/STORAGE/exec';
   return cacheStore;
@@ -784,5 +789,382 @@ describe('StorageDrive: cronometro, lote de fotos y carpetas bajo lock', () => {
       llamarApi('putFotosPozoLote', { fotos: [item(0), item(1)] });
       expect(drive.raiz._hijosCarpetas).toHaveLength(0);
     });
+  });
+});
+
+
+// ===========================================================================
+// ITF colaborativos (E9-4): TERCERA raiz (ItfPropuestas), acciones especificas, JPEG y PNG
+// ===========================================================================
+describe('StorageDrive: ITF colaborativos (E9-4)', () => {
+  const DOC = '33333333-3333-4333-8333-333333333333';
+  const DOC2 = '44444444-4444-4444-8444-444444444444';
+  const jpegB64 = (n) => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(Math.max(n - 4, 0), 7)]).toString('base64');
+  const pngB64 = (n) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52]), Buffer.alloc(Math.max(n - 16, 0), 9)]).toString('base64');
+  const putItf = (extra) => Object.assign({ documentoId: DOC, mimeType: 'image/jpeg', imagenBase64: jpegB64(500) }, extra || {});
+  const MB3 = 3 * 1024 * 1024;
+
+  describe('validacion', () => {
+    test('JPEG y PNG validos', () => {
+      expect(Dr.storageDrive_validarPutItf(putItf())).toBeNull();
+      expect(Dr.storageDrive_validarPutItf(putItf({ mimeType: 'image/png', imagenBase64: pngB64(500) }))).toBeNull();
+    });
+    test.each([['application/pdf'], ['image/gif'], ['image/webp'], ['image/jpg'], ['IMAGE/JPEG'], ['image/jpeg; charset=x'], [''], [null], [5]])('MIME %j no se acepta', (mime) => {
+      expect(Dr.storageDrive_validarPutItf(putItf({ mimeType: mime }))).toBe('INVALID_MIME');
+    });
+    test('contenido renombrado: un PNG declarado JPEG, un JPEG declarado PNG, un PDF / GIF / WEBP / texto declarados imagen', () => {
+      expect(Dr.storageDrive_validarPutItf(putItf({ imagenBase64: pngB64(100) }))).toBe('INVALID_IMAGEN');
+      expect(Dr.storageDrive_validarPutItf(putItf({ mimeType: 'image/png', imagenBase64: jpegB64(100) }))).toBe('INVALID_IMAGEN');
+      ['%PDF-1.7 xxxxxxxxxxxxxx', 'GIF89a xxxxxxxxxxxxxxxx', 'RIFFxxxxWEBPVP8 xxxxxxxx', 'hola mundo, esto no es una imagen'].forEach((t) => {
+        const b64 = Buffer.from(t).toString('base64');
+        expect(Dr.storageDrive_validarPutItf(putItf({ imagenBase64: b64 }))).toBe('INVALID_IMAGEN');
+        expect(Dr.storageDrive_validarPutItf(putItf({ mimeType: 'image/png', imagenBase64: b64 }))).toBe('INVALID_IMAGEN');
+      });
+    });
+    test('PNG con la firma pero sin chunk IHDR, y JPEG de menos de 3 bytes: INVALID_IMAGEN', () => {
+      const sinIhdr = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(40, 1)]).toString('base64');
+      expect(Dr.storageDrive_validarPutItf(putItf({ mimeType: 'image/png', imagenBase64: sinIhdr }))).toBe('INVALID_IMAGEN');
+      expect(Dr.storageDrive_validarPutItf(putItf({ imagenBase64: Buffer.from([0xff, 0xd8]).toString('base64') }))).toBe('INVALID_IMAGEN');
+    });
+    test('vacio, no base64, base64 con largo invalido o con espacios', () => {
+      ['', 'no es base64!!', 'AAA', ' ' + jpegB64(100), jpegB64(100) + '\n', null, 5].forEach((b) => {
+        expect(Dr.storageDrive_validarPutItf(putItf({ imagenBase64: b }))).toBe('INVALID_IMAGEN');
+      });
+    });
+    test('tamano: justo 3 MB entra; un byte mas no', () => {
+      expect(Dr.STORAGE_ITF_MAX_BYTES).toBe(MB3);
+      expect(Dr.storageDrive_validarPutItf(putItf({ imagenBase64: jpegB64(MB3) }))).toBeNull();
+      expect(Dr.storageDrive_validarPutItf(putItf({ imagenBase64: jpegB64(MB3 + 1) }))).toBe('INVALID_IMAGEN');
+      expect(Dr.storageDrive_validarPutItf(putItf({ mimeType: 'image/png', imagenBase64: pngB64(MB3 + 1) }))).toBe('INVALID_IMAGEN');
+    });
+    test('documentoId: UUID obligatorio (no un wellId, un hash, un id de Drive ni un nombre)', () => {
+      ['14-0001', 'a'.repeat(64), '1AbCdEfGhIjKlMnOpQrStUvWxYz012345', 'itf.jpg', '', null, 5, DOC + 'x'].forEach((d) => {
+        expect(Dr.storageDrive_validarPutItf(putItf({ documentoId: d }))).toBe('INVALID_DOCUMENTO_ID');
+      });
+    });
+    test('el cliente no manda carpetas ni nombres: cualquier clave de mas es MALFORMED', () => {
+      ['carpeta', 'folderId', 'nombre', 'nombreArchivo', 'wellId', 'driveFileId', 'ruta', 'parent', 'sha256', 'anio', 'fuente'].forEach((k) => {
+        expect(Dr.storageDrive_validarPutItf(putItf({ [k]: 'x' }))).toBe('MALFORMED');
+      });
+      [null, undefined, 'texto', [], 5].forEach((p) => expect(Dr.storageDrive_validarPutItf(p)).toBe('MALFORMED'));
+    });
+    test('la politica de Fotos NO cambia: Reemplazos y Pozos siguen aceptando SOLO JPEG', () => {
+      const png = pngB64(100);
+      expect(Dr.storageDrive_validarPut(payloadPut({ mimeType: 'image/png', imagenBase64: png }))).toBe('INVALID_MIME');
+      expect(Dr.storageDrive_validarPut(payloadPut({ imagenBase64: png }))).toBe('INVALID_IMAGEN');
+      const pozo = { fotoId: FOTO_ID, fuente: 'CAMPO_APP', carpetaFecha: '2026', mimeType: 'image/png', imagenBase64: png, thumbBase64: THUMB_B64 };
+      expect(Dr.storageDrive_validarPutPozo(pozo)).toBe('INVALID_MIME');
+      expect(Dr.storageDrive_validarPutPozo(Object.assign({}, pozo, { mimeType: 'image/jpeg' }))).toBe('INVALID_IMAGEN');
+      expect(Dr.storageDrive_validarPut(payloadPut())).toBeNull();
+      expect(Dr.STORAGE_LOTE_MAX_FOTOS).toBe(10);
+    });
+  });
+
+  describe('putItf / getItf / metaItf / trashItf', () => {
+    test('guarda bajo la raiz de ITF / <anio> con nombre = documentoId + extension (jamas el nombre original), privado', () => {
+      const r = Dr.storageDrive_putItf(putItf(), 2026);
+      expect(r).toMatchObject({ status: 'ok', existente: false });
+      const archivo = drive.archivos[r.driveFileId];
+      expect(archivo._nombre).toBe(DOC + '.jpg');
+      expect(archivo._padre._nombre).toBe('2026');
+      expect(archivo._padre._padre._id).toBe(ITF_ROOT_ID);
+      expect(archivo._sharing).toEqual(['PRIVATE', 'NONE']);
+      expect(archivo._mime).toBe('image/jpeg');
+      expect(Object.keys(r).sort()).toEqual(['driveFileId', 'existente', 'status', 'tamanoBytes']);
+    });
+    test('PNG: extension .png y MIME png', () => {
+      const r = Dr.storageDrive_putItf(putItf({ documentoId: DOC2, mimeType: 'image/png', imagenBase64: pngB64(300) }), 2026);
+      expect(drive.archivos[r.driveFileId]._nombre).toBe(DOC2 + '.png');
+      expect(drive.archivos[r.driveFileId]._mime).toBe('image/png');
+    });
+    test('un documentoId en mayuscula produce el nombre en minuscula', () => {
+      const r = Dr.storageDrive_putItf(putItf({ documentoId: DOC.toUpperCase() }), 2026);
+      expect(drive.archivos[r.driveFileId]._nombre).toBe(DOC + '.jpg');
+    });
+    test('NO escribe en las raices de Fotos ni de Reemplazos', () => {
+      Dr.storageDrive_putItf(putItf(), 2026);
+      expect(drive.raiz._hijosCarpetas).toHaveLength(0);
+      expect(drive.raizPozos._hijosCarpetas).toHaveLength(0);
+      expect(drive.raizItf._hijosCarpetas).toHaveLength(1);
+    });
+    test('un documento invalido no toca Drive', () => {
+      expect(Dr.storageDrive_putItf(putItf({ mimeType: 'application/pdf' }), 2026)).toEqual({ status: 'error', code: 'INVALID_MIME' });
+      expect(drive.raizItf._hijosCarpetas).toHaveLength(0);
+    });
+    test('IDEMPOTENTE: el mismo documentoId con el mismo contenido devuelve el existente (una sola copia)', () => {
+      const a = Dr.storageDrive_putItf(putItf(), 2026);
+      const b = Dr.storageDrive_putItf(putItf(), 2026);
+      expect(b).toMatchObject({ status: 'ok', driveFileId: a.driveFileId, existente: true });
+      expect(drive.raizItf._hijosCarpetas[0]._hijosArchivos).toHaveLength(1);
+    });
+    test('el mismo documentoId con OTRO contenido (otro tamano) es un conflicto: no se pisa ni se duplica', () => {
+      Dr.storageDrive_putItf(putItf(), 2026);
+      expect(Dr.storageDrive_putItf(putItf({ imagenBase64: jpegB64(900) }), 2026)).toEqual({ status: 'error', code: 'DOCUMENTO_EXISTENTE_DISTINTO' });
+      expect(drive.raizItf._hijosCarpetas[0]._hijosArchivos).toHaveLength(1);
+    });
+    test('getItf devuelve el contenido y el tipo; metaItf solo el tipo y el tamano', () => {
+      const bytes = jpegB64(321);
+      const { driveFileId } = Dr.storageDrive_putItf(putItf({ imagenBase64: bytes }), 2026);
+      expect(Dr.storageDrive_getItf({ driveFileId })).toEqual({ status: 'ok', mimeType: 'image/jpeg', imagenBase64: bytes, tamanoBytes: 321 });
+      expect(Dr.storageDrive_metaItf({ driveFileId })).toEqual({ status: 'ok', mimeType: 'image/jpeg', tamanoBytes: 321 });
+    });
+    test('trashItf manda a la papelera (nunca borrado definitivo)', () => {
+      const { driveFileId } = Dr.storageDrive_putItf(putItf(), 2026);
+      expect(Dr.storageDrive_trashItf({ driveFileId })).toEqual({ status: 'ok' });
+      expect(drive.archivos[driveFileId]._papelera).toBe(true);
+    });
+    test('AISLAMIENTO: get / meta / trash de ITF no alcanzan archivos de Fotos, de Reemplazos ni de la cuenta', () => {
+      const foto = Dr.storageDrive_putFoto(payloadPut(), 2026).driveFileId;
+      const pozo = Dr.storageDrive_putFotoPozo({ fotoId: FOTO_ID, fuente: 'CAMPO_APP', carpetaFecha: '2026', mimeType: 'image/jpeg', imagenBase64: JPEG_B64, thumbBase64: THUMB_B64 }).driveFileId;
+      [foto, pozo, drive.archivoAjeno._id].forEach((id) => {
+        expect(Dr.storageDrive_getItf({ driveFileId: id })).toEqual({ status: 'error', code: 'NOT_FOUND' });
+        expect(Dr.storageDrive_metaItf({ driveFileId: id })).toEqual({ status: 'error', code: 'NOT_FOUND' });
+        expect(Dr.storageDrive_trashItf({ driveFileId: id })).toEqual({ status: 'error', code: 'NOT_FOUND' });
+        expect(drive.archivos[id]._papelera).toBe(false);
+      });
+    });
+    test('AISLAMIENTO inverso: Fotos y Reemplazos no alcanzan un archivo de ITF', () => {
+      const { driveFileId } = Dr.storageDrive_putItf(putItf(), 2026);
+      expect(Dr.storageDrive_getFoto({ driveFileId, variante: 'full' })).toEqual({ status: 'error', code: 'NOT_FOUND' });
+      expect(Dr.storageDrive_getFotoPozo({ driveFileId, variante: 'full' })).toEqual({ status: 'error', code: 'NOT_FOUND' });
+      expect(Dr.storageDrive_trashFoto({ driveFileId })).toEqual({ status: 'error', code: 'NOT_FOUND' });
+      expect(Dr.storageDrive_trashFotoPozo({ driveFileId })).toEqual({ status: 'error', code: 'NOT_FOUND' });
+      expect(drive.archivos[driveFileId]._papelera).toBe(false);
+    });
+    test('get / meta / trash: ids invalidos o con claves de mas -> NOT_FOUND, sin excepcion', () => {
+      ['', 'corto', null, 5, '../../etc', 'a b c d e f g h i j'].forEach((id) => expect(Dr.storageDrive_getItf({ driveFileId: id })).toEqual({ status: 'error', code: 'NOT_FOUND' }));
+      const { driveFileId } = Dr.storageDrive_putItf(putItf(), 2026);
+      expect(Dr.storageDrive_getItf({ driveFileId, carpeta: 'x' })).toEqual({ status: 'error', code: 'NOT_FOUND' });
+      expect(Dr.storageDrive_getItf(null)).toEqual({ status: 'error', code: 'NOT_FOUND' });
+      expect(Dr.storageDrive_trashItf([])).toEqual({ status: 'error', code: 'NOT_FOUND' });
+    });
+  });
+
+  describe('StorageApi: acciones de ITF (extremo a extremo con el cliente del backend)', () => {
+    function llamar(accion, payload, secretoFirma) {
+      const sol = Client.fotosStorageClient_armarSolicitud(accion, payload, secretoFirma || SECRET, ahora(), crypto.randomUUID());
+      const salida = Api.doPost({ postData: { contents: JSON.stringify(sol) } });
+      return { sol, cuerpo: JSON.parse(salida.text) };
+    }
+    const datos = (r) => Client.fotosStorageClient_verificarRespuesta(r.cuerpo, SECRET, r.sol.nonce, ahora()).data;
+
+    test('putItf -> metaItf -> getItf -> trashItf firmados', () => {
+      const put = datos(llamar('putItf', putItf()));
+      expect(put.status).toBe('ok');
+      expect(datos(llamar('metaItf', { driveFileId: put.driveFileId }))).toMatchObject({ status: 'ok', mimeType: 'image/jpeg' });
+      expect(datos(llamar('getItf', { driveFileId: put.driveFileId })).imagenBase64).toBe(putItf().imagenBase64);
+      expect(datos(llamar('trashItf', { driveFileId: put.driveFileId })).status).toBe('ok');
+    });
+    test('sin firma valida: UNAUTHORIZED y no escribe nada en la raiz de ITF', () => {
+      const r = llamar('putItf', putItf(), 'q'.repeat(40));
+      expect(r.cuerpo).toEqual({ status: 'error', code: 'UNAUTHORIZED' });
+      expect(drive.raizItf._hijosCarpetas).toHaveLength(0);
+    });
+    test('NO hay una accion generica: cualquier otra accion firmada es UNKNOWN_ACTION y no toca Drive', () => {
+      ['putArchivo', 'getArchivo', 'crearCarpeta', 'listarItf', 'borrarItf', 'putItfLote', 'moverItf', 'getFileById'].forEach((accion) => {
+        expect(datos(llamar(accion, putItf())).code).toBe('UNKNOWN_ACTION');
+      });
+      expect(drive.raizItf._hijosCarpetas).toHaveLength(0);
+    });
+    test('payload con carpeta u otras claves: MALFORMED firmado', () => {
+      expect(datos(llamar('putItf', putItf({ carpeta: 'ItfPropuestas' }))).code).toBe('MALFORMED');
+    });
+    test('la acciones de ITF usan el anio del servidor (no uno que mande el cliente)', () => {
+      const put = datos(llamar('putItf', putItf()));
+      expect(drive.archivos[put.driveFileId]._padre._nombre).toBe(String(new Date().getFullYear()));
+    });
+  });
+
+  describe('configuracion', () => {
+    test('el setup crea la raiz una sola vez y es idempotente (no se ejecuta solo)', () => {
+      const props = {};
+      global.PropertiesService = { getScriptProperties: () => ({ getProperty: (k) => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = v; } }) };
+      global.Session = { getEffectiveUser: () => ({ getEmail: () => 'storage@x.com' }) };
+      global.Logger = { log: jest.fn() };
+      const creadas = [];
+      const raizDrive = { getFoldersByName: () => ({ hasNext: () => false }), createFolder: (n) => { creadas.push(n); return { getId: () => 'ITF_NUEVA_RAIZ_0001', getName: () => n }; } };
+      global.DriveApp = Object.assign({}, global.DriveApp, { getRootFolder: () => raizDrive });
+      const Config = require('../src/StorageConfig');
+      expect(() => Config.getStorageItfRootFolderId()).toThrow(/setupItfPropuestasStorage/);
+      Config.setupItfPropuestasStorage();
+      Config.setupItfPropuestasStorage();
+      expect(creadas).toEqual(['ItfPropuestas']);
+      expect(props.ITF_ROOT_FOLDER_ID).toBe('ITF_NUEVA_RAIZ_0001');
+      expect(Config.getStorageItfRootFolderId()).toBe('ITF_NUEVA_RAIZ_0001');
+      expect(Config.STORAGE_ITF_ROOT_FOLDER_NAME).toBe('ItfPropuestas');
+    });
+    test('las tres raices tienen nombres y propiedades distintos', () => {
+      const Config = require('../src/StorageConfig');
+      expect(new Set([Config.STORAGE_ROOT_FOLDER_NAME, Config.STORAGE_POZOS_ROOT_FOLDER_NAME, Config.STORAGE_ITF_ROOT_FOLDER_NAME]).size).toBe(3);
+    });
+  });
+});
+
+// ===========================================================================
+// Prueba CRUZADA E9-4: el proveedor REAL del backend principal (ItfStorageProvider) contra el Web App de storage, con la firma HMAC de Fotos (un solo esquema de autenticacion)
+// ===========================================================================
+describe('ITF extremo a extremo: proveedor del backend principal -> cliente HMAC de Fotos -> storage', () => {
+  const jpeg = (n) => Array.from(Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(n - 4, 5)])).map((v) => (v > 127 ? v - 256 : v));
+  const png = (n) => Array.from(Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52]), Buffer.alloc(n - 16, 6)])).map((v) => (v > 127 ? v - 256 : v));
+  const DOC_ID = '55555555-5555-4555-8555-555555555555';
+  let proveedor;
+  let enviados;
+
+  beforeEach(() => {
+    Object.assign(global, require('../../backend/src/ItfArchivoLogic'));
+    enviados = [];
+    // UrlFetchApp: el "HTTP" va directo al doPost del storage
+    global.UrlFetchApp = {
+      fetch: (url, opciones) => {
+        enviados.push(JSON.parse(opciones.payload));
+        const salida = Api.doPost({ postData: { contents: opciones.payload } });
+        return { getResponseCode: () => 200, getContentText: () => salida.text };
+      }
+    };
+    Object.assign(global, Client);
+    proveedor = require('../../backend/src/ItfStorageProvider').itfStorage_crearReal();
+  });
+
+  test('guardar -> metadata -> leer -> compensar: los bytes vuelven identicos y todo viaja firmado con las acciones de ITF', () => {
+    const bytes = jpeg(5000);
+    const g = proveedor.guardarPropuesta({ documentoId: DOC_ID, bytes: bytes, mimeType: 'image/jpeg' });
+    expect(g.ok).toBe(true);
+    expect(typeof g.storageRef).toBe('string');
+    expect(drive.archivos[g.storageRef]._padre._padre._id).toBe(ITF_ROOT_ID);
+    expect(proveedor.obtenerMetadata(g.storageRef)).toEqual({ ok: true, bytes: 5000, mimeType: 'image/jpeg' });
+    const l = proveedor.leerDocumento(g.storageRef);
+    expect(l.ok).toBe(true);
+    expect(Array.from(l.bytes).map((v) => v & 0xff)).toEqual(bytes.map((v) => v & 0xff));
+    expect(proveedor.eliminarTemporal(g.storageRef)).toEqual({ ok: true });
+    expect(drive.archivos[g.storageRef]._papelera).toBe(true);
+    expect(enviados.map((s) => s.action)).toEqual(['putItf', 'metaItf', 'getItf', 'trashItf']);
+    enviados.forEach((s) => { expect(s.v).toBe('v1'); expect(typeof s.sig).toBe('string'); expect(s.sig).toHaveLength(64); });
+  });
+  test('PNG viaja y se guarda como PNG', () => {
+    const g = proveedor.guardarPropuesta({ documentoId: DOC_ID, bytes: png(800), mimeType: 'image/png' });
+    expect(g.ok).toBe(true);
+    expect(drive.archivos[g.storageRef]._nombre).toBe(DOC_ID + '.png');
+    expect(proveedor.leerDocumento(g.storageRef).mimeType).toBe('image/png');
+  });
+  test('un reintento con el mismo documentoId devuelve la MISMA referencia (idempotente) y una sola copia', () => {
+    const a = proveedor.guardarPropuesta({ documentoId: DOC_ID, bytes: jpeg(700), mimeType: 'image/jpeg' });
+    const b = proveedor.guardarPropuesta({ documentoId: DOC_ID, bytes: jpeg(700), mimeType: 'image/jpeg' });
+    expect(b).toEqual(a);
+    expect(drive.raizItf._hijosCarpetas[0]._hijosArchivos).toHaveLength(1);
+  });
+  test('contenido renombrado (PDF dicho JPEG) que se cuele al storage: el storage lo rechaza y el proveedor lo informa como INVALID_ARCHIVO', () => {
+    const pdf = Array.from(Buffer.from('%PDF-1.7 ....................'));
+    expect(proveedor.guardarPropuesta({ documentoId: DOC_ID, bytes: pdf, mimeType: 'image/jpeg' })).toEqual({ ok: false, code: 'INVALID_ARCHIVO' });
+    expect(drive.raizItf._hijosCarpetas).toHaveLength(0);
+  });
+  test('un archivo de Fotos no se puede leer ni retirar por el proveedor de ITF', () => {
+    const foto = Dr.storageDrive_putFoto(payloadPut(), 2026).driveFileId;
+    expect(proveedor.leerDocumento(foto)).toEqual({ ok: false, code: 'ITF_NOT_FOUND' });
+    expect(proveedor.eliminarTemporal(foto)).toEqual({ ok: false, code: 'ITF_NOT_FOUND' });
+    expect(drive.archivos[foto]._papelera).toBe(false);
+  });
+  test('sin el secreto correcto en el storage: UNAUTHORIZED -> el proveedor responde SERVICE_UNAVAILABLE (no se crea nada)', () => {
+    global.getStorageSecret = () => 'z'.repeat(40);
+    const g = proveedor.guardarPropuesta({ documentoId: DOC_ID, bytes: jpeg(700), mimeType: 'image/jpeg' });
+    expect(g).toEqual({ ok: false, code: 'SERVICE_UNAVAILABLE' });
+    expect(drive.raizItf._hijosCarpetas).toHaveLength(0);
+  });
+  test('un storage desplegado SIN las acciones de ITF (version vieja) responde UNKNOWN_ACTION -> ITF_STORAGE_NO_CONFIGURADO', () => {
+    const original = Api.doPost;
+    global.UrlFetchApp.fetch = (url, opciones) => {
+      const sol = JSON.parse(opciones.payload);
+      const falso = Client.fotosStorageClient_armarSolicitud('accionInexistente', {}, SECRET, ahora(), sol.nonce);
+      const salida = original({ postData: { contents: JSON.stringify(Object.assign({}, falso, { nonce: sol.nonce })) } });
+      // el storage viejo firma su error con el nonce de la solicitud original: se emula devolviendo UNKNOWN_ACTION firmado
+      const cuerpo = Auth.storageAuth_firmarRespuesta(SECRET, sol.nonce, { status: 'error', code: 'UNKNOWN_ACTION' }, ahora());
+      return { getResponseCode: () => 200, getContentText: () => JSON.stringify(cuerpo) };
+    };
+    expect(proveedor.guardarPropuesta({ documentoId: DOC_ID, bytes: jpeg(700), mimeType: 'image/jpeg' })).toEqual({ ok: false, code: 'ITF_STORAGE_NO_CONFIGURADO' });
+  });
+});
+
+describe('StorageApi: ITF y autenticacion HMAC (timestamp, replay, accion, firma)', () => {
+  const DOC = '66666666-6666-4666-8666-666666666666';
+  const imagen = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(200, 3)]).toString('base64');
+  const enviar = (accion, payload, ts, secreto, nonce) => {
+    const sol = Client.fotosStorageClient_armarSolicitud(accion, payload, secreto || SECRET, ts === undefined ? ahora() : ts, nonce || crypto.randomUUID());
+    return { sol, cuerpo: JSON.parse(Api.doPost({ postData: { contents: JSON.stringify(sol) } }).text) };
+  };
+  const sinEscritura = () => { expect(drive.raizItf._hijosCarpetas).toHaveLength(0); };
+
+  test('timestamp vencido (hace 10 min) o del futuro: UNAUTHORIZED y no se escribe nada', () => {
+    expect(enviar('putItf', { documentoId: DOC, mimeType: 'image/jpeg', imagenBase64: imagen }, ahora() - 600).cuerpo).toEqual({ status: 'error', code: 'UNAUTHORIZED' });
+    expect(enviar('putItf', { documentoId: DOC, mimeType: 'image/jpeg', imagenBase64: imagen }, ahora() + 600).cuerpo).toEqual({ status: 'error', code: 'UNAUTHORIZED' });
+    sinEscritura();
+  });
+  test('replay de un putItf valido: el segundo es UNAUTHORIZED y no duplica nada', () => {
+    const sol = Client.fotosStorageClient_armarSolicitud('putItf', { documentoId: DOC, mimeType: 'image/jpeg', imagenBase64: imagen }, SECRET, ahora(), crypto.randomUUID());
+    const mandar = () => JSON.parse(Api.doPost({ postData: { contents: JSON.stringify(sol) } }).text);
+    expect(mandar().status).toBeUndefined();                                    // respuesta firmada (sin 'status' en el sobre)
+    expect(mandar()).toEqual({ status: 'error', code: 'UNAUTHORIZED' });
+    expect(drive.raizItf._hijosCarpetas[0]._hijosArchivos).toHaveLength(1);
+  });
+  test('firma con otro secreto, y accion alterada (putFoto -> putItf reusando la firma): UNAUTHORIZED', () => {
+    expect(enviar('putItf', { documentoId: DOC, mimeType: 'image/jpeg', imagenBase64: imagen }, undefined, 'q'.repeat(40)).cuerpo).toEqual({ status: 'error', code: 'UNAUTHORIZED' });
+    const sol = Client.fotosStorageClient_armarSolicitud('putFoto', {}, SECRET, ahora(), crypto.randomUUID());
+    sol.action = 'putItf';
+    sol.payload = JSON.stringify({ documentoId: DOC, mimeType: 'image/jpeg', imagenBase64: imagen });
+    expect(JSON.parse(Api.doPost({ postData: { contents: JSON.stringify(sol) } }).text)).toEqual({ status: 'error', code: 'UNAUTHORIZED' });
+    sinEscritura();
+  });
+  test('acciones de otras familias NO operan sobre la raiz de ITF y las de ITF NO operan sobre la de Fotos', () => {
+    const r = enviar('putItf', { documentoId: DOC, mimeType: 'image/jpeg', imagenBase64: imagen });
+    const ref = Client.fotosStorageClient_verificarRespuesta(r.cuerpo, SECRET, r.sol.nonce, ahora()).data.driveFileId;
+    ['getFoto', 'getFotoPozo'].forEach((accion) => {
+      const x = enviar(accion, { driveFileId: ref, variante: 'full' });
+      expect(Client.fotosStorageClient_verificarRespuesta(x.cuerpo, SECRET, x.sol.nonce, ahora()).data).toEqual({ status: 'error', code: 'NOT_FOUND' });
+    });
+    ['trashFoto', 'trashFotoPozo'].forEach((accion) => {
+      const x = enviar(accion, { driveFileId: ref });
+      expect(Client.fotosStorageClient_verificarRespuesta(x.cuerpo, SECRET, x.sol.nonce, ahora()).data).toEqual({ status: 'error', code: 'NOT_FOUND' });
+    });
+    expect(drive.archivos[ref]._papelera).toBe(false);
+    const foto = Dr.storageDrive_putFoto(payloadPut(), 2026).driveFileId;
+    const g = enviar('getItf', { driveFileId: foto });
+    expect(Client.fotosStorageClient_verificarRespuesta(g.cuerpo, SECRET, g.sol.nonce, ahora()).data).toEqual({ status: 'error', code: 'NOT_FOUND' });
+  });
+  test('la raiz de ITF sin configurar (falta ITF_ROOT_FOLDER_ID): INTERNAL sin detalle, nada se crea', () => {
+    global.getStorageItfRootFolderId = () => { throw new Error('ITF_ROOT_FOLDER_ID no configurado: correr setupItfPropuestasStorage() una vez'); };
+    const r = enviar('putItf', { documentoId: DOC, mimeType: 'image/jpeg', imagenBase64: imagen });
+    expect(r.cuerpo).toEqual({ status: 'error', code: 'INTERNAL' });
+    expect(JSON.stringify(r.cuerpo)).not.toMatch(/ITF_ROOT|setup/);
+  });
+  test('el limite de 3 MB es el mismo en el storage y en el backend principal', () => {
+    const { ITF_ARCHIVO_BYTES_MAX } = require('../../backend/src/ItfArchivoLogic');
+    expect(Dr.STORAGE_ITF_MAX_BYTES).toBe(ITF_ARCHIVO_BYTES_MAX);
+    expect(ITF_ARCHIVO_BYTES_MAX).toBe(3 * 1024 * 1024);
+  });
+});
+
+describe('StorageDrive: ITF, nombre fisico y claves del payload', () => {
+  const DOC = '77777777-7777-4777-8777-777777777777';
+  const imagen = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(100, 3)]).toString('base64');
+
+  test('putItf con "nombreOriginal" (o cualquier clave de mas) se rechaza como MALFORMED y no crea nada', () => {
+    ['nombreOriginal', 'nombre', 'ruta', 'wellId'].forEach((clave) => {
+      const p = { documentoId: DOC, mimeType: 'image/jpeg', imagenBase64: imagen };
+      p[clave] = '../../fuga.jpg';
+      expect(Dr.storageDrive_putItf(p, 2026)).toEqual({ status: 'error', code: 'MALFORMED' });
+    });
+    expect(drive.raizItf._hijosCarpetas).toHaveLength(0);
+  });
+  test('el archivo se llama exactamente <documentoId>.jpg / .png, sin importar nada mas', () => {
+    const j = Dr.storageDrive_putItf({ documentoId: DOC, mimeType: 'image/jpeg', imagenBase64: imagen }, 2026);
+    expect(drive.archivos[j.driveFileId]._nombre).toBe(DOC + '.jpg');
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52]), Buffer.alloc(40, 1)]).toString('base64');
+    const otro = '88888888-8888-4888-8888-888888888888';
+    const p = Dr.storageDrive_putItf({ documentoId: otro, mimeType: 'image/png', imagenBase64: png }, 2026);
+    expect(drive.archivos[p.driveFileId]._nombre).toBe(otro + '.png');
+  });
+  test('base64 vacio, solo relleno o de largo cero bytes: INVALID_IMAGEN y no se crea carpeta ni archivo', () => {
+    ['', '====', 'AAAA'.slice(0, 0), '=A=='].forEach((vacio) => {
+      expect(Dr.storageDrive_putItf({ documentoId: DOC, mimeType: 'image/jpeg', imagenBase64: vacio }, 2026)).toEqual({ status: 'error', code: 'INVALID_IMAGEN' });
+    });
+    expect(drive.raizItf._hijosCarpetas).toHaveLength(0);
   });
 });

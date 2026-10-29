@@ -51,6 +51,9 @@ function doPost(e) {
         response = handleGetItfAvailability(body.sessionToken, body.wellIds);
       } else if (body.action === 'registerDescargaItf') {
         response = handleRegisterDescargaItf(body.sessionToken, body.resumen);
+      } else if (body.action === 'proponerItf') {
+        // E9-4: lista BLANCA de campos dentro del handler (rechaza cualquier otro). Solo con perfil + perfil_subir y con ITF_E9_ACTIVO encendido.
+        response = handleProponerItf(body.sessionToken, body);
       } else if (body.action === 'getEstadoReemplazo') {
         response = handleGetEstadoReemplazo(body.sessionToken, body.wellId);
       } else if (body.action === 'getHistorialReemplazo') {
@@ -805,6 +808,104 @@ function handleRegisterDescargaItf(sessionToken, resumen) {
   }
 
   return { status: 'ok' };
+}
+
+// --- ITF colaborativos (E9-4): PROPONER un ITF ---
+// Un usuario autorizado manda una imagen (JPEG o PNG); el backend la valida por los BYTES reales, calcula el SHA-256, la guarda en el storage PRIVADO (segunda cuenta, raiz ItfPropuestas: nunca en la
+// carpeta legacy FOLDER_ID) y escribe ITF_PROPUESTO (append-only). Queda PENDIENTE de validacion: NO es vigente, no cambia lo que ve nadie y no cuenta como "Tiene ITF". Todavia no hay aprobar /
+// rechazar / reemplazar / revertir, ni interfaz, ni columnas de permiso en Usuarios, ni hoja ItfEventos en produccion.
+// Gates (exactos, `=== true`): perfil Y perfil_subir. Orden de chequeos: sesion -> permisos -> interruptor ITF_E9_ACTIVO (apagado: ITF_E9_INACTIVO ANTES de tocar la hoja o el storage) -> entrada
+// (lista BLANCA de campos: wellId, imageBase64, mimeType, nombreOriginal, clientRequestId; documentoId, hash, bytes, storageFileId, email, nombre, timestamp o estado se RECHAZAN) -> servicio.
+// El actor (email, nombre) sale SIEMPRE de la sesion + hoja Usuarios. Con el interruptor encendido y la hoja ItfEventos o el storage faltantes: SERVICE_UNAVAILABLE / ITF_STORAGE_NO_CONFIGURADO
+// (nada se crea solo, y no hay fallback a la carpeta legacy). Historial: UNA fila por propuesta escrita (accion + pozo + OK), sin base64, sin hash, sin id de storage, sin nombre del archivo; un
+// reintento idempotente NO escribe otra. Sin Telegram. Respuesta: {documentoId, wellId, estado:'PROPUESTO', mimeType, bytes, nombreOriginal, timestampUtc, warnings} y nada mas (ni storageFileId, ni hash,
+// ni email, ni clientRequestId, ni secuencia).
+// Codigos: INVALID_REQUEST / INVALID_WELL_ID / INVALID_ARCHIVO (entrada), MIME_NO_PERMITIDO / FORMATO_NO_RECONOCIDO / MIME_NO_COINCIDE / ARCHIVO_VACIO / ARCHIVO_DEMASIADO_GRANDE (archivo),
+// PERMISSION_DENIED, ITF_E9_INACTIVO, POZO_NOT_FOUND, LEGACY_AMBIGUO / LEGACY_NOMBRE_NO_CANONICO / LEGACY_FORMATO_INVALIDO / ITF_STATE_UNKNOWN (requiere revision), TOO_MANY_PENDING,
+// DUPLICADO_DOCUMENTO, IDEMPOTENCY_CONFLICT, INCONSISTENT_STATE, ITF_STORAGE_NO_CONFIGURADO, SERVICE_UNAVAILABLE.
+var PROPONER_ITF_CAMPOS = ['action', 'sessionToken', 'wellId', 'imageBase64', 'mimeType', 'nombreOriginal', 'clientRequestId'];
+var PROPONER_ITF_BASE64_REGEX = /^[A-Za-z0-9+\/]+={0,2}$/;
+var PROPONER_ITF_NOMBRE_MAX = 500;
+
+function api_proponerItfError(code, message) {
+  return { status: 'error', code: code, message: message };
+}
+
+function handleProponerItf(sessionToken, body) {
+  var validation = validateSession(sessionToken, 'proponerItf', null);
+  if (!validation.ok) {
+    return validation.response;
+  }
+  var session = validation.session;
+  var permisos = api_validarPermisosEstrictos(session, 'proponerItf', ['perfil', 'perfil_subir']);
+  if (!permisos.ok) {
+    return permisos.response;
+  }
+  if (!itfService_e9Activo()) {
+    return api_proponerItfError('ITF_E9_INACTIVO', 'los ITF colaborativos no estan activos');
+  }
+  var b = body !== null && typeof body === 'object' ? body : {};
+  var sobrantes = Object.keys(b).filter(function (k) { return PROPONER_ITF_CAMPOS.indexOf(k) < 0; });
+  if (sobrantes.length > 0) {
+    return api_proponerItfError('INVALID_REQUEST', 'campos que no corresponden a la accion');
+  }
+  if (typeof b.wellId !== 'string' || !/^\d{2}-\d{4}$/.test(b.wellId)) {
+    return api_proponerItfError('INVALID_WELL_ID', 'wellId invalido');
+  }
+  var maxBase64 = Math.ceil(ITF_ARCHIVO_BYTES_MAX / 3) * 4;
+  if (typeof b.imageBase64 !== 'string' || b.imageBase64.length === 0 || b.imageBase64.length > maxBase64 || b.imageBase64.length % 4 !== 0 || !PROPONER_ITF_BASE64_REGEX.test(b.imageBase64)) {
+    return api_proponerItfError('INVALID_ARCHIVO', 'imageBase64 invalido (JPEG o PNG, maximo ' + ITF_ARCHIVO_BYTES_MAX + ' bytes)');
+  }
+  if (typeof b.mimeType !== 'string') {
+    return api_proponerItfError('INVALID_ARCHIVO', 'mimeType invalido');
+  }
+  if (b.nombreOriginal !== undefined && b.nombreOriginal !== null && (typeof b.nombreOriginal !== 'string' || b.nombreOriginal.length > PROPONER_ITF_NOMBRE_MAX)) {
+    return api_proponerItfError('INVALID_ARCHIVO', 'nombreOriginal invalido');
+  }
+  var bytes;
+  try {
+    bytes = Utilities.base64Decode(b.imageBase64);
+  } catch (err) {
+    return api_proponerItfError('INVALID_ARCHIVO', 'imageBase64 invalido');
+  }
+  var access = getUserAccess(session.email);
+  var resultado;
+  try {
+    resultado = itfService_ejecutar(
+      {
+        email: session.email,
+        nombre: access.nombre,
+        permisos: { perfil: hasPermission(session.email, 'perfil') === true, perfil_subir: hasPermission(session.email, 'perfil_subir') === true, perfil_validar: hasPermission(session.email, 'perfil_validar') === true }
+      },
+      { accion: 'PROPONER', wellId: b.wellId, clientRequestId: b.clientRequestId },
+      { archivo: { bytes: bytes, mimeType: b.mimeType, nombreOriginal: b.nombreOriginal } }
+    );
+  } catch (err) {
+    Logger.log('proponerItf: excepcion: ' + api_limpiarMensajeLog(err));
+    logHistoryEvent(session.email, 'proponerItf', b.wellId, 'SERVICE_UNAVAILABLE');
+    return api_proponerItfError('SERVICE_UNAVAILABLE', 'no se pudo completar la accion: intenta de nuevo en unos minutos');
+  }
+  if (!resultado.ok) {
+    logHistoryEvent(session.email, 'proponerItf', b.wellId, resultado.code);
+    return api_proponerItfError(resultado.code, resultado.message);
+  }
+  if (resultado.accion === 'ESCRIBIR') {
+    logHistoryEvent(session.email, 'proponerItf', b.wellId, 'OK');
+  }
+  var propuesta = resultado.propuesta;
+  return {
+    status: 'ok',
+    data: {
+      documentoId: resultado.resultado.documentoId,
+      wellId: resultado.resultado.wellId,
+      estado: 'PROPUESTO',
+      mimeType: propuesta.mimeType,
+      bytes: propuesta.bytes,
+      nombreOriginal: propuesta.nombreOriginal,
+      timestampUtc: propuesta.timestampUtc,
+      warnings: []
+    }
+  };
 }
 
 // --- Modulo Reemplazos v1 (evaluacion de aptitud de pozos candidatos) ---
@@ -1985,6 +2086,7 @@ if (typeof module !== 'undefined' && module.exports) {
     handleGetIndiceBusquedaProvincia,
     handleGetItfAvailability,
     handleRegisterDescargaItf,
+    handleProponerItf,
     handleGetEstadoReemplazo,
     handleGetHistorialReemplazo,
     handleRegistrarEvaluacionReemplazo,

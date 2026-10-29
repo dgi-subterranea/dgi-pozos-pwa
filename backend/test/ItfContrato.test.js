@@ -10,12 +10,12 @@ const DOC = () => leer('docs', 'itf-colaborativos.md');
 // codigo sin comentarios (los comentarios documentan y nombran cosas; las guardas miran lo que se EJECUTA)
 const CODIGO = (nombre) => SRC(nombre).replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
 
-const MODULOS_NUEVOS = ['ItfArchivoLogic.js', 'ItfDominioService.js', 'ItfEventosRepository.js', 'ItfLegacyProvider.js', 'ItfStorageProvider.js', 'ItfService.js'];
-const MARCAS_E9 = /itfDominio_|itfEventosRepository_|itfArchivo_|itfLegacy_|itfStorage_|itfService_|setupItfEventosSheet|ItfEventos|ItfArchivoLogic|ItfDominioService|ItfLegacyProvider|ItfStorageProvider|ItfService|ITF_E9_ACTIVO|perfil_subir|perfil_validar|itfTieneVigente/;
+const MODULOS_NUEVOS = ['ItfArchivoLogic.js', 'ItfDominioService.js', 'ItfEventosRepository.js', 'ItfLegacyAuditoria.js', 'ItfLegacyProvider.js', 'ItfStorageProvider.js', 'ItfService.js'];
+const MARCAS_E9 = /itfDominio_|itfEventosRepository_|itfArchivo_|itfLegacy_|itfStorage_|itfService_|itfAuditoria_|auditarCarpetaItfLegacy|ItfLegacyAuditoria|setupItfEventosSheet|ItfEventos|ItfArchivoLogic|ItfDominioService|ItfLegacyProvider|ItfStorageProvider|ItfService|ITF_E9_ACTIVO|perfil_subir|perfil_validar|itfTieneVigente/;
 
 describe('E9-2 no esta cableado: ningun archivo vivo de la app lo referencia', () => {
   test.each([
-    'Api.js', 'Config.js', 'AuthService.js', 'SheetUserRepository.js', 'ProfileService.js', 'ItfAvailabilityService.js', 'PozoExistenciaService.js',
+    'Config.js', 'ProfileService.js', 'ItfAvailabilityService.js', 'PozoExistenciaService.js',
     'SheetHistoryRepository.js', 'HistoryService.js', 'NotificationService.js', 'MapaService.js', 'FotosPozosService.js', 'FotosPozosModeracionService.js', 'RegistryService.js'
   ])('backend/src/%s no usa los modulos de E9', (archivo) => {
     expect(SRC(archivo)).not.toMatch(MARCAS_E9);
@@ -38,12 +38,21 @@ describe('E9-2 no esta cableado: ningun archivo vivo de la app lo referencia', (
     });
   });
 
-  test('Usuarios no tiene columnas nuevas: perfil_subir y perfil_validar NO existen todavia', () => {
+  test('E9-4: perfil_subir y perfil_validar existen en el parser del backend (mismo patron exacto SI -> true, columna ausente -> false) pero NO hay UI ni frontend', () => {
     const src = SRC('SheetUserRepository.js');
-    expect(src).not.toMatch(/perfil_subir|perfil_validar/);
     const permisos = /var USUARIOS_COLUMNAS_PERMISO = \[([^\]]*)\]/.exec(src)[1].split(',').map((c) => c.trim().replace(/'/g, ''));
-    expect(permisos).toHaveLength(13);
-    expect(permisos).toContain('perfil');
+    expect(permisos).toHaveLength(15);
+    expect(permisos).toEqual(expect.arrayContaining(['perfil', 'perfil_subir', 'perfil_validar']));
+    expect(SRC('AuthService.js')).toContain('perfil_subir: false, perfil_validar: false');
+    expect(src).toContain('perfil_subir: false, perfil_validar: false');
+  });
+
+  test('E9-4: Api.js expone UNA sola ruta de ITF colaborativos (proponerItf) y solo usa itfService_ejecutar / itfService_e9Activo; nada de aprobar, rechazar, reemplazar ni revertir', () => {
+    const api = CODIGO('Api.js');
+    expect(api).toMatch(/body\.action === 'proponerItf'/);
+    const usadas = Array.from(new Set(api.match(/itf[A-Z][A-Za-z]*_\w+/g) || [])).sort();
+    expect(usadas).toEqual(['itfService_e9Activo', 'itfService_ejecutar']);
+    expect(api).not.toMatch(/aprobarItf|rechazarItf|retirarItf|revertirItf|getItfPendientes|getItfEstado|getItfDocumento|itfPropuesta/i);
   });
 
   test('el Perfil actual sigue igual: getProfile y la disponibilidad se apoyan solo en Drive (<wellId>.jpg)', () => {
@@ -59,7 +68,7 @@ describe('E9-2 no esta cableado: ningun archivo vivo de la app lo referencia', (
   });
 
   test('ningun endpoint nuevo: Api.js no enruta acciones de ITF colaborativos', () => {
-    expect(SRC('Api.js')).not.toMatch(/proponerItf|aprobarItf|rechazarItf|retirarItf|revertirItf|getItfPendientes|getItfEstado|itfPropuesta/i);
+    expect(CODIGO('Api.js')).not.toMatch(/aprobarItf|rechazarItf|retirarItf|revertirItf|getItfPendientes|getItfEstado|itfPropuesta/i);
   });
 
   test('los scripts del repo no ejecutan el setup de la hoja (scripts/gas)', () => {
@@ -71,7 +80,7 @@ describe('E9-2 no esta cableado: ningun archivo vivo de la app lo referencia', (
 describe('los modulos nuevos', () => {
   test('existen exactamente estos archivos de E9 (mas el ItfAvailabilityService existente) en backend/src', () => {
     const itf = fs.readdirSync(path.join(RAIZ, 'backend', 'src')).filter((f) => /^Itf/.test(f)).sort();
-    expect(itf).toEqual(['ItfArchivoLogic.js', 'ItfAvailabilityService.js', 'ItfDominioService.js', 'ItfEventosRepository.js', 'ItfLegacyProvider.js', 'ItfService.js', 'ItfStorageProvider.js'].sort());
+    expect(itf).toEqual(['ItfArchivoLogic.js', 'ItfAvailabilityService.js', 'ItfDominioService.js', 'ItfEventosRepository.js', 'ItfLegacyAuditoria.js', 'ItfLegacyProvider.js', 'ItfService.js', 'ItfStorageProvider.js'].sort());
   });
 
   test.each(MODULOS_NUEVOS)('%s es ES5 de Apps Script (sin import / export / async / arrow / const / let)', (archivo) => {
@@ -105,7 +114,7 @@ describe('los modulos nuevos', () => {
   test('E9-3: el servicio y el proveedor legacy no hablan con Drive ni con Sheets directamente (solo por los repositorios) y el servicio no usa Drive para los documentos E9', () => {
     expect(CODIGO('ItfService.js')).not.toMatch(/DriveApp|SpreadsheetApp|CacheService|LockService|UrlFetchApp/);
     expect(CODIGO('ItfLegacyProvider.js')).not.toMatch(/DriveApp|SpreadsheetApp|LockService|UrlFetchApp|PropertiesService/);
-    expect(CODIGO('ItfStorageProvider.js')).not.toMatch(/DriveApp|SpreadsheetApp|CacheService|LockService|UrlFetchApp|PropertiesService|Utilities/);
+    expect(CODIGO('ItfStorageProvider.js')).not.toMatch(/DriveApp|SpreadsheetApp|CacheService|LockService|UrlFetchApp|PropertiesService/);        // habla con el storage SOLO por el cliente HMAC de Fotos
     expect(CODIGO('ItfService.js').match(/PropertiesService/g)).toHaveLength(1);                  // solo el interruptor ITF_E9_ACTIVO
   });
 
@@ -189,5 +198,29 @@ describe('docs/itf-colaborativos.md', () => {
     expect(ITF_ARCHIVO_BYTES_MAX).toBe(3145728);
     expect(DOC()).toMatch(/3 MB/);
     expect(DOC()).toMatch(/3\.145\.728|3145728/);
+  });
+});
+
+describe('docs/itf-colaborativos.md: E9-4', () => {
+  test('documenta la etapa como local, el flujo A-Q, el limite provisional, la auditoria legacy y la raiz aislada', () => {
+    const d = DOC();
+    expect(d).toMatch(/## 15\. E9-4/);
+    expect(d).toMatch(/NO productivo/);
+    expect(d).toMatch(/ITF_E9_INACTIVO/);
+    expect(d).toMatch(/proponerItf/);
+    expect(d).toMatch(/PROVISIONAL/);
+    expect(d).toMatch(/4\.194\.304/);
+    expect(d).toMatch(/auditarCarpetaItfLegacy/);
+    expect(d).toMatch(/ItfPropuestas/);
+    expect(d).toMatch(/putItf/);
+    expect(d).toMatch(/TOO_MANY_PENDING/);
+    expect(d).toMatch(/MISMO_HASH_OTRO_POZO/);
+    expect(d).toMatch(/FUERA del lock/);
+    expect(d).toMatch(/Desviaciones/);
+  });
+  test('la auditoria legacy no la llama ningun archivo vivo de la app', () => {
+    ['Api.js', 'Config.js', 'ProfileService.js', 'ItfService.js', 'ItfLegacyProvider.js', 'ItfAvailabilityService.js'].forEach((archivo) => {
+      expect(CODIGO(archivo)).not.toMatch(/itfAuditoria_|auditarCarpetaItfLegacy|ItfLegacyAuditoria/);
+    });
   });
 });

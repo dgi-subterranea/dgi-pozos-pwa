@@ -14,7 +14,7 @@ describe('sheetUserRepository_indiceColumnas', () => {
     const idx = sheetUserRepository_indiceColumnas(header);
     expect(idx).toEqual({
       email: 0, nombre: 1, estado: 2, fecha_alta: 3, perfil: 4, datos: 5, ubicacion: 6, ne: 7, reemplazo: 8, fotos: 9, fotos_carga: 10, fotos_moderar: 11, ubicacion_corregir: 12, ubicacion_validar: 13,
-      observaciones: 14, observaciones_agregar: 15, observaciones_anular: 16
+      observaciones: 14, observaciones_agregar: 15, observaciones_anular: 16, perfil_subir: -1, perfil_validar: -1
     });
   });
 
@@ -23,7 +23,7 @@ describe('sheetUserRepository_indiceColumnas', () => {
     const idx = sheetUserRepository_indiceColumnas(header);
     expect(idx).toEqual({
       observaciones_anular: 0, observaciones_agregar: 1, observaciones: 2, ubicacion_validar: 3, ubicacion_corregir: 4, fotos_carga: 5, fotos: 6, reemplazo: 7, ne: 8, ubicacion: 9, datos: 10, perfil: 11,
-      fecha_alta: 12, estado: 13, nombre: 14, email: 15, fotos_moderar: -1
+      fecha_alta: 12, estado: 13, nombre: 14, email: 15, fotos_moderar: -1, perfil_subir: -1, perfil_validar: -1
     });
   });
 

@@ -17,7 +17,7 @@
 //       <AAAA | sin_fecha>/    (anio de la FOTO, no del servidor)
 //         <fotoId>.jpg
 //         <fotoId>_thumb.jpg
-// Las dos familias estan aisladas: una accion de Reemplazos nunca alcanza un
+// Tercera familia (E9-4, ITF colaborativos): ITF_ROOT_FOLDER_ID, ver storageDrive_putItf mas abajo. Las tres familias estan aisladas: una accion de Reemplazos nunca alcanza un
 // archivo de la raiz de pozos y viceversa (cada una valida contra SU raiz).
 var STORAGE_MAX_BYTES = 3 * 1024 * 1024;
 var STORAGE_THUMB_MAX_BYTES = 80 * 1024;
@@ -32,6 +32,10 @@ var STORAGE_CARPETA_FECHA_REGEX = /^(?:20\d{2}|sin_fecha)$/;
 // Reemplazos = 2 (raiz/anio/archivo), Pozos = 3 (raiz/fuente/anio/archivo)
 var STORAGE_NIVELES_REEMPLAZO = 2;
 var STORAGE_NIVELES_POZOS = 3;
+// ITF colaborativos (E9-4): raiz/AAAA/<documentoId>.<ext> -> 2 niveles. Solo JPEG y PNG; el limite coincide con el del backend principal (ItfArchivoLogic.js: 3 MB).
+var STORAGE_ITF_MAX_BYTES = 3 * 1024 * 1024;
+var STORAGE_NIVELES_ITF = 2;
+var STORAGE_ITF_EXTENSIONES = { 'image/jpeg': '.jpg', 'image/png': '.png' };
 
 function storageDrive_bytesDeBase64(b64) {
   var pad = b64.slice(-2) === '==' ? 2 : (b64.slice(-1) === '=' ? 1 : 0);
@@ -360,8 +364,125 @@ function storageDrive_trashFotoPozo(p) {
   return storageDrive_papelera(p, storageDrive_abrirArchivoPozoSeguro);
 }
 
+// --- ITF colaborativos (E9-4): documentos propuestos, raiz PROPIA (ItfPropuestas) ---
+//   ItfPropuestas/
+//     <AAAA>/                  (anio del SERVIDOR al guardar)
+//       <documentoId>.jpg | <documentoId>.png
+// El nombre fisico lo FIJA el storage a partir del documentoId (UUID generado por el backend principal): jamas el nombre original del archivo, ni un wellId, ni un hash. Solo JPEG / PNG, validados
+// por los BYTES (firma real) y con el MIME declarado coincidiendo. Los archivos son privados. Las acciones son especificas (putItf / getItf / metaItf / trashItf): no hay ninguna operacion generica
+// sobre Drive, el cliente no manda carpetas, y get / meta / trash solo alcanzan archivos que cuelgan de la raiz de ITF (nunca de Fotos ni de Reemplazos, ni del resto de la cuenta).
+
+// Tipo real por los bytes iniciales (base64 de los primeros 24 caracteres = 18 bytes): 'image/jpeg' | 'image/png' | null.
+function storageDrive_tipoItf(b64) {
+  try {
+    var b = Utilities.base64Decode(b64.substring(0, 24));
+    function v(i) { return i < b.length ? (b[i] & 0xff) : -1; }
+    if (b.length >= 3 && v(0) === 0xff && v(1) === 0xd8 && v(2) === 0xff) {
+      return 'image/jpeg';
+    }
+    var firma = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52];
+    if (b.length >= 16) {
+      for (var i = 0; i < 16; i++) {
+        if (v(i) !== firma[i]) {
+          return null;
+        }
+      }
+      return 'image/png';
+    }
+  } catch (err) {
+    return null;
+  }
+  return null;
+}
+
+function storageDrive_soloClaves(p, permitidas) {
+  return Object.keys(p).every(function (k) { return permitidas.indexOf(k) >= 0; });
+}
+
+function storageDrive_validarPutItf(p) {
+  if (!p || typeof p !== 'object' || Array.isArray(p)) { return 'MALFORMED'; }
+  if (!storageDrive_soloClaves(p, ['documentoId', 'mimeType', 'imagenBase64'])) { return 'MALFORMED'; }
+  if (typeof p.documentoId !== 'string' || !STORAGE_UUID_REGEX.test(p.documentoId)) { return 'INVALID_DOCUMENTO_ID'; }
+  if (typeof p.mimeType !== 'string' || !Object.prototype.hasOwnProperty.call(STORAGE_ITF_EXTENSIONES, p.mimeType)) { return 'INVALID_MIME'; }
+  if (typeof p.imagenBase64 !== 'string' || p.imagenBase64.length === 0 || p.imagenBase64.length % 4 !== 0 || !STORAGE_BASE64_REGEX.test(p.imagenBase64)) { return 'INVALID_IMAGEN'; }
+  var bytes = storageDrive_bytesDeBase64(p.imagenBase64);
+  if (bytes < 1 || bytes > STORAGE_ITF_MAX_BYTES) { return 'INVALID_IMAGEN'; }
+  if (storageDrive_tipoItf(p.imagenBase64) !== p.mimeType) { return 'INVALID_IMAGEN'; }
+  return null;
+}
+
+// Guarda UN documento. Idempotente por nombre (reintento tras una respuesta perdida): si ya existe <documentoId>.<ext> del MISMO tamano devuelve el existente; si existe con otro tamano
+// es un conflicto (nunca se pisa ni se duplica). anio = anio del servidor.
+function storageDrive_putItf(p, anio) {
+  var error = storageDrive_validarPutItf(p);
+  if (error) {
+    return { status: 'error', code: error };
+  }
+  var raiz = DriveApp.getFolderById(getStorageItfRootFolderId());
+  var carpeta = storageDrive_carpetaHija(raiz, String(anio));
+  var nombre = p.documentoId.toLowerCase() + STORAGE_ITF_EXTENSIONES[p.mimeType];
+  var tamano = storageDrive_bytesDeBase64(p.imagenBase64);
+  var existentes = carpeta.getFilesByName(nombre);
+  if (existentes.hasNext()) {
+    var ya = existentes.next();
+    if (ya.getSize() !== tamano) {
+      return { status: 'error', code: 'DOCUMENTO_EXISTENTE_DISTINTO' };
+    }
+    return { status: 'ok', driveFileId: ya.getId(), tamanoBytes: ya.getSize(), existente: true };
+  }
+  var archivo = carpeta.createFile(Utilities.newBlob(Utilities.base64Decode(p.imagenBase64), p.mimeType, nombre));
+  try {
+    archivo.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE);
+  } catch (err) {
+    // ver storageDrive_putFoto: los archivos nuevos ya nacen privados
+  }
+  return { status: 'ok', driveFileId: archivo.getId(), tamanoBytes: archivo.getSize(), existente: false };
+}
+
+function storageDrive_abrirArchivoItfSeguro(p) {
+  if (!p || typeof p !== 'object' || Array.isArray(p) || !storageDrive_soloClaves(p, ['driveFileId'])) {
+    return null;
+  }
+  return storageDrive_abrirArchivoEnRaiz(p.driveFileId, getStorageItfRootFolderId(), STORAGE_NIVELES_ITF);
+}
+
+function storageDrive_getItf(p) {
+  var archivo = storageDrive_abrirArchivoItfSeguro(p);
+  if (!archivo) {
+    return { status: 'error', code: 'NOT_FOUND' };
+  }
+  var blob = archivo.getBlob();
+  return { status: 'ok', mimeType: blob.getContentType(), imagenBase64: Utilities.base64Encode(blob.getBytes()), tamanoBytes: archivo.getSize() };
+}
+
+// Tipo y tamano SIN entregar el contenido.
+function storageDrive_metaItf(p) {
+  var archivo = storageDrive_abrirArchivoItfSeguro(p);
+  if (!archivo) {
+    return { status: 'error', code: 'NOT_FOUND' };
+  }
+  return { status: 'ok', mimeType: archivo.getBlob().getContentType(), tamanoBytes: archivo.getSize() };
+}
+
+// Compensacion: papelera (nunca borrado definitivo). Solo la usa el backend principal cuando puede demostrar que ninguna fila referencia el archivo.
+function storageDrive_trashItf(p) {
+  var archivo = storageDrive_abrirArchivoItfSeguro(p);
+  if (!archivo) {
+    return { status: 'error', code: 'NOT_FOUND' };
+  }
+  archivo.setTrashed(true);
+  return { status: 'ok' };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
+    STORAGE_ITF_MAX_BYTES,
+    storageDrive_tipoItf,
+    storageDrive_validarPutItf,
+    storageDrive_putItf,
+    storageDrive_getItf,
+    storageDrive_metaItf,
+    storageDrive_trashItf,
     storageDrive_validarPut,
     storageDrive_putFoto,
     storageDrive_getFoto,

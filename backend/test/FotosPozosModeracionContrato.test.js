@@ -311,8 +311,8 @@ describe('E8-3: alcance del cableado (backend si; frontend, storage, Drive y leg
     expect(sinComentarios(leer('backend', 'src', 'FotosPozoEventosRepository.js'))).not.toMatch(/'ACTIVA'|'RETIRADA'|visible/);
   });
 
-  test('USUARIOS_COLUMNAS_PERMISO suma SOLO fotos_moderar (justo despues de fotos_carga)', () => {
-    expect(leer('backend', 'src', 'SheetUserRepository.js')).toContain("var USUARIOS_COLUMNAS_PERMISO = ['perfil', 'datos', 'ubicacion', 'ne', 'reemplazo', 'fotos', 'fotos_carga', 'fotos_moderar', 'ubicacion_corregir', 'ubicacion_validar', 'observaciones', 'observaciones_agregar', 'observaciones_anular'];");
+  test('USUARIOS_COLUMNAS_PERMISO suma fotos_moderar (justo despues de fotos_carga); E9-4 agrega perfil_subir / perfil_validar junto a perfil', () => {
+    expect(leer('backend', 'src', 'SheetUserRepository.js')).toContain("var USUARIOS_COLUMNAS_PERMISO = ['perfil', 'perfil_subir', 'perfil_validar', 'datos', 'ubicacion', 'ne', 'reemplazo', 'fotos', 'fotos_carga', 'fotos_moderar', 'ubicacion_corregir', 'ubicacion_validar', 'observaciones', 'observaciones_agregar', 'observaciones_anular'];");
   });
 
   test('un cambio de nombre de columna de eventos que el dominio lee seria detectado: el repositorio produce todo lo que el dominio parsea', () => {
