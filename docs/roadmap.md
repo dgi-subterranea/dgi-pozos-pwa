@@ -103,6 +103,8 @@ Ubicación/mapas, panel admin real, exportación PDF/CSV, comparación entre poz
 - Nunca se reemplaza en silencio un ITF existente (un reemplazo sería otra solicitud, con revisión).
 - Se conserva la **auditoría del original presentado** (quién, cuándo, hash) aunque se publique una versión optimizada.
 - Al aprobar se genera la versión optimizada para consulta y se actualiza el índice.
+
+> **Actualización (E9-1 / E9-2):** el diseño vigente está en [`docs/itf-colaborativos.md`](itf-colaborativos.md). Cambia respecto de lo anterior: E9 v1 trabaja con **imágenes JPEG / PNG (no PDF)**, sin el paso de optimización; el modelo es una hoja **append-only `ItfEventos`**; el ITF actual (`<wellId>.jpg`) es el **vigente legacy implícito**; y quien tenga `perfil_subir` y `perfil_validar` puede aprobar su propia propuesta, siempre como dos acciones separadas. Estado: dominio y repositorio implementados y probados, **no productivos** (sin endpoints, sin permisos nuevos, sin hoja real).
 - Reutilizar los patrones ya probados: indicador en el hub, cola de revisión, aviso por mail con reserva de cuota, auditoría en Historial, hoja append-only con eventos y estado derivado, idempotencia por `clientRequestId`, caché de lectura con invalidación.
 - Estudiar primero **JPG / PNG / WebP**; evaluar **PDF / HEIC** aparte (conversión y tamaño).
 - **Costo mensual $0 obligatorio** (sin servicios de pago): la optimización debe resolverse en el navegador o con las cuotas gratuitas ya usadas.
