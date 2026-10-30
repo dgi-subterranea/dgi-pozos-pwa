@@ -870,6 +870,7 @@ Secuencia (todo con el pozo de prueba): **A.** login nuevo → **B.** permisos v
 - **Ningún paso de preflight** expone ids de Drive, publica una carpeta, cambia sharing, habilita usuarios, crea triggers ni activa la feature (el código no tiene cómo: probado por inspección del fuente y con valores centinela).
 - `gas:push:main` sube **solo** `backend/src/*.js` + `appsscript.json` a `@HEAD`; **no** crea versión ni toca el deployment numerado. Las guardas del wrapper (huella confirmada, árbol limpio, sin deriva, sin solo-remotos) se aplican igual.
 - Verificación posterior: remoto = repo; `gas:deployments:main` debe seguir mostrando **v46** y el deployment `…UZRq1Z` apuntando a v46.
+- **Hecho el 30/10/2026** (commit `e0c475f`): `gas:push:main` a `@HEAD` verificado — remoto idéntico al repo (53 archivos + manifiesto; 8 agregados, 5 modificados, 0 eliminados). Después: `gas:deployments:main` sigue mostrando **v46** (última versión: 46) y `…UZRq1Z` → v46; `@HEAD` (`…iHYjIM`) es solo pruebas; el storage no se tocó (v5); el frontend de Pages sigue sin los archivos de E9 (`js/itfLogic.js` → 404); `origin/main` sigue en `efc9262` (no se hizo `git push`). No se ejecutó ningún setup, no se creó la hoja, no se cambió `Usuarios` y `ITF_E9_ACTIVO` no existe.
 
 ### 18.13 Bloqueos antes de cualquier setup o cambio productivo
 
