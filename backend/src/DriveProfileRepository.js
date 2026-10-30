@@ -50,6 +50,35 @@ function driveProfileRepository_buscarPorNombre(nombre) {
   return out;
 }
 
+// E9-7 (politica de nombre legacy case-insensitive SOLO para la extension .jpg): TODOS los candidatos legacy de un pozo, sea cual sea la capitalizacion de la extension (DD-PPPP.jpg, DD-PPPP.JPG, DD-PPPP.Jpg...).
+// No se confia en como compara nombres getFilesByName: se UNEN (por id de archivo) dos busquedas de solo lectura y se filtra en codigo con el nombre logico DD-PPPP + ".jpg" sin importar mayusculas:
+//   1) getFilesByName('<wellId>.jpg'): lo que siempre funciono (el canonico en minuscula nunca se pierde);
+//   2) searchFiles("title contains '<wellId>'"): trae las variantes de mayusculas. Si esta busqueda falla se LANZA (un error de Drive jamas se vuelve "un solo candidato": podria ocultar un duplicado).
+// Descriptores {fileId, nombre, leerBlob()}; el fileId es INTERNO (nunca sale hacia el cliente). Los archivos de otros pozos o con otros nombres se descartan.
+function driveProfileRepository_buscarCandidatosLegacy(wellId) {
+  if (typeof wellId !== 'string' || !/^\d{2}-\d{4}$/.test(wellId)) {
+    throw new Error('wellId invalido');
+  }
+  var folder = DriveApp.getFolderById(getFolderId());
+  var regex = new RegExp('^' + wellId + '\\.jpg$', 'i');
+  var vistos = {};
+  var out = [];
+  function agregar(iterador) {
+    while (iterador.hasNext()) {
+      var f = iterador.next();
+      var id = f.getId();
+      if (vistos[id] === true || !regex.test(f.getName())) {
+        continue;
+      }
+      vistos[id] = true;
+      out.push({ fileId: id, nombre: f.getName(), leerBlob: (function (archivo) { return function () { return archivo.getBlob(); }; })(f) });
+    }
+  }
+  agregar(folder.getFilesByName(wellId + '.jpg'));
+  agregar(folder.searchFiles("title contains '" + wellId + "' and trashed = false"));
+  return out;
+}
+
 // E9-3: lee un archivo de la carpeta institucional POR ID (el que quedo registrado en ITF_LEGACY_REGISTRADO). Solo devuelve archivos que estan dentro de FOLDER_ID: un id cualquiera de Drive
 // no sirve para leer otra cosa con los permisos de la cuenta del backend. {found:false} si no existe o no esta en la carpeta; lanza si Drive falla.
 function driveProfileRepository_leerPorId(fileId) {
@@ -82,6 +111,7 @@ if (typeof module !== 'undefined' && module.exports) {
     driveProfileRepository_existe,
     driveProfileRepository_listarArchivosThumb,
     driveProfileRepository_buscarPorNombre,
+    driveProfileRepository_buscarCandidatosLegacy,
     driveProfileRepository_leerPorId
   };
 }

@@ -762,10 +762,10 @@ No se hizo nada de esto todavía (solo lectura). El preflight verifica el storag
 
 ### 18.4 Herramientas nuevas (solo manuales; ningún endpoint, trigger ni pantalla las llama)
 
-- **`preflightItfE9()`**: SOLO LECTURA. Informa `interruptor` (ENCENDIDO / APAGADO), `listoParaEncender` y 7 comprobaciones (`carpeta_legacy`, `hoja_itfeventos`, `usuarios_hoja`, `usuarios_columna_perfil_subir`, `usuarios_columna_perfil_validar`, `storage_configurado`, `storage_itf`) con un texto por cada una, más **contadores** (eventos, usuarios activos con `perfil_subir` / `perfil_validar`; nunca emails). **No** escribe propiedades, hojas, Drive ni cache; **no** crea la hoja ni la carpeta; **no** cambia permisos ni sharing; **no** crea triggers; **no** imprime ids de Drive, URL, secreto, id del spreadsheet ni emails (probado con valores centinela). Hace una única llamada al storage (`metaItf`).
+- **`preflightItfE9()`**: SOLO LECTURA. Informa `interruptor` (ENCENDIDO / APAGADO), `listoParaEncender` y 8 comprobaciones (`carpeta_legacy`, `legacy_variantes_mayusculas`, `hoja_itfeventos`, `usuarios_hoja`, `usuarios_columna_perfil_subir`, `usuarios_columna_perfil_validar`, `storage_configurado`, `storage_itf`) con un texto por cada una, más **contadores** (eventos, usuarios activos con `perfil_subir` / `perfil_validar`; nunca emails). **No** escribe propiedades, hojas, Drive ni cache; **no** crea la hoja ni la carpeta; **no** cambia permisos ni sharing; **no** crea triggers; **no** imprime ids de Drive, URL, secreto, id del spreadsheet ni emails (probado con valores centinela). Hace una única llamada al storage (`metaItf`).
 - **`itfE9Encender()`**: pone `ITF_E9_ACTIVO = SI` **solo si** el preflight está completamente en verde; si no, **no toca nada**, imprime qué falta y devuelve `{encendido:false, motivo:'PREFLIGHT_NO_OK', pendientes:[…]}`. Es la forma recomendada de encender.
 - **`itfE9Apagar()`**: pone `ITF_E9_ACTIVO = NO`. **Siempre funciona** (sin condiciones): es el **rollback inmediato**. No borra eventos ni documentos.
-- **`medirRendimientoItfE9()`**: SHA-256 de 100 KB / 500 KB / 1 MB / 3 MB sintéticos y disponibilidad legacy de 1 y 500 pozos (primera vez y repetida; la primera puede reconstruir el índice, que es el mecanismo de cache que ya usa la app). No es requisito del rollout; es opcional y no escribe nada salvo ese cache.
+- **`medirRendimientoItfE9()`**: SHA-256 de 100 KB / 500 KB / 1 MB / 3 MB / 12 MB sintéticos (12 MB = el legacy más grande medido) y disponibilidad legacy de 1 y 500 pozos (primera vez y repetida; la primera puede reconstruir el índice, que es el mecanismo de cache que ya usa la app). No es requisito del rollout; es opcional y no escribe nada salvo ese cache.
 - Frontend: `scripts/medir_itf_consola.js` (pegar en la consola con sesión iniciada: `getItfAvailability` y `getProfile`) y, local, `scripts/medir_itf_propuesta.js`.
 - Forma **inequívoca** de ON / OFF: `itfE9Encender()` / `itfE9Apagar()` (devuelven y registran el resultado) o, a mano, Configuración del proyecto → Propiedades de la secuencia de comandos → `ITF_E9_ACTIVO` = `SI` (ON) o `NO` / borrar la propiedad (OFF). `preflightItfE9()` siempre informa el estado actual.
 
@@ -812,7 +812,7 @@ Ajustes: (a) el storage va **antes** de encender y de cualquier prueba de propue
 | 1 | **Backup y configuración**: copia de la hoja `Usuarios` (Archivo → Hacer una copia) y de la hoja de Historial si se quiere; anotar **nombres** (no valores) de las Script Properties de los dos proyectos; anotar versiones vigentes (backend **v46**, storage **v5**) | manual | usuario |
 | 2 | **Storage E9**: `gas:diff:storage` → `gas:adopt:storage` → `gas:push:storage` → `gas:version:storage` → `gas:deploy:storage` (deployment existente) → correr `setupItfPropuestasStorage` (proyecto `DGI Fotos Storage`, archivo `StorageConfig`, **segunda cuenta**) | clasp + editor | asistente / usuario |
 | 3 | **Backend a `@HEAD`**: `gas:push:main` | clasp | **hecho en esta etapa** (ver §18.12) |
-| 4 | **Auditoría legacy**: `auditarCarpetaItfLegacy` (§18.9); **detiene todo hasta analizar el resultado** | editor | usuario |
+| 4 | **Auditoría legacy**: `auditarCarpetaItfLegacy` (§18.9) — **HECHA el 30/10/2026: VERDE** (§19) | editor | usuario |
 | 5 | **Crear `ItfEventos`**: `setupItfEventosSheet` (proyecto `dgi-pozos-backend`, archivo `ItfEventosRepository`) | editor | usuario (con instrucción explícita) |
 | 6 | **Columnas de `Usuarios`**: agregar los encabezados `perfil_subir` y `perfil_validar` al final de la fila 1, **sin valores** (nadie habilitado) | manual | usuario |
 | 7 | **Preflight**: `preflightItfE9` debe dar `listoParaEncender: true` | editor | usuario |
@@ -874,9 +874,73 @@ Secuencia (todo con el pozo de prueba): **A.** login nuevo → **B.** permisos v
 
 ### 18.13 Bloqueos antes de cualquier setup o cambio productivo
 
-1. **Resultado de `auditarCarpetaItfLegacy()`** (pendiente de la persona responsable) y su análisis / categorías (§18.9).
+1. ~~Resultado de `auditarCarpetaItfLegacy()`~~ → **recibido y VERDE** (§19).
 2. Elegir el **pozo de prueba** (§18.11).
 3. Completar `.gas.local.json` del storage (`pushHabilitado`, `deploymentId`) y desplegar el storage E9 (§18.3).
 4. Confirmar la persona del **smoke** y su correo en la hoja `Usuarios` (el correo **no** va en documentación).
 5. Mediciones reales en Apps Script (límite de 3 MB, tiempos; opcional, §18.4).
 6. Deuda: limpieza completa de metadata (§18.1) y, si se quiere, Q3 (auditoría).
+
+## 19. Auditoría legacy REAL (30/10/2026) y política de nombre revisada
+
+### 19.1 Resultado real de `auditarCarpetaItfLegacy()`
+
+Se corrió el **30/10/2026** en el proyecto `dgi-pozos-backend` (archivo `ItfLegacyAuditoria`), de **solo lectura** (nombres y tamaños). **Auditoría completa** (`incompleto: false`), duración 152.312 ms. Sin ids de Drive.
+
+| Dato | Valor |
+| --- | --- |
+| Archivos en la carpeta | **17.364** |
+| Canónicos (`DD-PPPP.jpg`) | **16.599** |
+| Variantes de extensión (`.JPG`) | **3** (`15-1082.JPG`, `15-1024.JPG`, `15-0997.JPG`) |
+| Candidatos legacy totales (canónicos + variantes) | **16.602** |
+| Duplicados canónicos / archivos sobrantes | **0 / 0** |
+| Pozos con más de un candidato | **0** |
+| Estados por pozo | UNICO **16.599**, AMBIGUO **0**, NO_CANONICO **3** (con la regla de entonces) |
+| Fuera del patrón (no son `DD-PPPP.jpg`) | **762** |
+| Pozos inválidos (`sinPozoValido`) | **0** |
+| Ejemplos de lo que no coincide | `PM1.jpg` … `PM6.jpg`, `8-4410.jpg`, `8-4360.jpg`, `8-4401.jpg`, `19-105.jpg` |
+
+Tamaños sobre los **16.602** candidatos:
+
+| min | mediana | p95 | p99 | máximo | sobre 3 MB |
+| --- | --- | --- | --- | --- | --- |
+| 30.296 B | 775.969 B | 1.832.389 B | 2.809.496 B | 11.540.150 B | **42** (~0,25 %) |
+
+| Tramo | Archivos |
+| --- | --- |
+| < 50 KB | 4 |
+| 50-100 KB | 4 |
+| 100-250 KB | 21 |
+| 250-500 KB | 1.812 |
+| 500 KB – 1 MB | 13.471 |
+| 1-3 MB | 1.248 |
+| > 3 MB | 42 |
+
+**Veredicto: VERDE para el rollout de E9.** No hay duplicados canónicos, ambigüedad, pozos con múltiples candidatos ni archivos canónicos sobrantes. **No se modificó, renombró ni movió ningún archivo legacy** y no se debe renombrar manualmente los tres `.JPG`.
+
+### 19.2 Decisión: la extensión `.jpg` es case-insensitive SOLO para la lectura legacy
+
+- El nombre institucional **lógico** sigue siendo `DD-PPPP.jpg`. Las propuestas nuevas **no** usan estos nombres (el storage de E9 guarda por `documentoId`).
+- Candidatos **equivalentes**: `DD-PPPP.jpg`, `DD-PPPP.JPG`, `DD-PPPP.Jpg`, etc. El resto del nombre (`DD-PPPP`) es exacto.
+- **Regla de unicidad** (fail-closed): 0 candidatos → **NO**; exactamente **1** (de cualquier capitalización) → **UNICO**; **2 o más** → **AMBIGUO**. Nunca se elige uno arbitrariamente ni se ignora un segundo candidato de distinto case.
+  - solo `15-1082.JPG` → UNICO; solo `15-1082.jpg` → UNICO; `15-1082.jpg` + `15-1082.JPG` → AMBIGUO.
+- Cambios: `ItfLegacyProvider.js` (`itfLegacy_clasificarNombres`, `itfLegacy_estadoDe`, `itfLegacy_buscar`; prefijo del cache de índice **`itf_leg_v2_`** para no mezclar con la semántica anterior), `DriveProfileRepository.js` (`driveProfileRepository_buscarCandidatosLegacy`: **une por id** `getFilesByName('<wellId>.jpg')` y `searchFiles("title contains '<wellId>' and trashed = false")` y filtra en código con `^DD-PPPP\.jpg$` sin importar mayúsculas; no se confía en cómo compara nombres `getFilesByName`; si la búsqueda falla **lanza**: un error de Drive jamás se vuelve «un solo candidato») y `ItfLegacyAuditoria.js` (misma regla). `NO_CANONICO` queda en el catálogo por compatibilidad pero **ya no se produce**.
+- **Con el interruptor apagado nada cambia**: `getProfile` y `getItfAvailability` siguen siendo los de la versión actual (que buscan `<wellId>.jpg` exacto y, en el índice, aceptan `/i`). La política nueva rige **solo con E9 encendido**.
+- La auditoría futura **reporta** las variantes (`variantesExtension: 3`, información de higiene histórica) pero **no las trata como bloqueo** si son únicas. No se corrigen ni se renombran (con la política nueva se **leen** tal cual están).
+- `preflightItfE9` agrega la comprobación `legacy_variantes_mayusculas`: verifica de **solo lectura** que el lookup resuelva como UNICO los tres pozos con `.JPG`. **Debe estar en verde antes de encender**: confirma en Drive real que la búsqueda de variantes funciona.
+
+### 19.3 Tamaño: 3 MB para NUEVAS propuestas, no para el legacy existente
+
+- El límite de **3 MB se mantiene para las propuestas nuevas** (el cliente reduce lo grande; servidor y storage lo exigen). Justificación medida: de 16.602 candidatos, solo **42** lo superan (~0,25 %) y el p99 es ~2,81 MB.
+- **No** se aplica a la **lectura** del legacy: un legacy de 11 MB se sigue sirviendo como hoy (`getProfile`, ZIP, disponibilidad). No se recodifica ni se comprime nada.
+- **Limitación conocida (deuda de performance / inventario, no bloquea):** para **reemplazar, retirar o restaurar** un legacy hay que registrarlo antes (hash SHA-256 de sus bytes) y el registro **rechaza** archivos de más de 3 MB (`LEGACY_FORMATO_INVALIDO`). Los **42** pozos con legacy > 3 MB se leen igual, pero **no se pueden reemplazar por E9 v1** hasta que se decida (a) redimensionar a mano ese legacy o (b) subir el límite del registro tras medir el costo del hash (`medirRendimientoItfE9`). No se modifica nada ahora.
+
+### 19.4 Lo que no coincide con el patrón (762)
+
+Estos 762 **no se corrigen, no se renombran y no se incorporan automáticamente a E9**: quedan **fuera del lookup institucional `DD-PPPP`**. Clasificación **solo de lectura**, para documentación (**no bloquea el rollout** y no se modifica Drive). La auditoría ya clasifica por patrón en su informe (`noCoincidenClasificados`): `PM*.jpg`, `D-PPPP` (un dígito de departamento, p. ej. `8-4410.jpg`), `DD-PPP` (tres dígitos de pozo, p. ej. `19-105.jpg`), otra extensión sobre `DD-PPPP` y otros. El resultado de la corrida del 30/10 es anterior a esa clasificación: **el desglose exacto de los 762 se obtendrá en la próxima corrida** (los ejemplos reales muestran `PM*`, `D-PPPP` y `DD-PPP`). **Deuda de inventario posterior:** decidir qué hacer con esos nombres; ninguno entra en el lookup `DD-PPPP`.
+
+### 19.5 Deudas registradas
+
+1. Inventario: los 762 nombres fuera del patrón y los 3 `.JPG` (higiene; sin acción por ahora).
+2. Performance: los 42 legacy > 3 MB (lectura OK; sin reemplazo por E9 v1; sin recompresión automática).
+3. Limpieza completa de metadata (EXIF) de las imágenes (ver §18.1).

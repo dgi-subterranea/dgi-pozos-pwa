@@ -3,12 +3,14 @@
 //
 // ESTADO DE ESTA ETAPA: NADA de esto esta cableado a Api.js. Lo usa ItfService.js. getProfile / getItfAvailability de produccion siguen usando ProfileService + ItfAvailabilityService, sin cambios.
 //
-// POLITICA UNICA DE NOMBRE LEGACY (auditoria E9-1: el indice aceptaba .jpg / .JPG con /i pero la descarga buscaba '<wellId>.jpg' exacto, y Drive puede devolver mas de un archivo):
-//   - Un ITF legacy es EXACTAMENTE '<wellId>.jpg' (extension en minuscula). Eso es lo que resuelve getFilesByName y lo que se puede descargar.
-//   - Se RECONOCE sin importar mayusculas al indexar (.JPG, .Jpg...), pero esas variantes NO son descargables: el pozo queda NO_CANONICO (DESCONOCIDO), nunca "Si" y nunca un "No" enganoso.
-//   - Un solo archivo canonico -> UNICO. Cero -> NO. Dos o mas con el mismo nombre -> AMBIGUO (fail-closed, nunca se toma el primero en silencio).
-//   Estados: 'NO' | 'UNICO' | 'AMBIGUO' | 'NO_CANONICO'. Solo UNICO es "tiene ITF legacy"; solo NO es "no tiene"; los otros dos son "no se sabe".
-//   Efecto frente a hoy (que toma el primero y acepta /i): un pozo con archivo duplicado o con extension en mayuscula pasa de "Si (y a veces la descarga falla)" a "no se sabe". Es la unica diferencia.
+// POLITICA UNICA DE NOMBRE LEGACY (auditoria E9-1; REVISADA en E9-7 con el resultado real de auditarCarpetaItfLegacy: 17.364 archivos, 16.599 canonicos, 3 variantes .JPG unicas, 0 duplicados):
+//   - El nombre institucional LOGICO sigue siendo '<wellId>.jpg' (DD-PPPP.jpg). Las propuestas nuevas jamas usan estos nombres.
+//   - La LECTURA del legacy es case-insensitive SOLO en la extension .jpg: DD-PPPP.jpg, DD-PPPP.JPG, DD-PPPP.Jpg... son candidatos EQUIVALENTES. El resto del nombre (DD-PPPP) es exacto.
+//   - Regla de UNICIDAD: exactamente UN candidato (de la capitalizacion que sea) -> UNICO. Cero -> NO. Dos o mas (aunque difieran solo en las mayusculas: 15-1082.jpg + 15-1082.JPG) -> AMBIGUO
+//     (fail-closed; jamas se elige uno arbitrariamente ni se ignora el segundo).
+//   - No se renombra, mueve ni recodifica nada en Drive. Un legacy grande (p. ej. 11 MB) se lee como siempre: el limite de 3 MB es solo de las PROPUESTAS NUEVAS.
+//   Estados: 'NO' | 'UNICO' | 'AMBIGUO' | 'NO_CANONICO'. Solo UNICO es "tiene ITF legacy"; solo NO es "no tiene"; AMBIGUO es "no se sabe". NO_CANONICO queda en el catalogo por compatibilidad pero YA NO SE PRODUCE.
+//   Efecto frente a E9-3: un pozo cuyo unico archivo es DD-PPPP.JPG pasa de "no se sabe" a UNICO (con E9 encendido). Con E9 apagado el comportamiento de getProfile / getItfAvailability es el de siempre.
 //
 // INDICE DE DISPONIBILIDAD (nuevo, aparte del existente 'itf_idx_' que NO se toca): CacheService, por departamento 01..19, clave 'itf_leg_v1_DD', TTL 1 hora, valor
 // {"u":[PPPP unicos], "a":[PPPP ambiguos], "n":[PPPP no canonicos]}; lo que no esta en ninguna lista es 'NO'. Se reconstruye entero (una pasada por la carpeta) ante cualquier departamento faltante.
@@ -18,9 +20,9 @@
 // HUELLA: mimeType (por los bytes reales, no por el nombre), bytes, SHA-256 de los bytes reales, id de Drive del archivo (referencia INTERNA, nunca sale al cliente) y nombre. Se calcula SOLO cuando se
 // va a registrar el legacy (primer reemplazo / retiro) o a verificar (restauracion): no se hashean miles de archivos.
 var ITF_LEGACY_EXTENSION = '.jpg';
-var ITF_LEGACY_INDEX_PREFIX = 'itf_leg_v1_';
+var ITF_LEGACY_INDEX_PREFIX = 'itf_leg_v2_';
 var ITF_LEGACY_INDEX_SECONDS = 3600;
-var ITF_LEGACY_REBUILD_FLAG = 'itf_leg_v1_rebuilding';
+var ITF_LEGACY_REBUILD_FLAG = 'itf_leg_v2_rebuilding';
 var ITF_LEGACY_REBUILD_FLAG_SECONDS = 60;
 var ITF_LEGACY_ESPERA_MS = 500;
 var ITF_LEGACY_ESPERA_MAX = 12;
@@ -40,7 +42,8 @@ function itfLegacy_nombre(wellId) {
   return wellId + ITF_LEGACY_EXTENSION;
 }
 
-// PURA. Lista de nombres de la carpeta -> {wellId: {canonicos, noCanonicos}} SOLO para los que parecen un ITF (DD-PPPP.jpg, sin importar mayusculas). Cualquier otro nombre se ignora, nunca rompe.
+// PURA. Lista de nombres de la carpeta -> {wellId: {candidatos, canonicos, noCanonicos}} SOLO para los que parecen un ITF (DD-PPPP.jpg, sin importar mayusculas de la extension). `candidatos` es lo que
+// decide el estado; canonicos (extension exacta en minuscula) / noCanonicos (variantes de mayusculas) son solo informativos. Cualquier otro nombre se ignora, nunca rompe.
 function itfLegacy_clasificarNombres(nombres) {
   var porPozo = {};
   (nombres || []).forEach(function (nombre) {
@@ -49,7 +52,8 @@ function itfLegacy_clasificarNombres(nombres) {
       return;
     }
     var wellId = m[1] + '-' + m[2];
-    var entrada = porPozo[wellId] = porPozo[wellId] || { canonicos: 0, noCanonicos: 0 };
+    var entrada = porPozo[wellId] = porPozo[wellId] || { candidatos: 0, canonicos: 0, noCanonicos: 0 };
+    entrada.candidatos += 1;
     if (String(nombre) === itfLegacy_nombre(wellId)) {
       entrada.canonicos += 1;
     } else {
@@ -59,18 +63,16 @@ function itfLegacy_clasificarNombres(nombres) {
   return porPozo;
 }
 
-// PURA. {canonicos, noCanonicos} (o undefined) -> estado.
+// PURA. {candidatos} (o undefined) -> estado: 0 -> NO, 1 -> UNICO (de la capitalizacion que sea), 2 o mas -> AMBIGUO. Tambien acepta {canonicos, noCanonicos} (suma los dos).
 function itfLegacy_estadoDe(entrada) {
   if (!entrada) {
     return ITF_LEGACY_ESTADOS.NO;
   }
-  if (entrada.canonicos >= 2) {
+  var candidatos = typeof entrada.candidatos === 'number' ? entrada.candidatos : (entrada.canonicos || 0) + (entrada.noCanonicos || 0);
+  if (candidatos >= 2) {
     return ITF_LEGACY_ESTADOS.AMBIGUO;
   }
-  if (entrada.canonicos === 1) {
-    return ITF_LEGACY_ESTADOS.UNICO;
-  }
-  return entrada.noCanonicos > 0 ? ITF_LEGACY_ESTADOS.NO_CANONICO : ITF_LEGACY_ESTADOS.NO;
+  return candidatos === 1 ? ITF_LEGACY_ESTADOS.UNICO : ITF_LEGACY_ESTADOS.NO;
 }
 
 // --- indice de disponibilidad ---
@@ -93,9 +95,7 @@ function itfLegacy_reconstruirIndice() {
       bucket.u.push(pppp);
     } else if (estado === ITF_LEGACY_ESTADOS.AMBIGUO) {
       bucket.a.push(pppp);
-    } else if (estado === ITF_LEGACY_ESTADOS.NO_CANONICO) {
-      bucket.n.push(pppp);
-    }
+    }                                                      // bucket.n (no canonicos) queda siempre vacio: se conserva por el formato del indice
   });
   deptos.forEach(function (d) {
     cache.put(ITF_LEGACY_INDEX_PREFIX + d, JSON.stringify(buckets[d]), ITF_LEGACY_INDEX_SECONDS);
@@ -180,19 +180,17 @@ function itfLegacy_disponibilidad(wellIds) {
 
 // --- resolucion de UN pozo ---
 
-// {estado, cantidad, fileId?, nombre?, leerBlob?}. Una sola llamada a Drive (getFilesByName). Como Drive puede devolver variantes de mayusculas, se filtra por nombre EXACTO. Lanza si Drive falla.
-// fileId es INTERNO (referencia para el registro del legacy): jamas sale hacia el cliente.
+// {estado, cantidad, fileId?, nombre?, leerBlob?}. TODOS los candidatos del pozo (DD-PPPP + extension .jpg en cualquier capitalizacion; ver driveProfileRepository_buscarCandidatosLegacy): 0 -> NO, 1 -> UNICO,
+// 2 o mas -> AMBIGUO (nunca se elige uno). Lanza si Drive falla. fileId es INTERNO (referencia para el registro del legacy): jamas sale hacia el cliente.
 function itfLegacy_buscar(wellId) {
-  var nombre = itfLegacy_nombre(wellId);
-  var coincidencias = driveProfileRepository_buscarPorNombre(nombre);
-  var exactas = coincidencias.filter(function (c) { return c.nombre === nombre; });
-  if (exactas.length === 0) {
-    return { estado: coincidencias.length > 0 ? ITF_LEGACY_ESTADOS.NO_CANONICO : ITF_LEGACY_ESTADOS.NO, cantidad: 0 };
+  var candidatos = driveProfileRepository_buscarCandidatosLegacy(wellId);
+  if (candidatos.length === 0) {
+    return { estado: ITF_LEGACY_ESTADOS.NO, cantidad: 0 };
   }
-  if (exactas.length >= 2) {
-    return { estado: ITF_LEGACY_ESTADOS.AMBIGUO, cantidad: exactas.length };
+  if (candidatos.length >= 2) {
+    return { estado: ITF_LEGACY_ESTADOS.AMBIGUO, cantidad: candidatos.length };
   }
-  return { estado: ITF_LEGACY_ESTADOS.UNICO, cantidad: 1, fileId: exactas[0].fileId, nombre: exactas[0].nombre, leerBlob: exactas[0].leerBlob };
+  return { estado: ITF_LEGACY_ESTADOS.UNICO, cantidad: 1, fileId: candidatos[0].fileId, nombre: candidatos[0].nombre, leerBlob: candidatos[0].leerBlob };
 }
 
 // 'NO'|'UNICO'|... -> true / false / null para el dominio (itfDominio_estadoPozo): solo UNICO es true, solo NO es false; ambiguo, no canonico o desconocido son null (no se sabe).

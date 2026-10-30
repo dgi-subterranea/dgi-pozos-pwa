@@ -19,7 +19,7 @@ function iterador(lista) {
 function crearDrive(archivos, opciones) {
   const o = opciones || {};
   const estado = { archivos: archivos.slice(), caseInsensitive: o.caseInsensitive === true, fallar: null };
-  const calls = { getFilesByName: 0, getFiles: 0, getFileById: 0, getBlob: 0 };
+  const calls = { getFilesByName: 0, getFiles: 0, getFileById: 0, getBlob: 0, searchFiles: 0 };
   const mk = (a) => ({
     getId: () => a.id,
     getName: () => a.name,
@@ -32,6 +32,15 @@ function crearDrive(archivos, opciones) {
       calls.getFilesByName += 1;
       verificar();
       return iterador(estado.archivos.filter((a) => (a.padre || 'CARPETA') === 'CARPETA' && (a.name === n || (estado.caseInsensitive && a.name.toLowerCase() === n.toLowerCase()))).map(mk));
+    },
+    // E9-7: searchFiles("title contains 'X' and trashed = false") -> los archivos de la carpeta cuyo nombre contiene X (sin importar mayusculas), como la busqueda real de Drive
+    searchFiles: (q) => {
+      calls.searchFiles += 1;
+      verificar();
+      if (estado.fallarBusqueda) { throw new Error(estado.fallarBusqueda); }
+      const m = /^title contains '([^']+)'/.exec(String(q));
+      if (!m) { throw new Error('consulta no soportada por el fake: ' + q); }
+      return iterador(estado.archivos.filter((a) => (a.padre || 'CARPETA') === 'CARPETA' && a.name.toLowerCase().indexOf(m[1].toLowerCase()) >= 0).map(mk));
     },
     getFiles: () => { calls.getFiles += 1; verificar(); return iterador(estado.archivos.filter((x) => (x.padre || 'CARPETA') === 'CARPETA').map(mk)); }
   };

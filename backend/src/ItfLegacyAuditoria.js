@@ -8,7 +8,9 @@
 //   totalArchivos, canonicos (DD-PPPP.jpg), variantesExtension (DD-PPPP.JPG / .Jpg ...), noCoinciden (nombres que no parecen un ITF), sinPozoValido (parecen un ITF pero el pozo no es valido),
 //   duplicadosCanonicos (pozos con >=2 archivos '<wellId>.jpg'), pozosConMasDeUnCandidato (>=2 archivos del mismo pozo, canonicos o no), pozosPorEstado {UNICO, AMBIGUO, NO_CANONICO},
 //   tamanos {cantidad, sinTamano, minBytes, medianaBytes, p95Bytes, p99Bytes, maxBytes, totalBytes, sobreElLimite, distribucion[]}.
-// El estado por pozo usa EXACTAMENTE la misma regla que el proveedor legacy (UNICO / AMBIGUO / NO_CANONICO); el test lo cruza contra itfLegacy_estadoDe para que no puedan divergir.
+// El estado por pozo usa EXACTAMENTE la misma regla que el proveedor legacy (UNICO / AMBIGUO; desde E9-7 la extension .jpg es case-insensitive: DD-PPPP.JPG es un candidato equivalente, y dos candidatos
+// del mismo pozo, de la capitalizacion que sea, son AMBIGUO); el test lo cruza contra itfLegacy_estadoDe para que no puedan divergir. `variantesExtension` se conserva como informacion de HIGIENE HISTORICA:
+// una variante unica NO es un bloqueo. `noCoincidenClasificados` agrupa por patron (solo para documentacion) los nombres que no son un ITF DD-PPPP.jpg; no hay ninguna accion asociada.
 //
 // POZO VALIDO: departamento 01..19 y numero distinto de 0000 (la misma cobertura que el indice legacy: itfLegacy_departamentos).
 // TIEMPO: Apps Script corta a los 6 minutos. La lectura se detiene a los AUDITORIA_MAX_MS (4,5 min) y el informe sale con incompleto=true: nunca se informa un conteo parcial como si fuera total.
@@ -30,6 +32,23 @@ var ITF_AUDITORIA_TRAMOS = [
 function itfAuditoria_pozoValido(depto, numero) {
   var d = parseInt(depto, 10);
   return d >= 1 && d <= 19 && parseInt(numero, 10) > 0;
+}
+
+// PURA. Para un nombre que NO es un ITF DD-PPPP.jpg: en que patron cae (solo documentacion). tieneFormatoItf = parece DD-PPPP.<ext> pero con otra extension.
+function itfAuditoria_patronNoCoincide(nombre, tieneFormatoItf) {
+  if (tieneFormatoItf) {
+    return 'otraExtension';
+  }
+  if (/^PM\d*\./i.test(nombre)) {
+    return 'PM';
+  }
+  if (/^\d-\d{4}\./.test(nombre)) {
+    return 'depto1Digito';
+  }
+  if (/^\d{2}-\d{3}\./.test(nombre)) {
+    return 'pozo3Digitos';
+  }
+  return 'otros';
 }
 
 function itfAuditoria_percentil(ordenados, p) {
@@ -60,9 +79,10 @@ function itfAuditoria_analizar(archivos, opciones) {
     duplicadosCanonicos: 0,
     archivosCanonicosSobrantes: 0,
     pozosConMasDeUnCandidato: 0,
+    noCoincidenClasificados: { PM: 0, depto1Digito: 0, pozo3Digitos: 0, otraExtension: 0, otros: 0 },
     pozosPorEstado: { UNICO: 0, AMBIGUO: 0, NO_CANONICO: 0 },
     tamanos: null,
-    ejemplos: { noCoinciden: [], sinPozoValido: [], variantesExtension: [], duplicadosCanonicos: [], pozosConMasDeUnCandidato: [] }
+    ejemplos: { noCoinciden: [], sinPozoValido: [], variantesExtension: [], duplicadosCanonicos: [], pozosConMasDeUnCandidato: [], noCoincidenPorPatron: { PM: [], depto1Digito: [], pozo3Digitos: [], otraExtension: [], otros: [] } }
   };
   var porPozo = {};
   var tamanos = [];
@@ -75,6 +95,9 @@ function itfAuditoria_analizar(archivos, opciones) {
     if (!m || !esJpg) {
       informe.noCoinciden += 1;
       itfAuditoria_agregarEjemplo(informe.ejemplos.noCoinciden, nombre.substring(0, 60));
+      var patron = itfAuditoria_patronNoCoincide(nombre, !!m);
+      informe.noCoincidenClasificados[patron] += 1;
+      itfAuditoria_agregarEjemplo(informe.ejemplos.noCoincidenPorPatron[patron], nombre.substring(0, 60));
       return;
     }
     var wellId = m[1] + '-' + m[2];
@@ -106,13 +129,10 @@ function itfAuditoria_analizar(archivos, opciones) {
     if (entrada.canonicos >= 2) {
       informe.duplicadosCanonicos += 1;
       informe.archivosCanonicosSobrantes += entrada.canonicos - 1;
-      informe.pozosPorEstado.AMBIGUO += 1;
       itfAuditoria_agregarEjemplo(informe.ejemplos.duplicadosCanonicos, wellId);
-    } else if (entrada.canonicos === 1) {
-      informe.pozosPorEstado.UNICO += 1;
-    } else {
-      informe.pozosPorEstado.NO_CANONICO += 1;
     }
+    // el estado sale de la MISMA regla que el proveedor legacy: un candidato (de la capitalizacion que sea) = UNICO; dos o mas = AMBIGUO
+    informe.pozosPorEstado[entrada.canonicos + entrada.noCanonicos >= 2 ? 'AMBIGUO' : 'UNICO'] += 1;
     if (entrada.canonicos + entrada.noCanonicos >= 2) {
       informe.pozosConMasDeUnCandidato += 1;
       itfAuditoria_agregarEjemplo(informe.ejemplos.pozosConMasDeUnCandidato, wellId);
@@ -169,6 +189,7 @@ if (typeof module !== 'undefined' && module.exports) {
     ITF_AUDITORIA_MAX_MS,
     ITF_AUDITORIA_TRAMOS,
     itfAuditoria_pozoValido,
+    itfAuditoria_patronNoCoincide,
     itfAuditoria_percentil,
     itfAuditoria_analizar,
     auditarCarpetaItfLegacy

@@ -21,13 +21,13 @@ describe('E9-2 no esta cableado: ningun archivo vivo de la app lo referencia', (
     expect(SRC(archivo)).not.toMatch(MARCAS_E9);
   });
 
-  test('DriveProfileRepository: getFile / existe / listarArchivosThumb siguen IGUAL; solo se agregaron buscarPorNombre y leerPorId (que usa el proveedor legacy) y el codigo no menciona a E9', () => {
+  test('DriveProfileRepository: getFile / existe / listarArchivosThumb siguen IGUAL; solo se agregaron buscarPorNombre, buscarCandidatosLegacy y leerPorId (que usa el proveedor legacy) y el codigo no menciona a E9', () => {
     const src = CODIGO('DriveProfileRepository.js');
     expect(src).toMatch(/folder\.getFilesByName\(wellId \+ '\.jpg'\);\n  if \(!files\.hasNext\(\)\) \{\n    return \{ found: false \};\n  \}\n  var file = files\.next\(\);\n  return \{ found: true, blob: file\.getBlob\(\) \};/);
     expect(src).toMatch(/return folder\.getFilesByName\(wellId \+ '\.jpg'\)\.hasNext\(\);/);
     expect(src).not.toMatch(MARCAS_E9);
     const m = require('../src/DriveProfileRepository');
-    expect(Object.keys(m).sort()).toEqual(['driveProfileRepository_buscarPorNombre', 'driveProfileRepository_existe', 'driveProfileRepository_getFile', 'driveProfileRepository_leerPorId', 'driveProfileRepository_listarArchivosThumb']);
+    expect(Object.keys(m).sort()).toEqual(['driveProfileRepository_buscarCandidatosLegacy', 'driveProfileRepository_buscarPorNombre', 'driveProfileRepository_existe', 'driveProfileRepository_getFile', 'driveProfileRepository_leerPorId', 'driveProfileRepository_listarArchivosThumb']);
   });
 
   // E9-6 (UI local): el frontend SI conoce los permisos perfil_subir / perfil_validar (compuertas exactas de la UI), pero NUNCA el interior del backend: la hoja de eventos, el dominio, el servicio, el proveedor legacy ni el interruptor.

@@ -286,7 +286,6 @@ describe('getMisPropuestasItf: solo las propuestas de quien pregunta', () => {
     for (let i = 0; i < cantidad; i += 1) {
       // cada pozo admite hasta 10 pendientes: se reparten en varios pozos
       const wellId = '14-' + String(100 + Math.floor(i / 8)).padStart(4, '0');
-      E.drive.agregar && E.drive.agregar(wellId);
       ids.push(proponer(i % 200 + 1, wellId, PROPONENTE));
     }
     como(PROPONENTE);
@@ -350,6 +349,27 @@ describe('getProfile: cableado al vigente institucional SOLO con ITF_E9_ACTIVO =
   test('ENCENDIDO sin ITF: PROFILE_NOT_FOUND', () => {
     como(SOLO_PERFIL);
     expect(getProfile(W2)).toMatchObject({ status: 'error', code: 'PROFILE_NOT_FOUND' });
+  });
+
+  test('ENCENDIDO (politica legacy case-insensitive, E9-7): un UNICO <wellId>.JPG se sirve por getProfile y cuenta como disponible; .jpg + .JPG es ITF_STATE_UNKNOWN y se omite de la disponibilidad', () => {
+    const bytesJpg = JPEG(222, 6);
+    montar({ archivos: [{ id: 'legacy-up-15-1082', name: '15-1082.JPG', bytes: bytesJpg }, { id: 'legacy-a-15-1024', name: '15-1024.jpg', bytes: JPEG(100, 1) }, { id: 'legacy-b-15-1024', name: '15-1024.JPG', bytes: JPEG(100, 2) }], props: { ITF_E9_ACTIVO: 'SI' } });
+    como(SOLO_PERFIL);
+    const r = getProfile('15-1082');
+    expect(r.status).toBe('ok');
+    expect(r.data.originalSizeBytes).toBe(222);
+    expect(Api.handleGetItfAvailability('t', ['15-1082', '15-1024', '15-0001']).data).toEqual({ '15-1082': true, '15-0001': false });
+    expect(getProfile('15-1024')).toMatchObject({ status: 'error', code: 'ITF_STATE_UNKNOWN' });
+  });
+
+  test.each([['encendido', { ITF_E9_ACTIVO: 'SI' }], ['apagado', {}]])('un legacy EXISTENTE de 11 MB se sigue leyendo como hoy (interruptor %s): el limite de 3 MB es solo de las propuestas nuevas', (_n, props) => {
+    const grande = JPEG(11540150, 8);
+    montar({ archivos: [{ id: 'legacy-grande-' + W, name: W + '.jpg', bytes: grande }], props });
+    como(SOLO_PERFIL);
+    const r = getProfile();
+    expect(r.status).toBe('ok');
+    expect(r.data.originalSizeBytes).toBe(11540150);
+    expect(Api.handleGetItfAvailability('t', [W]).data).toEqual({ [W]: true });
   });
 
   test('ENCENDIDO: una propuesta pendiente NO se sirve (sigue el legacy) y un rechazado tampoco', () => {

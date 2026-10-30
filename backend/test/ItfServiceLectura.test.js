@@ -50,11 +50,22 @@ describe('resolverVigente: legacy y E9 combinados', () => {
     E.drive.agregar({ id: 'legacy-otro-' + W, name: W + '.jpg', bytes: JPEG(100) });
     expect(S.itfService_resolverVigente(W)).toMatchObject({ estado: 'DESCONOCIDO', codigo: 'LEGACY_AMBIGUO', legacy: 'AMBIGUO', storageRef: null });
   });
-  test('extension en mayuscula (Drive insensible): DESCONOCIDO / LEGACY_NOMBRE_NO_CANONICO', () => {
-    entorno({ archivos: [{ id: 'legacy-x-' + W, name: W + '.JPG', bytes: JPEG(100) }] });
+  test.each([[false], [true]])('un UNICO <wellId>.JPG es el vigente legacy (Drive insensible=%s): SI / LEGACY, getProfile lo sirve y la disponibilidad lo cuenta', (insensible) => {
+    const bytes = JPEG(100, 3);
+    entorno({ archivos: [{ id: 'legacy-x-' + W, name: W + '.JPG', bytes: bytes }] });
     activar();
-    E.drive.estado.caseInsensitive = true;
-    expect(S.itfService_resolverVigente(W)).toMatchObject({ estado: 'DESCONOCIDO', codigo: 'LEGACY_NOMBRE_NO_CANONICO' });
+    E.drive.estado.caseInsensitive = insensible;
+    expect(S.itfService_resolverVigente(W)).toMatchObject({ estado: 'SI', origen: 'LEGACY', documentoId: LEGACY_ID, codigo: null });
+    expect(S.itfService_getProfile(W)).toMatchObject({ found: true });
+    expect(S.itfService_getProfile(W).blob.getBytes()).toHaveLength(100);
+    expect(S.itfService_disponibilidad([W])).toEqual({ [W]: true });
+  });
+  test('<wellId>.jpg + <wellId>.JPG: DESCONOCIDO / LEGACY_AMBIGUO (nunca se elige uno), getProfile no sirve ninguno y la disponibilidad lo omite', () => {
+    entorno({ archivos: [{ id: 'legacy-a-' + W, name: W + '.jpg', bytes: JPEG(100, 3) }, { id: 'legacy-b-' + W, name: W + '.JPG', bytes: JPEG(100, 4) }] });
+    activar();
+    expect(S.itfService_resolverVigente(W)).toMatchObject({ estado: 'DESCONOCIDO', codigo: 'LEGACY_AMBIGUO' });
+    expect(S.itfService_getProfile(W)).toMatchObject({ found: false, unknown: true });
+    expect(S.itfService_disponibilidad([W])).toEqual({});
   });
   test('legacy registrado pero SIN aprobacion posterior: el legacy SIGUE vigente (el registro no es un reemplazo)', () => {
     cargar(H.legacy());
@@ -271,13 +282,13 @@ describe('disponibilidad en lote', () => {
       [w(1)]: true, [w(2)]: true, [w(3)]: true, [w(4)]: false, [w(5)]: false, [w(6)]: false, [w(7)]: false
     });
   });
-  test('un pozo corrupto, ambiguo o con nombre no canonico se OMITE: nunca un "No" enganoso', () => {
-    entorno({ archivos: [lf('15-0001'), lf('15-0002'), { id: 'dup-15-0002', name: '15-0002.jpg', bytes: JPEG(10) }, { id: 'may-15-0003', name: '15-0003.JPG', bytes: JPEG(10) }, lf('15-0004')] });
+  test('un pozo corrupto o ambiguo (tambien jpg + JPG) se OMITE: nunca un "No" enganoso; una variante unica (.JPG) SI cuenta como tiene ITF', () => {
+    entorno({ archivos: [lf('15-0001'), lf('15-0002'), { id: 'dup-15-0002', name: '15-0002.jpg', bytes: JPEG(10) }, { id: 'may-15-0003', name: '15-0003.JPG', bytes: JPEG(10) }, lf('15-0004'), lf('15-0006'), { id: 'may-15-0006', name: '15-0006.JPG', bytes: JPEG(10) }] });
     activar();
     cargar(H.propuesto(1, { wellId: '15-0004' }), H.aprobado(1, null, { wellId: '15-0004' }), H.aprobado(1, null, { wellId: '15-0004' }));
-    const r = S.itfService_disponibilidad(['15-0001', '15-0002', '15-0003', '15-0004', '15-0005']);
-    expect(r).toEqual({ '15-0001': true, '15-0005': false });
-    ['15-0002', '15-0003', '15-0004'].forEach((id) => expect(Object.prototype.hasOwnProperty.call(r, id)).toBe(false));
+    const r = S.itfService_disponibilidad(['15-0001', '15-0002', '15-0003', '15-0004', '15-0005', '15-0006']);
+    expect(r).toEqual({ '15-0001': true, '15-0003': true, '15-0005': false });
+    ['15-0002', '15-0004', '15-0006'].forEach((id) => expect(Object.prototype.hasOwnProperty.call(r, id)).toBe(false));
   });
   test('los valores son SOLO booleanos (nada de ids, estados ni detalles)', () => {
     entorno({ archivos: carpeta() });

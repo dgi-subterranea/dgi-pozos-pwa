@@ -1,4 +1,4 @@
-// ItfLegacyProvider (E9-3): politica unica de nombre legacy, ambiguedad fail-closed, indice de disponibilidad en lote (una lectura, single-flight), resolucion de un pozo (una llamada a Drive),
+// ItfLegacyProvider (E9-3, politica de nombre REVISADA en E9-7: la extension .jpg es case-insensitive y la unicidad cuenta candidatos de cualquier capitalizacion): politica unica de nombre legacy, ambiguedad fail-closed, indice de disponibilidad en lote (una lectura, single-flight), resolucion de un pozo (una llamada a Drive),
 // huella para el registro (SHA-256 de los bytes reales) y verificacion al restaurar. Drive falso con contadores; nada toca Google.
 const { crearEntorno, JPEG, PNG, sha256 } = require('./itfEntorno');
 
@@ -14,22 +14,27 @@ describe('politica de nombre: pura', () => {
     expect(L.itfLegacy_nombre('14-0001')).toBe('14-0001.jpg');
     expect(L.ITF_LEGACY_EXTENSION).toBe('.jpg');
   });
-  test('clasificar: canonico, no canonico (cualquier mayuscula), duplicados; lo que no parece un ITF se ignora', () => {
+  test('clasificar: cuenta CANDIDATOS de cualquier capitalizacion de la extension; lo que no parece un ITF se ignora', () => {
     const r = L.itfLegacy_clasificarNombres(['14-0001.jpg', '14-0001.jpg', '14-0002.JPG', '14-0003.Jpg', '14-0004.jpg', '14-0004.JPG', 'readme.txt', '14-0005.png', '14-001.jpg', 'x14-0006.jpg', '', null, 7]);
     expect(r).toEqual({
-      '14-0001': { canonicos: 2, noCanonicos: 0 },
-      '14-0002': { canonicos: 0, noCanonicos: 1 },
-      '14-0003': { canonicos: 0, noCanonicos: 1 },
-      '14-0004': { canonicos: 1, noCanonicos: 1 }
+      '14-0001': { candidatos: 2, canonicos: 2, noCanonicos: 0 },
+      '14-0002': { candidatos: 1, canonicos: 0, noCanonicos: 1 },
+      '14-0003': { candidatos: 1, canonicos: 0, noCanonicos: 1 },
+      '14-0004': { candidatos: 2, canonicos: 1, noCanonicos: 1 }
     });
   });
-  test('estadoDe: NO / UNICO / AMBIGUO / NO_CANONICO', () => {
+  test('estadoDe: 0 candidatos -> NO; 1 candidato (minuscula O variante) -> UNICO; 2 o mas -> AMBIGUO; NO_CANONICO ya no se produce', () => {
     expect(L.itfLegacy_estadoDe(undefined)).toBe('NO');
+    expect(L.itfLegacy_estadoDe({ candidatos: 0 })).toBe('NO');
     expect(L.itfLegacy_estadoDe({ canonicos: 0, noCanonicos: 0 })).toBe('NO');
-    expect(L.itfLegacy_estadoDe({ canonicos: 1, noCanonicos: 0 })).toBe('UNICO');
-    expect(L.itfLegacy_estadoDe({ canonicos: 1, noCanonicos: 3 })).toBe('UNICO');
-    expect(L.itfLegacy_estadoDe({ canonicos: 2, noCanonicos: 0 })).toBe('AMBIGUO');
-    expect(L.itfLegacy_estadoDe({ canonicos: 0, noCanonicos: 2 })).toBe('NO_CANONICO');
+    expect(L.itfLegacy_estadoDe({ candidatos: 1, canonicos: 1, noCanonicos: 0 })).toBe('UNICO');
+    expect(L.itfLegacy_estadoDe({ candidatos: 1, canonicos: 0, noCanonicos: 1 })).toBe('UNICO');
+    expect(L.itfLegacy_estadoDe({ canonicos: 0, noCanonicos: 1 })).toBe('UNICO');
+    expect(L.itfLegacy_estadoDe({ candidatos: 2, canonicos: 2, noCanonicos: 0 })).toBe('AMBIGUO');
+    expect(L.itfLegacy_estadoDe({ candidatos: 2, canonicos: 1, noCanonicos: 1 })).toBe('AMBIGUO');
+    expect(L.itfLegacy_estadoDe({ candidatos: 2, canonicos: 0, noCanonicos: 2 })).toBe('AMBIGUO');
+    expect(L.itfLegacy_estadoDe({ canonicos: 1, noCanonicos: 3 })).toBe('AMBIGUO');
+    [undefined, { candidatos: 0 }, { candidatos: 1, canonicos: 0, noCanonicos: 1 }, { candidatos: 5 }].forEach((e) => expect(L.itfLegacy_estadoDe(e)).not.toBe('NO_CANONICO'));
   });
   test('solo UNICO es true y solo NO es false para el dominio; el resto es "no se sabe" (null)', () => {
     expect(L.itfLegacy_aDisponible('UNICO')).toBe(true);
@@ -40,9 +45,9 @@ describe('politica de nombre: pura', () => {
 
 describe('disponibilidad en lote: UN indice, UNA pasada por la carpeta', () => {
   test('estados por pozo y una sola listada de la carpeta', () => {
-    entorno([archivo('a', '14-0001.jpg'), archivo('b', '14-0002.jpg'), archivo('c', '14-0002.jpg'), archivo('d', '14-0003.JPG'), archivo('e', '01-0012.jpg')]);
-    const r = L.itfLegacy_disponibilidad(['14-0001', '14-0002', '14-0003', '14-0004', '01-0012']);
-    expect(r).toEqual({ '14-0001': 'UNICO', '14-0002': 'AMBIGUO', '14-0003': 'NO_CANONICO', '14-0004': 'NO', '01-0012': 'UNICO' });
+    entorno([archivo('a', '14-0001.jpg'), archivo('b', '14-0002.jpg'), archivo('c', '14-0002.jpg'), archivo('d', '14-0003.JPG'), archivo('e', '01-0012.jpg'), archivo('f', '14-0005.jpg'), archivo('g', '14-0005.JPG')]);
+    const r = L.itfLegacy_disponibilidad(['14-0001', '14-0002', '14-0003', '14-0004', '01-0012', '14-0005']);
+    expect(r).toEqual({ '14-0001': 'UNICO', '14-0002': 'AMBIGUO', '14-0003': 'UNICO', '14-0004': 'NO', '01-0012': 'UNICO', '14-0005': 'AMBIGUO' });
     expect(E.drive.calls.getFiles).toBe(1);
     expect(E.drive.calls.getFilesByName).toBe(0);
   });
@@ -74,19 +79,19 @@ describe('disponibilidad en lote: UN indice, UNA pasada por la carpeta', () => {
     const original = L.itfLegacy_reconstruirIndice;
     const cache = CacheService.getScriptCache();
     L.itfLegacy_disponibilidad(['14-0001']);
-    cache.remove('itf_leg_v1_14');
+    cache.remove('itf_leg_v2_14');
     const put = cache.put;
-    cache.put = (k, v) => { if (k !== 'itf_leg_v1_14') { put(k, v); } };       // el cache "no guarda" ese bucket
+    cache.put = (k, v) => { if (k !== 'itf_leg_v2_14') { put(k, v); } };       // el cache "no guarda" ese bucket
     expect(L.itfLegacy_disponibilidad(['14-0001', '01-0001'])).toEqual({ '14-0001': 'DESCONOCIDO', '01-0001': 'NO' });
     cache.put = put;
     expect(original).toBeDefined();
   });
   test('un bucket corrupto en el cache no se interpreta: DESCONOCIDO', () => {
     entorno([archivo('a', '14-0001.jpg')]);
-    CacheService.getScriptCache().put('itf_leg_v1_14', 'esto no es json', 3600);
-    for (let d = 1; d <= 19; d += 1) { const k = 'itf_leg_v1_' + String(d).padStart(2, '0'); if (k !== 'itf_leg_v1_14') { CacheService.getScriptCache().put(k, '{"u":[],"a":[],"n":[]}', 3600); } }
+    CacheService.getScriptCache().put('itf_leg_v2_14', 'esto no es json', 3600);
+    for (let d = 1; d <= 19; d += 1) { const k = 'itf_leg_v2_' + String(d).padStart(2, '0'); if (k !== 'itf_leg_v2_14') { CacheService.getScriptCache().put(k, '{"u":[],"a":[],"n":[]}', 3600); } }
     expect(L.itfLegacy_disponibilidad(['14-0001'])).toEqual({ '14-0001': 'DESCONOCIDO' });
-    CacheService.getScriptCache().put('itf_leg_v1_14', '{"u":"no","a":[],"n":[]}', 3600);
+    CacheService.getScriptCache().put('itf_leg_v2_14', '{"u":"no","a":[],"n":[]}', 3600);
     expect(L.itfLegacy_disponibilidad(['14-0001'])).toEqual({ '14-0001': 'DESCONOCIDO' });
   });
   test('el indice vive en su propio espacio de claves (no pisa el itf_idx_ existente)', () => {
@@ -94,7 +99,7 @@ describe('disponibilidad en lote: UN indice, UNA pasada por la carpeta', () => {
     L.itfLegacy_disponibilidad(['14-0001']);
     const cache = CacheService.getScriptCache();
     expect(cache.get('itf_idx_14')).toBeNull();
-    expect(JSON.parse(cache.get('itf_leg_v1_14'))).toEqual({ u: ['0001'], a: [], n: [] });
+    expect(JSON.parse(cache.get('itf_leg_v2_14'))).toEqual({ u: ['0001'], a: [], n: [] });
   });
   test('Drive caido al reconstruir: LANZA (no se inventa un "No") y no deja la bandera de reconstruccion', () => {
     entorno([archivo('a', '14-0001.jpg')]);
@@ -111,7 +116,7 @@ describe('Q4: reconstruccion single-flight (sin ScriptLock)', () => {
     entorno([archivo('a', '14-0001.jpg')]);
     const cache = CacheService.getScriptCache();
     cache.put(L.ITF_LEGACY_REBUILD_FLAG, '1', 60);
-    Utilities.sleep.mockImplementation(() => { for (let d = 1; d <= 19; d += 1) { cache.put('itf_leg_v1_' + String(d).padStart(2, '0'), '{"u":["0001"],"a":[],"n":[]}', 3600); } });
+    Utilities.sleep.mockImplementation(() => { for (let d = 1; d <= 19; d += 1) { cache.put('itf_leg_v2_' + String(d).padStart(2, '0'), '{"u":["0001"],"a":[],"n":[]}', 3600); } });
     expect(L.itfLegacy_disponibilidad(['14-0001'])).toEqual({ '14-0001': 'UNICO' });
     expect(Utilities.sleep).toHaveBeenCalledTimes(1);
     expect(E.drive.calls.getFiles).toBe(0);
@@ -140,18 +145,20 @@ describe('Q4: reconstruccion single-flight (sin ScriptLock)', () => {
   });
 });
 
-describe('buscar: UNA llamada a Drive; 0 -> NO, 1 -> UNICO, 2+ -> AMBIGUO (nunca el primero en silencio)', () => {
+describe('buscar: 0 candidatos -> NO, 1 (de la capitalizacion que sea) -> UNICO, 2+ -> AMBIGUO (nunca el primero en silencio)', () => {
   test('inexistente', () => {
     entorno([archivo('a', '14-0002.jpg')]);
     expect(L.itfLegacy_buscar('14-0001')).toEqual({ estado: 'NO', cantidad: 0 });
     expect(E.drive.calls.getFilesByName).toBe(1);
+    expect(E.drive.calls.searchFiles).toBe(1);
   });
-  test('un archivo: referencia interna y lector de blob, sin segunda llamada a Drive', () => {
+  test('un archivo: referencia interna y lector de blob; solo dos lecturas de Drive (nombre canonico + busqueda de variantes), ninguna por id', () => {
     entorno([archivo('id-uno', '14-0001.jpg', JPEG(300, 9))]);
     const r = L.itfLegacy_buscar('14-0001');
     expect(r).toMatchObject({ estado: 'UNICO', cantidad: 1, fileId: 'id-uno', nombre: '14-0001.jpg' });
     expect(r.leerBlob().getBytes()).toHaveLength(300);
     expect(E.drive.calls.getFilesByName).toBe(1);
+    expect(E.drive.calls.searchFiles).toBe(1);
     expect(E.drive.calls.getFileById).toBe(0);
   });
   test('dos archivos con el mismo nombre: AMBIGUO y no entrega ninguno', () => {
@@ -161,20 +168,71 @@ describe('buscar: UNA llamada a Drive; 0 -> NO, 1 -> UNICO, 2+ -> AMBIGUO (nunca
     expect(r.leerBlob).toBeUndefined();
     expect(r.fileId).toBeUndefined();
   });
-  test('un Drive que no distingue mayusculas devuelve <wellId>.JPG: no es descargable (NO_CANONICO), no se lo toma por el canonico', () => {
-    entorno([archivo('a', '14-0001.JPG')]);
-    E.drive.estado.caseInsensitive = true;
-    expect(L.itfLegacy_buscar('14-0001')).toEqual({ estado: 'NO_CANONICO', cantidad: 0 });
+  test.each([['.JPG'], ['.Jpg'], ['.jPg'], ['.jpG']])('UN solo archivo con la extension %s: UNICO y se puede leer (la tolerancia de mayusculas es solo de la lectura legacy)', (ext) => {
+    entorno([archivo('id-v', '14-0001' + ext, JPEG(321, 4))]);
+    const r = L.itfLegacy_buscar('14-0001');
+    expect(r).toMatchObject({ estado: 'UNICO', cantidad: 1, fileId: 'id-v', nombre: '14-0001' + ext });
+    expect(r.leerBlob().getBytes()).toHaveLength(321);
+    expect(L.itfLegacy_disponibilidad(['14-0001'])['14-0001']).toBe('UNICO');
   });
-  test('un Drive que distingue mayusculas no ve la variante: NO (el indice la clasifica NO_CANONICO, que tampoco es "Si")', () => {
+  test.each([[false], [true]])('Drive %s distingue mayusculas en getFilesByName: el resultado es el mismo (una variante unica nunca se pierde ni se cuenta dos veces)', (insensible) => {
     entorno([archivo('a', '14-0001.JPG')]);
-    expect(L.itfLegacy_buscar('14-0001')).toEqual({ estado: 'NO', cantidad: 0 });
-    expect(L.itfLegacy_disponibilidad(['14-0001'])['14-0001']).toBe('NO_CANONICO');
+    E.drive.estado.caseInsensitive = insensible;
+    expect(L.itfLegacy_buscar('14-0001')).toMatchObject({ estado: 'UNICO', cantidad: 1, fileId: 'a' });
+    entorno([archivo('a', '14-0001.jpg')]);
+    E.drive.estado.caseInsensitive = insensible;
+    expect(L.itfLegacy_buscar('14-0001')).toMatchObject({ estado: 'UNICO', cantidad: 1, fileId: 'a' });
   });
-  test('canonico + variante en mayuscula (Drive insensible): UNICO, la variante se ignora', () => {
+  test.each([[false], [true]])('.jpg + .JPG del MISMO pozo: AMBIGUO (nunca el primero, nunca se ignora el segundo), con Drive insensible=%s', (insensible) => {
     entorno([archivo('a', '14-0001.jpg'), archivo('b', '14-0001.JPG')]);
+    E.drive.estado.caseInsensitive = insensible;
+    const r = L.itfLegacy_buscar('14-0001');
+    expect(r).toEqual({ estado: 'AMBIGUO', cantidad: 2 });
+    expect(r.leerBlob).toBeUndefined();
+    expect(r.fileId).toBeUndefined();
+    expect(L.itfLegacy_disponibilidad(['14-0001'])['14-0001']).toBe('AMBIGUO');
+  });
+  test('dos variantes entre si (.JPG + .Jpg) y tres capitalizaciones: AMBIGUO', () => {
+    entorno([archivo('a', '14-0001.Jpg'), archivo('b', '14-0001.JPG')]);
+    expect(L.itfLegacy_buscar('14-0001')).toEqual({ estado: 'AMBIGUO', cantidad: 2 });
+    entorno([archivo('a', '14-0001.jpg'), archivo('b', '14-0001.JPG'), archivo('c', '14-0001.Jpg')]);
+    expect(L.itfLegacy_buscar('14-0001')).toEqual({ estado: 'AMBIGUO', cantidad: 3 });
+  });
+  test('el mismo archivo devuelto por las dos busquedas cuenta UNA vez (se une por id)', () => {
+    entorno([archivo('a', '14-0001.jpg')]);
     E.drive.estado.caseInsensitive = true;
+    expect(L.itfLegacy_buscar('14-0001')).toMatchObject({ estado: 'UNICO', cantidad: 1 });
+  });
+  test('si la busqueda de variantes no encuentra nada, el canonico en minuscula NO se pierde (sin regresion respecto del comportamiento anterior)', () => {
+    entorno([archivo('a', '14-0001.jpg')]);
+    E.drive.mods = null;
+    const original = global.DriveApp.getFolderById;
+    global.DriveApp.getFolderById = () => { const c = original(); return { getFilesByName: c.getFilesByName, searchFiles: () => ({ hasNext: () => false, next: () => null }) }; };
     expect(L.itfLegacy_buscar('14-0001')).toMatchObject({ estado: 'UNICO', fileId: 'a' });
+  });
+  test('si la busqueda de variantes FALLA: LANZA (jamas "un solo candidato": podria ocultar un duplicado) y no se escribe nada', () => {
+    entorno([archivo('a', '14-0001.jpg')]);
+    E.drive.estado.fallarBusqueda = 'busqueda no disponible';
+    expect(() => L.itfLegacy_buscar('14-0001')).toThrow(/busqueda no disponible/);
+    expect(() => E.mods.drive.driveProfileRepository_buscarCandidatosLegacy('14-0001')).toThrow();
+  });
+  test('solo cuentan DD-PPPP + extension .jpg: otros pozos con el mismo prefijo, otras extensiones, sufijos y prefijos se descartan', () => {
+    entorno([archivo('a', '14-00011.jpg'), archivo('b', '14-0001.png'), archivo('c', '14-0001.jpg.bak'), archivo('d', 'x14-0001.jpg'), archivo('e', '14-0001.jpeg'), archivo('f', '14-0001'), archivo('g', '14-0002.jpg'), archivo('h', '14-0001.JPG')]);
+    E.drive.estado.caseInsensitive = true;
+    expect(L.itfLegacy_buscar('14-0001')).toMatchObject({ estado: 'UNICO', cantidad: 1, fileId: 'h' });
+    expect(L.itfLegacy_buscar('14-0002')).toMatchObject({ estado: 'UNICO', fileId: 'g' });
+    expect(L.itfLegacy_buscar('14-0003')).toEqual({ estado: 'NO', cantidad: 0 });
+  });
+  test('un wellId invalido no llega a Drive (ni se arma una consulta con el)', () => {
+    entorno([]);
+    ['', "14-0001' or 'x'='x", '14-001', null, undefined, 5].forEach((w) => expect(() => E.mods.drive.driveProfileRepository_buscarCandidatosLegacy(w)).toThrow(/wellId invalido/));
+    expect(E.drive.calls.searchFiles).toBe(0);
+  });
+  test('la consulta a Drive es de solo lectura sobre la carpeta institucional y excluye la papelera', () => {
+    const fuente = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'DriveProfileRepository.js'), 'utf8').replace(/\r\n/g, '\n');
+    const f = fuente.slice(fuente.indexOf('function driveProfileRepository_buscarCandidatosLegacy'), fuente.indexOf('function driveProfileRepository_leerPorId'));
+    expect(f).toContain('title contains ' + String.fromCharCode(39) + String.fromCharCode(34) + ' + wellId + ' + String.fromCharCode(34) + String.fromCharCode(39) + ' and trashed = false');
+    expect(f).not.toMatch(/setName|setTrashed|moveTo|makeCopy|setSharing|addEditor|createFile|createFolder|setContent|setDescription/);
   });
   test('Drive caido: LANZA (un error de Drive nunca es "no existe")', () => {
     entorno([]);
@@ -182,13 +240,12 @@ describe('buscar: UNA llamada a Drive; 0 -> NO, 1 -> UNICO, 2+ -> AMBIGUO (nunca
     expect(() => L.itfLegacy_buscar('14-0001')).toThrow(/Drive caido/);
   });
   test('el indice y la resolucion coinciden en todos los casos de la politica (nunca el indice dice Si y la resolucion no)', () => {
-    const casos = [[[], 'NO'], [[archivo('a', '14-0001.jpg')], 'UNICO'], [[archivo('a', '14-0001.jpg'), archivo('b', '14-0001.jpg')], 'AMBIGUO'], [[archivo('a', '14-0001.JPG')], 'NO_CANONICO']];
-    casos.forEach(([archivos, indice]) => {
+    const casos = [[[], 'NO'], [[archivo('a', '14-0001.jpg')], 'UNICO'], [[archivo('a', '14-0001.jpg'), archivo('b', '14-0001.jpg')], 'AMBIGUO'], [[archivo('a', '14-0001.JPG')], 'UNICO'], [[archivo('a', '14-0001.jpg'), archivo('b', '14-0001.JPG')], 'AMBIGUO'],
+      [[archivo('a', '14-0001.Jpg'), archivo('b', '14-0001.JPG')], 'AMBIGUO']];
+    casos.forEach(([archivos, esperado]) => {
       entorno(archivos);
-      const dis = L.itfLegacy_disponibilidad(['14-0001'])['14-0001'];
-      expect(dis).toBe(indice);
-      const res = L.itfLegacy_buscar('14-0001').estado;
-      if (dis === 'UNICO') { expect(res).toBe('UNICO'); }
+      expect(L.itfLegacy_disponibilidad(['14-0001'])['14-0001']).toBe(esperado);
+      expect(L.itfLegacy_buscar('14-0001').estado).toBe(esperado);          // el indice y la resolucion SIEMPRE coinciden
     });
   });
 });
@@ -200,6 +257,11 @@ describe('huella (para ITF_LEGACY_REGISTRADO)', () => {
     const r = L.itfLegacy_huella('14-0001');
     expect(r).toEqual({ ok: true, huella: { mimeType: 'image/jpeg', bytes: 500, sha256: sha256(bytes), storageFileId: 'id-huella-001', nombreOriginal: '14-0001.jpg' } });
     expect(E.mods.dominio.itfDominio_metadataDeCampos(r.huella).ok).toBe(true);
+  });
+  test('un unico <wellId>.JPG SI se registra: la huella lleva SU nombre real y el hash de sus bytes', () => {
+    const bytes = JPEG(280, 21);
+    entorno([archivo('id-mayus', '14-0001.JPG', bytes)]);
+    expect(L.itfLegacy_huella('14-0001')).toEqual({ ok: true, huella: { mimeType: 'image/jpeg', bytes: 280, sha256: sha256(bytes), storageFileId: 'id-mayus', nombreOriginal: '14-0001.JPG' } });
   });
   test('un legacy PNG con extension .jpg se registra como image/png (no se cree el nombre)', () => {
     entorno([archivo('id-png', '14-0001.jpg', PNG(60))]);
@@ -214,14 +276,13 @@ describe('huella (para ITF_LEGACY_REGISTRADO)', () => {
     entorno([archivo('x', '14-0001.jpg', b)]);
     expect(L.itfLegacy_huella('14-0001').huella.sha256).not.toBe(h1);
   });
-  test('no registra lo que no es una imagen valida, lo ambiguo, lo no canonico ni lo inexistente', () => {
+  test('no registra lo que no es una imagen valida, lo ambiguo (tambien jpg + JPG) ni lo inexistente', () => {
     entorno([archivo('a', '14-0001.jpg', Array.from(Buffer.from('%PDF-1.4 xxxx')))]);
     expect(L.itfLegacy_huella('14-0001')).toMatchObject({ ok: false, code: 'LEGACY_FORMATO_INVALIDO' });
     entorno([archivo('a', '14-0001.jpg'), archivo('b', '14-0001.jpg')]);
     expect(L.itfLegacy_huella('14-0001')).toMatchObject({ ok: false, code: 'LEGACY_AMBIGUO' });
-    entorno([archivo('a', '14-0001.JPG')]);
-    E.drive.estado.caseInsensitive = true;
-    expect(L.itfLegacy_huella('14-0001')).toMatchObject({ ok: false, code: 'LEGACY_NOMBRE_NO_CANONICO' });
+    entorno([archivo('a', '14-0001.jpg'), archivo('b', '14-0001.JPG')]);
+    expect(L.itfLegacy_huella('14-0001')).toMatchObject({ ok: false, code: 'LEGACY_AMBIGUO' });
     entorno([]);
     expect(L.itfLegacy_huella('14-0001')).toMatchObject({ ok: false, code: 'ITF_NOT_FOUND' });
   });
@@ -290,6 +351,13 @@ describe('repositorio de Drive: coincidencias y lectura por id', () => {
     expect(r.map((x) => x.fileId)).toEqual(['a', 'b']);
     expect(E.mods.drive.driveProfileRepository_getFile('14-0001').found).toBe(true);
   });
+  test('buscarCandidatosLegacy devuelve TODAS las capitalizaciones sin repetir (se une por id) y nada de otros pozos', () => {
+    entorno([archivo('a', '14-0001.jpg'), archivo('b', '14-0001.JPG'), archivo('c', '14-0002.jpg')]);
+    E.drive.estado.caseInsensitive = true;
+    const r = E.mods.drive.driveProfileRepository_buscarCandidatosLegacy('14-0001');
+    expect(r.map((x) => x.fileId).sort()).toEqual(['a', 'b']);
+    expect(r.map((x) => x.nombre).sort()).toEqual(['14-0001.JPG', '14-0001.jpg']);
+  });
   test('leerPorId: archivo dentro de la carpeta; id inexistente -> found:false', () => {
     entorno([archivo('a', '14-0001.jpg')]);
     expect(E.mods.drive.driveProfileRepository_leerPorId('a')).toMatchObject({ found: true, nombre: '14-0001.jpg' });
@@ -344,7 +412,7 @@ describe('single-flight con solicitudes simultaneas', () => {
     L.itfLegacy_disponibilidad(ids);
     expect(cache.get(L.ITF_LEGACY_REBUILD_FLAG)).toBeNull();
     cache.put(L.ITF_LEGACY_REBUILD_FLAG, '1', 60);
-    for (let d = 1; d <= 19; d += 1) { cache.remove('itf_leg_v1_' + String(d).padStart(2, '0')); }
+    for (let d = 1; d <= 19; d += 1) { cache.remove('itf_leg_v2_' + String(d).padStart(2, '0')); }
     L.itfLegacy_disponibilidad(ids);                                                     // bandera trabada: agota las esperas y reconstruye
     expect(cache.get(L.ITF_LEGACY_REBUILD_FLAG)).toBeNull();
     expect(E.lock.waitLock).not.toHaveBeenCalled();
@@ -369,15 +437,15 @@ describe('nombres invalidos y archivos fuera de la carpeta', () => {
     expect(L.itfLegacy_verificarHuella({ storageFileId: 'id-que-no-existe', sha256: 'a'.repeat(64), bytes: 10 })).toBe('AUSENTE');
     expect(L.itfLegacy_leerRegistrado({ storageFileId: 'id-que-no-existe', sha256: 'a'.repeat(64) })).toEqual({ found: false, code: 'ITF_NOT_FOUND' });
   });
-  test('0 coincidencias -> NO; 1 -> UNICO; 2 -> AMBIGUO; .jpg -> canonico; .JPG -> no canonico (la matriz completa de la politica)', () => {
+  test('0 candidatos -> NO; 1 candidato (cualquier capitalizacion) -> UNICO; 2 o mas -> AMBIGUO (la matriz completa de la politica)', () => {
     const matriz = [
       [[], 'NO'],
       [[archivo('a', '14-0001.jpg')], 'UNICO'],
       [[archivo('a', '14-0001.jpg'), archivo('b', '14-0001.jpg')], 'AMBIGUO'],
       [[archivo('a', '14-0001.jpg'), archivo('b', '14-0001.jpg'), archivo('c', '14-0001.jpg')], 'AMBIGUO'],
-      [[archivo('a', '14-0001.JPG')], 'NO_CANONICO'],
-      [[archivo('a', '14-0001.Jpg'), archivo('b', '14-0001.JPG')], 'NO_CANONICO'],
-      [[archivo('a', '14-0001.jpg'), archivo('b', '14-0001.JPG')], 'UNICO']
+      [[archivo('a', '14-0001.JPG')], 'UNICO'],
+      [[archivo('a', '14-0001.Jpg'), archivo('b', '14-0001.JPG')], 'AMBIGUO'],
+      [[archivo('a', '14-0001.jpg'), archivo('b', '14-0001.JPG')], 'AMBIGUO']
     ];
     matriz.forEach(([archivos, estado]) => {
       entorno(archivos);

@@ -311,12 +311,15 @@ describe('reglas de existencia y de estado (cadena real)', () => {
     expect(proponer().status).toBe('ok');
     expect(llamadasStorage).toHaveLength(1);
   });
-  test('C. legacy ambiguo / no canonico / ilegible: NO habilita nada, ni siquiera si el padron conoce el pozo (requiere revision) y no se sube nada', () => {
+  test('C. legacy ambiguo (tambien jpg + JPG) / ilegible: NO habilita nada, ni siquiera si el padron conoce el pozo (requiere revision) y no se sube nada; un UNICO .JPG se trata como el legacy vigente', () => {
     montar({ archivos: [legacy[0], { id: 'dup-14-0001-xx', name: W + '.jpg', bytes: JPEG(100) }] });
     expect(proponer()).toMatchObject({ status: 'error', code: 'LEGACY_AMBIGUO' });
+    montar({ archivos: [legacy[0], { id: 'may-14-0001-xx', name: W + '.JPG', bytes: JPEG(100) }] });
+    expect(proponer().code).toBe('LEGACY_AMBIGUO');
     montar({ archivos: [{ id: 'may-14-0001-xx', name: W + '.JPG', bytes: JPEG(100) }] });
-    E.drive.estado.caseInsensitive = true;
-    expect(proponer().code).toBe('LEGACY_NOMBRE_NO_CANONICO');
+    expect(proponer()).not.toMatchObject({ code: 'LEGACY_AMBIGUO' });
+    expect(proponer().code).not.toBe('LEGACY_NOMBRE_NO_CANONICO');
+    montar({ archivos: [legacy[0], { id: 'may-14-0001-xx', name: W + '.JPG', bytes: JPEG(100) }] });
     montar({ archivos: [{ id: 'pdf-14-0001-xx', name: W + '.jpg', bytes: Array.from(Buffer.from('%PDF-1.4 no es una imagen')) }] });
     expect(proponer().code).toBe('LEGACY_FORMATO_INVALIDO');
     expect(llamadasStorage).toEqual([]);

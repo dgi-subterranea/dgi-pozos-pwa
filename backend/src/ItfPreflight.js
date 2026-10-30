@@ -5,18 +5,22 @@
 //                                 Jamas imprime ids de Drive, la URL ni el secreto del storage, ni emails: solo si-no y cantidades.
 //   itfE9Encender()               pone ITF_E9_ACTIVO = SI SOLO si el preflight esta completamente en verde; si no, NO toca nada y lo dice. Es la unica forma recomendada de encender.
 //   itfE9Apagar()                 pone ITF_E9_ACTIVO = NO. Siempre funciona (sin condiciones): es el rollback inmediato. No borra eventos ni documentos.
-//   medirRendimientoItfE9()       SOLO LECTURA (salvo el cache de indice que ya usa la app): hash SHA-256 de 100 KB / 500 KB / 1 MB / 3 MB sinteticos y disponibilidad legacy de 1 y 500 pozos.
+//   medirRendimientoItfE9()       SOLO LECTURA (salvo el cache de indice que ya usa la app): hash SHA-256 de 100 KB / 500 KB / 1 MB / 3 MB / 12 MB sinteticos y disponibilidad legacy de 1 y 500 pozos.
 //
 // INTERRUPTOR: Script Property ITF_E9_ACTIVO del proyecto dgi-pozos-backend. Encendido = exactamente 'SI'. Apagado = CUALQUIER otro valor o propiedad ausente (el valor real de hoy: ausente).
 // La propiedad se lee en cada pedido (sin cache): apagarla corta E9 al instante, tambien para el @HEAD y para las versiones numeradas.
 var ITF_PREFLIGHT_PROPIEDAD = 'ITF_E9_ACTIVO';
 var ITF_PREFLIGHT_COLUMNAS_USUARIOS = ['perfil_subir', 'perfil_validar'];
+// Pozos cuyo UNICO archivo legacy tiene la extension en mayuscula (.JPG), segun la auditoria real de la carpeta (E9-7). El preflight comprueba que el lookup case-insensitive de la politica legacy los resuelve
+// como UNICO (solo lectura: nunca se abre ni se renombra el archivo). Es informacion de higiene historica, no una lista de acciones.
+var ITF_PREFLIGHT_POZOS_VARIANTE = ['15-1082', '15-1024', '15-0997'];
 var ITF_PREFLIGHT_REFERENCIA_INEXISTENTE = 'preflight-referencia-inexistente-no-es-un-archivo';
 var ITF_PREFLIGHT_TAMANOS_HASH = [
   { etiqueta: '100 KB', bytes: 100 * 1024 },
   { etiqueta: '500 KB', bytes: 500 * 1024 },
   { etiqueta: '1 MB', bytes: 1024 * 1024 },
-  { etiqueta: '3 MB', bytes: 3 * 1024 * 1024 }
+  { etiqueta: '3 MB', bytes: 3 * 1024 * 1024 },
+  { etiqueta: '12 MB (el legacy mas grande medido: 11,5 MB)', bytes: 12 * 1024 * 1024 }
 ];
 
 // --- evaluacion PURA (testeable sin Google) ---
@@ -31,12 +35,15 @@ function itfPreflight_evaluar(estado) {
   var usuarios = e.usuarios || {};
   var columnas = usuarios.columnas || {};
   var storage = e.storage || {};
+  var legacyVariantes = e.legacyVariantes || {};
   var items = [];
   function item(id, ok, detalle) {
     items.push({ id: id, ok: ok === true, detalle: detalle });
   }
   item('carpeta_legacy', carpeta.configurada === true && carpeta.accesible === true,
     carpeta.configurada !== true ? 'FOLDER_ID no configurado' : (carpeta.accesible === true ? 'carpeta legacy configurada y accesible' : 'la carpeta legacy configurada no se pudo abrir'));
+  item('legacy_variantes_mayusculas', typeof legacyVariantes.consultados === 'number' && legacyVariantes.consultados > 0 && legacyVariantes.unicos === legacyVariantes.consultados,
+    legacyVariantes.consultados > 0 && legacyVariantes.unicos === legacyVariantes.consultados ? 'el lookup case-insensitive resuelve como UNICO los ' + String(legacyVariantes.consultados) + ' pozos con extension en mayuscula' : 'el lookup case-insensitive NO resolvio como UNICO a los pozos con extension en mayuscula (' + String(legacyVariantes.unicos || 0) + ' de ' + String(legacyVariantes.consultados || 0) + ')');
   item('hoja_itfeventos', hoja.existe === true && hoja.esquemaOk === true,
     hoja.existe !== true ? 'la hoja ItfEventos NO existe (setupItfEventosSheet)' : (hoja.esquemaOk === true ? 'existe con el esquema de 17 columnas (' + String(hoja.filas) + ' evento(s))' : 'existe pero con un esquema inesperado: NO tocar, revisar a mano'));
   item('usuarios_hoja', usuarios.hoja === true, usuarios.hoja === true ? 'hoja Usuarios legible' : 'no se pudo leer la hoja Usuarios');
@@ -102,6 +109,12 @@ function itfPreflight_recolectar(deps) {
     }
   } catch (err) {
     // sigue en false
+  }
+  try {
+    var variantes = d.estadosVariantesLegacy ? d.estadosVariantesLegacy() : ITF_PREFLIGHT_POZOS_VARIANTE.map(function (w) { return itfLegacy_buscar(w).estado; });
+    estado.legacyVariantes = { consultados: variantes.length, unicos: variantes.filter(function (v) { return v === 'UNICO'; }).length };
+  } catch (err) {
+    estado.legacyVariantes = { consultados: ITF_PREFLIGHT_POZOS_VARIANTE.length, unicos: 0 };
   }
   try {
     var hoja = d.hojaItfEventos ? d.hojaItfEventos() : SpreadsheetApp.openById(getSpreadsheetId()).getSheetByName(ITF_EVENTOS_HOJA);
@@ -179,10 +192,13 @@ function itfPreflight_medir(deps) {
   var disponibilidad = d.disponibilidad || function (ids) { return itfLegacy_disponibilidad(ids); };
   var resultado = { hash: [], disponibilidad: [] };
   ITF_PREFLIGHT_TAMANOS_HASH.forEach(function (t) {
-    var bytes = itfPreflight_bytesSinteticos(t.bytes);
     var t0 = ahora();
-    sha(bytes);
-    resultado.hash.push({ tamano: t.etiqueta, ms: ahora() - t0 });
+    try {
+      sha(itfPreflight_bytesSinteticos(t.bytes));
+      resultado.hash.push({ tamano: t.etiqueta, ms: ahora() - t0 });
+    } catch (err) {
+      resultado.hash.push({ tamano: t.etiqueta, ms: ahora() - t0, error: true });        // p. ej. memoria: se informa y se sigue con lo demas
+    }
   });
   [{ etiqueta: '1 pozo', n: 1 }, { etiqueta: '500 pozos', n: 500 }, { etiqueta: '500 pozos (otra vez)', n: 500 }].forEach(function (c) {
     var ids = [];
@@ -206,6 +222,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     ITF_PREFLIGHT_PROPIEDAD,
     ITF_PREFLIGHT_TAMANOS_HASH,
+    ITF_PREFLIGHT_POZOS_VARIANTE,
     itfPreflight_evaluar,
     itfPreflight_cuantosActivosCon,
     itfPreflight_columnasDeUsuarios,

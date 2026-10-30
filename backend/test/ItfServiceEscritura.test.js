@@ -329,17 +329,16 @@ describe('APROBAR / registro del legacy / lock', () => {
     proponer(ana, 1, {}, deps);                                           // duplicado
     expect(deps.invalidarCaches).toHaveBeenCalledTimes(2);
   });
-  test('legacy ambiguo / no canonico / Drive caido / formato invalido al aprobar: LEGACY_AMBIGUO, LEGACY_NOMBRE_NO_CANONICO, SERVICE_UNAVAILABLE, LEGACY_FORMATO_INVALIDO; nada se escribe', () => {
+  test('legacy ambiguo (tambien jpg + JPG) / Drive caido / formato invalido al aprobar: LEGACY_AMBIGUO, SERVICE_UNAVAILABLE, LEGACY_FORMATO_INVALIDO; nada se escribe', () => {
     const p = proponer(ana, 1);
     const antes = filas().length;
     E.drive.agregar({ id: 'dup-' + W, name: W + '.jpg', bytes: JPEG(10) });
     expect(aprobar(val, docDe(p), LEGACY_ID)).toMatchObject({ ok: false, code: 'LEGACY_AMBIGUO' });
     E.drive.quitar('dup-' + W);
-    E.drive.quitar('legacy-' + W);
-    E.drive.agregar({ id: 'may-' + W + '-x', name: W + '.JPG', bytes: JPEG(10) });
-    E.drive.estado.caseInsensitive = true;
-    expect(aprobar(val, docDe(p), LEGACY_ID)).toMatchObject({ ok: false, code: 'LEGACY_NOMBRE_NO_CANONICO' });
+    E.drive.agregar({ id: 'may-' + W + '-x', name: W + '.JPG', bytes: JPEG(10) });               // <wellId>.jpg + <wellId>.JPG: dos candidatos equivalentes -> AMBIGUO, jamas uno arbitrario
+    expect(aprobar(val, docDe(p), LEGACY_ID)).toMatchObject({ ok: false, code: 'LEGACY_AMBIGUO' });
     E.drive.quitar('may-' + W + '-x');
+    E.drive.quitar('legacy-' + W);
     E.drive.agregar({ id: 'pdf-' + W + '-xxx', name: W + '.jpg', bytes: Array.from(Buffer.from('%PDF-1.4 xxxxx')) });
     expect(aprobar(val, docDe(p), LEGACY_ID)).toMatchObject({ ok: false, code: 'LEGACY_FORMATO_INVALIDO' });
     E.drive.estado.fallar = 'Drive caido';

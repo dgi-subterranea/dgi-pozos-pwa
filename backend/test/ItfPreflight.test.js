@@ -11,6 +11,7 @@ const R = require('../src/ItfEventosRepository');
 const OK_ESTADO = () => ({
   interruptor: null,
   carpetaLegacy: { configurada: true, accesible: true },
+  legacyVariantes: { consultados: 3, unicos: 3 },
   hoja: { existe: true, esquemaOk: true, filas: 0 },
   usuarios: { hoja: true, columnas: { perfil_subir: true, perfil_validar: true }, activosConSubir: 0, activosConValidar: 0 },
   storage: { configurado: true, codigo: 'ITF_NOT_FOUND' }
@@ -21,13 +22,15 @@ describe('evaluar (puro)', () => {
     const r = P.itfPreflight_evaluar(OK_ESTADO());
     expect(r.listoParaEncender).toBe(true);
     expect(r.interruptor).toBe('APAGADO');
-    expect(r.items.map((i) => i.id)).toEqual(['carpeta_legacy', 'hoja_itfeventos', 'usuarios_hoja', 'usuarios_columna_perfil_subir', 'usuarios_columna_perfil_validar', 'storage_configurado', 'storage_itf']);
+    expect(r.items.map((i) => i.id)).toEqual(['carpeta_legacy', 'legacy_variantes_mayusculas', 'hoja_itfeventos', 'usuarios_hoja', 'usuarios_columna_perfil_subir', 'usuarios_columna_perfil_validar', 'storage_configurado', 'storage_itf']);
     expect(r.items.every((i) => i.ok)).toBe(true);
   });
 
   test.each([
     ['sin carpeta legacy', (e) => { e.carpetaLegacy.configurada = false; }, 'carpeta_legacy'],
     ['carpeta legacy inaccesible', (e) => { e.carpetaLegacy.accesible = false; }, 'carpeta_legacy'],
+    ['el lookup de variantes (.JPG) no las resuelve como UNICO', (e) => { e.legacyVariantes.unicos = 2; }, 'legacy_variantes_mayusculas'],
+    ['el lookup de variantes no se consulto', (e) => { delete e.legacyVariantes; }, 'legacy_variantes_mayusculas'],
     ['sin hoja ItfEventos', (e) => { e.hoja.existe = false; }, 'hoja_itfeventos'],
     ['hoja con esquema inesperado', (e) => { e.hoja.esquemaOk = false; }, 'hoja_itfeventos'],
     ['Usuarios ilegible', (e) => { e.usuarios.hoja = false; }, 'usuarios_hoja'],
@@ -109,7 +112,18 @@ describe('preflight y interruptor contra Apps Script falso', () => {
     global.getFolderId = () => (c.carpeta ? SECRETOS[0] : (() => { throw new Error('FOLDER_ID no configurado'); })());
     global.getFotosStorageUrl = () => { if (!props.FOTOS_STORAGE_URL) { throw new Error('FOTOS_STORAGE_URL no configurado en Script Properties'); } return props.FOTOS_STORAGE_URL; };
     global.getFotosStorageSecret = () => props.FOTOS_STORAGE_SECRET;
-    global.DriveApp = { getFolderById: jest.fn((id) => { if (id !== SECRETOS[0]) { throw new Error('no existe'); } return {}; }) };
+    const nombresDrive = ['15-1082.JPG', '15-1024.JPG', '15-0997.JPG', '14-0001.jpg'].concat(c.variantesAmbiguas ? ['15-1082.jpg'] : []);
+    const mkArchivo = (n) => ({ getId: () => 'id-' + n, getName: () => n, getBlob: () => ({ getBytes: () => [1] }) });
+    const itera = (lista) => { let i = 0; return { hasNext: () => i < lista.length, next: () => lista[i++] }; };
+    global.DriveApp = {
+      getFolderById: jest.fn((id) => {
+        if (id !== SECRETOS[0]) { throw new Error('no existe'); }
+        return {
+          getFilesByName: (n) => itera(nombresDrive.filter((x) => x === n).map(mkArchivo)),
+          searchFiles: (q) => { const m = /^title contains '([^']+)'/.exec(q); return itera(nombresDrive.filter((x) => x.toLowerCase().indexOf(m[1].toLowerCase()) >= 0).map(mkArchivo)); }
+        };
+      })
+    };
     const cabeceraUsuarios = ['email', 'nombre', 'estado', 'perfil'].concat(c.columnas ? ['perfil_subir', 'perfil_validar'] : []);
     const filaUsuario = (email, v) => ['email'.length ? email : '', 'Persona', 'activo', 'SI'].concat(c.columnas ? [v, v] : []);
     const inicial = { Usuarios: [cabeceraUsuarios, filaUsuario('smoke@example.com', 'SI'), filaUsuario('otra@example.com', 'NO')] };
@@ -168,7 +182,8 @@ describe('preflight y interruptor contra Apps Script falso', () => {
     ['storage sin acciones de ITF (todavia es la version vieja)', { storage: 'sin-acciones' }, 'storage_itf'],
     ['storage sin ITF_ROOT_FOLDER_ID', { storage: 'sin-raiz' }, 'storage_itf'],
     ['storage caido', { storage: 'caido' }, 'storage_itf'],
-    ['sin carpeta legacy', { carpeta: false }, 'carpeta_legacy']
+    ['sin carpeta legacy', { carpeta: false }, 'carpeta_legacy'],
+    ['un pozo con .JPG que ademas tiene .jpg (ambiguo): el lookup no lo da por UNICO', { variantesAmbiguas: true }, 'legacy_variantes_mayusculas']
   ])('%s: el preflight lo dice y NO queda listo', (_n, cfg, id) => {
     montar(cfg);
     const r = global.preflightItfE9();
@@ -261,11 +276,17 @@ describe('medicion', () => {
       sha256: (bytes) => { llamadas.push(['hash', bytes.length]); return 'x'; },
       disponibilidad: (ids) => { llamadas.push(['disp', ids.length, ids[0], ids[ids.length - 1]]); return {}; }
     });
-    expect(r.hash.map((h) => h.tamano)).toEqual(['100 KB', '500 KB', '1 MB', '3 MB']);
-    expect(llamadas.filter((l) => l[0] === 'hash').map((l) => l[1])).toEqual([100 * 1024, 500 * 1024, 1024 * 1024, 3 * 1024 * 1024]);
+    expect(r.hash.map((h) => h.tamano.split(' (')[0])).toEqual(['100 KB', '500 KB', '1 MB', '3 MB', '12 MB']);
+    expect(llamadas.filter((l) => l[0] === 'hash').map((l) => l[1])).toEqual([100 * 1024, 500 * 1024, 1024 * 1024, 3 * 1024 * 1024, 12 * 1024 * 1024]);
     expect(r.disponibilidad.map((d) => d.consulta)).toEqual(['1 pozo', '500 pozos', '500 pozos (otra vez)']);
     expect(llamadas.filter((l) => l[0] === 'disp').map((l) => l.slice(1))).toEqual([[1, '14-0001', '14-0001'], [500, '14-0001', '14-0500'], [500, '14-0001', '14-0500']]);
     [].concat(r.hash, r.disponibilidad).forEach((x) => expect(x.ms).toBe(10));
+  });
+
+  test('si un hash falla (p. ej. memoria con 12 MB) se informa error:true y la medicion sigue', () => {
+    const r = P.itfPreflight_medir({ ahora: () => 1, sha256: (b) => { if (b.length > 5 * 1024 * 1024) { throw new Error('memoria'); } return 'x'; }, disponibilidad: () => ({}) });
+    expect(r.hash.map((h) => h.error === true)).toEqual([false, false, false, false, true]);
+    expect(r.disponibilidad).toHaveLength(3);
   });
 
   test('los bytes sinteticos son bytes con signo (como los de Apps Script) y del largo pedido', () => {
@@ -279,7 +300,7 @@ describe('medicion', () => {
     Object.assign(global, P);
     global.Logger = { log: jest.fn() };
     const r = global.medirRendimientoItfE9();
-    expect(r.hash).toHaveLength(4);
+    expect(r.hash).toHaveLength(5);
     expect(r.disponibilidad).toHaveLength(3);
     expect(global.Logger.log.mock.calls.join('')).not.toMatch(/legacy-14-0001/);
     expect(e).toBeTruthy();

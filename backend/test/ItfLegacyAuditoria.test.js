@@ -5,6 +5,44 @@ const KB = 1024;
 const MB = 1024 * 1024;
 const f = (nombre, bytes) => ({ nombre, bytes: bytes === undefined ? 100 * KB : bytes });
 
+describe('ItfLegacyAuditoria: variantes de mayusculas y clasificacion de lo que no es un ITF (E9-7)', () => {
+  test('RESULTADO REAL de la auditoria (forma): 3 variantes .JPG unicas NO son un bloqueo: UNICO, sin ambiguos, y variantesExtension se conserva como higiene historica', () => {
+    const nombres = [f('15-1082.JPG'), f('15-1024.JPG'), f('15-0997.JPG'), f('15-0001.jpg'), f('15-0002.jpg')];
+    const r = A.itfAuditoria_analizar(nombres);
+    expect(r.variantesExtension).toBe(3);
+    expect(r.variantesDetalle).toEqual({ '.JPG': 3 });
+    expect(r.pozosPorEstado).toEqual({ UNICO: 5, AMBIGUO: 0, NO_CANONICO: 0 });
+    expect(r.duplicadosCanonicos).toBe(0);
+    expect(r.pozosConMasDeUnCandidato).toBe(0);
+  });
+  test('.jpg + .JPG del mismo pozo: AMBIGUO y se reporta como pozo con mas de un candidato (aunque no sea un duplicado canonico)', () => {
+    const r = A.itfAuditoria_analizar([f('15-1082.jpg'), f('15-1082.JPG'), f('15-0001.JPG')]);
+    expect(r.pozosPorEstado).toEqual({ UNICO: 1, AMBIGUO: 1, NO_CANONICO: 0 });
+    expect(r.pozosConMasDeUnCandidato).toBe(1);
+    expect(r.duplicadosCanonicos).toBe(0);
+  });
+  test('los nombres que no son un ITF se clasifican por patron (solo documentacion) y las clases suman noCoinciden', () => {
+    const r = A.itfAuditoria_analizar([f('PM1.jpg'), f('PM2.jpg'), f('pm10.JPG'), f('PM.jpg'), f('8-4410.jpg'), f('8-4360.jpg'), f('19-105.jpg'), f('01-001.jpg'), f('14-0001.png'), f('14-0002.pdf'), f('Thumbs.db'), f('foto.jpg'), f('14-0003.jpg')]);
+    expect(r.noCoincidenClasificados).toEqual({ PM: 4, depto1Digito: 2, pozo3Digitos: 2, otraExtension: 2, otros: 2 });
+    expect(Object.values(r.noCoincidenClasificados).reduce((a, b) => a + b, 0)).toBe(r.noCoinciden);
+    expect(r.noCoinciden).toBe(12);
+    expect(r.ejemplos.noCoincidenPorPatron.PM).toEqual(['PM1.jpg', 'PM2.jpg', 'pm10.JPG', 'PM.jpg']);
+    expect(r.ejemplos.noCoincidenPorPatron.depto1Digito).toEqual(['8-4410.jpg', '8-4360.jpg']);
+    expect(r.pozosPorEstado.UNICO).toBe(1);
+  });
+  test('patronNoCoincide: orden de las reglas (un nombre con forma DD-PPPP pero otra extension va a otraExtension, no a otros)', () => {
+    expect(A.itfAuditoria_patronNoCoincide('14-0001.png', true)).toBe('otraExtension');
+    expect(A.itfAuditoria_patronNoCoincide('PM3.jpg', false)).toBe('PM');
+    expect(A.itfAuditoria_patronNoCoincide('8-4401.jpg', false)).toBe('depto1Digito');
+    expect(A.itfAuditoria_patronNoCoincide('19-105.jpg', false)).toBe('pozo3Digitos');
+    expect(A.itfAuditoria_patronNoCoincide('algo.txt', false)).toBe('otros');
+  });
+  test('la clasificacion es de SOLO LECTURA: no hay ninguna accion asociada en el codigo', () => {
+    const fuente = require('fs').readFileSync(require('path').join(__dirname, '../src/ItfLegacyAuditoria.js'), 'utf8').replace(/\/\/.*$/gm, '');
+    expect(fuente).not.toMatch(/setName|setTrashed|moveTo|makeCopy|setSharing|createFile|createFolder|rename/i);
+  });
+});
+
 describe('ItfLegacyAuditoria: analisis puro de la carpeta', () => {
   test('carpeta vacia: todo en cero y estadisticas nulas, sin romper', () => {
     const r = A.itfAuditoria_analizar([]);
@@ -26,7 +64,8 @@ describe('ItfLegacyAuditoria: analisis puro de la carpeta', () => {
     expect(r.variantesDetalle).toEqual({ '.JPG': 1, '.Jpg': 1 });
     expect(r.noCoinciden).toBe(5);
     expect(r.sinPozoValido).toBe(3);
-    expect(r.pozosPorEstado).toEqual({ UNICO: 2, AMBIGUO: 0, NO_CANONICO: 2 });
+    // E9-7: la extension .jpg es case-insensitive: una variante UNICA (.JPG / .Jpg) es un candidato equivalente -> UNICO (NO_CANONICO ya no se produce)
+    expect(r.pozosPorEstado).toEqual({ UNICO: 4, AMBIGUO: 0, NO_CANONICO: 0 });
   });
 
   test('duplicados canonicos: el pozo cuenta como AMBIGUO y se informan los archivos sobrantes', () => {
@@ -41,7 +80,7 @@ describe('ItfLegacyAuditoria: analisis puro de la carpeta', () => {
     const r = A.itfAuditoria_analizar([f('02-0001.jpg'), f('02-0001.JPG'), f('02-0002.JPG'), f('02-0002.Jpg'), f('02-0003.jpg'), f('02-0004.JPG')]);
     expect(r.pozosConMasDeUnCandidato).toBe(2);
     expect(r.ejemplos.pozosConMasDeUnCandidato).toEqual(['02-0001', '02-0002']);
-    expect(r.pozosPorEstado).toEqual({ UNICO: 2, AMBIGUO: 0, NO_CANONICO: 2 });        // 02-0001 tiene UN canonico: UNICO (la variante convive); 02-0002 solo variantes
+    expect(r.pozosPorEstado).toEqual({ UNICO: 2, AMBIGUO: 2, NO_CANONICO: 0 });        // 02-0001 (.jpg + .JPG) y 02-0002 (dos variantes) tienen 2 candidatos: AMBIGUO
   });
 
   test('los ejemplos estan acotados y no incluyen ids ni contenido', () => {
