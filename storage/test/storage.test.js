@@ -1168,3 +1168,35 @@ describe('StorageDrive: ITF, nombre fisico y claves del payload', () => {
     expect(drive.raizItf._hijosCarpetas).toHaveLength(0);
   });
 });
+
+describe('rollout (E9-7): storage NUEVO con una app VIEJA (sin ITF_ROOT_FOLDER_ID todavia)', () => {
+  const FOTO = '99999999-9999-4999-8999-999999999999';
+  const DOC = '77777777-7777-4777-8777-777777777777';
+  const imagenItf = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(200, 3)]).toString('base64');
+  const llamar = (accion, payload) => {
+    const sol = Client.fotosStorageClient_armarSolicitud(accion, payload, SECRET, ahora(), crypto.randomUUID());
+    const salida = Api.doPost({ postData: { contents: JSON.stringify(sol) } });
+    return Client.fotosStorageClient_verificarRespuesta(JSON.parse(salida.text), SECRET, sol.nonce, ahora()).data;
+  };
+  const cruda = (accion, payload) => JSON.parse(Api.doPost({ postData: { contents: JSON.stringify(Client.fotosStorageClient_armarSolicitud(accion, payload, SECRET, ahora(), crypto.randomUUID())) } }).text);
+
+  test('con el storage nuevo desplegado pero SIN raiz de ITF, Reemplazos y Fotos de pozos funcionan igual que antes; ITF falla cerrado y no crea nada', () => {
+    global.getStorageItfRootFolderId = () => { throw new Error('ITF_ROOT_FOLDER_ID no configurado: correr setupItfPropuestasStorage() una vez'); };
+    const foto = llamar('putFotoPozo', { fotoId: FOTO, fuente: 'CAMPO_APP', carpetaFecha: '2026', mimeType: 'image/jpeg', imagenBase64: JPEG_B64, thumbBase64: THUMB_B64 });
+    expect(foto.status).toBe('ok');
+    expect(llamar('getFotoPozo', { driveFileId: foto.driveFileId, variante: 'full' }).imagenBase64).toBe(JPEG_B64);
+    const reemplazo = llamar('putFoto', payloadPut());
+    expect(reemplazo.status).toBe('ok');
+    expect(llamar('getFoto', { driveFileId: reemplazo.driveFileId, variante: 'full' }).status).toBe('ok');
+    expect(cruda('putItf', { documentoId: DOC, mimeType: 'image/jpeg', imagenBase64: imagenItf })).toEqual({ status: 'error', code: 'INTERNAL' });
+    expect(cruda('metaItf', { driveFileId: 'cualquiera' })).toEqual({ status: 'error', code: 'INTERNAL' });
+    expect(drive.raizItf._hijosCarpetas).toHaveLength(0);
+    expect(drive.raizItf._hijosArchivos).toHaveLength(0);
+  });
+
+  test('las acciones viejas se despachan por el mismo camino de siempre (el storage nuevo solo AGREGA acciones)', () => {
+    const fuente = require('fs').readFileSync(require('path').join(__dirname, '../src/StorageApi.js'), 'utf8').replace(/\r\n/g, '\n');
+    ['putFoto', 'getFoto', 'trashFoto', 'putFotoPozo', 'putFotosPozoLote', 'getFotoPozo', 'trashFotoPozo'].forEach((a) => expect(fuente).toContain("auth.accion === '" + a + "'"));
+    ['putItf', 'getItf', 'metaItf', 'trashItf'].forEach((a) => expect(fuente).toContain("auth.accion === '" + a + "'"));
+  });
+});

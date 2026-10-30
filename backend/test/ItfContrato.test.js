@@ -10,7 +10,7 @@ const DOC = () => leer('docs', 'itf-colaborativos.md');
 // codigo sin comentarios (los comentarios documentan y nombran cosas; las guardas miran lo que se EJECUTA)
 const CODIGO = (nombre) => SRC(nombre).replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
 
-const MODULOS_NUEVOS = ['ItfArchivoLogic.js', 'ItfDominioService.js', 'ItfEventosRepository.js', 'ItfLegacyAuditoria.js', 'ItfLegacyProvider.js', 'ItfStorageProvider.js', 'ItfService.js'];
+const MODULOS_NUEVOS = ['ItfArchivoLogic.js', 'ItfDominioService.js', 'ItfEventosRepository.js', 'ItfLegacyAuditoria.js', 'ItfLegacyProvider.js', 'ItfPreflight.js', 'ItfStorageProvider.js', 'ItfService.js'];
 const MARCAS_E9 = /itfDominio_|itfEventosRepository_|itfArchivo_|itfLegacy_|itfStorage_|itfService_|itfAuditoria_|auditarCarpetaItfLegacy|ItfLegacyAuditoria|setupItfEventosSheet|ItfEventos|ItfArchivoLogic|ItfDominioService|ItfLegacyProvider|ItfStorageProvider|ItfService|ITF_E9_ACTIVO|perfil_subir|perfil_validar|itfTieneVigente/;
 
 describe('E9-2 no esta cableado: ningun archivo vivo de la app lo referencia', () => {
@@ -93,7 +93,7 @@ describe('E9-2 no esta cableado: ningun archivo vivo de la app lo referencia', (
 describe('los modulos nuevos', () => {
   test('existen exactamente estos archivos de E9 (mas el ItfAvailabilityService existente) en backend/src', () => {
     const itf = fs.readdirSync(path.join(RAIZ, 'backend', 'src')).filter((f) => /^Itf/.test(f)).sort();
-    expect(itf).toEqual(['ItfArchivoLogic.js', 'ItfAvailabilityService.js', 'ItfDominioService.js', 'ItfEventosRepository.js', 'ItfLegacyAuditoria.js', 'ItfLegacyProvider.js', 'ItfService.js', 'ItfStorageProvider.js'].sort());
+    expect(itf).toEqual(['ItfArchivoLogic.js', 'ItfAvailabilityService.js', 'ItfDominioService.js', 'ItfEventosRepository.js', 'ItfLegacyAuditoria.js', 'ItfLegacyProvider.js', 'ItfPreflight.js', 'ItfService.js', 'ItfStorageProvider.js'].sort());
   });
 
   test.each(MODULOS_NUEVOS)('%s es ES5 de Apps Script (sin import / export / async / arrow / const / let)', (archivo) => {

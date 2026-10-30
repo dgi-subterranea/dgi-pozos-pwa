@@ -692,7 +692,7 @@ Medición local (arnés con backend simulado; imágenes sintéticas de 1200 × 1
 
 El orden «tabla dibujada antes de que llegue la disponibilidad» está fijado por `js/itfSeleccionDisponibilidad.test.js`. Con ITF reales (cientos de KB a varios MB en base64) la diferencia de bytes crece en proporción.
 
-**Riesgo de Q2 (a decidir antes del rollout):** la decisión «existe Perfil» pasa de la lectura en vivo de Drive (`getProfile`) al índice por departamento cacheado (TTL de 1 h, tanto el de `ItfAvailabilityService` como el de `ItfLegacyProvider`). Un ITF legacy agregado a mano a la carpeta puede tardar hasta 1 h en aparecer en el hub de quien tiene solo `perfil`. Opciones: aceptarlo (la carpeta casi no cambia), bajar el TTL, o ofrecer siempre la tarjeta cuando el índice dice «No» (más requests). No se cambió nada del backend por esto.
+**Riesgo de Q2 (DECIDIDO en E9-7, §18.1: se acepta el TTL de 1 h):** la decisión «existe Perfil» pasa de la lectura en vivo de Drive (`getProfile`) al índice por departamento cacheado (TTL de 1 h, tanto el de `ItfAvailabilityService` como el de `ItfLegacyProvider`). Un ITF legacy agregado a mano a la carpeta puede tardar hasta 1 h en aparecer en el hub de quien tiene solo `perfil`. Opciones: aceptarlo (la carpeta casi no cambia), bajar el TTL, o ofrecer siempre la tarjeta cuando el índice dice «No» (más requests). No se cambió nada del backend por esto.
 
 ### 17.12 Responsive, accesibilidad y seguridad
 
@@ -718,6 +718,164 @@ El orden «tabla dibujada antes de que llegue la disponibilidad» está fijado p
 1. **Resultado real de `auditarCarpetaItfLegacy()`** (lo corre la persona responsable): incorporarlo antes de cualquier rollout; las anomalías (duplicados, mayúsculas, nombres inválidos) **no se corrigen automáticamente**: informe aparte («rollout cleanup»).
 2. Despliegue ordenado (storage con `ITF_ROOT_FOLDER_ID`, hoja `ItfEventos` con su encabezado, columnas `perfil_subir` / `perfil_validar` en `Usuarios`, y **recién entonces** el interruptor).
 3. Mediciones reales en Apps Script (límite de 3 MB, tiempos de `proponerItf`, lectura de la hoja con muchos eventos).
-4. Decidir el riesgo de índice cacheado de Q2 (§17.11) y, si se quiere, Q3 (auditoría).
-5. Decidir si «conservar» debe quitar EXIF / GPS de un archivo que ya está bien (hoy no se toca).
+4. ~~Riesgo de índice cacheado de Q2~~ → decidido en §18.1 (TTL 1 h aceptado); Q3 (auditoría) queda como opción futura.
+5. ~~EXIF / GPS de «conservar»~~ → decidido en §18.1 (no se recodifica; limpieza completa = deuda futura).
 6. Verificar a mano en un navegador real el selector de archivos del celular y el guardado en iOS (la parte de canvas se probó con un navegador falso y con Chromium en el arnés).
+
+## 18. E9-7: pre-rollout (preparación; E9 NO está en producción)
+
+Estado: **E9 NO es productivo.** El backend de producción sigue en **v46** (deployment `…UZRq1Z`), el storage de producción en **v5**, el frontend publicado es el previo a E9 y `ITF_E9_ACTIVO` **no existe** como propiedad (= apagado). Esta sección fija las decisiones, la preparación y el procedimiento exacto del rollout. Nada de lo descrito acá como «futuro» se ejecutó.
+
+### 18.1 Decisiones cerradas
+
+| Tema | Decisión |
+| --- | --- |
+| **Q2 / TTL del índice** | Se **acepta el TTL actual de 1 hora** (`ITF_INDEX_CACHE_SECONDS = 3600` y el equivalente del proveedor legacy). **No se baja ahora.** Un ITF legacy agregado a mano a la carpeta puede tardar **hasta 1 h** en aparecer en el hub de quien solo tiene `perfil`. Es aceptable porque las cargas futuras deben pasar por E9 (propuesta → validación). |
+| **Quien solo tiene `perfil` y el pozo no tiene ITF** | **NO** se muestra la tarjeta Perfil (comportamiento actual). Si además tiene `perfil_subir` o `perfil_validar`, **sí**, porque tiene acciones disponibles (ya implementado y probado). |
+| **EXIF / GPS (E9 v1)** | Lo que se **reprocesa con canvas** (reducción o conversión) **sale sin EXIF / GPS**. Un archivo **pequeño que se conserva tal cual** **conserva su metadata**: no se recodifica obligatoriamente solo para quitarla. **Deuda futura documentada:** normalización / limpieza completa de metadata (p. ej. una pasada del servidor o una opción «quitar metadata» al proponer). No se implementó. |
+| **Orden de la etapa** | Hacer `gas:push` **solo a `@HEAD`**; **no** crear versión ni actualizar el deployment productivo numerado; **no** ejecutar setups; **no** activar el interruptor; **no** publicar el frontend. |
+
+### 18.2 Dónde vive cada cosa (nombres reales, derivados del repo)
+
+| Qué | Dónde |
+| --- | --- |
+| Proyecto del backend | Apps Script **`dgi-pozos-backend`** (cuenta `main` de clasp). En el editor los archivos aparecen como `Nombre.gs`; en el repo son `backend/src/Nombre.js` |
+| Auditoría de la carpeta legacy | archivo **`ItfLegacyAuditoria`**, función **`auditarCarpetaItfLegacy`** (solo lectura de nombres y tamaños) |
+| Crear la hoja `ItfEventos` | archivo **`ItfEventosRepository`**, función **`setupItfEventosSheet`** (idempotente; esquema de **17 columnas**: `eventoId, secuencia, evento, documentoId, wellId, documentoReemplazadoId, mimeType, bytes, sha256, storageFileId, nombreOriginal, motivoCodigo, motivoTexto, email, nombre, timestampUtc, clientRequestId`) |
+| Preflight de solo lectura, interruptor guardado, rollback y medición | archivo **`ItfPreflight`** (nuevo en E9-7): **`preflightItfE9`**, **`itfE9Encender`**, **`itfE9Apagar`**, **`medirRendimientoItfE9`** |
+| Proyecto del storage | Apps Script **`DGI Fotos Storage`** (segunda cuenta de Google; cuenta `storage` de clasp) |
+| Crear la carpeta raíz de ITF del storage | archivo **`StorageConfig`**, función **`setupItfPropuestasStorage`** (idempotente; crea / reutiliza `ItfPropuestas` en Mi unidad de la **segunda** cuenta y guarda `ITF_ROOT_FOLDER_ID`) |
+| **Interruptor `ITF_E9_ACTIVO`** | **Script Property** del proyecto `dgi-pozos-backend` (no es constante ni otra fuente). Se lee **en cada pedido** (`PropertiesService.getScriptProperties()`), sin cache: apagarla corta E9 al instante, también para `@HEAD` y para las versiones numeradas |
+| Valor apagado real | propiedad **ausente** (hoy). Encendido = exactamente **`SI`**; cualquier otro valor (`NO`, vacío, `si`, ` SI`, `true`, `1`) = apagado |
+| Columnas de permisos | hoja `Usuarios` (se buscan por el **texto** del encabezado, cualquier orden): `perfil_subir`, `perfil_validar`. Una columna ausente = permiso `false` para todos (fail-closed); solo el valor `SI` (sin importar mayúsculas / espacios) habilita |
+
+### 18.3 Storage: qué requiere E9
+
+Diferencias del storage local contra el productivo (v5): **3 archivos modificados** (`StorageApi.js`, `StorageConfig.js`, `StorageDrive.js`), **0 nuevos, 0 eliminados**; solo **agrega** acciones (`putItf`, `getItf`, `metaItf`, `trashItf`), la función de setup y la tercera raíz. Las acciones de Fotos y Reemplazos no cambian (probado: con el storage nuevo y **sin** `ITF_ROOT_FOLDER_ID`, Fotos y Reemplazos funcionan igual y las acciones de ITF fallan cerradas sin crear nada).
+
+E9 **sí** requiere en el storage:
+1. **Nueva versión del storage** (`gas:push:storage` → `gas:version:storage` → `gas:deploy:storage` sobre el deployment numerado **existente**; la URL `/exec` no cambia). `.gas.local.json` hoy tiene `storage.pushHabilitado=false` y `deploymentId` vacío: hay que completarlos en el rollout (el ID forma parte de la URL secreta del storage: no se pega en chats ni en git).
+2. **Una propiedad nueva**, `ITF_ROOT_FOLDER_ID`, **creada por `setupItfPropuestasStorage`** (no se edita a mano; no hace falta crear la carpeta a mano). Se corre **con la segunda cuenta**.
+3. **Nada** más: el secreto (`FOTOS_STORAGE_SECRET`) y la URL (`FOTOS_STORAGE_URL`) del backend ya existen y se reutilizan.
+
+No se hizo nada de esto todavía (solo lectura). El preflight verifica el storage con **una sola consulta de solo lectura** (`metaItf` de un archivo inexistente): `NOT_FOUND` = desplegado con las acciones de ITF y con raíz configurada; `UNKNOWN_ACTION` o error de raíz = «no configurado»; cualquier otra cosa = no responde.
+
+### 18.4 Herramientas nuevas (solo manuales; ningún endpoint, trigger ni pantalla las llama)
+
+- **`preflightItfE9()`**: SOLO LECTURA. Informa `interruptor` (ENCENDIDO / APAGADO), `listoParaEncender` y 7 comprobaciones (`carpeta_legacy`, `hoja_itfeventos`, `usuarios_hoja`, `usuarios_columna_perfil_subir`, `usuarios_columna_perfil_validar`, `storage_configurado`, `storage_itf`) con un texto por cada una, más **contadores** (eventos, usuarios activos con `perfil_subir` / `perfil_validar`; nunca emails). **No** escribe propiedades, hojas, Drive ni cache; **no** crea la hoja ni la carpeta; **no** cambia permisos ni sharing; **no** crea triggers; **no** imprime ids de Drive, URL, secreto, id del spreadsheet ni emails (probado con valores centinela). Hace una única llamada al storage (`metaItf`).
+- **`itfE9Encender()`**: pone `ITF_E9_ACTIVO = SI` **solo si** el preflight está completamente en verde; si no, **no toca nada**, imprime qué falta y devuelve `{encendido:false, motivo:'PREFLIGHT_NO_OK', pendientes:[…]}`. Es la forma recomendada de encender.
+- **`itfE9Apagar()`**: pone `ITF_E9_ACTIVO = NO`. **Siempre funciona** (sin condiciones): es el **rollback inmediato**. No borra eventos ni documentos.
+- **`medirRendimientoItfE9()`**: SHA-256 de 100 KB / 500 KB / 1 MB / 3 MB sintéticos y disponibilidad legacy de 1 y 500 pozos (primera vez y repetida; la primera puede reconstruir el índice, que es el mecanismo de cache que ya usa la app). No es requisito del rollout; es opcional y no escribe nada salvo ese cache.
+- Frontend: `scripts/medir_itf_consola.js` (pegar en la consola con sesión iniciada: `getItfAvailability` y `getProfile`) y, local, `scripts/medir_itf_propuesta.js`.
+- Forma **inequívoca** de ON / OFF: `itfE9Encender()` / `itfE9Apagar()` (devuelven y registran el resultado) o, a mano, Configuración del proyecto → Propiedades de la secuencia de comandos → `ITF_E9_ACTIVO` = `SI` (ON) o `NO` / borrar la propiedad (OFF). `preflightItfE9()` siempre informa el estado actual.
+
+### 18.5 Qué se subirá a `@HEAD` (backend) — diferencia exacta contra el remoto
+
+Comparación `gas:diff:main` (repo local E9 vs Apps Script `@HEAD` actual; el remoto coincide con lo adoptado, sin deriva):
+
+| Categoría | Archivos |
+| --- | --- |
+| **Nuevos (7 + 1)** | `ItfArchivoLogic.js`, `ItfDominioService.js`, `ItfEventosRepository.js`, `ItfLegacyAuditoria.js`, `ItfLegacyProvider.js`, `ItfService.js`, `ItfStorageProvider.js` y, de E9-7, `ItfPreflight.js` |
+| **Modificados (5)** | `Api.js`, `AuthService.js`, `DriveProfileRepository.js`, `PozoExistenciaService.js`, `SheetUserRepository.js` |
+| **Eliminados** | **0** |
+| Manifiesto `appsscript.json` | igual (V8, zona horaria, acceso de la Web App, sin servicios avanzados) |
+
+`@HEAD` es el deployment de pruebas (`/dev`); lo que sirve `/exec` (producción) es la **versión numerada**, que no cambia con un push. El proyecto **no tiene triggers** (ninguna llamada a `ScriptApp`): nada corre solo sobre `@HEAD`. Con la propiedad ausente, el código nuevo de `@HEAD` se comporta como el actual.
+
+### 18.6 Matriz de compatibilidad (todo con prueba: `backend/test/ItfRolloutCompat.test.js` y `storage/test`)
+
+| Combinación | Resultado verificado |
+| --- | --- |
+| **Frontend nuevo + backend con el interruptor APAGADO** (la propagación) | el Perfil sigue siendo el de siempre (availability al buscar, `getProfile` al abrir, imagen legacy); quien solo tiene `perfil` no ve nada colaborativo; con permisos E9 «adelantados», proponer / Mis propuestas / cola responden «La propuesta y validación de ITF todavía no están habilitadas.» sin escribir ni tocar la hoja ni el storage |
+| **Backend nuevo + frontend viejo** | `getProfile` y `getItfAvailability` conservan exactamente su forma (apagado o encendido); las acciones nuevas son rutas nuevas; ninguna ruta vieja cambió de nombre |
+| **Frontend nuevo + backend v46** (sin E9) | el backend v46 no devuelve `perfil_subir` / `perfil_validar` ⇒ permisos `false` ⇒ la interfaz colaborativa no aparece; availability / `getProfile` existen en v46 |
+| **Storage nuevo + Fotos / Reemplazos viejos** | sin `ITF_ROOT_FOLDER_ID` las acciones viejas funcionan igual; las de ITF fallan cerradas |
+| **`ItfEventos` vacía** (con el interruptor encendido) | availability, `getProfile`, cola y Mis propuestas = legacy / vacíos |
+| **`ItfEventos` ausente** (con el interruptor encendido) | **no** cae al legacy: `SERVICE_UNAVAILABLE` (por eso el preflight exige la hoja **antes** de encender) |
+| **Columnas `perfil_*` ausentes** | permisos `false` (repositorio real sobre hoja falsa) ⇒ `PERMISSION_DENIED` aunque el interruptor esté encendido |
+| **Interruptor apagado** | `ItfEventos` y el storage **no se tocan** (con valores `NO`, `no`, vacío, `true`, `1`, `Si`, ` SI`, `SI `) |
+| **Storage sin configurar / sin acciones de ITF, interruptor encendido** | proponer devuelve `ITF_STORAGE_NO_CONFIGURADO`; ninguna fila, ningún archivo: jamás queda habilitado |
+| **Rollback con eventos ya escritos** | apagar no borra ningún evento ni documento; el Perfil vuelve al ITF legacy; al volver a encender todo reaparece |
+
+### 18.7 Caches y propagación del frontend
+
+- El service worker es **network-first** (con fallback a cache solo si no hay red); sin versión manual. Los 5 JS nuevos están en `SHELL_FILES` y se precachean con `cache: 'reload'` (no usan la cache HTTP).
+- Una pestaña abierta con el JS viejo sigue usándolo hasta recargar; el JS viejo **es compatible** con el backend nuevo (§18.6). Un dispositivo con el JS nuevo y el backend con el interruptor apagado también.
+- Por eso el orden de despliegue pone el **backend antes** que el frontend y el interruptor **al final**.
+
+### 18.8 Orden de despliegue (validado; ajustado respecto del borrador)
+
+Ajustes: (a) el storage va **antes** de encender y de cualquier prueba de propuesta; (b) se agrega el **preflight** como compuerta antes de crear la versión y antes de encender; (c) las columnas se **crean** (vacías) antes de la versión y se **habilitan** solo para el usuario del smoke justo antes de encender; (d) `ITF_E9_ACTIVO` se enciende solo con `itfE9Encender()`.
+
+| # | Paso | Dónde / cómo | Quién |
+| --- | --- | --- | --- |
+| 1 | **Backup y configuración**: copia de la hoja `Usuarios` (Archivo → Hacer una copia) y de la hoja de Historial si se quiere; anotar **nombres** (no valores) de las Script Properties de los dos proyectos; anotar versiones vigentes (backend **v46**, storage **v5**) | manual | usuario |
+| 2 | **Storage E9**: `gas:diff:storage` → `gas:adopt:storage` → `gas:push:storage` → `gas:version:storage` → `gas:deploy:storage` (deployment existente) → correr `setupItfPropuestasStorage` (proyecto `DGI Fotos Storage`, archivo `StorageConfig`, **segunda cuenta**) | clasp + editor | asistente / usuario |
+| 3 | **Backend a `@HEAD`**: `gas:push:main` | clasp | **hecho en esta etapa** (ver §18.12) |
+| 4 | **Auditoría legacy**: `auditarCarpetaItfLegacy` (§18.9); **detiene todo hasta analizar el resultado** | editor | usuario |
+| 5 | **Crear `ItfEventos`**: `setupItfEventosSheet` (proyecto `dgi-pozos-backend`, archivo `ItfEventosRepository`) | editor | usuario (con instrucción explícita) |
+| 6 | **Columnas de `Usuarios`**: agregar los encabezados `perfil_subir` y `perfil_validar` al final de la fila 1, **sin valores** (nadie habilitado) | manual | usuario |
+| 7 | **Preflight**: `preflightItfE9` debe dar `listoParaEncender: true` | editor | usuario |
+| 8 | **Nueva versión del backend**: `gas:version:main` (v47) | clasp | asistente |
+| 9 | **Actualizar el deployment productivo con el interruptor APAGADO**: `gas:deploy:main -- --version 47` | clasp | asistente |
+| 10 | Verificar el legacy en producción con el frontend **actual** (Perfil, Mi selección, ZIP) | manual | usuario |
+| 11 | **Push de Git / Pages** (frontend nuevo) | git | asistente |
+| 12 | **Verificar el frontend nuevo con el interruptor apagado** (combinación A de §18.6, en navegador real, también en iOS) | manual | usuario |
+| 13 | **Habilitar permisos del smoke**: `perfil = SI`, `perfil_subir = SI`, `perfil_validar = SI` **solo** para la persona del smoke | hoja `Usuarios` | usuario |
+| 14 | **Encender**: `itfE9Encender` | editor | usuario |
+| 15 | **Sesión nueva** (cerrar sesión y volver a entrar: los permisos se cachean hasta 5 minutos en el backend) | app | usuario |
+| 16 | **Smoke** (§18.11) | app | usuario + asistente |
+| 17 | **Cierre de documentación** (marcar E9 productivo, registrar versiones y fecha) | repo | asistente |
+
+### 18.9 Auditoría legacy: cómo correrla y cómo se va a analizar
+
+Procedimiento exacto para la persona responsable (se detalla en el informe de la etapa): abrir el proyecto **`dgi-pozos-backend`**, seleccionar el archivo **`ItfLegacyAuditoria`**, seleccionar la función **`auditarCarpetaItfLegacy`** en el desplegable, **Ejecutar**, y copiar **todo** el contenido del registro de ejecución (JSON). Es de **solo lectura** de nombres y tamaños (no abre archivos, no escribe, no cambia permisos ni mueve nada) y se corta a los 4,5 min con `incompleto: true` (nunca informa un conteo parcial como total).
+
+Qué se analizará: total de archivos, canónicos (`DD-PPPP.jpg`), no canónicos, `.JPG` / `.Jpg`, duplicados, nombres inválidos, pozos sin departamento válido, pozos con más de un candidato, distribución de tamaños, cuántos pasan de 3 MB, y si la auditoría quedó completa o incompleta.
+
+Categorías y acción **futura** (propuesta; **no se ejecuta nada** y **no se corrigen archivos automáticamente**):
+
+| Cat. | Qué es | Acción futura propuesta |
+| --- | --- | --- |
+| **A. Limpia / segura** | `<wellId>.jpg` único, ≤ 3 MB, JPEG | ninguna: es el vigente legacy implícito |
+| **B. Nombre no canónico** | `DD-PPPP.JPG`, `.Jpg`, `.jpeg`, etc. | E9 los trata como «no se sabe» (no los muestra como vigente). Renombrar **a mano** a `DD-PPPP.jpg` previa verificación, o proponerlos por E9 |
+| **C. Duplicado** | dos o más archivos para el mismo pozo | revisión manual: elegir el correcto y **proponerlo por E9**; los duplicados quedan sin tocar (no se borran) |
+| **D. Huérfano** | nombre parece ITF pero el pozo no es válido (`00`, `20+`, `0000`) o no existe en el padrón | listar y decidir pozo por pozo; no se migra |
+| **E. Tamaño grande** | > 3 MB | no entra como propuesta E9 tal cual (el cliente lo reduce); el legacy se sigue sirviendo. Decidir si se reduce con la herramienta de reducción |
+| **F. Formato no soportado** | no es JPEG (PNG disfrazado, PDF, otro) | quedan fuera de E9 v1 (solo JPEG / PNG); proponer una versión en imagen |
+| **G. Requiere revisión manual** | cualquier otro caso (nombre ambiguo, tamaño nulo, auditoría incompleta) | revisión humana antes del rollout; con la auditoría incompleta no se afirma nada |
+
+### 18.10 Rollback
+
+Principio: **apagar el interruptor primero**; no se borran eventos ni documentos; el deployment solo vuelve a v46 si hace falta.
+
+| Falla | Síntoma | Acción (en orden) |
+| --- | --- | --- |
+| **A. El frontend E9 falla** | pantalla rota o JS con error en navegadores | 1) `itfE9Apagar()`; con el interruptor apagado el frontend se comporta como el legacy (§18.6, A); 2) si el defecto está en el JS, revertir el commit en `main` y republicar Pages (network-first: los clientes lo toman al recargar); 3) el backend no necesita cambios |
+| **B. El backend E9 falla** | errores en `getProfile` / disponibilidad / login | 1) `itfE9Apagar()`; 2) si el problema persiste con el interruptor apagado, **`gas:deploy:main -- --version 46 --permitir-retroceso`** (v46 es la última versión productiva conocida; hacer `gas:deployments:main` antes para confirmar); 3) no hace falta tocar la hoja ni el storage |
+| **C. El storage E9 falla** | `ITF_STORAGE_NO_CONFIGURADO` / `SERVICE_UNAVAILABLE` al proponer, aprobar o abrir | 1) `itfE9Apagar()`; 2) Fotos y Reemplazos no se ven afectados (acciones separadas); 3) si hay que volver, `gas:deploy:storage -- --version 5 --permitir-retroceso`; los archivos de `ItfPropuestas` **no se borran** |
+| **D. `ItfEventos` falla** | hoja ilegible / esquema roto / filas dañadas | 1) `itfE9Apagar()` (con el interruptor apagado la hoja **ni se lee**); 2) **no** editar ni borrar filas: la hoja es append-only; un pozo con historial dañado queda en `ITF_STATE_UNKNOWN` (no se inventa estado) y se revisa a mano |
+| **E. El interruptor causa problemas** | comportamiento inesperado al encender | `itfE9Apagar()`; verificar con `preflightItfE9()` que dice `APAGADO`; si la propiedad está mal escrita, corregirla en la Configuración del proyecto. El estado de E9 queda intacto y se retoma al volver a encender |
+
+Con E9 apagado después de haber aprobado documentos E9, el Perfil vuelve a mostrar el **ITF legacy** (los eventos y archivos siguen guardados). Los usuarios con `perfil_subir` / `perfil_validar` ven «todavía no están habilitadas» en las pantallas colaborativas.
+
+### 18.11 Plan de smoke (no ejecutado) y pozo de prueba
+
+**Pozo de prueba:** no existe uno definido en el repo. **No se usará un ITF institucional real para mutaciones.** Propuesta: tras la auditoría legacy elegir un pozo **del padrón sin ITF** (availability `false` y sin archivo en la carpeta) y **bajo control de la persona responsable**, con imágenes obviamente de prueba («PRUEBA E9 – NO USAR»). Así el estado final se puede dejar **igual al inicial** (sin ITF) retirando el último vigente; el historial conserva el rastro (append-only). La ruta «reemplazo del legacy» está cubierta por pruebas automáticas y **no** se ejercita sobre un ITF real; si se quisiera probarla, solo sobre un pozo de prueba acordado con una copia.
+
+Secuencia (todo con el pozo de prueba): **A.** login nuevo → **B.** permisos visibles (tarjeta «ITF pendientes»; en Perfil: Proponer, Mis propuestas, Historial) → **C.** el Perfil legacy sigue funcionando en un pozo **distinto** que ya tenga ITF (solo lectura) → **D.** proponer un ITF de prueba → **E.** aparece en «Mis propuestas» → **F.** aparece en «ITF pendientes» → **G.** abrirlo y comparar → **H.** rechazar una propuesta de prueba (con motivo) → **I.** nueva propuesta → **J.** aprobar → **K.** el Perfil muestra el nuevo vigente (y `getItfAvailability` / Mi selección lo cuentan) → **L.** el historial muestra el anterior → **M.** restaurar el anterior → **N.** estado final: retirar el vigente de prueba (queda «sin ITF») y verificar el historial; confirmar que **no** se tocó ningún otro pozo, y que `Historial` registró las acciones. Después: si algo falla, rollback (§18.10).
+
+### 18.12 Garantías del preflight y del `gas:push` a `@HEAD`
+
+- **Ningún paso de preflight** expone ids de Drive, publica una carpeta, cambia sharing, habilita usuarios, crea triggers ni activa la feature (el código no tiene cómo: probado por inspección del fuente y con valores centinela).
+- `gas:push:main` sube **solo** `backend/src/*.js` + `appsscript.json` a `@HEAD`; **no** crea versión ni toca el deployment numerado. Las guardas del wrapper (huella confirmada, árbol limpio, sin deriva, sin solo-remotos) se aplican igual.
+- Verificación posterior: remoto = repo; `gas:deployments:main` debe seguir mostrando **v46** y el deployment `…UZRq1Z` apuntando a v46.
+
+### 18.13 Bloqueos antes de cualquier setup o cambio productivo
+
+1. **Resultado de `auditarCarpetaItfLegacy()`** (pendiente de la persona responsable) y su análisis / categorías (§18.9).
+2. Elegir el **pozo de prueba** (§18.11).
+3. Completar `.gas.local.json` del storage (`pushHabilitado`, `deploymentId`) y desplegar el storage E9 (§18.3).
+4. Confirmar la persona del **smoke** y su correo en la hoja `Usuarios` (el correo **no** va en documentación).
+5. Mediciones reales en Apps Script (límite de 3 MB, tiempos; opcional, §18.4).
+6. Deuda: limpieza completa de metadata (§18.1) y, si se quiere, Q3 (auditoría).
