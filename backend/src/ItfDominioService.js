@@ -1242,6 +1242,154 @@ function itfDominio_contextoPozoSimple(wellId, ctx) {
   return { ok: true, pozo: p };
 }
 
+// --- E9-5: cola de pendientes, documento para moderacion, historial por pozo y respuesta de escritura (todo PURO, sin Sheets ni Drive) ---
+// Ningun DTO de esta seccion lleva email, storageFileId, sha256 (ni su huella corta), clientRequestId ni secuencia. La unica "advertencia" derivada del hash es un BOOLEANO (mismo archivo asociado a otro pozo).
+var ITF_PENDIENTES_LIMITE_DEFECTO = 20;
+var ITF_PENDIENTES_LIMITE_MAX = 50;
+var ITF_CURSOR_PREFIJO = 's1:';
+var ITF_MARCA_OTRO_POZO = 'MISMO_HASH_OTRO_POZO';
+var ITF_MENSAJE_OTRO_POZO = 'Este mismo archivo aparece asociado a otro pozo.';
+var ITF_ESTADO_TRAS_EVENTO = { ITF_APROBADO: 'VIGENTE', ITF_RECHAZADO: 'RECHAZADO', ITF_RETIRADO: 'RETIRADO', ITF_REVERTIDO: 'VIGENTE' };
+
+// limite (entero 1..MAX, por defecto 20) y cursor (opaco: 's1:<n>') -> {ok:true, limite, cursor (numero o null)} | {ok:false, code, message}.
+// El cursor es la secuencia (unica y creciente en TODA la hoja) de la ultima propuesta entregada: "dame las anteriores a esa". Una propuesta nueva tiene una secuencia mayor, asi que no corre las paginas ya
+// vistas; una que sale de la cola (aprobada, rechazada, retirada) no deja un hueco ni repite otra, que es lo que rompe un offset.
+function itfDominio_validarPaginacion(limite, cursor) {
+  var lim = ITF_PENDIENTES_LIMITE_DEFECTO;
+  if (limite !== undefined && limite !== null && limite !== '') {
+    if (typeof limite !== 'number' || Math.floor(limite) !== limite || limite < 1 || limite > ITF_PENDIENTES_LIMITE_MAX) {
+      return itfDominio_error('INVALID_LIMITE', 'limite invalido (1 a ' + ITF_PENDIENTES_LIMITE_MAX + ')');
+    }
+    lim = limite;
+  }
+  var cur = null;
+  if (cursor !== undefined && cursor !== null && cursor !== '') {
+    var m = typeof cursor === 'string' ? /^s1:([1-9]\d{0,14})$/.exec(cursor) : null;
+    if (!m) {
+      return itfDominio_error('INVALID_CURSOR', 'cursor invalido');
+    }
+    cur = Number(m[1]);
+  }
+  return { ok: true, limite: lim, cursor: cur };
+}
+
+function itfDominio_dtoPendiente(d, proponenteDe, emailActor) {
+  var otroPozo = d.marcaRevision.indexOf(ITF_MARCA_OTRO_POZO) >= 0;
+  return {
+    documentoId: d.documentoId,
+    wellId: d.wellId,
+    mimeType: d.mimeType,
+    bytes: d.bytes,
+    nombreOriginal: d.nombreOriginal,
+    nombreProponente: itfDominio_nombreVisible(d.propuesto.nombre),
+    timestampUtc: d.propuesto.timestamp,
+    autoPropuestaPropia: itfDominio_normalizarEmail(proponenteDe(d.documentoId)) === itfDominio_normalizarEmail(emailActor),
+    warningDuplicadoOtroPozo: otroPozo,
+    warningMensaje: otroPozo ? ITF_MENSAJE_OTRO_POZO : null
+  };
+}
+
+// derivacion (itfDominio_derivar de TODA la hoja, UNA sola vez) + {emailActor, proponenteDe(documentoId) -> email, limite, cursor}. Devuelve SOLO documentos PROPUESTO, las mas nuevas primero.
+//   {items, siguienteCursor (null si no hay mas), total (pendientes de toda la cola), pozosSinDerivar (pozos con historial roto: sus propuestas no se pueden listar sin inventar un estado)}
+// Todo en memoria: ninguna lectura de storage, de Drive ni de la hoja por tarjeta.
+function itfDominio_listarPendientes(derivacion, ctx) {
+  var c = ctx || {};
+  var pozos = derivacion && derivacion.porPozo ? derivacion.porPozo : {};
+  var todos = [];
+  var sinDerivar = 0;
+  Object.keys(pozos).forEach(function (wellId) {
+    var p = pozos[wellId];
+    if (p.integridad !== ITF_INTEGRIDAD.OK) {
+      sinDerivar += 1;
+      return;
+    }
+    p.orden.forEach(function (id) {
+      var d = p.documentos[id];
+      if (d.estado === ITF_ESTADOS_DOCUMENTO.PROPUESTO) {
+        todos.push(d);
+      }
+    });
+  });
+  todos.sort(function (a, b) { return b.propuesto.secuencia - a.propuesto.secuencia; });
+  var restantes = c.cursor === null || c.cursor === undefined ? todos : todos.filter(function (d) { return d.propuesto.secuencia < c.cursor; });
+  var pagina = restantes.slice(0, c.limite);
+  var hayMas = restantes.length > pagina.length;
+  return {
+    items: pagina.map(function (d) { return itfDominio_dtoPendiente(d, c.proponenteDe, c.emailActor); }),
+    siguienteCursor: hayMas ? ITF_CURSOR_PREFIJO + pagina[pagina.length - 1].propuesto.secuencia : null,
+    total: todos.length,
+    pozosSinDerivar: sinDerivar
+  };
+}
+
+// Documento para el validador, en cualquier estado. Sin huella: el hash no sale ni siquiera abreviado.
+function itfDominio_dtoDocumentoModeracion(d, proponenteDe, emailActor) {
+  var decision = d.cierre || d.aprobacion || null;
+  var propuestoPorYo = d.propuesto ? itfDominio_normalizarEmail(proponenteDe(d.documentoId)) === itfDominio_normalizarEmail(emailActor) : false;
+  return {
+    documentoId: d.documentoId,
+    origen: d.origen,
+    wellId: d.wellId,
+    estado: d.estado,
+    implicito: d.implicito === true,
+    mimeType: d.mimeType,
+    bytes: d.bytes,
+    nombreOriginal: d.nombreOriginal,
+    nombreProponente: d.propuesto ? itfDominio_nombreVisible(d.propuesto.nombre) : null,
+    propuestoEn: d.propuesto ? d.propuesto.timestamp : null,
+    autoPropuestaPropia: propuestoPorYo,
+    aprobadoPor: d.aprobacion ? itfDominio_nombreVisible(d.aprobacion.nombre) : null,
+    aprobadoEn: d.aprobacion ? d.aprobacion.timestamp : null,
+    vigenteDesde: d.vigenteDesde,
+    autoaprobado: d.autoaprobado === true,
+    reemplazaA: d.reemplazaA,
+    reemplazadoPor: d.reemplazadoPor,
+    restaurable: d.fueVigente === true && (d.estado === ITF_ESTADOS_DOCUMENTO.REEMPLAZADO || d.estado === ITF_ESTADOS_DOCUMENTO.RETIRADO),
+    warningDuplicadoOtroPozo: d.marcaRevision.indexOf(ITF_MARCA_OTRO_POZO) >= 0,
+    decision: decision === null ? null : {
+      evento: decision.evento, nombre: itfDominio_nombreVisible(decision.nombre), timestamp: decision.timestamp, motivoCodigo: decision.motivoCodigo, motivoTexto: decision.motivoTexto
+    }
+  };
+}
+
+function itfDominio_detalleEvento(h, doc) {
+  if (h.evento === ITF_EVENTO.PROPUESTO) {
+    return 'Se propuso un ITF para el pozo.';
+  }
+  if (h.evento === ITF_EVENTO.APROBADO) {
+    var auto = doc !== undefined && doc.autoaprobado === true ? ' La aprobo quien lo habia propuesto.' : '';
+    return (h.documentoReemplazadoId === '' ? 'Se aprobo como ITF vigente del pozo.' : 'Se aprobo y reemplazo al ITF vigente anterior.') + auto;
+  }
+  if (h.evento === ITF_EVENTO.RECHAZADO) {
+    return 'Se rechazo la propuesta.';
+  }
+  if (h.evento === ITF_EVENTO.RETIRADO) {
+    return h.motivoCodigo === ITF_MOTIVO_CANCELACION ? 'Quien lo propuso retiro su propuesta.' : 'Se retiro el documento.';
+  }
+  if (h.evento === ITF_EVENTO.REVERTIDO) {
+    return h.documentoReemplazadoId === '' ? 'Se restauro como ITF vigente.' : 'Se restauro como ITF vigente y dejo de serlo el anterior.';
+  }
+  return 'Se registro el ITF original del pozo para poder referenciarlo.';
+}
+
+// Historial de UN pozo (derivacion ya verificada: integridad OK), del evento mas nuevo al mas viejo. La lista del pozo viene en orden de secuencia; la secuencia NO sale.
+function itfDominio_dtoHistorialPozo(p) {
+  return p.historial.slice().reverse().map(function (h) {
+    var doc = p.documentos[h.documentoId];
+    return {
+      evento: h.evento,
+      documentoId: h.documentoId,
+      documentoReemplazadoId: h.documentoReemplazadoId,
+      nombre: itfDominio_nombreVisible(h.nombre),
+      timestamp: h.timestamp,
+      motivoCodigo: h.motivoCodigo,
+      motivoTexto: h.motivoTexto,
+      detalle: itfDominio_detalleEvento(h, doc),
+      estadoActualDocumento: doc === undefined ? null : doc.estado
+    };
+  });
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     ITF_EVENTO,
@@ -1282,6 +1430,19 @@ if (typeof module !== 'undefined' && module.exports) {
     itfDominio_documentoParaDescarga,
     itfDominio_validarComando,
     itfDominio_atenderExistente,
+    ITF_WELLID_REGEX,
+    ITF_PENDIENTES_LIMITE_DEFECTO,
+    ITF_PENDIENTES_LIMITE_MAX,
+    ITF_CURSOR_PREFIJO,
+    ITF_MARCA_OTRO_POZO,
+    ITF_MENSAJE_OTRO_POZO,
+    ITF_ESTADO_TRAS_EVENTO,
+    itfDominio_validarPaginacion,
+    itfDominio_dtoPendiente,
+    itfDominio_listarPendientes,
+    itfDominio_dtoDocumentoModeracion,
+    itfDominio_detalleEvento,
+    itfDominio_dtoHistorialPozo,
     itfDominio_planificar
   };
 }

@@ -47,12 +47,14 @@ describe('E9-2 no esta cableado: ningun archivo vivo de la app lo referencia', (
     expect(src).toContain('perfil_subir: false, perfil_validar: false');
   });
 
-  test('E9-4: Api.js expone UNA sola ruta de ITF colaborativos (proponerItf) y solo usa itfService_ejecutar / itfService_e9Activo; nada de aprobar, rechazar, reemplazar ni revertir', () => {
+  test('E9-5: Api.js expone SOLO las rutas de ITF colaborativos esperadas y solo habla con el servicio (nunca con el dominio, la hoja, Drive ni el storage)', () => {
     const api = CODIGO('Api.js');
-    expect(api).toMatch(/body\.action === 'proponerItf'/);
+    ['proponerItf', 'getItfPendientes', 'getItfDocumentoModeracion', 'getHistorialItf', 'aprobarItf', 'rechazarItf', 'retirarItf', 'revertirItf', 'retirarPropuestaItf'].forEach((accion) => {
+      expect(api).toContain("body.action === '" + accion + "'");
+    });
     const usadas = Array.from(new Set(api.match(/itf[A-Z][A-Za-z]*_\w+/g) || [])).sort();
-    expect(usadas).toEqual(['itfService_e9Activo', 'itfService_ejecutar']);
-    expect(api).not.toMatch(/aprobarItf|rechazarItf|retirarItf|revertirItf|getItfPendientes|getItfEstado|getItfDocumento|itfPropuesta/i);
+    expect(usadas).toEqual(['itfService_documentoModeracion', 'itfService_e9Activo', 'itfService_ejecutar', 'itfService_historial', 'itfService_pendientes']);
+    expect(api).not.toMatch(/getItfEstado|itfPropuesta|PROPONER_Y_APROBAR|proponerYAprobar/i);
   });
 
   test('el Perfil actual sigue igual: getProfile y la disponibilidad se apoyan solo en Drive (<wellId>.jpg)', () => {
@@ -67,8 +69,8 @@ describe('E9-2 no esta cableado: ningun archivo vivo de la app lo referencia', (
     expect(src).not.toMatch(/PROPUESTA|ItfEventos|itfDominio/i);
   });
 
-  test('ningun endpoint nuevo: Api.js no enruta acciones de ITF colaborativos', () => {
-    expect(CODIGO('Api.js')).not.toMatch(/aprobarItf|rechazarItf|retirarItf|revertirItf|getItfPendientes|getItfEstado|itfPropuesta/i);
+  test('ninguna accion combinada: no existe "proponer y aprobar" en ninguna capa', () => {
+    ['Api.js', 'ItfService.js', 'ItfDominioService.js'].forEach((archivo) => expect(CODIGO(archivo)).not.toMatch(/PROPONER_Y_APROBAR|proponerYAprobar|proponerYAprobarItf/));
   });
 
   test('los scripts del repo no ejecutan el setup de la hoja (scripts/gas)', () => {
@@ -222,5 +224,25 @@ describe('docs/itf-colaborativos.md: E9-4', () => {
     ['Api.js', 'Config.js', 'ProfileService.js', 'ItfService.js', 'ItfLegacyProvider.js', 'ItfAvailabilityService.js'].forEach((archivo) => {
       expect(CODIGO(archivo)).not.toMatch(/itfAuditoria_|auditarCarpetaItfLegacy|ItfLegacyAuditoria/);
     });
+  });
+});
+
+describe('docs/itf-colaborativos.md: E9-5', () => {
+  test('documenta la etapa como local y no productiva, los endpoints, la cola, la paginacion, la aprobacion, el reemplazo, el rechazo, el retiro, la reversion, la autoaprobacion, el historial y la concurrencia', () => {
+    const d = DOC();
+    expect(d).toMatch(/## 16\. E9-5/);
+    expect(d).toMatch(/E9-5[^\n]*NO productivo/);
+    ['getItfPendientes', 'getItfDocumentoModeracion', 'getHistorialItf', 'aprobarItf', 'rechazarItf', 'retirarItf', 'revertirItf', 'retirarPropuestaItf', 'vigenteEsperadoDocumentoId',
+      'VIGENTE_CAMBIO', 'ITF_ARCHIVO_NO_DISPONIBLE', 'LEGACY_CAMBIO', 'LEGACY_NO_DISPONIBLE', 'CANCELADO_POR_PROPONENTE', 'DESTINO_INVALIDO', 'siguienteCursor'].forEach((t) => expect(d).toContain(t));
+    expect(d).toMatch(/autoaprobaci/i);
+    expect(d).toMatch(/no mueven archivos/i);
+    expect(d).toMatch(/UNA lectura de `ItfEventos`/);
+    expect(d).toMatch(/no restaura el anterior/);
+    expect(d).toMatch(/auditarCarpetaItfLegacy/);
+  });
+  test('los DTO de E9-5 no llevan hash (ni su prefijo), storage, email, clientRequestId ni secuencia: lo dicen el codigo y las pruebas', () => {
+    const dom = CODIGO('ItfDominioService.js');
+    const bloque = dom.slice(dom.indexOf('function itfDominio_dtoPendiente'), dom.indexOf("if (typeof module !== 'undefined'"));
+    expect(bloque).not.toMatch(/sha256|huella|storageFileId|\.email|clientRequestId|secuencia:/);
   });
 });

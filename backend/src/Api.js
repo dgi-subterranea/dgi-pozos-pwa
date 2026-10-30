@@ -54,6 +54,23 @@ function doPost(e) {
       } else if (body.action === 'proponerItf') {
         // E9-4: lista BLANCA de campos dentro del handler (rechaza cualquier otro). Solo con perfil + perfil_subir y con ITF_E9_ACTIVO encendido.
         response = handleProponerItf(body.sessionToken, body);
+      } else if (body.action === 'getItfPendientes') {
+        // E9-5: moderacion institucional. Cada handler recibe el cuerpo entero para aplicar su LISTA BLANCA de campos; todos exigen perfil + perfil_validar (retirarPropuestaItf: perfil + perfil_subir).
+        response = handleGetItfPendientes(body.sessionToken, body);
+      } else if (body.action === 'getItfDocumentoModeracion') {
+        response = handleGetItfDocumentoModeracion(body.sessionToken, body);
+      } else if (body.action === 'getHistorialItf') {
+        response = handleGetHistorialItf(body.sessionToken, body);
+      } else if (body.action === 'aprobarItf') {
+        response = handleAprobarItf(body.sessionToken, body);
+      } else if (body.action === 'rechazarItf') {
+        response = handleRechazarItf(body.sessionToken, body);
+      } else if (body.action === 'retirarItf') {
+        response = handleRetirarItf(body.sessionToken, body);
+      } else if (body.action === 'revertirItf') {
+        response = handleRevertirItf(body.sessionToken, body);
+      } else if (body.action === 'retirarPropuestaItf') {
+        response = handleRetirarPropuestaItf(body.sessionToken, body);
       } else if (body.action === 'getEstadoReemplazo') {
         response = handleGetEstadoReemplazo(body.sessionToken, body.wellId);
       } else if (body.action === 'getHistorialReemplazo') {
@@ -906,6 +923,190 @@ function handleProponerItf(sessionToken, body) {
       warnings: []
     }
   };
+}
+
+// --- E9-5: moderacion institucional de ITF (local, NO productivo) ---
+// Lecturas del validador: getItfPendientes (cola, sin imagenes), getItfDocumentoModeracion (un documento con su imagen) y getHistorialItf (evolucion de un pozo).
+// Escrituras: aprobarItf, rechazarItf, retirarItf, revertirItf (perfil + perfil_validar) y retirarPropuestaItf (el PROPONENTE retira la propia: perfil + perfil_subir; el servicio verifica que sea de quien la propuso).
+// Orden de chequeos de TODOS: sesion -> permisos exactos (=== true) -> interruptor ITF_E9_ACTIVO -> lista blanca de campos -> servicio. El cliente es autoridad SOLO sobre los campos listados: el actor sale de
+// la sesion y el pozo sale del documento (un wellId, email, nombre, hash, storage, estado, secuencia o timestamp del cliente se RECHAZA). Historial: UNA fila por escritura exitosa (el reintento idempotente no
+// escribe otra), sin imagenes, hashes ni ids de storage. Ningun DTO lleva email, storageFileId, sha256, clientRequestId ni secuencia. Sin Telegram.
+// Codigos: INVALID_REQUEST / INVALID_DOCUMENTO_ID / INVALID_WELL_ID / INVALID_MOTIVO / INVALID_MOTIVO_TEXTO / INVALID_CLIENT_REQUEST_ID / INVALID_LIMITE / INVALID_CURSOR, PERMISSION_DENIED, ITF_E9_INACTIVO,
+// ITF_NOT_FOUND, ITF_STATE_UNKNOWN, INCONSISTENT_STATE, DOCUMENTO_NO_PROPUESTO, DOCUMENTO_NO_RETIRABLE, DESTINO_INVALIDO, VIGENTE_CAMBIO, LEGACY_AMBIGUO / LEGACY_NOMBRE_NO_CANONICO / LEGACY_CAMBIO /
+// LEGACY_NO_DISPONIBLE / LEGACY_FORMATO_INVALIDO, ITF_ARCHIVO_NO_DISPONIBLE / ITF_ARCHIVO_NO_COINCIDE, IDEMPOTENCY_CONFLICT, ITF_STORAGE_NO_CONFIGURADO, SERVICE_UNAVAILABLE.
+var ITF_MOD_ENDPOINTS = {
+  getItfPendientes: { modulos: ['perfil', 'perfil_validar'], campos: ['action', 'sessionToken', 'limite', 'cursor'] },
+  getItfDocumentoModeracion: { modulos: ['perfil', 'perfil_validar'], campos: ['action', 'sessionToken', 'documentoId'] },
+  getHistorialItf: { modulos: ['perfil', 'perfil_validar'], campos: ['action', 'sessionToken', 'wellId'] },
+  aprobarItf: { modulos: ['perfil', 'perfil_validar'], accion: 'APROBAR', campos: ['action', 'sessionToken', 'clientRequestId', 'documentoId', 'vigenteEsperadoDocumentoId', 'motivoCodigo', 'motivoTexto'] },
+  rechazarItf: { modulos: ['perfil', 'perfil_validar'], accion: 'RECHAZAR', campos: ['action', 'sessionToken', 'clientRequestId', 'documentoId', 'motivoCodigo', 'motivoTexto'] },
+  retirarItf: { modulos: ['perfil', 'perfil_validar'], accion: 'RETIRAR', campos: ['action', 'sessionToken', 'clientRequestId', 'documentoId', 'motivoCodigo', 'motivoTexto'] },
+  revertirItf: { modulos: ['perfil', 'perfil_validar'], accion: 'REVERTIR', campos: ['action', 'sessionToken', 'clientRequestId', 'documentoId', 'vigenteEsperadoDocumentoId', 'motivoCodigo', 'motivoTexto'] },
+  retirarPropuestaItf: { modulos: ['perfil', 'perfil_subir'], accion: 'RETIRAR_PROPUESTA', campos: ['action', 'sessionToken', 'clientRequestId', 'documentoId', 'motivoTexto'] }
+};
+
+function api_itfModError(code, message) {
+  return { status: 'error', code: code, message: message };
+}
+
+// Sesion -> permisos exactos -> interruptor -> lista blanca. {ok:true, session, b} | {ok:false, response}.
+function api_itfModEntrada(sessionToken, body, accionApi) {
+  var cfg = ITF_MOD_ENDPOINTS[accionApi];
+  var validation = validateSession(sessionToken, accionApi, null);
+  if (!validation.ok) {
+    return { ok: false, response: validation.response };
+  }
+  var session = validation.session;
+  var permisos = api_validarPermisosEstrictos(session, accionApi, cfg.modulos);
+  if (!permisos.ok) {
+    return { ok: false, response: permisos.response };
+  }
+  if (!itfService_e9Activo()) {
+    return { ok: false, response: api_itfModError('ITF_E9_INACTIVO', 'los ITF colaborativos no estan activos') };
+  }
+  var b = body !== null && typeof body === 'object' ? body : {};
+  var sobrantes = Object.keys(b).filter(function (k) { return cfg.campos.indexOf(k) < 0; });
+  if (sobrantes.length > 0) {
+    return { ok: false, response: api_itfModError('INVALID_REQUEST', 'campos que no corresponden a la accion') };
+  }
+  return { ok: true, session: session, b: b };
+}
+
+function api_itfModSesionServicio(session) {
+  var access = getUserAccess(session.email);
+  return {
+    email: session.email,
+    nombre: access.nombre,
+    permisos: { perfil: hasPermission(session.email, 'perfil') === true, perfil_subir: hasPermission(session.email, 'perfil_subir') === true, perfil_validar: hasPermission(session.email, 'perfil_validar') === true }
+  };
+}
+
+function handleGetItfPendientes(sessionToken, body) {
+  var entrada = api_itfModEntrada(sessionToken, body, 'getItfPendientes');
+  if (!entrada.ok) {
+    return entrada.response;
+  }
+  var r;
+  try {
+    r = itfService_pendientes(api_itfModSesionServicio(entrada.session), { limite: entrada.b.limite, cursor: entrada.b.cursor });
+  } catch (err) {
+    Logger.log('getItfPendientes: excepcion: ' + api_limpiarMensajeLog(err));
+    return api_itfModError('SERVICE_UNAVAILABLE', 'no se pudo completar la accion: intenta de nuevo en unos minutos');
+  }
+  if (!r.ok) {
+    return api_itfModError(r.code, r.message);
+  }
+  return { status: 'ok', data: { items: r.items, siguienteCursor: r.siguienteCursor, total: r.total, pozosSinDerivar: r.pozosSinDerivar } };
+}
+
+function handleGetItfDocumentoModeracion(sessionToken, body) {
+  var entrada = api_itfModEntrada(sessionToken, body, 'getItfDocumentoModeracion');
+  if (!entrada.ok) {
+    return entrada.response;
+  }
+  var r;
+  try {
+    r = itfService_documentoModeracion(api_itfModSesionServicio(entrada.session), entrada.b.documentoId);
+  } catch (err) {
+    Logger.log('getItfDocumentoModeracion: excepcion: ' + api_limpiarMensajeLog(err));
+    return api_itfModError('SERVICE_UNAVAILABLE', 'no se pudo completar la accion: intenta de nuevo en unos minutos');
+  }
+  if (!r.ok) {
+    return api_itfModError(r.code, r.message);
+  }
+  var bytes = r.blob.getBytes();
+  return {
+    status: 'ok',
+    data: { documento: r.documento, pozo: r.pozo, imagen: { mimeType: r.blob.getContentType(), imagenBase64: Utilities.base64Encode(bytes) } }
+  };
+}
+
+function handleGetHistorialItf(sessionToken, body) {
+  var entrada = api_itfModEntrada(sessionToken, body, 'getHistorialItf');
+  if (!entrada.ok) {
+    return entrada.response;
+  }
+  var r;
+  try {
+    r = itfService_historial(api_itfModSesionServicio(entrada.session), entrada.b.wellId);
+  } catch (err) {
+    Logger.log('getHistorialItf: excepcion: ' + api_limpiarMensajeLog(err));
+    return api_itfModError('SERVICE_UNAVAILABLE', 'no se pudo completar la accion: intenta de nuevo en unos minutos');
+  }
+  if (!r.ok) {
+    return api_itfModError(r.code, r.message);
+  }
+  return { status: 'ok', data: { wellId: r.wellId, pozo: r.pozo, historial: r.historial, documentos: r.documentos } };
+}
+
+// Respuesta de una escritura: lo minimo para que la pantalla se actualice (despues vuelve a pedir la cola). reintento=true si era un reintento idempotente de algo ya hecho.
+function api_itfModRespuestaEscritura(resultado) {
+  var data = {
+    documentoId: resultado.resultado.documentoId,
+    wellId: resultado.resultado.wellId,
+    evento: resultado.resultado.evento,
+    estado: ITF_ESTADO_TRAS_EVENTO[resultado.resultado.evento],
+    reintento: resultado.accion === 'REINTENTO'
+  };
+  if (resultado.resultado.evento === 'ITF_APROBADO') {
+    data.autoaprobado = resultado.autoaprobado === true;
+  }
+  return { status: 'ok', data: data };
+}
+
+function api_itfModEscritura(sessionToken, body, accionApi) {
+  var entrada = api_itfModEntrada(sessionToken, body, accionApi);
+  if (!entrada.ok) {
+    return entrada.response;
+  }
+  var cfg = ITF_MOD_ENDPOINTS[accionApi];
+  var b = entrada.b;
+  var comando = { accion: cfg.accion, clientRequestId: b.clientRequestId, documentoId: b.documentoId };
+  if (b.vigenteEsperadoDocumentoId !== undefined) {
+    comando.documentoReemplazadoId = b.vigenteEsperadoDocumentoId;
+  }
+  if (b.motivoCodigo !== undefined) {
+    comando.motivoCodigo = b.motivoCodigo;
+  }
+  if (b.motivoTexto !== undefined) {
+    comando.motivoTexto = b.motivoTexto;
+  }
+  var resultado;
+  try {
+    resultado = itfService_ejecutar(api_itfModSesionServicio(entrada.session), comando, {});
+  } catch (err) {
+    Logger.log(accionApi + ': excepcion: ' + api_limpiarMensajeLog(err));
+    logHistoryEvent(entrada.session.email, accionApi, null, 'SERVICE_UNAVAILABLE');
+    return api_itfModError('SERVICE_UNAVAILABLE', 'no se pudo completar la accion: intenta de nuevo en unos minutos');
+  }
+  if (!resultado.ok) {
+    logHistoryEvent(entrada.session.email, accionApi, null, resultado.code);
+    return api_itfModError(resultado.code, resultado.message);
+  }
+  if (resultado.accion === 'ESCRIBIR') {
+    logHistoryEvent(entrada.session.email, accionApi, resultado.resultado.wellId, 'OK');
+  }
+  return api_itfModRespuestaEscritura(resultado);
+}
+
+function handleAprobarItf(sessionToken, body) {
+  return api_itfModEscritura(sessionToken, body, 'aprobarItf');
+}
+
+function handleRechazarItf(sessionToken, body) {
+  return api_itfModEscritura(sessionToken, body, 'rechazarItf');
+}
+
+function handleRetirarItf(sessionToken, body) {
+  return api_itfModEscritura(sessionToken, body, 'retirarItf');
+}
+
+function handleRevertirItf(sessionToken, body) {
+  return api_itfModEscritura(sessionToken, body, 'revertirItf');
+}
+
+function handleRetirarPropuestaItf(sessionToken, body) {
+  return api_itfModEscritura(sessionToken, body, 'retirarPropuestaItf');
 }
 
 // --- Modulo Reemplazos v1 (evaluacion de aptitud de pozos candidatos) ---
@@ -2087,6 +2288,15 @@ if (typeof module !== 'undefined' && module.exports) {
     handleGetItfAvailability,
     handleRegisterDescargaItf,
     handleProponerItf,
+    ITF_MOD_ENDPOINTS,
+    handleGetItfPendientes,
+    handleGetItfDocumentoModeracion,
+    handleGetHistorialItf,
+    handleAprobarItf,
+    handleRechazarItf,
+    handleRetirarItf,
+    handleRevertirItf,
+    handleRetirarPropuestaItf,
     handleGetEstadoReemplazo,
     handleGetHistorialReemplazo,
     handleRegistrarEvaluacionReemplazo,

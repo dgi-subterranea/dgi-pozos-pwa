@@ -21,7 +21,7 @@
 var ITF_E9_PROPIEDAD = 'ITF_E9_ACTIVO';
 var ITF_SERVICE_CODIGOS = [
   'ITF_NOT_FOUND', 'ITF_STATE_UNKNOWN', 'LEGACY_AMBIGUO', 'LEGACY_NOMBRE_NO_CANONICO', 'LEGACY_CAMBIO', 'LEGACY_FORMATO_INVALIDO', 'VIGENTE_CAMBIO', 'DUPLICADO_DOCUMENTO',
-  'IDEMPOTENCY_CONFLICT', 'INCONSISTENT_STATE', 'SERVICE_UNAVAILABLE', 'ITF_E9_INACTIVO', 'ITF_STORAGE_NO_CONFIGURADO', 'TOO_MANY_PENDING'
+  'IDEMPOTENCY_CONFLICT', 'INCONSISTENT_STATE', 'SERVICE_UNAVAILABLE', 'ITF_E9_INACTIVO', 'ITF_STORAGE_NO_CONFIGURADO', 'TOO_MANY_PENDING', 'ITF_ARCHIVO_NO_DISPONIBLE', 'ITF_ARCHIVO_NO_COINCIDE'
 ];
 var ITF_SIN_STORAGE_REF = 'sin-storage-aun';        // valor de relleno valido para el dominio cuando la decision es solo "reintento / conflicto" y no se guardo ningun archivo
 
@@ -316,13 +316,44 @@ function itfService_planificar(s, email, comando, valores, d, extra) {
   if (!plan.ok) {
     return { falla: itfService_falla(itfService_traducirCodigo(plan.code, legacyEstado), plan.message) };
   }
+  if (plan.accion === 'ESCRIBIR' && (accion === ITF_ACCIONES.APROBAR || accion === ITF_ACCIONES.REVERTIR)) {
+    var archivoFalla = itfService_verificarArchivo(derivacion, wellId, valores.documentoId, d);
+    if (archivoFalla !== null) {
+      return { falla: archivoFalla };
+    }
+  }
+  if (accion === ITF_ACCIONES.APROBAR) {
+    plan.autoaprobado = ctx.proponenteDe(valores.documentoId) === email;                  // se marca, no cambia nada: es la misma accion con otro dato
+  }
   return { plan: plan, legacyEstado: legacyEstado, wellId: wellId };
+}
+
+// Un documento E9 que va a quedar VIGENTE (aprobar, restaurar) tiene que seguir existiendo en el storage y ser el que se registro (tipo y tamano). Se pregunta adentro del lock, justo antes de escribir.
+// El legacy se verifica por su huella (itfService_planificar). null si esta bien | falla.
+function itfService_verificarArchivo(derivacion, wellId, documentoId, d) {
+  var p = derivacion.porPozo[wellId];
+  var doc = p === undefined ? undefined : p.documentos[documentoId];
+  if (doc === undefined || doc.origen !== ITF_ORIGEN.E9) {
+    return null;
+  }
+  var meta = d.storage.obtenerMetadata(doc.storageFileId);
+  if (!meta || meta.ok !== true) {
+    var code = meta && meta.code === ITF_STORAGE_NO_CONFIGURADO ? ITF_STORAGE_NO_CONFIGURADO : (meta && meta.code === 'ITF_NOT_FOUND' ? 'ITF_ARCHIVO_NO_DISPONIBLE' : 'SERVICE_UNAVAILABLE');
+    return itfService_falla(code, 'el archivo del documento no esta disponible');
+  }
+  if (meta.bytes !== doc.bytes || meta.mimeType !== doc.mimeType) {
+    return itfService_falla('ITF_ARCHIVO_NO_COINCIDE', 'el archivo guardado no es el que se registro');
+  }
+  return null;
 }
 
 function itfService_resultadoDe(plan, escritos) {
   var r = { ok: true, accion: plan.accion, resultado: plan.resultado, advertencias: plan.advertencias, eventosEscritos: escritos };
   if (plan.propuesta) {
     r.propuesta = plan.propuesta;
+  }
+  if (plan.autoaprobado !== undefined) {
+    r.autoaprobado = plan.autoaprobado;
   }
   return r;
 }
@@ -460,6 +491,165 @@ function itfService_proponer(s, email, comando, valores, archivo, d) {
   return res;
 }
 
+// --- E9-5: lectura del validador (cola, documento, historial) ---
+// Las tres lecturas exigen perfil + perfil_validar (exactos) y ITF_E9_ACTIVO; leen ItfEventos UNA vez y derivan en memoria. Ninguna escribe. Errores de infraestructura -> SERVICE_UNAVAILABLE sin detalle.
+
+// {ok:true, email} | falla. El permiso se comprueba aca ademas de en Api.js: el servicio no confia en que quien lo llama ya lo hizo.
+function itfService_exigirValidador(sesion) {
+  var s = sesion !== null && typeof sesion === 'object' ? sesion : {};
+  if (!itfDominio_puede(ITF_ACCIONES.APROBAR, s.permisos)) {
+    return itfService_falla('PERMISSION_DENIED', 'permiso insuficiente');
+  }
+  var email = itfDominio_normalizarEmail(s.email);
+  if (!ITF_EMAIL_REGEX.test(email)) {
+    return itfService_falla('INVALID_REQUEST', 'sesion sin email valido');
+  }
+  return { ok: true, email: email };
+}
+
+// Cola de propuestas PENDIENTES (solo PROPUESTO), de todos los pozos, las mas nuevas primero. opciones = {limite, cursor}. Una sola lectura de la hoja; sin storage, sin Drive, sin lecturas por tarjeta.
+// {ok:true, items, siguienteCursor, total, pozosSinDerivar} | falla.
+function itfService_pendientes(sesion, opciones, deps) {
+  var d = itfService_deps(deps);
+  var v = itfService_exigirValidador(sesion);
+  if (!v.ok) {
+    return v;
+  }
+  var o = opciones !== null && typeof opciones === 'object' ? opciones : {};
+  var pag = itfDominio_validarPaginacion(o.limite, o.cursor);
+  if (!pag.ok) {
+    return itfService_falla(pag.code, pag.message);
+  }
+  if (!d.e9Activo()) {
+    return itfService_falla('ITF_E9_INACTIVO', 'los ITF colaborativos no estan activos');
+  }
+  try {
+    var eventos = d.repo.leerTodos().eventos;
+    var derivacion = itfDominio_derivar(eventos);
+    var r = itfDominio_listarPendientes(derivacion, { emailActor: v.email, proponenteDe: itfService_proponentes(eventos), limite: pag.limite, cursor: pag.cursor });
+    return { ok: true, items: r.items, siguienteCursor: r.siguienteCursor, total: r.total, pozosSinDerivar: r.pozosSinDerivar };
+  } catch (err) {
+    itfService_log('fallo la cola de pendientes: ' + String(err));
+    return itfService_falla('SERVICE_UNAVAILABLE', 'servicio no disponible');
+  }
+}
+
+// Contexto del pozo para el validador a partir de UNA derivacion: el estado del pozo con el legacy incluido (una sola consulta al indice si ningun documento E9 decide el vigente).
+function itfService_estadoDelPozo(wellId, derivacion, d) {
+  var p = derivacion.porPozo[wellId];
+  var vigenteE9 = p !== undefined && p.integridad === ITF_INTEGRIDAD.OK && p.vigenteId !== null && p.documentos[p.vigenteId].origen === ITF_ORIGEN.E9;
+  var info = vigenteE9 || (p !== undefined && p.integridad !== ITF_INTEGRIDAD.OK) ? null : d.legacy.buscar(wellId);
+  return { est: itfDominio_estadoPozo(wellId, derivacion, info === null ? false : itfLegacy_aDisponible(info.estado)), info: info };
+}
+
+function itfService_resumenPozo(est) {
+  return {
+    wellId: est.wellId,
+    estado: est.estado,
+    tieneItf: est.tieneItf,
+    vigenteActualDocumentoId: est.vigente === null ? null : est.vigente.documentoId,
+    vigenteIndeterminado: est.tieneItf === ITF_TIENE_ITF.DESCONOCIDO,
+    advertencias: est.advertencias.slice()
+  };
+}
+
+// Un documento del pozo (propuesto, vigente, reemplazado, retirado, rechazado, o el legacy) con su imagen, para que el validador lo MIRE antes de decidir. Devuelve la metadata segura, el contexto del
+// pozo (incluido el vigente que hay que declarar al aprobar / restaurar) y el blob. Nunca ids de Drive. Un legacy registrado se entrega SOLO si sigue coincidiendo con su huella.
+// {ok:true, documento, pozo, blob} | falla (ITF_NOT_FOUND, ITF_STATE_UNKNOWN, LEGACY_CAMBIO, LEGACY_NO_DISPONIBLE, ...).
+function itfService_documentoModeracion(sesion, documentoId, deps) {
+  var d = itfService_deps(deps);
+  var v = itfService_exigirValidador(sesion);
+  if (!v.ok) {
+    return v;
+  }
+  var id = itfDominio_idDocumento(documentoId);
+  if (id === null) {
+    return itfService_falla('INVALID_DOCUMENTO_ID', 'documentoId invalido');
+  }
+  if (!d.e9Activo()) {
+    return itfService_falla('ITF_E9_INACTIVO', 'los ITF colaborativos no estan activos');
+  }
+  try {
+    var eventos = d.repo.leerTodos().eventos;
+    var derivacion = itfDominio_derivar(eventos);
+    var wellId = id.tipo === ITF_ORIGEN.LEGACY ? id.wellId : derivacion.documentoPozo[id.id];
+    if (wellId === undefined) {
+      return itfService_falla('ITF_NOT_FOUND', 'documento no disponible');
+    }
+    var p = derivacion.porPozo[wellId];
+    if (p !== undefined && p.integridad !== ITF_INTEGRIDAD.OK) {
+      return itfService_falla('ITF_STATE_UNKNOWN', 'el historial del pozo no se puede derivar: requiere revision');
+    }
+    var ctx = itfService_estadoDelPozo(wellId, derivacion, d);
+    var doc = p === undefined ? undefined : p.documentos[id.id];
+    if (doc === undefined) {
+      // el legacy todavia NO registrado: solo existe como vigente implicito
+      if (id.tipo === ITF_ORIGEN.LEGACY && ctx.est.vigente !== null && ctx.est.vigente.implicito === true && ctx.est.vigente.documentoId === id.id) {
+        doc = ctx.est.vigente;
+      } else {
+        return itfService_falla('ITF_NOT_FOUND', 'documento no disponible');
+      }
+    }
+    var blob;
+    if (doc.origen === ITF_ORIGEN.LEGACY) {
+      if (doc.implicito === true) {
+        blob = ctx.info.leerBlob();
+      } else {
+        var r = d.legacy.leerRegistrado(doc);
+        if (!r.found) {
+          return itfService_falla(r.code, 'documento no disponible');
+        }
+        blob = r.blob;
+      }
+    } else {
+      var leido = d.storage.leerDocumento(doc.storageFileId);
+      if (!leido || leido.ok !== true) {
+        return itfService_falla(leido && leido.code === ITF_STORAGE_NO_CONFIGURADO ? ITF_STORAGE_NO_CONFIGURADO : 'SERVICE_UNAVAILABLE', 'documento no disponible');
+      }
+      blob = itfStorage_comoBlob(leido.bytes, leido.mimeType || doc.mimeType);
+    }
+    return { ok: true, documento: itfDominio_dtoDocumentoModeracion(doc, itfService_proponentes(eventos), v.email), pozo: itfService_resumenPozo(ctx.est), blob: blob };
+  } catch (err) {
+    itfService_log('fallo la apertura de un documento: ' + String(err));
+    return itfService_falla('SERVICE_UNAVAILABLE', 'servicio no disponible');
+  }
+}
+
+// Historial institucional de UN pozo: eventos del mas nuevo al mas viejo (sin email, hash, storage, clientRequestId ni secuencia) y los documentos con su estado actual. wellId, no documento: permite ver
+// toda la evolucion (propuestas, aprobaciones, reemplazos, retiros, reversiones) de una sola vez.
+// {ok:true, wellId, pozo, historial, documentos} | falla.
+function itfService_historial(sesion, wellId, deps) {
+  var d = itfService_deps(deps);
+  var v = itfService_exigirValidador(sesion);
+  if (!v.ok) {
+    return v;
+  }
+  if (typeof wellId !== 'string' || !ITF_WELLID_REGEX.test(wellId)) {
+    return itfService_falla('INVALID_WELL_ID', 'wellId invalido');
+  }
+  if (!d.e9Activo()) {
+    return itfService_falla('ITF_E9_INACTIVO', 'los ITF colaborativos no estan activos');
+  }
+  try {
+    var eventos = d.repo.leerTodos().eventos;
+    var derivacion = itfDominio_derivar(eventos);
+    var p = derivacion.porPozo[wellId];
+    if (p !== undefined && p.integridad !== ITF_INTEGRIDAD.OK) {
+      return itfService_falla('ITF_STATE_UNKNOWN', 'el historial del pozo no se puede derivar: requiere revision');
+    }
+    var est = itfService_estadoDelPozo(wellId, derivacion, d).est;
+    var proponentes = itfService_proponentes(eventos);
+    var documentos = p === undefined ? [] : p.orden.slice().reverse().map(function (id) { return itfDominio_dtoDocumentoModeracion(p.documentos[id], proponentes, v.email); });
+    if (est.vigente !== null && est.vigente.implicito === true) {
+      documentos.push(itfDominio_dtoDocumentoModeracion(est.vigente, proponentes, v.email));
+    }
+    return { ok: true, wellId: wellId, pozo: itfService_resumenPozo(est), historial: p === undefined ? [] : itfDominio_dtoHistorialPozo(p), documentos: documentos };
+  } catch (err) {
+    itfService_log('fallo el historial: ' + String(err));
+    return itfService_falla('SERVICE_UNAVAILABLE', 'servicio no disponible');
+  }
+}
+
 // Ejecuta una accion institucional. sesion = {email, nombre, permisos} (lo arma Api.js a partir del token, NUNCA del cuerpo del pedido); comando = el pedido del cliente (el dominio rechaza campos de mas, entre
 // ellos cualquier intento de elegir otro actor); opciones.archivo solo para PROPONER. Devuelve {ok:true, accion:'ESCRIBIR'|'REINTENTO', resultado:{evento, documentoId, wellId}, advertencias,
 // eventosEscritos} | {ok:false, code, message}. Nunca devuelve email, storageRef, hash completo, clientRequestId ni secuencia.
@@ -510,6 +700,12 @@ if (typeof module !== 'undefined' && module.exports) {
     itfService_planificar,
     itfService_evidenciaPropuesta,
     itfService_proponer,
-    itfService_ejecutar
+    itfService_ejecutar,
+    itfService_exigirValidador,
+    itfService_pendientes,
+    itfService_estadoDelPozo,
+    itfService_documentoModeracion,
+    itfService_historial,
+    itfService_verificarArchivo
   };
 }

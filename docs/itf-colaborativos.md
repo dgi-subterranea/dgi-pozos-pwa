@@ -478,3 +478,100 @@ El cliente no elige actor, ids, hash, estado ni referencias de storage. Ni el `s
 - Jest completo en serie: 167 suites, 11.049 tests verdes; Python: 97 + 224 verdes; `git diff --check` limpio.
 - Mutaciones: E9-4 **62 de 62 muertas**; E9-3 **59 de 59** y E9-2 **75 de 75** repetidas sobre el código actual (el código compartido cambió). En la primera corrida de E9-4 sobrevivieron 6: tres eran faltas de test reales (un `sha256` que acompañe al archivo, los argumentos exactos que recibe el storage, el nombre original en el payload del storage) y se agregaron los tests; dos eran mutantes que no cambiaban el comportamiento por la lista blanca o por el UUID exigido (se reescribieron para que prueben la defensa en profundidad); uno eran cuatro guardas redundantes contra el archivo vacío (se anularon juntas).
 - No se corrió nada contra Google: ni storage desplegado, ni hoja real, ni la auditoría de la carpeta legacy ni la medición en Apps Script. El benchmark de `scripts/medir_itf_propuesta.js` es CPU local de Node.
+
+## 16. E9-5: moderación institucional de ITF (local, NO productivo)
+
+Estado: implementado y probado **en local**. No hay UI, push, `gas:*`, despliegue, hoja `ItfEventos` productiva, `ITF_E9_ACTIVO` encendido en producción, columnas productivas en `Usuarios` ni cableado de `getProfile`. El dominio de E9-2/E9-3 ya sabía aprobar, rechazar, retirar y revertir; E9-5 **lo expone con endpoints seguros y agrega las lecturas** (cola, apertura de un documento, historial) y la comprobación del archivo.
+
+### 16.1 Endpoints
+
+Todos: sesión → permisos exactos (`=== true`) → interruptor `ITF_E9_ACTIVO` → **lista blanca de campos** → servicio. El actor sale de la sesión; el pozo sale del documento. Un `wellId`, `email`, `actor`, `nombre`, hash, `storageFileId`, `estado`, `secuencia` o `timestamp` del cliente se **rechaza** (`INVALID_REQUEST`), no se ignora.
+
+| Acción | Permisos | Campos del cliente |
+|---|---|---|
+| `getItfPendientes` | `perfil` + `perfil_validar` | `limite`, `cursor` |
+| `getItfDocumentoModeracion` | `perfil` + `perfil_validar` | `documentoId` |
+| `getHistorialItf` | `perfil` + `perfil_validar` | `wellId` |
+| `aprobarItf` | `perfil` + `perfil_validar` | `documentoId`, `vigenteEsperadoDocumentoId`, `motivoCodigo`, `motivoTexto`, `clientRequestId` |
+| `rechazarItf` | `perfil` + `perfil_validar` | `documentoId`, `motivoCodigo`, `motivoTexto`, `clientRequestId` |
+| `retirarItf` | `perfil` + `perfil_validar` | `documentoId`, `motivoCodigo`, `motivoTexto`, `clientRequestId` |
+| `revertirItf` | `perfil` + `perfil_validar` | `documentoId`, `vigenteEsperadoDocumentoId`, `motivoCodigo`, `motivoTexto`, `clientRequestId` |
+| `retirarPropuestaItf` | `perfil` + `perfil_subir` (y ser quien propuso) | `documentoId`, `motivoTexto`, `clientRequestId` |
+
+No basta `perfil` solo, `perfil_validar` solo ni `perfil_subir`; un valor truthy que no sea el booleano `true` tampoco. Con el interruptor apagado responden `ITF_E9_INACTIVO` antes de tocar la hoja; el permiso se comprueba **antes** que el interruptor.
+
+### 16.2 Cola de pendientes (`getItfPendientes`)
+
+- Devuelve **solo** documentos `PROPUESTO`, de todos los pozos, **las más nuevas primero**. Aprobar, rechazar o retirar una propuesta la saca de la cola: no hay «resueltos».
+- Cada ítem: `documentoId`, `wellId`, `mimeType`, `bytes`, `nombreOriginal`, `nombreProponente`, `timestampUtc`, `autoPropuestaPropia` (quien mira es quien propuso, **por email normalizado**, nunca por nombre), `warningDuplicadoOtroPozo` y `warningMensaje` (texto fijo «Este mismo archivo aparece asociado a otro pozo.»). **Nunca** email, `storageFileId`, hash (ni su prefijo), `clientRequestId` ni secuencia. No lleva imágenes.
+- Respuesta: `items`, `siguienteCursor`, `total` (todas las pendientes de la cola) y `pozosSinDerivar` (pozos con historial roto, cuyas propuestas no se listan para no inventar un estado).
+- **Costo:** UNA lectura de `ItfEventos`, derivación en memoria y el mapa «hash → pozos» ya calculado por la derivación. Cero lecturas de storage, de Drive o del legacy por tarjeta; la imagen se pide solo al abrir. Probado con 1, 20, 100 y 500 propuestas: siempre una lectura de la hoja.
+- **Paginación:** `limite` 1–50 (por defecto 20) y `cursor` opaco `s1:<n>`. El cursor es la **secuencia** (única y creciente en toda la hoja) de la última propuesta entregada: «dame las anteriores». Una propuesta nueva tiene secuencia mayor y no corre las páginas ya vistas; una que sale de la cola no deja un hueco ni repite otra, que es lo que rompe un `offset`. No depende de que el último ítem entregado siga pendiente. Límite o cursor inválidos → `INVALID_LIMITE` / `INVALID_CURSOR`.
+
+### 16.3 Abrir un documento (`getItfDocumentoModeracion`)
+
+Devuelve `documento` (metadata segura, estado, quién lo propuso/aprobó, motivo de la decisión, `restaurable`), `pozo` (estado y **`vigenteActualDocumentoId`**, el vigente que hay que declarar al aprobar o restaurar; `vigenteIndeterminado: true` si no se puede afirmar, p. ej. legacy ambiguo) e `imagen` (`mimeType` + `imagenBase64`). Se pueden abrir propuestos, vigentes, reemplazados, retirados y rechazados. El legacy no registrado se abre como vigente implícito (`implicito: true`); el registrado se entrega **solo si su contenido sigue coincidiendo con la huella** (`LEGACY_CAMBIO` si no). Sin ids de Drive ni referencias de storage.
+
+### 16.4 Aprobar (`aprobarItf`)
+
+- Evento `ITF_APROBADO`; la propuesta pasa a `VIGENTE`. **Sin vigente** no hay motivo (no reemplaza nada).
+- **`vigenteEsperadoDocumentoId` es obligatorio cuando ya hay vigente** (`LEGACY:<wellId>` o el id del documento E9 que vio el validador). Dentro del lock el servidor **rederiva** el vigente real; si es otro, o ya no hay → `VIGENTE_CAMBIO` y no se escribe nada. Con vigente el motivo es obligatorio: `ACTUALIZACION`, `CORRECCION`, `MEJOR_CALIDAD`, `DOCUMENTO_COMPLETO` u `OTRO` (este exige texto; en los demás es opcional). El texto se normaliza con la misma política que E8.
+- **Reemplazo del legacy:** si el vigente es `LEGACY:<wellId>` y aún no tiene `ITF_LEGACY_REGISTRADO`, el servidor resuelve el legacy único, calcula su huella y escribe el registro y la aprobación **en la misma operación y el mismo lock**, con secuencias consecutivas. El archivo legacy no se toca.
+- **Revalidación dentro del lock:** la propuesta sigue `PROPUESTO` (`DOCUMENTO_NO_PROPUESTO` si fue rechazada, retirada o ya aprobada), el vigente esperado coincide, el historial del pozo es derivable (`ITF_STATE_UNKNOWN`) y **el archivo sigue en el storage y es el registrado** (mismo tipo y tamaño): falta → `ITF_ARCHIVO_NO_DISPONIBLE`, distinto → `ITF_ARCHIVO_NO_COINCIDE`, storage caído → `SERVICE_UNAVAILABLE`. Nunca queda vigente un documento sin archivo. (La misma comprobación se hace al restaurar un E9.)
+- **Autoaprobación:** permitida si quien aprueba es quien propuso. Son dos acciones y dos eventos, cada uno con su `clientRequestId`; la derivación la marca (`autoaprobado`) sin crear un estado especial, y la respuesta lo informa. **No existe «proponer y aprobar»** (`INVALID_ACCION`).
+
+### 16.5 Rechazar, retirar y revertir
+
+- **Rechazar** (`ITF_RECHAZADO`): solo `PROPUESTO`; motivo obligatorio (`NO_CORRESPONDE_POZO`, `INCOMPLETO`, `ILEGIBLE`, `DUPLICADO`, `VERSION_INCORRECTA`, `OTRO`; `OTRO` exige texto). El archivo **no se borra ni se mueve**: queda para trazabilidad. No depende del legacy, de Drive ni del storage.
+- **Retirar** (`ITF_RETIRADO`), tres caminos sin estados paralelos: (a) el **proponente** retira la **propia** pendiente (`retirarPropuestaItf`; motivo reservado `CANCELADO_POR_PROPONENTE`; la ajena o una inexistente dan el mismo `PERMISSION_DENIED`); (b) un **validador** retira cualquier pendiente con el catálogo institucional; (c) un **validador** retira el **vigente** (E9 o `LEGACY:<wellId>`), con motivo `ERROR_DE_APROBACION`, `DOCUMENTO_INCORRECTO`, `NO_CORRESPONDE_POZO`, `DESACTUALIZADO` u `OTRO`. Retirar el vigente deja el pozo `SIN_ITF` y **no restaura el anterior**. Si el vigente es el legacy implícito se registra su huella antes del retiro; el archivo físico no se mueve y el overlay deja de considerarlo vigente. Un retirado, reemplazado o rechazado no se vuelve a retirar (`DOCUMENTO_NO_RETIRABLE`).
+- **Revertir / restaurar** (`ITF_REVERTIDO`), acción explícita: puede restaurar un E9 `REEMPLAZADO`, un `RETIRADO` que fue vigente o el legacy registrado; **no** una propuesta, un rechazado, un documento que nunca fue vigente ni el vigente actual (`DESTINO_INVALIDO`). Declara el destino y el vigente que el cliente vio (`vigenteEsperadoDocumentoId`, obligatorio si hay vigente): al restaurar A con B vigente, A queda `VIGENTE` y B `REEMPLAZADO` en un solo evento. Motivo obligatorio (catálogo de retiro). **Restaurar el legacy:** se vuelve a leer por el id de Drive **registrado**, se comprueba que sigue siendo el `<wellId>.jpg` único de la carpeta correcta y se recalcula la huella: si no coincide → `LEGACY_CAMBIO`; si ya no está → `LEGACY_NO_DISPONIBLE`. Nunca se restaura «el archivo que ahora tenga ese nombre».
+
+### 16.6 Historial por pozo (`getHistorialItf`)
+
+Contrato elegido: **por `wellId`**, porque muestra toda la evolución institucional (propuestas, aprobaciones, reemplazos, rechazos, retiros, reversiones y el registro del legacy) en una sola respuesta. Eventos del **más nuevo al más viejo**: `evento`, `documentoId`, `documentoReemplazadoId`, nombre de quien actuó, `timestamp`, `motivoCodigo`, `motivoTexto`, `detalle` (texto legible) y `estadoActualDocumento`; más `pozo` y `documentos` (con su estado actual, el legacy implícito incluido). Nada de email, hash, storage, secuencia ni `clientRequestId`. Para consultar por documento se usa `getItfDocumentoModeracion`.
+
+### 16.7 Escrituras: respuesta, Historial, idempotencia
+
+- Respuesta: `{documentoId, wellId, evento, estado, reintento, autoaprobado?}`; nada más.
+- **Historial:** una fila por escritura exitosa (`aprobarItf`, `rechazarItf`, `retirarItf`, `revertirItf`, `retirarPropuestaItf`, igual que `proponerItf`); un reintento idempotente no escribe otra; sin imágenes, hashes ni ids de storage. Los errores dejan su fila con el código. Las lecturas no escriben en Historial. Sin Telegram.
+- **Idempotencia:** todas llevan `clientRequestId` con namespace por email normalizado. Reintento exacto → mismo resultado sin evento nuevo; contenido distinto → `IDEMPOTENCY_CONFLICT`.
+- Códigos para el validador (claros, sin texto de Drive ni del storage): `VIGENTE_CAMBIO`, `DOCUMENTO_NO_PROPUESTO`, `DOCUMENTO_NO_RETIRABLE`, `DESTINO_INVALIDO`, `ITF_NOT_FOUND`, `ITF_STATE_UNKNOWN`, `INCONSISTENT_STATE`, `LEGACY_AMBIGUO`, `LEGACY_NOMBRE_NO_CANONICO`, `LEGACY_CAMBIO`, `LEGACY_NO_DISPONIBLE`, `ITF_ARCHIVO_NO_DISPONIBLE`, `ITF_ARCHIVO_NO_COINCIDE`, `IDEMPOTENCY_CONFLICT`, `INVALID_*`, `SERVICE_UNAVAILABLE`.
+
+### 16.8 Concurrencia (todo con lock + relectura + derivación)
+
+| Caso | Resultado |
+|---|---|
+| A. Dos validadores aprueban propuestas distintas del mismo pozo | Gana el primero; el segundo recibe `VIGENTE_CAMBIO`, su propuesta sigue pendiente y el legacy se registra una sola vez. |
+| B. Uno aprueba y otro rechaza la misma propuesta | Gana el primero; el segundo, `DOCUMENTO_NO_PROPUESTO`. |
+| C. Retiro mientras otro reemplaza (y al revés) | El retiro sobre lo ya reemplazado da `DOCUMENTO_NO_RETIRABLE`; el reemplazo sobre lo ya retirado, `VIGENTE_CAMBIO`. |
+| D. Reversión mientras otro aprueba (y al revés) | `VIGENTE_CAMBIO` al que llegó segundo. |
+
+Después de cada carrera se comprueba que el pozo sigue derivable y con **a lo sumo un vigente**. Las secuencias son consecutivas.
+
+### 16.9 Archivos físicos y lectura productiva
+
+Aprobar y rechazar **no mueven archivos**: todo documento E9 vive en `ItfPropuestas/` aunque pase a vigente. El estado institucional vive en los eventos, no en la carpeta, lo que simplifica la reversión. Tras aprobar B, `itfService_resolverVigente` devuelve B (y `getProfile` de servicio entrega sus bytes); tras revertir A, devuelve A. **`getProfile` y la disponibilidad productivos siguen sin cablear** hasta tener la auditoría de la carpeta legacy.
+
+### 16.10 Decisiones y cambios respecto del diseño anterior
+
+| Tema | Antes | E9-5 |
+|---|---|---|
+| Nombre del vigente esperado | `documentoReemplazadoId` (comando interno) | el endpoint lo llama `vigenteEsperadoDocumentoId`; el servicio lo traduce |
+| Archivo al aprobar / restaurar | no se comprobaba | se comprueba dentro del lock (existe, tipo y tamaño registrados) |
+| Autoaprobación | solo marca en la derivación | además la respuesta de `aprobarItf` informa `autoaprobado` |
+| Huella en DTO de validador | `itfDominio_dtoValidador` mostraba 12 caracteres | los DTO de E9-5 **no llevan ni el prefijo** del hash |
+| Retiro de la propia propuesta | solo servicio | endpoint propio `retirarPropuestaItf` (permiso de proponer) |
+
+### 16.11 Pendientes para E9-6
+
+1. Resultado real de `auditarCarpetaItfLegacy()` (a cargo de quien lo ejecute): decide qué hacer con duplicados, mayúsculas y nombres inválidos **sin corregirlos automáticamente**; se prepara un informe aparte.
+2. Interfaz: cola, ficha del documento (imagen + vigente a declarar), formularios de motivo, historial; y la vista del proponente (sus propias propuestas pendientes, hoy sin endpoint de lectura).
+3. Despliegue ordenado: storage con las acciones de ITF y `ITF_ROOT_FOLDER_ID`, hoja `ItfEventos`, columnas `perfil_subir` / `perfil_validar` en `Usuarios`, recién entonces el interruptor.
+4. Cablear `getProfile` / disponibilidad / descarga ZIP a `itfService_*` con la política legacy decidida.
+5. Mediciones reales en Apps Script (límite de 3 MB y costo de derivar con muchos eventos).
+
+### 16.12 Verificación de E9-5 (local)
+
+- Jest completo en serie: 170 suites, 11.213 tests verdes; Python: 97 + 224 verdes; `git diff --check` limpio.
+- Mutaciones: E9-5 **55 de 55 muertas**; E9-4 62/62, E9-3 59/59 y E9-2 75/75 repetidas sobre el código actual. En la primera corrida de E9-5 sobrevivieron 6: eran defensas en profundidad (el servicio repite el permiso, el interruptor, la lista blanca y la captura de excepciones del Api) que daban el mismo resultado visible; se agregaron pruebas que exigen que el Api corte **antes** de llamar al servicio y que no filtre el texto de una excepción. Dos mutantes de E9-3 dejaron de aplicar al agregar las lecturas y se reescribieron con contexto único.
+- No se corrió nada contra Google ni se obtuvo aún el resultado real de `auditarCarpetaItfLegacy()`.
