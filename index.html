@@ -124,6 +124,20 @@
       </span>
     </button>
 
+    <!-- ITF pendientes (E9-6): visible solo con perfil=true y perfil_validar=true exactos (ver toggleAccesosUbicacion en app.js). La tarjeta NO pide nada: la cola se carga al abrir la pantalla. -->
+    <button type="button" id="btn-abrir-itf-moderacion" class="button-secondary btn-mapa-acceso fotos-cola-acceso" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M8 12l3 3 5-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="fotos-cola-acceso-textos">
+        <span class="fotos-cola-acceso-titulo">ITF pendientes</span>
+        <span class="fotos-cola-acceso-desc">Validá propuestas de ITF</span>
+      </span>
+    </button>
+    <!-- Al llegar al pozo desde "Ver pozo" de ITF pendientes: vuelta directa a la cola (conserva lo ya cargado). -->
+    <button type="button" id="btn-itf-volver-moderacion" class="button-secondary btn-mapa-acceso" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+      Volver a ITF pendientes
+    </button>
+
     <!-- Hub modular: cabecera compacta + tarjetas de acceso solo a los
          modulos que existen (Perfil/Datos/Ubicacion/Niveles Estaticos).
          Los 3 fetches (ITF, Ficha, NE) corren en paralelo y son
@@ -170,7 +184,84 @@
         Volver al pozo
       </button>
     </div>
-    <div id="perfil-content" class="modulo-content"></div>
+    <!-- Perfil (E9-6): el ITF vigente se pide AL ABRIR (getProfile), no al buscar el pozo; el hub solo consulta la disponibilidad. Las funciones colaborativas (proponer, mis propuestas, historial, retirar) aparecen
+         SOLO con los permisos exactos (perfil_subir / perfil_validar): un usuario con solo perfil ve lo de siempre (imagen + guardar, o el mensaje de que no hay ITF vigente). -->
+    <div id="perfil-content" class="modulo-content">
+      <div class="modulo-id-line"><span id="perfil-wellid" class="modulo-id mono"></span></div>
+      <p class="modulo-subline">Perfil</p>
+
+      <div id="perfil-cargando" class="cargando" data-cargando role="status" hidden>Cargando ITF…</div>
+      <div id="perfil-aviso" class="itf-bloque" hidden>
+        <p id="perfil-aviso-texto" class="itf-sin-itf" role="status" tabindex="-1"></p>
+        <button type="button" id="btn-perfil-reintentar" class="button-secondary" hidden>Reintentar</button>
+      </div>
+      <div id="perfil-vigente" hidden>
+        <img id="perfil-imagen" class="profile-image" alt="Perfil del pozo">
+        <a id="perfil-guardar-a" class="button" href="#" download>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>Guardar / Compartir
+        </a>
+        <button type="button" id="btn-save-image" class="button" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>Guardar / Compartir
+        </button>
+      </div>
+
+      <section id="itf-colab" class="itf-colab" aria-label="ITF colaborativos" hidden>
+        <p id="itf-colab-aviso" class="fotos-mod-aviso" role="status" tabindex="-1" hidden></p>
+
+        <div id="itf-proponer-bloque" hidden>
+          <button type="button" id="btn-itf-proponer" class="button-secondary" aria-expanded="false" aria-controls="itf-proponer-panel">Proponer ITF</button>
+          <div id="itf-proponer-panel" class="itf-panel" hidden>
+            <h2 id="itf-prop-titulo" class="itf-h">Proponer ITF</h2>
+            <p class="fotos-nota">Elegí una imagen JPEG o PNG del ITF. Queda pendiente hasta que una persona autorizada la valide.</p>
+            <input type="file" id="itf-archivo-input" accept="image/jpeg,image/png" hidden>
+            <button type="button" id="btn-itf-elegir" class="button-secondary">Elegir imagen</button>
+            <div id="itf-prop-preparando" class="cargando cargando-sm" data-cargando role="status" hidden>Preparando imagen…</div>
+            <div id="itf-prop-resumen" class="itf-resumen" hidden>
+              <img id="itf-prop-preview" class="itf-prop-preview" alt="Vista previa de la imagen que se va a enviar">
+              <dl class="itf-datos">
+                <dt>Archivo</dt><dd id="itf-prop-nombre"></dd>
+                <dt>Tamaño original</dt><dd id="itf-prop-tam-original"></dd>
+                <dt>Se enviará</dt><dd id="itf-prop-tam-final"></dd>
+                <dt>Resolución</dt><dd id="itf-prop-dim"></dd>
+              </dl>
+              <p id="itf-prop-accion-img" class="fotos-nota"></p>
+            </div>
+            <p id="itf-prop-mensaje" class="fotos-mod-aviso" role="status" tabindex="-1" hidden></p>
+            <div class="fotos-mod-botones">
+              <button type="button" id="btn-itf-prop-enviar" class="button" disabled>Enviar propuesta</button>
+              <button type="button" id="btn-itf-prop-cancelar" class="button-secondary">Cerrar</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="itf-mis-bloque" hidden>
+          <button type="button" id="btn-itf-mis-propuestas" class="button-secondary" aria-expanded="false" aria-controls="itf-mis-panel">Mis propuestas</button>
+          <div id="itf-mis-panel" class="itf-panel" hidden>
+            <h2 class="itf-h">Mis propuestas</h2>
+            <div class="itf-alcance" role="group" aria-label="Qué propuestas ver">
+              <button type="button" id="btn-itf-mis-pozo" class="itf-alcance-btn" aria-pressed="true">De este pozo</button>
+              <button type="button" id="btn-itf-mis-todos" class="itf-alcance-btn" aria-pressed="false">De todos los pozos</button>
+            </div>
+            <p id="itf-mis-aviso" class="fotos-mod-aviso" role="status" tabindex="-1" hidden></p>
+            <div id="itf-mis-cargando" class="cargando cargando-sm" data-cargando role="status" hidden>Cargando propuestas…</div>
+            <div id="itf-mis-error" class="itf-bloque" hidden>
+              <p id="itf-mis-error-texto" class="error-message" role="alert" tabindex="-1"></p>
+              <button type="button" id="btn-itf-mis-reintentar" class="button-secondary">Reintentar</button>
+            </div>
+            <p id="itf-mis-vacio" class="fotos-nota" hidden></p>
+            <p id="itf-mis-incompleta" class="fotos-nota" hidden>Algunas propuestas no se pueden mostrar ahora. Volvé a intentar más tarde.</p>
+            <ul id="itf-mis-lista" class="itf-lista"></ul>
+            <p id="itf-mis-mas-error" class="error-message" role="alert" hidden></p>
+            <button type="button" id="btn-itf-mis-mas" class="button-secondary" hidden>Ver más</button>
+          </div>
+        </div>
+
+        <div id="itf-validador-bloque" hidden>
+          <button type="button" id="btn-itf-historial" class="button-secondary" aria-haspopup="dialog">Historial de ITF</button>
+          <button type="button" id="btn-itf-retirar-vigente" class="button-secondary itf-peligro" aria-haspopup="dialog" hidden>Retirar ITF vigente</button>
+        </div>
+      </section>
+    </div>
   </div>
 
   <div id="screen-datos" class="screen" hidden>
@@ -1549,6 +1640,180 @@
     </div>
   </div>
 
+  <!-- ITF pendientes (E9-6, solo perfil + perfil_validar): la cola de propuestas. La tarjeta del hub NO carga nada: la primera pagina se pide recien al abrir la pantalla. Las imagenes se piden una por una, al abrir un documento. -->
+  <div id="screen-itf-moderacion" class="screen" hidden>
+    <div class="tv-topbar tv-topbar-fija">
+      <button type="button" id="btn-itf-cola-volver" class="tv-volver">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+        Volver
+      </button>
+    </div>
+    <div class="tv-header">
+      <div>
+        <h1 class="mapa-titulo">ITF pendientes</h1>
+        <p class="tv-header-label">Revisá las propuestas de ITF</p>
+      </div>
+    </div>
+    <p id="itf-cola-aviso" class="fotos-mod-aviso" role="status" tabindex="-1" hidden></p>
+    <div id="itf-cola-panel" class="fotos-cola-panel" tabindex="-1">
+      <div class="fotos-cola-barra">
+        <p id="itf-cola-total" class="fotos-nota" role="status" hidden></p>
+        <button type="button" id="btn-itf-cola-actualizar" class="button-secondary fotos-cola-actualizar">Actualizar</button>
+      </div>
+      <div id="itf-cola-cargando" class="mapa-loading reemplazo-cargando" role="status" hidden>
+        <div class="cargando" data-cargando>Cargando propuestas...</div>
+      </div>
+      <div id="itf-cola-error" class="reemplazo-bloque" hidden>
+        <p id="itf-cola-error-texto" class="error-message" role="alert" tabindex="-1"></p>
+        <button type="button" id="btn-itf-cola-reintentar" class="button-secondary">Reintentar</button>
+      </div>
+      <p id="itf-cola-vacio" class="fotos-nota fotos-cola-vacio" hidden>No hay propuestas de ITF pendientes.</p>
+      <p id="itf-cola-sin-derivar" class="fotos-nota" hidden>Hay pozos con un historial que requiere revisión: sus propuestas no se pueden mostrar todavía.</p>
+      <ul id="itf-cola-lista" class="itf-lista"></ul>
+      <p id="itf-cola-mas-error" class="error-message" role="alert" hidden></p>
+      <button type="button" id="btn-itf-cola-mas" class="button-secondary fotos-cola-mas" hidden>Ver más</button>
+    </div>
+  </div>
+
+  <!-- Visor de un documento ITF (E9-6): imagen grande con zoom, datos seguros y, si el pozo ya tiene ITF vigente, comparacion propuesta / vigente (lado a lado en pantallas anchas; uno por vez en el celular). -->
+  <div id="itf-vis-overlay" class="itf-vis-overlay" role="dialog" aria-modal="true" aria-labelledby="itf-vis-titulo" hidden>
+    <div class="itf-vis-panel">
+      <div class="fotos-mod-cabecera">
+        <h2 id="itf-vis-titulo" class="fotos-mod-titulo">Revisar ITF</h2>
+        <button type="button" id="btn-itf-vis-cerrar" class="fotos-mod-cerrar" aria-label="Cerrar">&times;</button>
+      </div>
+      <p id="itf-vis-pozo" class="fotos-mod-intro"></p>
+      <div id="itf-vis-cargando" class="cargando cargando-sm" data-cargando role="status" hidden>Cargando documento…</div>
+      <div id="itf-vis-error" class="itf-bloque" hidden>
+        <p id="itf-vis-error-texto" class="error-message fotos-mod-error" role="alert" tabindex="-1"></p>
+        <button type="button" id="btn-itf-vis-reintentar" class="button-secondary">Reintentar</button>
+      </div>
+      <p id="itf-vis-aviso" class="fotos-mod-aviso" role="status" tabindex="-1" hidden></p>
+      <dl id="itf-vis-datos" class="itf-datos" hidden>
+        <dt>Estado</dt><dd id="itf-vis-estado"></dd>
+        <dt>Archivo</dt><dd id="itf-vis-nombre"></dd>
+        <dt>Tamaño</dt><dd id="itf-vis-tamano"></dd>
+        <dt id="itf-vis-dt-prop">Propuesto por</dt><dd id="itf-vis-proponente"></dd>
+      </dl>
+      <p id="itf-vis-advertencia" class="fotos-mod-aviso fotos-mod-aviso-error" hidden></p>
+      <div id="itf-vis-vistas" class="itf-alcance" role="group" aria-label="Documento que se muestra" hidden>
+        <button type="button" id="btn-itf-vis-ver-prop" class="itf-alcance-btn" aria-pressed="true">Propuesta</button>
+        <button type="button" id="btn-itf-vis-ver-vig" class="itf-alcance-btn" aria-pressed="false">ITF vigente</button>
+      </div>
+      <div id="itf-vis-zoom" class="itf-zoom" role="group" aria-label="Zoom de la imagen" hidden>
+        <button type="button" id="btn-itf-vis-alejar" class="button-secondary" aria-label="Alejar">−</button>
+        <span id="itf-vis-zoom-texto" class="itf-zoom-texto" role="status">100%</span>
+        <button type="button" id="btn-itf-vis-acercar" class="button-secondary" aria-label="Acercar">+</button>
+        <button type="button" id="btn-itf-vis-ajustar" class="button-secondary">Ajustar</button>
+      </div>
+      <div id="itf-vis-paneles" class="itf-vis-paneles" data-comparando="false" data-vista="PROPUESTA" hidden>
+        <figure id="itf-vis-pane-prop" class="itf-vis-pane">
+          <figcaption id="itf-vis-cap-prop" class="itf-vis-cap">Propuesta</figcaption>
+          <div class="itf-vis-scroll" tabindex="0" role="region" aria-label="Imagen de la propuesta">
+            <img id="itf-vis-img-prop" class="itf-vis-img" alt="Imagen de la propuesta">
+          </div>
+        </figure>
+        <figure id="itf-vis-pane-vig" class="itf-vis-pane" hidden>
+          <figcaption class="itf-vis-cap">ITF vigente</figcaption>
+          <div id="itf-vis-vig-cargando" class="cargando cargando-sm" data-cargando role="status" hidden>Cargando ITF vigente…</div>
+          <div id="itf-vis-vig-error" class="itf-bloque" hidden>
+            <p id="itf-vis-vig-error-texto" class="error-message" role="alert"></p>
+            <button type="button" id="btn-itf-vis-vig-reintentar" class="button-secondary">Reintentar</button>
+          </div>
+          <div id="itf-vis-vig-scroll" class="itf-vis-scroll" tabindex="0" role="region" aria-label="Imagen del ITF vigente" hidden>
+            <img id="itf-vis-img-vig" class="itf-vis-img" alt="Imagen del ITF vigente">
+          </div>
+        </figure>
+      </div>
+      <p id="itf-vis-vigente-nota" class="fotos-nota" hidden></p>
+      <div class="fotos-mod-botones">
+        <button type="button" id="btn-itf-vis-comparar" class="button-secondary" aria-pressed="false" hidden>Comparar con el ITF vigente</button>
+        <button type="button" id="btn-itf-vis-aprobar" class="button" aria-haspopup="dialog" hidden>Aprobar como ITF vigente</button>
+        <button type="button" id="btn-itf-vis-rechazar" class="button-secondary" aria-haspopup="dialog" hidden>Rechazar</button>
+        <button type="button" id="btn-itf-vis-restaurar" class="button" aria-haspopup="dialog" hidden>Restaurar como vigente</button>
+        <button type="button" id="btn-itf-vis-cerrar2" class="button-secondary">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirmacion de aprobar / rechazar / retirar / restaurar (E9-6): un solo dialogo. Pide motivo SOLO cuando corresponde (rechazar, retirar, restaurar y aprobar un reemplazo); OTRO exige detalle. -->
+  <div id="itf-accion-overlay" class="fotos-mod-overlay itf-accion-overlay" role="dialog" aria-modal="true" aria-labelledby="itf-accion-titulo" aria-describedby="itf-accion-aviso" hidden>
+    <div class="fotos-mod-panel">
+      <div class="fotos-mod-cabecera">
+        <h2 id="itf-accion-titulo" class="fotos-mod-titulo"></h2>
+        <button type="button" id="btn-itf-accion-cerrar" class="fotos-mod-cerrar" aria-label="Cerrar">&times;</button>
+      </div>
+      <p id="itf-accion-entidad" class="fotos-mod-intro"></p>
+      <div id="itf-accion-cargando" class="cargando cargando-sm" data-cargando role="status" hidden>Verificando el ITF vigente…</div>
+      <p id="itf-accion-aviso" class="fotos-mod-confirmar-pregunta"></p>
+      <div id="itf-accion-motivo-grupo" hidden>
+        <label for="itf-accion-motivo" class="itf-etiqueta">Motivo</label>
+        <select id="itf-accion-motivo" class="itf-campo"></select>
+        <div id="itf-accion-texto-grupo" hidden>
+          <label for="itf-accion-texto" class="itf-etiqueta">Detalle del motivo</label>
+          <textarea id="itf-accion-texto" class="itf-campo" rows="3" maxlength="300"></textarea>
+          <p class="fotos-nota">Entre 3 y 300 caracteres.</p>
+        </div>
+      </div>
+      <p id="itf-accion-error" class="error-message fotos-mod-error" role="alert" tabindex="-1" hidden></p>
+      <div class="fotos-mod-botones">
+        <button type="button" id="btn-itf-accion-cancelar" class="button-secondary">Cancelar</button>
+        <button type="button" id="btn-itf-accion-confirmar" class="button"></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Historial de ITF de un pozo (E9-6, solo perfil + perfil_validar): vigente, documentos anteriores (Ver / Restaurar) y linea de tiempo. -->
+  <div id="itf-hist-overlay" class="fotos-mod-overlay itf-hist-overlay" role="dialog" aria-modal="true" aria-labelledby="itf-hist-titulo" hidden>
+    <div class="fotos-mod-panel itf-hist-panel">
+      <div class="fotos-mod-cabecera">
+        <h2 id="itf-hist-titulo" class="fotos-mod-titulo">Historial de ITF</h2>
+        <button type="button" id="btn-itf-hist-cerrar" class="fotos-mod-cerrar" aria-label="Cerrar">&times;</button>
+      </div>
+      <p id="itf-hist-pozo" class="fotos-mod-intro"></p>
+      <div id="itf-hist-cargando" class="cargando cargando-sm" data-cargando role="status" hidden>Cargando historial…</div>
+      <div id="itf-hist-error" class="itf-bloque" hidden>
+        <p id="itf-hist-error-texto" class="error-message fotos-mod-error" role="alert" tabindex="-1"></p>
+        <button type="button" id="btn-itf-hist-reintentar" class="button-secondary">Reintentar</button>
+      </div>
+      <p id="itf-hist-aviso" class="fotos-mod-aviso" role="status" tabindex="-1" hidden></p>
+      <div id="itf-hist-contenido" hidden>
+        <h3 class="itf-h">ITF vigente</h3>
+        <p id="itf-hist-vigente" class="fotos-nota"></p>
+        <div class="fotos-mod-botones">
+          <button type="button" id="btn-itf-hist-ver-vigente" class="button-secondary" hidden>Ver ITF vigente</button>
+          <button type="button" id="btn-itf-hist-retirar" class="button-secondary itf-peligro" aria-haspopup="dialog" hidden>Retirar ITF vigente</button>
+        </div>
+        <h3 class="itf-h">Documentos anteriores</h3>
+        <p id="itf-hist-sin-anteriores" class="fotos-nota" hidden>No hay documentos anteriores que se puedan restaurar.</p>
+        <ul id="itf-hist-anteriores" class="itf-lista"></ul>
+        <h3 class="itf-h">Línea de tiempo</h3>
+        <p id="itf-hist-vacio" class="fotos-nota" hidden>Este pozo todavía no tiene movimientos de ITF.</p>
+        <ol id="itf-hist-lineas" class="itf-linea"></ol>
+      </div>
+      <div class="fotos-mod-botones">
+        <button type="button" id="btn-itf-hist-cerrar2" class="button-secondary">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirmacion de retirar la PROPIA propuesta pendiente (E9-6, perfil + perfil_subir). -->
+  <div id="itf-retiro-overlay" class="fotos-mod-overlay" role="dialog" aria-modal="true" aria-labelledby="itf-retiro-titulo" aria-describedby="itf-retiro-texto" hidden>
+    <div class="fotos-mod-panel">
+      <div class="fotos-mod-cabecera">
+        <h2 id="itf-retiro-titulo" class="fotos-mod-titulo">Retirar propuesta</h2>
+        <button type="button" id="btn-itf-retiro-cerrar" class="fotos-mod-cerrar" aria-label="Cerrar">&times;</button>
+      </div>
+      <p id="itf-retiro-entidad" class="fotos-mod-intro"></p>
+      <p id="itf-retiro-texto" class="fotos-mod-confirmar-pregunta">Dejará de estar pendiente de validación. Podés proponer otro ITF cuando quieras.</p>
+      <p id="itf-retiro-error" class="error-message fotos-mod-error" role="alert" tabindex="-1" hidden></p>
+      <div class="fotos-mod-botones">
+        <button type="button" id="btn-itf-retiro-cancelar" class="button-secondary">Cancelar</button>
+        <button type="button" id="btn-itf-retiro-confirmar" class="button">Retirar propuesta</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Correcciones de ubicacion (ficha del pozo): modal "Corregir ubicacion". La coordenada de Irrigacion NO se modifica: se muestra
        siempre y la correccion se guarda aparte. Opciones: GPS actual (precision <= 50 m), punto elegido en el mapa o coordenadas ingresadas (GMS / WGS84 o POSGAR 94 / Argentina 2). Ver
        js/ubicacionCorreccion.js (DOM) y js/ubicacionCorreccionLogic.js (reglas, con tests). -->
@@ -1910,6 +2175,11 @@
   <script src="js/lineaTiempoPozoLoader.js"></script>
   <script src="js/lineaTiempoPozoVistaLogic.js"></script>
   <script src="js/lineaTiempoPozo.js"></script>
+  <script src="js/itfLogic.js"></script>
+  <script src="js/itfFlujosLogic.js"></script>
+  <script src="js/itfImagen.js"></script>
+  <script src="js/itfPerfil.js"></script>
+  <script src="js/itfModeracion.js"></script>
   <script src="js/app.js"></script>
   <!-- Va DESPUES de app.js en el documento a proposito, para que
        onGsiLoaded/onGsiLoadError ya existan antes de que puedan

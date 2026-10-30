@@ -650,6 +650,40 @@ function itfService_historial(sesion, wellId, deps) {
   }
 }
 
+// --- E9-6: propuestas del propio usuario ---
+// perfil + perfil_subir (exactos) y ITF_E9_ACTIVO. El dueno sale SIEMPRE del email de la sesion (el pedido no lleva ningun email); opciones.wellId (opcional) solo ACOTA a un pozo, nunca cambia de dueno. Una sola lectura de la hoja, derivacion en memoria, cero lecturas de storage.
+// {ok:true, items, siguienteCursor, total, incompleta} | falla.
+function itfService_misPropuestas(sesion, opciones, deps) {
+  var d = itfService_deps(deps);
+  var s = sesion !== null && typeof sesion === 'object' ? sesion : {};
+  if (!itfDominio_puede(ITF_ACCIONES.PROPONER, s.permisos)) {
+    return itfService_falla('PERMISSION_DENIED', 'permiso insuficiente');
+  }
+  var email = itfDominio_normalizarEmail(s.email);
+  if (!ITF_EMAIL_REGEX.test(email)) {
+    return itfService_falla('INVALID_REQUEST', 'sesion sin email valido');
+  }
+  var o = opciones !== null && typeof opciones === 'object' ? opciones : {};
+  var pag = itfDominio_validarPaginacion(o.limite, o.cursor);
+  if (!pag.ok) {
+    return itfService_falla(pag.code, pag.message);
+  }
+  if (o.wellId !== undefined && o.wellId !== null && (typeof o.wellId !== 'string' || !ITF_WELLID_REGEX.test(o.wellId))) {
+    return itfService_falla('INVALID_WELL_ID', 'wellId invalido');
+  }
+  if (!d.e9Activo()) {
+    return itfService_falla('ITF_E9_INACTIVO', 'los ITF colaborativos no estan activos');
+  }
+  try {
+    var eventos = d.repo.leerTodos().eventos;
+    var r = itfDominio_listarMisPropuestas(itfDominio_derivar(eventos), { emailActor: email, proponenteDe: itfService_proponentes(eventos), limite: pag.limite, cursor: pag.cursor, wellId: o.wellId });
+    return { ok: true, items: r.items, siguienteCursor: r.siguienteCursor, total: r.total, incompleta: r.incompleta };
+  } catch (err) {
+    itfService_log('fallo la lista de propuestas propias: ' + String(err));
+    return itfService_falla('SERVICE_UNAVAILABLE', 'servicio no disponible');
+  }
+}
+
 // Ejecuta una accion institucional. sesion = {email, nombre, permisos} (lo arma Api.js a partir del token, NUNCA del cuerpo del pedido); comando = el pedido del cliente (el dominio rechaza campos de mas, entre
 // ellos cualquier intento de elegir otro actor); opciones.archivo solo para PROPONER. Devuelve {ok:true, accion:'ESCRIBIR'|'REINTENTO', resultado:{evento, documentoId, wellId}, advertencias,
 // eventosEscritos} | {ok:false, code, message}. Nunca devuelve email, storageRef, hash completo, clientRequestId ni secuencia.
@@ -706,6 +740,7 @@ if (typeof module !== 'undefined' && module.exports) {
     itfService_estadoDelPozo,
     itfService_documentoModeracion,
     itfService_historial,
+    itfService_misPropuestas,
     itfService_verificarArchivo
   };
 }

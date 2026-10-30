@@ -78,6 +78,10 @@ function installAppsScriptFakes() {
   global.driveProfileRepository_existe = jest.fn(() => false);
   global.ubicacionCorreccionRepository_listarCorrecciones = jest.fn(() => []);
   global.profileService_getProfile = jest.fn();
+  // E9-6: ITF colaborativos apagados por defecto (el Api consulta el interruptor antes de elegir entre el legacy y el vigente institucional)
+  global.itfService_e9Activo = jest.fn(() => false);
+  global.itfService_getProfile = jest.fn();
+  global.itfService_disponibilidad = jest.fn();
   global.registryRepository_getWellRecord = jest.fn();
   global.registryService_getWellRecord = jest.fn();
   global.registryService_getWellLocation = jest.fn();

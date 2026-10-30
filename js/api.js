@@ -124,6 +124,65 @@ function apiRegisterDescargaItf(sessionToken, resumen) {
 }
 
 
+// --- ITF colaborativos (E9-6, local, NO productivo) ---
+// El actor (email / nombre) NUNCA se manda: el backend lo toma de la sesion. Cada wrapper copia SOLO los campos de la lista blanca de su accion (un campo de mas haria que el servidor rechace el pedido),
+// y ninguno lleva keepalive: la persona espera el resultado para refrescar lo que ve.
+function itfApi_campos(origen, lista) {
+  var out = {};
+  lista.forEach(function (k) {
+    if (origen && origen[k] !== undefined) {
+      out[k] = origen[k];
+    }
+  });
+  return out;
+}
+
+// Proponer: perfil + perfil_subir. payload = {wellId, imageBase64, mimeType, nombreOriginal, clientRequestId}.
+function apiProponerItf(sessionToken, payload) {
+  return callBackend('proponerItf', Object.assign({ sessionToken: sessionToken }, itfApi_campos(payload, ['wellId', 'imageBase64', 'mimeType', 'nombreOriginal', 'clientRequestId'])));
+}
+
+// "Mis propuestas": perfil + perfil_subir. wellId (opcional) acota a un pozo; el dueño de las propuestas es SIEMPRE la sesion.
+function apiGetMisPropuestasItf(sessionToken, wellId, limite, cursor) {
+  return callBackend('getMisPropuestasItf', Object.assign({ sessionToken: sessionToken }, itfApi_campos({ wellId: wellId || undefined, limite: limite, cursor: cursor }, ['wellId', 'limite', 'cursor'])));
+}
+
+// El proponente retira SU propuesta pendiente: perfil + perfil_subir. payload = {documentoId, clientRequestId}.
+function apiRetirarPropuestaItf(sessionToken, payload) {
+  return callBackend('retirarPropuestaItf', Object.assign({ sessionToken: sessionToken }, itfApi_campos(payload, ['documentoId', 'clientRequestId'])));
+}
+
+// Moderacion (perfil + perfil_validar): cola paginada (sin imagenes), un documento con su imagen, historial de un pozo.
+function apiGetItfPendientes(sessionToken, limite, cursor) {
+  return callBackend('getItfPendientes', Object.assign({ sessionToken: sessionToken }, itfApi_campos({ limite: limite, cursor: cursor }, ['limite', 'cursor'])));
+}
+
+function apiGetItfDocumentoModeracion(sessionToken, documentoId) {
+  return callBackend('getItfDocumentoModeracion', { sessionToken: sessionToken, documentoId: documentoId });
+}
+
+function apiGetHistorialItf(sessionToken, wellId) {
+  return callBackend('getHistorialItf', { sessionToken: sessionToken, wellId: wellId });
+}
+
+// payload de aprobar / revertir (restaurar) = {documentoId, clientRequestId, vigenteEsperadoDocumentoId?, motivoCodigo?, motivoTexto?}; de rechazar / retirar = {documentoId, clientRequestId, motivoCodigo, motivoTexto?}.
+function apiAprobarItf(sessionToken, payload) {
+  return callBackend('aprobarItf', Object.assign({ sessionToken: sessionToken }, itfApi_campos(payload, ['documentoId', 'clientRequestId', 'vigenteEsperadoDocumentoId', 'motivoCodigo', 'motivoTexto'])));
+}
+
+function apiRechazarItf(sessionToken, payload) {
+  return callBackend('rechazarItf', Object.assign({ sessionToken: sessionToken }, itfApi_campos(payload, ['documentoId', 'clientRequestId', 'motivoCodigo', 'motivoTexto'])));
+}
+
+function apiRetirarItf(sessionToken, payload) {
+  return callBackend('retirarItf', Object.assign({ sessionToken: sessionToken }, itfApi_campos(payload, ['documentoId', 'clientRequestId', 'motivoCodigo', 'motivoTexto'])));
+}
+
+function apiRevertirItf(sessionToken, payload) {
+  return callBackend('revertirItf', Object.assign({ sessionToken: sessionToken }, itfApi_campos(payload, ['documentoId', 'clientRequestId', 'vigenteEsperadoDocumentoId', 'motivoCodigo', 'motivoTexto'])));
+}
+
+
 // --- Modulo Evaluacion / Reemplazo (v1) ---
 // Los 3 endpoints se gatean en el backend EXCLUSIVAMENTE por el permiso
 // reemplazo=SI (lectura y escritura). La identidad (email/nombre) NUNCA se

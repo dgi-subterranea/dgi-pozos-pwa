@@ -5891,6 +5891,330 @@ p.uval-primera {
   margin: 8px 0 0;
 }
 
+/* --- ITF colaborativos (E9-6): Perfil con proponer / mis propuestas, ITF pendientes, visor con comparacion, dialogo de accion e historial. Mobile-first; los dialogos reusan .fotos-mod-*. --- */
+body.itf-mod-abierto {
+  overflow: hidden;
+}
+.itf-bloque {
+  margin: 12px 0;
+}
+.itf-sin-itf {
+  margin: 12px 0;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: var(--color-primary-tint);
+  color: var(--color-primary-dark);
+  font-weight: 700;
+}
+.itf-colab {
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border-soft);
+  display: grid;
+  gap: 10px;
+}
+.itf-colab .button-secondary,
+.itf-colab .button {
+  width: 100%;
+}
+.itf-panel {
+  margin-top: 10px;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-surface);
+}
+.itf-panel .fotos-mod-botones {
+  margin-top: 12px;
+}
+.itf-h {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+.itf-resumen {
+  margin-top: 12px;
+}
+.itf-prop-preview {
+  display: block;
+  max-width: 100%;
+  max-height: 46vh;
+  margin: 0 auto 10px;
+  border-radius: 10px;
+  object-fit: contain;
+  background: var(--color-border-soft);
+}
+.itf-datos {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 10px 0 0;
+  font-size: 0.9rem;
+}
+.itf-datos dt {
+  color: var(--color-text-soft);
+  font-weight: 700;
+}
+.itf-datos dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.itf-alcance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+.itf-alcance-btn {
+  flex: 1 1 140px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1.5px solid var(--color-border);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.itf-alcance-btn[aria-pressed="true"] {
+  border-color: var(--color-primary);
+  background: var(--color-primary-tint);
+  color: var(--color-primary-dark);
+}
+.itf-alcance-btn:focus-visible,
+.itf-campo:focus-visible,
+.itf-vis-scroll:focus-visible {
+  outline: 3px solid var(--color-primary);
+  outline-offset: 2px;
+}
+.itf-lista {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+.itf-item {
+  padding: 12px;
+  border-radius: 14px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  min-width: 0;
+}
+.itf-item p {
+  margin: 0 0 4px;
+  overflow-wrap: anywhere;
+}
+.itf-item-titulo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-weight: 800;
+}
+.itf-item-acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.itf-item-acciones button {
+  flex: 1 1 120px;
+  min-width: 0;
+  min-height: 44px;
+}
+.itf-chip {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--color-primary-tint);
+  color: var(--color-primary-dark);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+.itf-chip-propuesto {
+  background: var(--color-warn-tint);
+  color: var(--color-warn);
+}
+.itf-chip-aprobado {
+  background: #e3f4e8;
+  color: #14532d;
+}
+.itf-chip-rechazado {
+  background: #fbe4e2;
+  color: var(--color-error);
+}
+.itf-chip-retirado,
+.itf-chip-reemplazado {
+  background: var(--color-border-soft);
+  color: var(--color-text-soft);
+}
+.itf-motivo {
+  color: var(--color-text-soft);
+  font-size: 0.88rem;
+}
+.itf-advertencia {
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--color-warn-tint);
+  color: var(--color-warn);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+.itf-peligro {
+  color: var(--color-error);
+  border-color: var(--color-error);
+}
+.itf-etiqueta {
+  display: block;
+  margin: 12px 0 6px;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+.itf-campo {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1.5px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+}
+textarea.itf-campo {
+  resize: vertical;
+  min-height: 84px;
+}
+.itf-linea {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0 0 0 14px;
+  border-left: 2px solid var(--color-border);
+  display: grid;
+  gap: 12px;
+}
+.itf-linea-item p {
+  margin: 0 0 3px;
+  overflow-wrap: anywhere;
+}
+.itf-linea-cab {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+}
+.itf-linea-doc {
+  color: var(--color-text-soft);
+  font-size: 0.88rem;
+}
+/* el historial queda DEBAJO del visor (se abre un documento desde el historial) y del dialogo de accion */
+.itf-hist-overlay {
+  z-index: 85;
+}
+.itf-hist-panel {
+  max-width: 640px;
+}
+/* encima del visor (90) y del historial (85) */
+.itf-accion-overlay {
+  z-index: 100;
+}
+#itf-retiro-overlay {
+  z-index: 100;
+}
+
+/* Visor: pantalla casi completa; comparacion lado a lado en pantalla ancha, de a una (pestañas) en el celular */
+.itf-vis-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(22, 33, 42, 0.7);
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+}
+.itf-vis-panel {
+  background: var(--color-surface);
+  color: var(--color-text);
+  width: 100%;
+  max-width: 1280px;
+  overflow-y: auto;
+  padding: 14px 16px 20px;
+  box-sizing: border-box;
+}
+.itf-zoom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+}
+.itf-zoom .button-secondary {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 14px;
+  width: auto;
+}
+.itf-zoom-texto {
+  min-width: 48px;
+  text-align: center;
+  font-weight: 700;
+}
+.itf-vis-paneles {
+  display: block;
+}
+.itf-vis-pane {
+  margin: 0;
+  min-width: 0;
+}
+.itf-vis-cap {
+  margin: 0 0 6px;
+  font-weight: 800;
+  font-size: 0.9rem;
+}
+.itf-vis-scroll {
+  max-height: 62vh;
+  max-height: 62dvh;
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-border-soft);
+}
+.itf-vis-img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.itf-vis-paneles[data-comparando="true"][data-vista="PROPUESTA"] #itf-vis-pane-vig {
+  display: none;
+}
+.itf-vis-paneles[data-comparando="true"][data-vista="VIGENTE"] #itf-vis-pane-prop {
+  display: none;
+}
+@media (min-width: 900px) {
+  .itf-vis-paneles[data-comparando="true"] {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 14px;
+  }
+  .itf-vis-paneles[data-comparando="true"][data-vista] #itf-vis-pane-prop,
+  .itf-vis-paneles[data-comparando="true"][data-vista] #itf-vis-pane-vig {
+    display: block;
+  }
+  #itf-vis-vistas {
+    display: none;
+  }
+  .itf-vis-scroll {
+    max-height: 70vh;
+    max-height: 70dvh;
+  }
+  .itf-item-acciones button {
+    flex: 0 1 auto;
+  }
+  .itf-colab .button-secondary,
+  .itf-colab .button {
+    width: auto;
+  }
+}
+
 /* --- Linea de tiempo del pozo (E6-3, solo lectura) --- */
 .lt-cargando {
   display: flex;

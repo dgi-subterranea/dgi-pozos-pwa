@@ -23,6 +23,7 @@
     reemplazo: document.getElementById('screen-reemplazo'),
     fotos: document.getElementById('screen-fotos'),
     fotosModeracion: document.getElementById('screen-fotos-moderacion'),
+    itfModeracion: document.getElementById('screen-itf-moderacion'),
     observaciones: document.getElementById('screen-observaciones'),
     lineaTiempo: document.getElementById('screen-linea-tiempo'),
     disabled: document.getElementById('screen-disabled'),
@@ -168,6 +169,8 @@
   var ubicacionContent = document.getElementById('ubicacion-content');
   var neContent = document.getElementById('ne-content');
   var pozoActual = null;
+  // Vengo de "Ver pozo" en ITF pendientes: el hub ofrece volver a la cola sin perder lo cargado (E9-6).
+  var itfRetornoModeracion = false;
 
   // Permisos efectivos del usuario (perfil/datos/ubicacion/ne/reemplazo), tal como
   // los devolvio el ultimo login/checkSession - NUNCA viven en el
@@ -176,7 +179,7 @@
   // permiso. Se usan solo para decidir que fetch conviene ni siquiera
   // disparar - el backend vuelve a validar cada uno igual, esto es una
   // optimizacion de red, no el limite de seguridad real.
-  var permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false, ubicacion_corregir: false, ubicacion_validar: false, observaciones: false, observaciones_agregar: false, observaciones_anular: false };
+  var permisosActuales = { perfil: false, perfil_subir: false, perfil_validar: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false, ubicacion_corregir: false, ubicacion_validar: false, observaciones: false, observaciones_agregar: false, observaciones_anular: false };
 
   var ICON_PERFIL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5.5-5.5L11 15l-3-3-4.5 4.5"/></svg>';
   var ICON_DATOS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>';
@@ -220,10 +223,69 @@
     return ubicacionCorreccionLogic_oficialDisponible(location);
   }
 
+  // La tarjeta Perfil (E9-6): el hub solo sabe si HAY ITF vigente (disponibilidad), no baja la imagen. Se ofrece si hay ITF, si NO se sabe (nunca se afirma que no existe sin saberlo) o si la persona puede
+  // proponer / validar y el pozo existe en otro modulo (para poder proponer el primer ITF). Un usuario con solo `perfil` y un pozo sin ITF ve lo de siempre: sin tarjeta.
+  function itfTarjetaVisible(pozo) {
+    var estado = pozo.itf.estado;
+    if (estado === 'SI' || estado === 'DESCONOCIDO') {
+      return true;
+    }
+    if (estado !== 'NO') {
+      return false;
+    }
+    var existeEnOtroModulo = pozo.registro.found || pozo.ubicacion.found || pozo.ne.found;
+    return !!existeEnOtroModulo && (itfLogic_puedeProponer(permisosActuales) || itfLogic_puedeValidar(permisosActuales));
+  }
+
+  function descPerfilHub(pozo) {
+    if (pozo.itf.estado === 'NO') {
+      return itfLogic_puedeProponer(permisosActuales) ? 'Sin ITF vigente · proponer' : 'Sin ITF vigente';
+    }
+    return 'Ver imagen ITF';
+  }
+
+  // availability de UN pozo -> estado del ITF en el hub. El backend omite el pozo cuyo estado no se puede afirmar: eso es DESCONOCIDO, jamas "No".
+  function interpretarDisponibilidadItf(wellId, r) {
+    if (r.status === 'ok' && r.data && typeof r.data[wellId] === 'boolean') {
+      return { found: r.data[wellId], estado: r.data[wellId] ? 'SI' : 'NO' };
+    }
+    if (r.status === 'ok') {
+      return { found: false, estado: 'DESCONOCIDO' };
+    }
+    if (r.code === 'PERMISSION_DENIED') {
+      return { found: false, estado: 'SIN_PERMISO', code: r.code };
+    }
+    return { found: false, estado: 'DESCONOCIDO', code: r.code };
+  }
+
+  // Despues de aprobar / retirar / restaurar un ITF: lo que el hub sabe de ESE pozo ya no vale. Se vuelve a consultar la disponibilidad (una llamada liviana) y se repinta la tarjeta; la seleccion
+  // multiple tambien descarta lo que tenia cacheado.
+  function refrescarItfDelHub(wellId) {
+    if (typeof seleccionController_invalidarDisponibilidadItf === 'function') {
+      seleccionController_invalidarDisponibilidadItf();
+    }
+    if (!pozoActual || pozoActual.wellId !== wellId || !permisosActuales.perfil) {
+      return;
+    }
+    fetchSinRechazo(apiGetItfAvailability(sessionToken, [wellId])).then(function (r) {
+      if (!pozoActual || pozoActual.wellId !== wellId) {
+        return;
+      }
+      if (r.code === 'UNAUTHORIZED') {
+        logout();
+        return;
+      }
+      pozoActual.itf = interpretarDisponibilidadItf(wellId, r);
+      if (pantallaActual === 'main') {
+        renderHubResultado(pozoActual);
+      }
+    });
+  }
+
   function renderHubResultado(pozo) {
     // E4-2: si la ubicacion NO se pudo comprobar (SERVICE_UNAVAILABLE, no "no existe") se avisa; no se inventa ningun estado ni se dice que el pozo no se encontro por eso.
     var avisoUbicacion = ubicacionCorreccionLogic_avisoHubUbicacion(pozo.ubicacion, permisosActuales);
-    if (!pozo.itf.found && !pozo.registro.found && !pozo.ubicacion.found && !pozo.ne.found) {
+    if (!itfTarjetaVisible(pozo) && !pozo.registro.found && !pozo.ubicacion.found && !pozo.ne.found) {
       if (avisoUbicacion !== '') {
         renderHubError(avisoUbicacion);
       } else {
@@ -266,8 +328,8 @@
     // llegara a pedirse. Ubicacion NUNCA depende de pozo.registro (datos)
     // - son permisos y fetches distintos.
     var modulos = [];
-    if (pozo.itf.found) {
-      modulos.push({ id: 'perfil', titulo: 'Perfil', desc: 'Ver imagen ITF', icono: ICON_PERFIL });
+    if (itfTarjetaVisible(pozo)) {
+      modulos.push({ id: 'perfil', titulo: 'Perfil', desc: descPerfilHub(pozo), icono: ICON_PERFIL });
     }
     if (pozo.registro.found) {
       modulos.push({ id: 'datos', titulo: 'Datos', desc: 'Ficha técnica y registral', icono: ICON_DATOS });
@@ -375,7 +437,7 @@
 
   function abrirModulo(id) {
     if (id === 'perfil') {
-      renderPerfil(pozoActual.itf.data);
+      itfPerfilController_abrir(pozoActual.wellId);
       showScreen('perfil');
     } else if (id === 'datos') {
       loadRegistryMetadataOnce().then(function (metadata) {
@@ -414,64 +476,8 @@
     });
   });
 
-  // --- Modulo Perfil (ITF) ---------------------------------------------
-  function base64ToFile(base64, mimeType, filename) {
-    var byteChars = atob(base64);
-    var byteNumbers = new Array(byteChars.length);
-    for (var i = 0; i < byteChars.length; i++) {
-      byteNumbers[i] = byteChars.charCodeAt(i);
-    }
-    return new File([new Uint8Array(byteNumbers)], filename, { type: mimeType });
-  }
-
-  // iOS no ofrece <a download> de forma confiable para imagenes: Safari
-  // tiende a abrirla en vez de guardarla. En vez de depender solo del
-  // gesto de mantener presionado, el boton dispara el share sheet nativo
-  // (Web Share API con archivos, soportado desde iOS 15), que incluye
-  // "Guardar en Fotos". Si el dispositivo no lo soporta, el fallback es
-  // abrir la imagen en una pestana nueva, donde Safari si ofrece su
-  // propio boton de compartir/guardar sobre la imagen ya abierta.
-  async function handleSaveImageIOS(wellId, mimeType, imageBase64, dataUri) {
-    var file = base64ToFile(imageBase64, mimeType, wellId + '.jpg');
-    var supportsFileShare = false;
-    try {
-      supportsFileShare = !!(navigator.canShare && navigator.canShare({ files: [file] }));
-    } catch (err) {
-      supportsFileShare = false;
-    }
-
-    if (supportsFileShare) {
-      try {
-        await navigator.share({ files: [file], title: 'Perfil ' + wellId });
-      } catch (err) {
-        // Cancelado por el usuario u otro error del share sheet: no es
-        // un error de la app, no hacemos nada mas.
-      }
-      return;
-    }
-
-    window.open(dataUri, '_blank');
-  }
-
-  function renderPerfil(data) {
-    var dataUri = 'data:' + data.mimeType + ';base64,' + data.imageBase64;
-    var html = '<div class="modulo-id-line"><span class="modulo-id mono">' + escapeHtml(data.wellId) + '</span></div>';
-    html += '<p class="modulo-subline">Perfil</p>';
-    html += '<img class="profile-image" src="' + dataUri + '" alt="Perfil del pozo ' + escapeHtml(data.wellId) + '" />';
-    var saveIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>';
-    if (isIOS()) {
-      html += '<button type="button" id="btn-save-image" class="button">' + saveIcon + 'Guardar / Compartir</button>';
-    } else {
-      html += '<a class="button" href="' + dataUri + '" download="' + data.wellId + '.jpg">' + saveIcon + 'Guardar / Compartir</a>';
-    }
-    perfilContent.innerHTML = html;
-
-    if (isIOS()) {
-      document.getElementById('btn-save-image').addEventListener('click', function () {
-        handleSaveImageIOS(data.wellId, data.mimeType, data.imageBase64, dataUri);
-      });
-    }
-  }
+  // --- Modulo Perfil (ITF) ---
+  // E9-6: la pantalla Perfil (imagen vigente, guardar / compartir, proponer, mis propuestas, historial y retirar) vive en js/itfPerfil.js; app.js solo la abre (abrirModulo) y le da el contexto.
 
   // --- Modulo Datos (Ficha del Pozo / padron) ----------------------------
   var registryMetadataPromise = null;
@@ -1243,6 +1249,9 @@
     document.getElementById('btn-abrir-reemplazo').hidden = !accesos.reemplazo;
     // "Fotos pendientes" (E8-5): solo fotos=true y fotos_moderar=true exactos; la tarjeta no carga nada
     document.getElementById('btn-abrir-fotos-moderacion').hidden = !fotosModeracionLogic_puedeModerar(permisosActuales);
+    // "ITF pendientes" (E9-6): solo perfil y perfil_validar === true exactos; la tarjeta no carga nada. El atajo de vuelta a la cola solo existe si se vino de "Ver pozo" y el permiso sigue.
+    document.getElementById('btn-abrir-itf-moderacion').hidden = !itfLogic_puedeValidar(permisosActuales);
+    document.getElementById('btn-itf-volver-moderacion').hidden = !(itfRetornoModeracion && itfLogic_puedeValidar(permisosActuales));
     document.getElementById('btn-abrir-mapa').hidden = accesos.mapas === 'ninguno';
     actualizarBotonesVolverMapa();
   }
@@ -1260,7 +1269,7 @@
     localStorage.removeItem('sessionToken');
     sessionToken = null;
     currentEmail = null;
-    permisosActuales = { perfil: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false, ubicacion_corregir: false, ubicacion_validar: false, observaciones: false, observaciones_agregar: false, observaciones_anular: false };
+    permisosActuales = { perfil: false, perfil_subir: false, perfil_validar: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false, ubicacion_corregir: false, ubicacion_validar: false, observaciones: false, observaciones_agregar: false, observaciones_anular: false };
     // un modal de correccion abierto no sobrevive a la sesion
     ubicacionCorreccionController_cerrar();
     // ni el visor de ubicaciones conocidas
@@ -1279,6 +1288,10 @@
     fotosModeracionController_reset();
     // ni la pantalla "Fotos pendientes" (listas, imagenes y lo que este en vuelo)
     fotosModeracionColaController_reset();
+    // ni el Perfil con ITF colaborativos (imagen, propuestas, lo que este en vuelo) ni la moderacion de ITF (cola, visor, dialogos)
+    itfPerfilController_reset();
+    itfModeracionController_reset();
+    itfRetornoModeracion = false;
     // ni las observaciones abiertas (se descartan las respuestas en vuelo)
     observacionesPozoController_reset();
     // ni la linea de tiempo abierta (se cancela lo que este en vuelo)
@@ -1373,7 +1386,8 @@
     };
     renderHubSearching(wellId);
 
-    var pItf = fetchSiTienePermiso(permisosActuales.perfil, function () { return apiGetProfile(sessionToken, wellId); });
+    // E9-6: buscar un pozo YA NO baja la imagen del ITF: solo pregunta si hay ITF vigente (una llamada liviana). La imagen se pide recien al abrir Perfil.
+    var pItf = fetchSiTienePermiso(permisosActuales.perfil, function () { return apiGetItfAvailability(sessionToken, [wellId]); });
     var pRegistro = fetchSiTienePermiso(permisosActuales.datos, function () { return apiGetWellRecord(sessionToken, wellId); });
     var pUbicacion = fetchSiTienePermiso(permisosActuales.ubicacion, function () { return apiGetWellLocation(sessionToken, wellId); });
     var pNe = fetchSiTienePermiso(permisosActuales.ne, function () { return apiGetMonitoringPoint(sessionToken, wellId); });
@@ -1403,7 +1417,7 @@
       // usuario ya disparo otra mientras esta seguia en vuelo) y en ese
       // caso no debe pisar el hub que esta en pantalla - pero eso solo
       // afecta al render, no al registro/notificacion de abajo.
-      var itf = itfResult.status === 'ok' ? { found: true, data: itfResult.data } : { found: false, code: itfResult.code };
+      var itf = interpretarDisponibilidadItf(wellId, itfResult);
       var registro = registroResult.status === 'ok' ? { found: true, data: registroResult.data } : { found: false, code: registroResult.code };
       var ubicacion = ubicacionResult.status === 'ok' ? { found: true, data: ubicacionResult.data } : { found: false, code: ubicacionResult.code };
       var ne = neResult.status === 'ok' ? { found: true, data: neResult.data } : { found: false, code: neResult.code };
@@ -1424,7 +1438,7 @@
       // igual, con los datos de ESTA busqueda (itf/registro/ubicacion/ne
       // locales, nunca leidos de pozoActual que puede ya ser de otra).
       apiRegisterWellSearch(sessionToken, wellId, {
-        perfil: itf.found,
+        perfil: itf.estado === 'SI',
         datos: registro.found,
         ubicacion: ubicacion.found,
         ne: ne.found
@@ -1859,6 +1873,69 @@
   document.getElementById('btn-fotos-cola-volver').addEventListener('click', function () {
     fotosModeracionColaController_cerrar();
     restaurarPantalla(fotosModeracionOrigen);
+  });
+
+  // Perfil con ITF colaborativos (E9-6): contexto fresco propio (sesion + permisos de HOY). La sesion vencida usa el logout de siempre.
+  itfPerfilController_inicializar(function () {
+    return {
+      sessionToken: sessionToken,
+      permisos: permisosActuales,
+      onSessionExpired: function () {
+        logout();
+      }
+    };
+  }, { esIOS: isIOS });
+
+  // ITF pendientes (E9-6): pantalla propia (cola, visor, aprobar / rechazar, historial). Se abre desde la tarjeta del hub y Volver regresa a la pantalla de origen; los datos se piden SOLO al abrir.
+  // "Ver pozo" lleva al hub de ese pozo y deja un atajo para volver a la cola (que conserva lo ya cargado).
+  var itfModeracionOrigen = { pantalla: 'main', scrollY: 0 };
+
+  itfModeracionController_inicializar(function () {
+    return {
+      sessionToken: sessionToken,
+      permisos: permisosActuales,
+      onSessionExpired: function () {
+        logout();
+      }
+    };
+  }, {
+    onVerPozo: function (wellId) {
+      itfRetornoModeracion = true;
+      input.value = wellId;
+      updateClearButtonVisibility();
+      showScreen('main');
+      toggleAccesosUbicacion();
+      buscarPozo(wellId);
+    },
+    onCambioDeVigente: refrescarItfDelHub
+  });
+
+  document.getElementById('btn-abrir-itf-moderacion').addEventListener('click', function () {
+    if (!itfLogic_puedeValidar(permisosActuales)) {
+      toggleAccesosUbicacion();          // el permiso se perdio: la tarjeta se corrige y no se abre ni se pide nada
+      return;
+    }
+    itfRetornoModeracion = false;
+    itfModeracionOrigen = { pantalla: pantallaActual, scrollY: window.scrollY };
+    showScreen('itfModeracion');
+    itfModeracionController_abrir();
+  });
+
+  document.getElementById('btn-itf-volver-moderacion').addEventListener('click', function () {
+    if (!itfLogic_puedeValidar(permisosActuales)) {
+      itfRetornoModeracion = false;
+      toggleAccesosUbicacion();
+      return;
+    }
+    itfRetornoModeracion = false;
+    toggleAccesosUbicacion();
+    showScreen('itfModeracion');
+    itfModeracionController_volver();
+  });
+
+  document.getElementById('btn-itf-cola-volver').addEventListener('click', function () {
+    itfModeracionController_cerrar();
+    restaurarPantalla(itfModeracionOrigen);
   });
 
   // Resumen de fotos compartido (hub, ficha NE, popup NE, Buscar reemplazo, Cerca

@@ -30,11 +30,22 @@ describe('E9-2 no esta cableado: ningun archivo vivo de la app lo referencia', (
     expect(Object.keys(m).sort()).toEqual(['driveProfileRepository_buscarPorNombre', 'driveProfileRepository_existe', 'driveProfileRepository_getFile', 'driveProfileRepository_leerPorId', 'driveProfileRepository_listarArchivosThumb']);
   });
 
-  test('el frontend (index.html, sw.js, js/*.js, css) no menciona E9 ni los permisos futuros', () => {
+  // E9-6 (UI local): el frontend SI conoce los permisos perfil_subir / perfil_validar (compuertas exactas de la UI), pero NUNCA el interior del backend: la hoja de eventos, el dominio, el servicio, el proveedor legacy ni el interruptor.
+  test('el frontend (index.html, sw.js, js/*.js, css) no menciona el interior de E9: ItfEventos, dominio, servicio, legacy ni el interruptor', () => {
     const archivos = ['index.html', 'sw.js', path.join('css', 'styles.css')];
     fs.readdirSync(path.join(RAIZ, 'js')).filter((f) => f.endsWith('.js') && !f.endsWith('.test.js')).forEach((f) => archivos.push(path.join('js', f)));
     archivos.forEach((f) => {
-      expect({ archivo: f, menciona: /perfil_subir|perfil_validar|ItfEventos|itfDominio_|itfService_|itfLegacy_|itfTieneVigente|ITF_E9_ACTIVO/.test(leer(f)) }).toEqual({ archivo: f, menciona: false });
+      expect({ archivo: f, menciona: /ItfEventos|itfDominio_|itfService_|itfLegacy_|itfTieneVigente|ITF_E9_ACTIVO/.test(leer(f)) }).toEqual({ archivo: f, menciona: false });
+    });
+  });
+
+  test('E9-6: los permisos perfil_subir / perfil_validar solo aparecen en la UI de ITF, el cableado del hub y los comentarios del HTML (ningun otro modulo los usa)', () => {
+    const permitidos = ['index.html', 'js/app.js', 'js/api.js', 'js/itfLogic.js', 'js/itfFlujosLogic.js', 'js/itfPerfil.js', 'js/itfModeracion.js'];
+    const archivos = ['index.html', 'sw.js', path.join('css', 'styles.css')];
+    fs.readdirSync(path.join(RAIZ, 'js')).filter((f) => f.endsWith('.js') && !f.endsWith('.test.js')).forEach((f) => archivos.push(path.join('js', f)));
+    archivos.forEach((f) => {
+      const menciona = /perfil_subir|perfil_validar/.test(leer(f));
+      expect({ archivo: f, menciona: menciona && permitidos.indexOf(f.split(path.sep).join('/')) < 0 }).toEqual({ archivo: f, menciona: false });
     });
   });
 
@@ -49,11 +60,11 @@ describe('E9-2 no esta cableado: ningun archivo vivo de la app lo referencia', (
 
   test('E9-5: Api.js expone SOLO las rutas de ITF colaborativos esperadas y solo habla con el servicio (nunca con el dominio, la hoja, Drive ni el storage)', () => {
     const api = CODIGO('Api.js');
-    ['proponerItf', 'getItfPendientes', 'getItfDocumentoModeracion', 'getHistorialItf', 'aprobarItf', 'rechazarItf', 'retirarItf', 'revertirItf', 'retirarPropuestaItf'].forEach((accion) => {
+    ['proponerItf', 'getItfPendientes', 'getItfDocumentoModeracion', 'getHistorialItf', 'getMisPropuestasItf', 'aprobarItf', 'rechazarItf', 'retirarItf', 'revertirItf', 'retirarPropuestaItf'].forEach((accion) => {
       expect(api).toContain("body.action === '" + accion + "'");
     });
     const usadas = Array.from(new Set(api.match(/itf[A-Z][A-Za-z]*_\w+/g) || [])).sort();
-    expect(usadas).toEqual(['itfService_documentoModeracion', 'itfService_e9Activo', 'itfService_ejecutar', 'itfService_historial', 'itfService_pendientes']);
+    expect(usadas).toEqual(['itfService_disponibilidad', 'itfService_documentoModeracion', 'itfService_e9Activo', 'itfService_ejecutar', 'itfService_getProfile', 'itfService_historial', 'itfService_misPropuestas', 'itfService_pendientes']);
     expect(api).not.toMatch(/getItfEstado|itfPropuesta|PROPONER_Y_APROBAR|proponerYAprobar/i);
   });
 

@@ -61,6 +61,9 @@ function doPost(e) {
         response = handleGetItfDocumentoModeracion(body.sessionToken, body);
       } else if (body.action === 'getHistorialItf') {
         response = handleGetHistorialItf(body.sessionToken, body);
+      } else if (body.action === 'getMisPropuestasItf') {
+        // E9-6: las propuestas del propio usuario (perfil + perfil_subir); el dueno sale de la sesion, el cuerpo no lleva email.
+        response = handleGetMisPropuestasItf(body.sessionToken, body);
       } else if (body.action === 'aprobarItf') {
         response = handleAprobarItf(body.sessionToken, body);
       } else if (body.action === 'rechazarItf') {
@@ -312,13 +315,21 @@ function handleGetProfile(sessionToken, wellId) {
   var startTime = Date.now();
   var profile;
   try {
-    profile = profileService_getProfile(wellId);
+    // E9-6: con ITF_E9_ACTIVO === 'SI' el ITF es el VIGENTE INSTITUCIONAL (documento E9 o, sin eventos, el legacy); apagado, el comportamiento es EXACTAMENTE el de siempre. Encendido NO hay
+    // fallback al legacy ante un error o un estado dudoso (podria mostrar como vigente un ITF ya reemplazado o retirado): se responde que no se puede determinar.
+    profile = itfService_e9Activo() ? itfService_getProfile(wellId) : profileService_getProfile(wellId);
   } catch (err) {
     logHistoryEvent(session.email, 'getProfile', wellId, 'SERVICE_UNAVAILABLE');
     return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
   }
   var elapsedMs = Date.now() - startTime;
 
+  if (!profile.found && profile.unknown === true) {
+    // "no se sabe" NUNCA se contesta como "no hay ITF": ni el estado del pozo ni el storage permiten afirmarlo
+    var codigoDudoso = profile.code === 'ITF_STORAGE_NO_CONFIGURADO' || profile.code === 'SERVICE_UNAVAILABLE' ? 'SERVICE_UNAVAILABLE' : 'ITF_STATE_UNKNOWN';
+    logHistoryEvent(session.email, 'getProfile', wellId, codigoDudoso);
+    return { status: 'error', code: codigoDudoso, message: 'no se puede determinar el ITF vigente de ' + wellId };
+  }
   if (!profile.found) {
     logHistoryEvent(session.email, 'getProfile', wellId, 'PROFILE_NOT_FOUND');
     return { status: 'error', code: 'PROFILE_NOT_FOUND', message: 'no se encontro perfil para ' + wellId };
@@ -756,7 +767,8 @@ function handleGetItfAvailability(sessionToken, wellIds) {
 
   var disponibilidad;
   try {
-    disponibilidad = profileService_checkDisponibilidad(wellIds);
+    // E9-6: encendido, la disponibilidad es la del vigente institucional (un pozo que no se puede afirmar se OMITE: el cliente lo trata como "no se sabe", nunca como "No"); apagado, el indice de siempre.
+    disponibilidad = itfService_e9Activo() ? itfService_disponibilidad(wellIds) : profileService_checkDisponibilidad(wellIds);
   } catch (err) {
     logHistoryEvent(session.email, 'getItfAvailability', null, 'SERVICE_UNAVAILABLE');
     return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: err.toString() };
@@ -942,6 +954,7 @@ var ITF_MOD_ENDPOINTS = {
   rechazarItf: { modulos: ['perfil', 'perfil_validar'], accion: 'RECHAZAR', campos: ['action', 'sessionToken', 'clientRequestId', 'documentoId', 'motivoCodigo', 'motivoTexto'] },
   retirarItf: { modulos: ['perfil', 'perfil_validar'], accion: 'RETIRAR', campos: ['action', 'sessionToken', 'clientRequestId', 'documentoId', 'motivoCodigo', 'motivoTexto'] },
   revertirItf: { modulos: ['perfil', 'perfil_validar'], accion: 'REVERTIR', campos: ['action', 'sessionToken', 'clientRequestId', 'documentoId', 'vigenteEsperadoDocumentoId', 'motivoCodigo', 'motivoTexto'] },
+  getMisPropuestasItf: { modulos: ['perfil', 'perfil_subir'], campos: ['action', 'sessionToken', 'limite', 'cursor', 'wellId'] },
   retirarPropuestaItf: { modulos: ['perfil', 'perfil_subir'], accion: 'RETIRAR_PROPUESTA', campos: ['action', 'sessionToken', 'clientRequestId', 'documentoId', 'motivoTexto'] }
 };
 
@@ -1019,6 +1032,25 @@ function handleGetItfDocumentoModeracion(sessionToken, body) {
     status: 'ok',
     data: { documento: r.documento, pozo: r.pozo, imagen: { mimeType: r.blob.getContentType(), imagenBase64: Utilities.base64Encode(bytes) } }
   };
+}
+
+// E9-6: las propuestas del PROPIO usuario (perfil + perfil_subir). No acepta email: el dueno es la sesion. Misma paginacion (limite, cursor) que la cola; `wellId` (opcional) solo acota a un pozo.
+function handleGetMisPropuestasItf(sessionToken, body) {
+  var entrada = api_itfModEntrada(sessionToken, body, 'getMisPropuestasItf');
+  if (!entrada.ok) {
+    return entrada.response;
+  }
+  var r;
+  try {
+    r = itfService_misPropuestas(api_itfModSesionServicio(entrada.session), { limite: entrada.b.limite, cursor: entrada.b.cursor, wellId: entrada.b.wellId });
+  } catch (err) {
+    Logger.log('getMisPropuestasItf: excepcion: ' + api_limpiarMensajeLog(err));
+    return api_itfModError('SERVICE_UNAVAILABLE', 'no se pudo completar la accion: intenta de nuevo en unos minutos');
+  }
+  if (!r.ok) {
+    return api_itfModError(r.code, r.message);
+  }
+  return { status: 'ok', data: { items: r.items, siguienteCursor: r.siguienteCursor, total: r.total, incompleta: r.incompleta } };
 }
 
 function handleGetHistorialItf(sessionToken, body) {
@@ -2292,6 +2324,7 @@ if (typeof module !== 'undefined' && module.exports) {
     handleGetItfPendientes,
     handleGetItfDocumentoModeracion,
     handleGetHistorialItf,
+    handleGetMisPropuestasItf,
     handleAprobarItf,
     handleRechazarItf,
     handleRetirarItf,

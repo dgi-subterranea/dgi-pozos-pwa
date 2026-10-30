@@ -575,3 +575,149 @@ Aprobar y rechazar **no mueven archivos**: todo documento E9 vive en `ItfPropues
 - Jest completo en serie: 170 suites, 11.213 tests verdes; Python: 97 + 224 verdes; `git diff --check` limpio.
 - Mutaciones: E9-5 **55 de 55 muertas**; E9-4 62/62, E9-3 59/59 y E9-2 75/75 repetidas sobre el código actual. En la primera corrida de E9-5 sobrevivieron 6: eran defensas en profundidad (el servicio repite el permiso, el interruptor, la lista blanca y la captura de excepciones del Api) que daban el mismo resultado visible; se agregaron pruebas que exigen que el Api corte **antes** de llamar al servicio y que no filtre el texto de una excepción. Dos mutantes de E9-3 dejaron de aplicar al agregar las lecturas y se reescribieron con contexto único.
 - No se corrió nada contra Google ni se obtuvo aún el resultado real de `auditarCarpetaItfLegacy()`.
+
+## 17. E9-6: experiencia de usuario completa (local, NO productivo)
+
+Estado: implementado y probado EN LOCAL. NO hay push, `gas:*`, deploy, hoja `ItfEventos` real, columnas `perfil_subir` / `perfil_validar` en `Usuarios`, ni `ITF_E9_ACTIVO` encendido. Nada de esto se ve en producción mientras el interruptor siga apagado y nadie tenga los permisos nuevos.
+
+### 17.1 Qué se agregó
+
+| Pieza | Archivo | Qué hace |
+| --- | --- | --- |
+| Lógica pura | `js/itfLogic.js` | permisos exactos, catálogos de motivos, textos de estado / evento / error, formatos, validación del archivo elegido, plan de reducción de imagen, data: URI segura, foco de diálogos, ids de intención |
+| Flujos con estado | `js/itfFlujosLogic.js` | Perfil, proponer, Mis propuestas (+ retiro propio), cola, visor / comparación, historial y el diálogo de aprobar / rechazar / retirar / restaurar; sin DOM, con dependencias inyectables |
+| Imagen | `js/itfImagen.js` | decodifica (respeta la orientación), conserva o reduce con la escalera de §17.4 |
+| Pantalla Perfil | `js/itfPerfil.js` | imagen vigente, guardar / compartir, proponer, Mis propuestas, retirar la propia propuesta, atajos del validador |
+| Moderación | `js/itfModeracion.js` | pantalla «ITF pendientes», visor con comparación, diálogo de acción, historial |
+| Cableado | `js/app.js`, `js/api.js`, `js/seleccion.js`, `index.html`, `css/styles.css`, `sw.js` | tarjeta del hub, availability al buscar, getProfile al abrir, Mi selección, ZIP, wrappers, markup, estilos, precache |
+| Backend | `ItfDominioService.js`, `ItfService.js`, `Api.js` | `getMisPropuestasItf`, y `getProfile` / `getItfAvailability` detrás del interruptor |
+
+### 17.2 Perfil: lo de siempre para quien solo tiene `perfil`
+
+- Con solo `perfil === true`: imagen + «Guardar / Compartir», o «No hay un ITF vigente registrado para este pozo.». Sin estados internos, sin propuestas, sin uploader, sin historial.
+- El ITF se pide **al abrir** Perfil (`getProfile`), con carga, error y reintento. Descargar usa el tipo real (un PNG vigente se guarda como `.png`).
+- «No se sabe» (`ITF_STATE_UNKNOWN`) **nunca** se presenta como «no hay ITF»: es un error con mensaje propio.
+
+### 17.3 Permisos (todos exactos, `=== true`)
+
+| Permisos | Ve en Perfil | Hub |
+| --- | --- | --- |
+| solo `perfil` | imagen / mensaje | — |
+| `perfil` + `perfil_subir` | + Proponer ITF / nueva versión, Mis propuestas (y retirar las propias pendientes) | — |
+| `perfil` + `perfil_validar` | + Historial de ITF, Retirar ITF vigente | tarjeta «ITF pendientes» |
+| los tres | todo lo anterior (autoaprobación = dos acciones) | tarjeta «ITF pendientes» |
+| truthy inválidos (`"SI"`, `1`, objeto), `perfil_*` sin `perfil` | como solo `perfil` / nada | — |
+
+El backend vuelve a validar cada acción; el cliente solo evita pedir lo que va a fallar. Cada acción se prueba con la matriz completa (itfLogic, flujos, controladores, backend).
+
+### 17.4 Proponer y reducción de la imagen
+
+- «Proponer ITF» (sin vigente) / «Proponer nueva versión» (con vigente); nunca «Subir ITF definitivo». Se elige JPEG o PNG del dispositivo (sin cámara especial). Se muestran nombre, vista previa, tamaño original, **tamaño final** y resolución; la vista previa es la imagen que **realmente** se envía.
+- Validación de cliente (comodidad): tipo aparente y extensión, no vacío, ≤ 40 MB de entrada. El servidor sigue siendo la autoridad (mira los bytes reales y el límite de 3 MB).
+- Reducción (legibilidad > ahorro; un ITF es un documento escaneado):
+
+| Situación | Decisión |
+| --- | --- |
+| entra en 2,5 MB y su lado mayor ≤ 4096 px | **se conserva tal cual** (los mismos bytes; JPEG o PNG) |
+| si no | JPEG, lado mayor ≤ 2400 px (≈ A4 a 200 dpi), calidad 0,92; si no entra: 0,88 → 0,84 → 0,80 → 0,76; si aún no: lado 2000 y luego 1600 con calidad 0,92 otra vez |
+| PNG grande | se convierte a JPEG (la transparencia se aplana sobre blanco) |
+| ni así ≤ 3 MB | **no se envía**: «La imagen sigue pesando X aun reducida (máximo 3 MB)» |
+
+Mínimos: lado 1600 px y calidad 0,76 (por debajo el texto deja de leerse). Reducir con canvas descarta EXIF / GPS; **conservar** no toca el archivo (queda como lo mandó la persona).
+- Estados: preparando imagen → enviando → «ITF propuesto. Queda pendiente de validación.» (nunca dice que ya es vigente); error con «Reintentar envío». El botón se deshabilita mientras envía (doble toque = **una** solicitud).
+- `clientRequestId`: **uno por intención** (cada archivo elegido), el **mismo** en cada reintento (fallo de red / servicio), nuevo al elegir otro archivo; si el servidor responde `IDEMPOTENCY_CONFLICT` hay que volver a elegir el archivo.
+
+### 17.5 Mis propuestas (`getMisPropuestasItf`, nuevo)
+
+- Gate `perfil` + `perfil_subir`; el dueño sale **siempre de la sesión** (el cuerpo no acepta email, actor ni nombre). `wellId` es opcional y solo **acota** a un pozo. Misma paginación por secuencia que la cola (`limite`, `cursor`).
+- DTO: `documentoId, wellId, estado (PROPUESTO | APROBADO | REEMPLAZADO | RECHAZADO | RETIRADO), esVigente, puedeRetirar, mimeType, bytes, nombreOriginal, timestampUtc, decididoEn, retiradaPorMi, motivoCodigo, motivoTexto`. Sin email, storage, hash, `clientRequestId`, secuencia ni el nombre de quien decidió.
+- El motivo de un rechazo / retiro institucional **sí** sale (es lo que la persona necesita para corregir); retirar la propia no lleva motivo.
+- Una lectura de la hoja por pedido, cero lecturas de storage / Drive.
+- «Retirar propuesta» solo si sigue `PROPUESTO` (endpoint `retirarPropuestaItf` existente), con confirmación; después la lista **se vuelve a pedir** y pasa a «Retirada».
+
+### 17.6 Cola, visor y comparación
+
+- Hub: tarjeta «ITF pendientes» solo con `perfil` y `perfil_validar` exactos; **no carga nada** ni muestra badge. La primera página se pide al abrir la pantalla; «Ver más» sigue desde el cursor; cada tarjeta lleva pozo, archivo, tamaño, proponente, fecha y, si corresponde, el aviso de «mismo archivo en otro pozo». No se baja ninguna imagen hasta «Ver documento».
+- Acciones por tarjeta: Ver documento, **Ver pozo** (va al hub de ese pozo y deja el atajo «Volver a ITF pendientes», que **conserva** la cola cargada), Historial, Aprobar, Rechazar.
+- Visor: imagen grande con zoom (100 / 150 / 200 / 300 / 400 %), metadata segura, y el vigente actual del pozo. «Comparar con el ITF vigente» baja el vigente (una vez): **lado a lado ≥ 900 px**, **uno por vez con pestañas** en el celular. Sin OCR ni visión automática.
+
+### 17.7 Aprobar, reemplazar, rechazar, retirar, restaurar
+
+- **Aprobar** sin vigente: confirmación simple, sin motivo. Con vigente: «Esta aprobación reemplazará el ITF vigente actual.», motivo obligatorio (ACTUALIZACIÓN, CORRECCIÓN, MEJOR CALIDAD, DOCUMENTO COMPLETO, OTRO) y se envía `vigenteEsperadoDocumentoId` del contexto **que esa persona vio**. Desde la tarjeta (sin haber abierto el documento) el vigente se lee con `getHistorialItf` (sin imágenes) antes de habilitar el botón.
+- **VIGENTE_CAMBIO**: «El ITF vigente cambió desde que abriste esta propuesta. Actualizá la información antes de decidir.»; se vuelven a pedir el contexto (visor + comparación) y la cola; **no** se reintenta solo.
+- **Rechazar**: motivo obligatorio del catálogo (NO CORRESPONDE AL POZO, INCOMPLETO, ILEGIBLE, DUPLICADO, VERSIÓN INCORRECTA, OTRO); sale de la cola.
+- **Retirar ITF vigente** (Perfil o historial): «El pozo quedará sin ITF vigente hasta que se apruebe o restaure otro.», motivo obligatorio; nunca borra el archivo.
+- **Restaurar como vigente** (historial o visor de un documento anterior): si hay vigente lo reemplaza (se declara); motivo obligatorio, con frases propias de la restauración.
+- Todos los diálogos: OTRO exige detalle de 3 a 300 caracteres; `Escape` cancela; el foco se queda dentro (Tab da la vuelta) y vuelve al botón que lo abrió (o al aviso del resultado si la tarjeta ya no existe); doble toque = una solicitud; un fallo transitorio se reintenta con el **mismo** id.
+- Tras **cualquier** acción nada se parcha: la cola, el historial abierto y el contexto del visor se **vuelven a pedir**; el hub y la selección múltiple descartan lo cacheado de ese pozo.
+
+### 17.8 Historial y documentos históricos
+
+- «Historial de ITF» (solo `perfil_validar`): vigente actual, **documentos anteriores** (Ver / Restaurar; solo los que fueron vigentes y ya no lo son), y línea de tiempo del más nuevo al más viejo: Propuesto, Aprobado, Rechazado, Retirado, Restaurado, con persona, fecha, motivo y documento.
+- El registro interno del ITF existente (`ITF_LEGACY_REGISTRADO`) **se oculta** en la línea de tiempo (lo escribe el sistema solo antes del primer reemplazo / retiro / restauración); el documento sigue apareciendo como **«ITF existente»**. Jamás se muestra `LEGACY:<wellId>`.
+- Las frases las arma la pantalla (con tildes); no se usa el `detalle` crudo del servidor.
+- **Autoaprobación**: sin UI especial ni advertencia. En el historial solo se agrega «Propuesto y aprobado por la misma persona.» a la frase de la aprobación.
+
+### 17.9 Ubicación de «Mis propuestas» (decisión)
+
+| Opción | Pro | Contra |
+| --- | --- | --- |
+| A. dentro de Perfil (elegida) | contexto del pozo, cero tarjetas nuevas, mismo permiso (`perfil` + `perfil_subir`) | hay que abrir un pozo; por eso hay un alcance «De todos los pozos» |
+| B. tarjeta propia en el hub | acceso directo a todas | otra tarjeta más para un permiso de uso ocasional |
+
+Se eligió A (la más simple): «De este pozo» por defecto (filtro **del servidor**) y «De todos los pozos» a un toque.
+
+### 17.10 Lectura institucional detrás del interruptor (`getProfile`, availability, Mi selección, ZIP)
+
+- `ITF_E9_ACTIVO` apagado (o ausente): `getProfile` y `getItfAvailability` son **exactamente** los de siempre (`profileService_getProfile`, índice por departamento); `ItfEventos` ni se lee.
+- Encendido: `getProfile` → `itfService_getProfile` (documento E9 vigente o, sin eventos, el legacy); `getItfAvailability` → `itfService_disponibilidad` (una lectura de la hoja + una del índice legacy; un pozo **no determinable se omite**: el cliente lo trata como «no se sabe», nunca «No»). **Sin fallback al legacy** ante hoja ilegible, storage caído o historial no derivable: `SERVICE_UNAVAILABLE` / `ITF_STATE_UNKNOWN`.
+- «Tiene ITF» = SÍ **solo** con vigente institucional: una propuesta pendiente, un rechazado, un retirado o un reemplazado nunca cuentan, ni en el hub, ni en Mi selección, ni en el ZIP (el ZIP y la descarga usan solo `getProfile`).
+- El ZIP nombra cada archivo por el tipo real (`.png` / `.jpg`).
+- Respuesta `getProfile` con la **misma forma** encendido o apagado; no filtra el origen ni ids.
+
+### 17.11 Q1, Q2 y Q3
+
+- **Q1 (implementado).** La tabla de Mi selección se **dibuja ya**; la columna «Tiene ITF» dice «Verificando…» (y el botón «Verificando…») y se repinta al llegar la disponibilidad; no se bloquea la tabla. Un lote caído o un pozo omitido queda en «—» (el botón «Ver ITF» sigue disponible: `getProfile` es la autoridad); **nunca «No»**. Antes de E9-6 la celda decía «No» para un pozo desconocido.
+- **Q2 (implementado).** Buscar un pozo ya **no baja la imagen**: consulta `getItfAvailability([wellId])`; `getProfile` se pide recién al abrir Perfil. Hub: `true` → tarjeta Perfil; `false` → sin tarjeta (como hoy) salvo para quien puede proponer / validar y el pozo existe en otro módulo (para proponer el primer ITF); **desconocido** (pozo omitido, error de red o servicio) → tarjeta Perfil «Ver imagen ITF»: no se afirma que no existe y `getProfile` decide.
+- **Q3 (NO implementado, a propósito).** La auditoría sigue como está: `getItfAvailability` deja una fila de Historial por llamada y `getProfile` otra al abrir. Se puede optimizar después de medir.
+
+Medición local (arnés con backend simulado; imágenes sintéticas de 1200 × 1600; **no son tiempos de red**):
+
+| Escenario | Antes (E9-5) | Después (E9-6) |
+| --- | --- | --- |
+| Buscar 3 pozos (2 con ITF) sin abrir Perfil: requests | 15 | 15 |
+| ídem: bytes de respuesta | 771.057 (769.929 en 3 `getProfile`) | 1.246 (118 en 3 `getItfAvailability`) |
+| Abrir Perfil de un pozo | 0 requests extra (la imagen ya se bajó) | +1 `getProfile` (384.927 bytes) |
+| Mi selección, requests **en serie antes del primer dibujo** de la tabla | datasets → disponibilidad (2) | datasets (1); la disponibilidad llega en paralelo después |
+
+El orden «tabla dibujada antes de que llegue la disponibilidad» está fijado por `js/itfSeleccionDisponibilidad.test.js`. Con ITF reales (cientos de KB a varios MB en base64) la diferencia de bytes crece en proporción.
+
+**Riesgo de Q2 (a decidir antes del rollout):** la decisión «existe Perfil» pasa de la lectura en vivo de Drive (`getProfile`) al índice por departamento cacheado (TTL de 1 h, tanto el de `ItfAvailabilityService` como el de `ItfLegacyProvider`). Un ITF legacy agregado a mano a la carpeta puede tardar hasta 1 h en aparecer en el hub de quien tiene solo `perfil`. Opciones: aceptarlo (la carpeta casi no cambia), bajar el TTL, o ofrecer siempre la tarjeta cuando el índice dice «No» (más requests). No se cambió nada del backend por esto.
+
+### 17.12 Responsive, accesibilidad y seguridad
+
+- Verificado en navegador (arnés local) a **375, 768 y 1280 px**: sin scroll horizontal en Perfil con paneles abiertos, cola, visor (comparación), diálogo de acción e historial. Comparación: pestañas por debajo de 900 px, lado a lado desde 900 px.
+- Pila de diálogos: historial (85) < visor (90) < acción / retiro (100). El scroll del fondo se bloquea con un diálogo abierto.
+- `role="dialog"` + `aria-modal` + `aria-labelledby`; `role="status"` / `role="alert"` para avisos y errores; `aria-pressed` en alcance y vistas; botones reales (`type="button"`); `<label for>` en motivo y detalle; foco visible; los estados no dependen solo del color (texto «Pendiente de validación», «Rechazada», …).
+- Todo texto del servidor (nombre del archivo, nombre de la persona, detalle de un motivo) se pinta con `textContent`; ningún archivo nuevo usa `innerHTML` / `insertAdjacentHTML` / `eval` (guarda en `js/itfWiring.test.js`). La imagen llega por `data:` URI armada solo con tipo JPEG / PNG y base64 válido.
+- Respuestas viejas: tokens + generaciones en cada flujo (como Fotos). `UNAUTHORIZED` / `USER_DISABLED`: flujo global (`logout()`); `PERMISSION_DENIED`: «No tenés permiso para hacer esto.». Al cerrar sesión se descartan imágenes, listas, previews (se liberan los blob URL), diálogos y lo que esté en vuelo.
+- Cache del service worker: los cinco JS nuevos están en `SHELL_FILES` (precache); sigue network-first, sin versión manual.
+
+### 17.13 Cambios de diseño respecto de E9-5
+
+| Cambio | Motivo |
+| --- | --- |
+| `getMisPropuestasItf` (nuevo) con `wellId` opcional | el proponente necesitaba ver y retirar lo suyo |
+| `getProfile` / `getItfAvailability` con interruptor | el vigente institucional pasa a ser lo que ve todo el sistema, sin fallback inseguro |
+| `getProfile` encendido y dudoso → `ITF_STATE_UNKNOWN` (no `PROFILE_NOT_FOUND`) | «no se sabe» no es «no existe» |
+| Guardas viejas actualizadas (`ItfContrato`, `ubicacionSugerenciasWiring`) | decían «el frontend no menciona `perfil_subir` / `perfil_validar`»; ahora esos permisos solo aparecen en la UI de ITF y el cableado |
+| `permisosActuales` incluye `perfil_subir` / `perfil_validar` | para las compuertas exactas |
+
+### 17.14 Bloqueos y pendientes para el rollout (todo sigue sin hacerse)
+
+1. **Resultado real de `auditarCarpetaItfLegacy()`** (lo corre la persona responsable): incorporarlo antes de cualquier rollout; las anomalías (duplicados, mayúsculas, nombres inválidos) **no se corrigen automáticamente**: informe aparte («rollout cleanup»).
+2. Despliegue ordenado (storage con `ITF_ROOT_FOLDER_ID`, hoja `ItfEventos` con su encabezado, columnas `perfil_subir` / `perfil_validar` en `Usuarios`, y **recién entonces** el interruptor).
+3. Mediciones reales en Apps Script (límite de 3 MB, tiempos de `proponerItf`, lectura de la hoja con muchos eventos).
+4. Decidir el riesgo de índice cacheado de Q2 (§17.11) y, si se quiere, Q3 (auditoría).
+5. Decidir si «conservar» debe quitar EXIF / GPS de un archivo que ya está bien (hoy no se toca).
+6. Verificar a mano en un navegador real el selector de archivos del celular y el guardado en iOS (la parte de canvas se probó con un navegador falso y con Chromium en el arnés).

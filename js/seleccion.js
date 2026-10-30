@@ -53,6 +53,7 @@
     vistaPrevia: null,
     disponibilidadItf: {},            // cache {wellId: boolean}
     disponibilidadItfListoPara: null, // snapshot (join de wellIds) de la seleccion para la que ya se pidio
+    verificandoItf: false,            // la disponibilidad de ITF de la seleccion se esta pidiendo: la tabla ya se dibujo con "Verificando…" en esa columna
     disponibilidadItfDesconocidos: [],// wellId cuyo lote de disponibilidad fallo (ni Si ni No); la exportacion los deja vacios
     filasVisibles: 0,                 // cuantas filas dibuja la tabla ahora (despues de buscar + filtrar): el N de "Exportar Excel (N)"
     listenersFilasVisibles: [],
@@ -149,6 +150,12 @@
   function seleccionController_registrarListenerFilasVisibles(fn) {
     estado.listenersFilasVisibles.push(fn);
     fn(estado.filasVisibles);
+  }
+
+  // Cambio el ITF vigente de algun pozo (se aprobo, retiro o restauro uno): lo que la seleccion tenia de disponibilidad ya no vale; se vuelve a pedir en la proxima apertura.
+  function seleccionController_invalidarDisponibilidadItf() {
+    estado.disponibilidadItfListoPara = null;
+    estado.disponibilidadItfDesconocidos = [];
   }
 
   function invalidarCachesDependientes() {
@@ -396,9 +403,20 @@
         renderizarTabla(indicePozos, indiceBusqueda, neSet, permisos);
       }
 
+      // E9-6: la tabla se dibuja YA (la columna "Tiene ITF" dice "Verificando…") y se repinta cuando llega la disponibilidad: nada bloquea el resto de la tabla.
       if (permisos.perfil) {
-        asegurarDisponibilidadItf(contexto).then(continuarConDisponibilidad);
+        var yaSabido = estado.disponibilidadItfListoPara === snapshotSeleccion();
+        estado.verificandoItf = !yaSabido;
+        continuarConDisponibilidad();
+        if (!yaSabido) {
+          asegurarDisponibilidadItf(contexto).then(function () {
+            if (aperturaId !== estado.aperturaTablaId) { return; }
+            estado.verificandoItf = false;
+            continuarConDisponibilidad();
+          });
+        }
       } else {
+        estado.verificandoItf = false;
         continuarConDisponibilidad();
       }
     }).catch(function () {
@@ -545,6 +563,15 @@
     return valor === null || valor === undefined || valor === '' ? '—' : String(valor);
   }
 
+  // "Tiene ITF" (E9-6): Si / No SOLO si el servidor lo afirmo (hay / no hay ITF vigente institucional). Mientras se verifica: "Verificando…". Si no se pudo saber (un lote que fallo, o un pozo cuyo estado el servidor
+  // no puede afirmar y omite): celda sin dato, NUNCA "No".
+  function textoTieneItf(wellId) {
+    var d = estado.disponibilidadItf[wellId];
+    if (d === true) { return 'Sí'; }
+    if (d === false) { return 'No'; }
+    return estado.verificandoItf ? 'Verificando…' : '—';
+  }
+
   function construirFilasOrdenadasYFiltradas(indicePozos, indiceBusqueda, neSet, permisos) {
     var filas = estado.seleccion.map(function (wellId) {
       var p = (indicePozos && indicePozos[wellId]) || {};
@@ -560,7 +587,7 @@
         tipoPozo: p.surgencia ? (SELECCION_ETIQUETAS_TIPO_POZO[p.surgencia] || p.surgencia) : '—',
         // con el dataset operativo cargado, un pozo que no esta en el NO tiene ubicacion operativa: "Sin ubicación operativa" (no un "—" que esconda el motivo)
         estadoUbicacion: permisos.ubicacion ? mapaLogic_textoEstadoUbicacion(indicePozos ? indicePozos[wellId] : undefined, indicePozos !== null) : '—',
-        tieneItf: permisos.perfil ? (estado.disponibilidadItf[wellId] ? 'Sí' : 'No') : '—',
+        tieneItf: permisos.perfil ? textoTieneItf(wellId) : '—',
         tieneNe: permisos.ne ? (neSet.has(wellId) ? 'Sí' : 'No') : '—',
         profundidadNum: typeof p.profundidad === 'number' ? p.profundidad : -1,
         // Aptitud para reemplazo (null sin reemplazo=SI: ningun badge)
@@ -653,9 +680,13 @@
     var btnItfFila = document.createElement('button');
     btnItfFila.type = 'button';
     btnItfFila.className = 'button-secondary';
-    if (fila.tieneItf === 'Sí') {
+    if (fila.tieneItf === 'Sí' || fila.tieneItf === '—') {
+      // "—" = no se pudo saber: no se afirma que no hay; getProfile es la autoridad al abrirlo
       btnItfFila.textContent = 'Ver ITF';
       btnItfFila.addEventListener('click', function () { mostrarItfVisor(fila.wellId); });
+    } else if (fila.tieneItf === 'Verificando…') {
+      btnItfFila.textContent = 'Verificando…';
+      btnItfFila.disabled = true;
     } else {
       btnItfFila.textContent = 'Sin ITF';
       btnItfFila.disabled = true;
@@ -720,7 +751,7 @@
       itfVisorImgEl.src = dataUri;
       itfVisorImgEl.alt = 'ITF del pozo ' + wellId;
       itfVisorGuardarEl.href = dataUri;
-      itfVisorGuardarEl.download = wellId + '.jpg';
+      itfVisorGuardarEl.download = wellId + (result.data.mimeType === 'image/png' ? '.png' : '.jpg');
       itfVisorGuardarEl.hidden = false;
     });
   }
@@ -903,7 +934,7 @@
       }
       var a = document.createElement('a');
       a.href = dataUri;
-      a.download = wellId + '.jpg';
+      a.download = wellId + (result.data.mimeType === 'image/png' ? '.png' : '.jpg');
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -981,7 +1012,8 @@
             manejarSiSesionExpiro(result, contexto);
             throw new Error(result.message || 'error');
           }
-          zip.file(wellId + '.jpg', result.data.imageBase64, { base64: true });
+          // el nombre sigue el tipo REAL del ITF vigente (un PNG aprobado no se guarda como .jpg)
+          zip.file(wellId + (result.data.mimeType === 'image/png' ? '.png' : '.jpg'), result.data.imageBase64, { base64: true });
           exitosos.push(wellId);
           return true;
         });
@@ -1060,6 +1092,7 @@
   window.seleccionController_abrirTabla = seleccionController_abrirTabla;
   window.seleccionController_abrirItf = seleccionController_abrirItf;
   window.seleccionController_asegurarDisponibilidadItf = seleccionController_asegurarDisponibilidadItf;
+  window.seleccionController_invalidarDisponibilidadItf = seleccionController_invalidarDisponibilidadItf;
   window.seleccionController_disponibilidadItfDe = seleccionController_disponibilidadItfDe;
   window.seleccionController_snapshotExportacion = seleccionController_snapshotExportacion;
   window.seleccionController_registrarListenerFilasVisibles = seleccionController_registrarListenerFilasVisibles;

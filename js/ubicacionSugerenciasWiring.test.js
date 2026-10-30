@@ -148,7 +148,8 @@ describe('alcance de esta etapa', () => {
     expect(leer('js', 'ubicacionSugerenciasLogic.js')).not.toMatch(/DecisionesFuentesDelta/);
     expect(leer('js', 'ubicacionSugerencias.js')).not.toMatch(/decidirFuenteUbicacion|apiDecidirFuente/);
   });
-  test('no hay nada de subida / validacion de ITF (es un roadmap documentado, sin codigo)', () => {
-    ['index.html', 'sw.js', 'js/app.js', 'js/api.js'].forEach((f) => expect(leer(...f.split('/'))).not.toMatch(/perfil_subir|perfil_validar|subirItf|subirPerfil/));
+  // E9-6 (UI local de ITF colaborativos): los permisos perfil_subir / perfil_validar ya tienen UI (js/itf*.js); aca solo se guarda que no vuelva un nombre viejo de accion directa de subida.
+  test('no hay una accion directa de "subir ITF definitivo" (los ITF colaborativos se PROPONEN y se validan)', () => {
+    ['index.html', 'sw.js', 'js/app.js', 'js/api.js'].forEach((f) => expect(leer(...f.split('/'))).not.toMatch(/subirItf|subirPerfil|Subir ITF definitivo/));
   });
 });

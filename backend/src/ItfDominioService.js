@@ -1390,6 +1390,68 @@ function itfDominio_dtoHistorialPozo(p) {
   });
 }
 
+// --- E9-6: "Mis propuestas" (lo que ve quien PROPONE de sus propias propuestas) ---
+// Solo documentos E9 cuyo ITF_PROPUESTO lo escribio el actor (por email normalizado: el nombre no es identidad), de todos los pozos, las mas nuevas primero, con la MISMA paginacion por secuencia que la cola. El
+// estado que ve el proponente: PROPUESTO (pendiente), APROBADO (es el ITF vigente), REEMPLAZADO (fue aprobada y despues la reemplazo otra), RECHAZADO, RETIRADO. Sin email, storageFileId, hash, clientRequestId,
+// secuencia ni el nombre de quien decidio. El motivo del rechazo / retiro institucional SI sale (es lo que la persona necesita para corregir); retirarla uno mismo no lleva motivo.
+var ITF_ESTADO_PROPUESTA_PROPIA = { PROPUESTO: 'PROPUESTO', VIGENTE: 'APROBADO', REEMPLAZADO: 'REEMPLAZADO', RECHAZADO: 'RECHAZADO', RETIRADO: 'RETIRADO' };
+
+function itfDominio_dtoMiPropuesta(d) {
+  var cierre = d.cierre || null;
+  var propia = cierre !== null && cierre.evento === ITF_EVENTO.RETIRADO && cierre.motivoCodigo === ITF_MOTIVO_CANCELACION;
+  var decidido = d.estado === ITF_ESTADOS_DOCUMENTO.RECHAZADO || d.estado === ITF_ESTADOS_DOCUMENTO.RETIRADO || d.estado === ITF_ESTADOS_DOCUMENTO.REEMPLAZADO ? cierre : (d.aprobacion || null);
+  return {
+    documentoId: d.documentoId,
+    wellId: d.wellId,
+    estado: ITF_ESTADO_PROPUESTA_PROPIA[d.estado],
+    esVigente: d.estado === ITF_ESTADOS_DOCUMENTO.VIGENTE,
+    puedeRetirar: d.estado === ITF_ESTADOS_DOCUMENTO.PROPUESTO,
+    mimeType: d.mimeType,
+    bytes: d.bytes,
+    nombreOriginal: d.nombreOriginal,
+    timestampUtc: d.propuesto.timestamp,
+    decididoEn: decidido === null ? null : decidido.timestamp,
+    retiradaPorMi: propia,
+    motivoCodigo: cierre === null || propia ? null : cierre.motivoCodigo,
+    motivoTexto: cierre === null || propia ? null : cierre.motivoTexto
+  };
+}
+
+// derivacion (UNA sola, de toda la hoja) + {emailActor, proponenteDe(documentoId) -> email, limite, cursor, wellId (opcional: solo las de ese pozo)}. {items, siguienteCursor, total, incompleta (hay pozos que no se pueden derivar: puede faltar alguna propuesta)}.
+function itfDominio_listarMisPropuestas(derivacion, ctx) {
+  var c = ctx || {};
+  var pozos = derivacion && derivacion.porPozo ? derivacion.porPozo : {};
+  var actor = itfDominio_normalizarEmail(c.emailActor);
+  var propias = [];
+  var sinDerivar = 0;
+  var soloPozo = typeof c.wellId === 'string' && c.wellId !== '' ? c.wellId : null;
+  Object.keys(pozos).forEach(function (wellId) {
+    if (soloPozo !== null && wellId !== soloPozo) {
+      return;
+    }
+    var p = pozos[wellId];
+    if (p.integridad !== ITF_INTEGRIDAD.OK) {
+      sinDerivar += 1;
+      return;
+    }
+    p.orden.forEach(function (id) {
+      var d = p.documentos[id];
+      if (d.origen === ITF_ORIGEN.E9 && d.propuesto && itfDominio_normalizarEmail(c.proponenteDe(d.documentoId)) === actor) {
+        propias.push(d);
+      }
+    });
+  });
+  propias.sort(function (a, b) { return b.propuesto.secuencia - a.propuesto.secuencia; });
+  var restantes = c.cursor === null || c.cursor === undefined ? propias : propias.filter(function (d) { return d.propuesto.secuencia < c.cursor; });
+  var pagina = restantes.slice(0, c.limite);
+  return {
+    items: pagina.map(itfDominio_dtoMiPropuesta),
+    siguienteCursor: restantes.length > pagina.length ? ITF_CURSOR_PREFIJO + pagina[pagina.length - 1].propuesto.secuencia : null,
+    total: propias.length,
+    incompleta: sinDerivar > 0
+  };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     ITF_EVENTO,
@@ -1443,6 +1505,9 @@ if (typeof module !== 'undefined' && module.exports) {
     itfDominio_dtoDocumentoModeracion,
     itfDominio_detalleEvento,
     itfDominio_dtoHistorialPozo,
+    ITF_ESTADO_PROPUESTA_PROPIA,
+    itfDominio_dtoMiPropuesta,
+    itfDominio_listarMisPropuestas,
     itfDominio_planificar
   };
 }
