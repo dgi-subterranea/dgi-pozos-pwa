@@ -415,6 +415,23 @@ describe('INTEGRIDAD (fail-closed, por pozo)', () => {
       noDerivable([propuesto(1, extra)], 'METADATA_INVALIDA');
     });
   });
+  test('el registro de un legacy EXISTENTE admite mas de 3 MB (tope defensivo de 20 MB); una PROPUESTA no', () => {
+    [3 * 1024 * 1024 + 1, 3250586, 11540150, 12 * 1024 * 1024, 20 * 1024 * 1024].forEach((bytes) => {
+      H.reiniciar();
+      expect(der([legacy(WELL, { bytes: bytes })]).porPozo[WELL].integridad).not.toBe('NO_DERIVABLE');
+    });
+    H.reiniciar();
+    noDerivable([legacy(WELL, { bytes: 20 * 1024 * 1024 + 1 })], 'METADATA_INVALIDA');
+    H.reiniciar();
+    noDerivable([propuesto(1, { bytes: 3 * 1024 * 1024 + 1 })], 'METADATA_INVALIDA');
+  });
+  test('metadataDeCampos: por omision el limite es el de propuestas; el del legacy se pasa aparte', () => {
+    const c = { mimeType: 'image/jpeg', bytes: 11540150, sha256: sha(1), storageFileId: 'archivo-legacy-01', nombreOriginal: WELL + '.jpg' };
+    expect(D.itfDominio_metadataDeCampos(c).ok).toBe(false);
+    expect(D.itfDominio_metadataDeCampos(c, ITF_LEGACY_BYTES_MAX).ok).toBe(true);
+    expect(D.itfDominio_metadataDeCampos(Object.assign({}, c, { bytes: ITF_LEGACY_BYTES_MAX + 1 }), ITF_LEGACY_BYTES_MAX).ok).toBe(false);
+    expect(D.itfDominio_metadataDeCampos(Object.assign({}, c, { bytes: ITF_ARCHIVO_BYTES_MAX })).ok).toBe(true);
+  });
   test('evento de otro pozo (wellId cruzado): afecta a los dos pozos, no al tercero', () => {
     const d = der([propuesto(1), propuesto(5, { wellId: '14-0003' }), aprobado(1, null, { wellId: OTRO_POZO })]);
     expect(d.porPozo[WELL].inconsistencias).toContain('WELL_CRUZADO');

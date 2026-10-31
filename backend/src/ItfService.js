@@ -448,7 +448,7 @@ function itfService_evidenciaPropuesta(wellId, d) {
 //   -> 8 lock: releer, revalidar, escribir ITF_PROPUESTO -> 9 invalidar -> si no se escribio, COMPENSAR (retirar el temporal).
 function itfService_proponer(s, email, comando, valores, archivo, d) {
   var a = archivo !== null && typeof archivo === 'object' ? archivo : {};
-  var v = itfArchivo_validar({ mimeType: a.mimeType, bytes: a.bytes });
+  var v = itfArchivo_validarPropuesta({ mimeType: a.mimeType, bytes: a.bytes });
   if (!v.ok) {
     return itfService_falla(v.code, v.message);
   }

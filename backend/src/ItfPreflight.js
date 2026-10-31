@@ -176,10 +176,16 @@ function itfE9Apagar() {
 
 // --- medicion (lectura) ---
 
+// Bytes con signo (como los de Apps Script). Empiezan con la firma JPEG (FF D8 FF) para que los validadores de formato los reconozcan como una imagen.
 function itfPreflight_bytesSinteticos(n) {
   var b = [];
   for (var i = 0; i < n; i++) {
     b.push(((i * 31 + 7) % 256) - 128);
+  }
+  if (n >= 3) {
+    b[0] = -1;
+    b[1] = -40;
+    b[2] = -1;
   }
   return b;
 }
@@ -194,8 +200,16 @@ function itfPreflight_medir(deps) {
   ITF_PREFLIGHT_TAMANOS_HASH.forEach(function (t) {
     var t0 = ahora();
     try {
-      sha(itfPreflight_bytesSinteticos(t.bytes));
-      resultado.hash.push({ tamano: t.etiqueta, ms: ahora() - t0 });
+      var bytes = itfPreflight_bytesSinteticos(t.bytes);
+      sha(bytes);
+      var ms = ahora() - t0;
+      // Los dos limites son independientes: un legacy existente de este tamano debe poder registrarse aunque supere el de las propuestas nuevas.
+      resultado.hash.push({
+        tamano: t.etiqueta,
+        ms: ms,
+        legacyRegistrable: itfArchivo_validarLegacy({ bytes: bytes }).ok === true,
+        propuestaNuevaAceptada: itfArchivo_validarPropuesta({ mimeType: 'image/jpeg', bytes: bytes }).ok === true
+      });
     } catch (err) {
       resultado.hash.push({ tamano: t.etiqueta, ms: ahora() - t0, error: true });        // p. ej. memoria: se informa y se sigue con lo demas
     }

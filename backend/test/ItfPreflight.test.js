@@ -283,6 +283,12 @@ describe('medicion', () => {
     [].concat(r.hash, r.disponibilidad).forEach((x) => expect(x.ms).toBe(10));
   });
 
+  test('cada medicion informa si un legacy de ese tamano es registrable y si una propuesta nueva lo aceptaria: 12 MB = legacy SI, propuesta NO (limites separados)', () => {
+    const r = P.itfPreflight_medir({ ahora: () => 1, sha256: () => 'x', disponibilidad: () => ({}) });
+    expect(r.hash.map((h) => [h.tamano.split(' (')[0], h.legacyRegistrable, h.propuestaNuevaAceptada])).toEqual([
+      ['100 KB', true, true], ['500 KB', true, true], ['1 MB', true, true], ['3 MB', true, true], ['12 MB', true, false]
+    ]);
+  });
   test('si un hash falla (p. ej. memoria con 12 MB) se informa error:true y la medicion sigue', () => {
     const r = P.itfPreflight_medir({ ahora: () => 1, sha256: (b) => { if (b.length > 5 * 1024 * 1024) { throw new Error('memoria'); } return 'x'; }, disponibilidad: () => ({}) });
     expect(r.hash.map((h) => h.error === true)).toEqual([false, false, false, false, true]);

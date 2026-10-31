@@ -25,6 +25,39 @@ describe('constantes: solo imagenes, 3 MB como el storage de Fotos', () => {
   });
 });
 
+describe('DOS limites separados: propuesta nueva (3 MB) y legacy existente (tope defensivo de 20 MB)', () => {
+  const jpegGrande = (n) => { const b = new Int8Array(n); b[0] = -1; b[1] = -40; b[2] = -1; return b; };
+  test('constantes: 3 MB para propuestas, 20 MB defensivo para el legacy, y el del legacy cubre con margen el maximo auditado (11.540.150 B)', () => {
+    expect(A.ITF_ARCHIVO_BYTES_MAX).toBe(3 * 1024 * 1024);
+    expect(A.ITF_LEGACY_BYTES_MAX).toBe(20 * 1024 * 1024);
+    expect(A.ITF_LEGACY_BYTES_MAX).toBeGreaterThan(A.ITF_ARCHIVO_BYTES_MAX);
+    expect(A.ITF_LEGACY_BYTES_MAX).toBeGreaterThan(11540150 * 1.5);
+  });
+  test('validarPropuesta: 3 MB exactos pasa; 3,1 MB, 11,54 MB y 12 MB NO (limite de propuesta nueva)', () => {
+    expect(A.itfArchivo_validarPropuesta({ mimeType: 'image/jpeg', bytes: jpegGrande(3 * 1024 * 1024) }).ok).toBe(true);
+    [3250586, 11540150, 12 * 1024 * 1024].forEach((n) => {
+      expect(A.itfArchivo_validarPropuesta({ mimeType: 'image/jpeg', bytes: jpegGrande(n) })).toMatchObject({ ok: false, code: 'ARCHIVO_DEMASIADO_GRANDE' });
+    });
+  });
+  test('itfArchivo_validar sigue siendo el validador de propuestas (mismo veredicto)', () => {
+    const grande = { mimeType: 'image/jpeg', bytes: jpegGrande(3 * 1024 * 1024 + 1) };
+    expect(A.itfArchivo_validar(grande)).toEqual(A.itfArchivo_validarPropuesta(grande));
+  });
+  test.each([[2 * 1024 * 1024], [3 * 1024 * 1024], [3250586], [11540150], [12 * 1024 * 1024], [20 * 1024 * 1024]])('validarLegacy acepta un JPEG existente de %i bytes (no usa el limite de 3 MB)', (n) => {
+    expect(A.itfArchivo_validarLegacy({ bytes: jpegGrande(n) })).toEqual({ ok: true, mimeType: 'image/jpeg', bytes: n });
+  });
+  test('validarLegacy: un byte por encima del tope defensivo se rechaza, explicito y fail-closed (LEGACY_FORMATO_INVALIDO)', () => {
+    const r = A.itfArchivo_validarLegacy({ bytes: jpegGrande(20 * 1024 * 1024 + 1) });
+    expect(r).toMatchObject({ ok: false, code: 'LEGACY_FORMATO_INVALIDO' });
+    expect(r.message).toMatch(/limite defensivo/);
+  });
+  test('validarLegacy sigue exigiendo imagen real: vacio, PDF, no-bytes', () => {
+    expect(A.itfArchivo_validarLegacy({ bytes: [] })).toMatchObject({ ok: false, code: 'LEGACY_FORMATO_INVALIDO', message: expect.stringMatching(/vacio/) });
+    expect(A.itfArchivo_validarLegacy({ bytes: Uint8Array.from(Buffer.from('%PDF-1.4 xxxxx')) }).code).toBe('LEGACY_FORMATO_INVALIDO');
+    [null, undefined, {}, 'texto', 42, { bytes: 'FFD8FF' }, { bytes: null }].forEach((e) => expect(A.itfArchivo_validarLegacy(e).code).toBe('LEGACY_FORMATO_INVALIDO'));
+  });
+});
+
 describe('itfArchivo_detectarFormato: por los bytes, no por el nombre ni el MIME', () => {
   test('JPEG y PNG validos', () => {
     expect(A.itfArchivo_detectarFormato(jpeg(100))).toBe('image/jpeg');

@@ -1,6 +1,6 @@
 // ItfLegacyProvider (E9-3, politica de nombre REVISADA en E9-7: la extension .jpg es case-insensitive y la unicidad cuenta candidatos de cualquier capitalizacion): politica unica de nombre legacy, ambiguedad fail-closed, indice de disponibilidad en lote (una lectura, single-flight), resolucion de un pozo (una llamada a Drive),
 // huella para el registro (SHA-256 de los bytes reales) y verificacion al restaurar. Drive falso con contadores; nada toca Google.
-const { crearEntorno, JPEG, PNG, sha256 } = require('./itfEntorno');
+const { crearEntorno, JPEG, JPEG_GRANDE, PNG, sha256 } = require('./itfEntorno');
 
 let E;
 let L;
@@ -286,8 +286,28 @@ describe('huella (para ITF_LEGACY_REGISTRADO)', () => {
     entorno([]);
     expect(L.itfLegacy_huella('14-0001')).toMatchObject({ ok: false, code: 'ITF_NOT_FOUND' });
   });
-  test('un legacy mas grande que el maximo de E9 no se registra', () => {
-    entorno([archivo('a', '14-0001.jpg', JPEG(3 * 1024 * 1024 + 1))]);
+  // El limite de 3 MB es de las PROPUESTAS NUEVAS. Un legacy existente se registra hasta su propio tope defensivo (20 MB): la auditoria real midio hasta 11,54 MB (42 archivos sobre 3 MB).
+  test.each([
+    ['2 MB', 2 * 1024 * 1024], ['3 MB exactos', 3 * 1024 * 1024], ['3 MB + 1 byte', 3 * 1024 * 1024 + 1], ['3,1 MB', 3250586],
+    ['11,54 MB (el maximo auditado)', 11540150], ['12 MB', 12 * 1024 * 1024], ['20 MB exactos (el tope defensivo)', 20 * 1024 * 1024]
+  ])('un legacy existente de %s SI se registra: bytes reales y SHA-256 de todo el contenido', (_n, tam) => {
+    const bytes = JPEG_GRANDE(tam, 9);
+    entorno([archivo('id-grande-01', '14-0001.jpg', bytes)]);
+    const r = L.itfLegacy_huella('14-0001');
+    expect(r).toEqual({ ok: true, huella: { mimeType: 'image/jpeg', bytes: tam, sha256: sha256(bytes), storageFileId: 'id-grande-01', nombreOriginal: '14-0001.jpg' } });
+    expect(E.mods.dominio.itfDominio_metadataDeCampos(r.huella, E.mods.archivo.ITF_LEGACY_BYTES_MAX).ok).toBe(true);
+  });
+  test('un legacy por encima del tope defensivo (20 MB + 1) NO se registra: fallo explicito y fail-closed, sin hash', () => {
+    entorno([archivo('id-enorme-01', '14-0001.jpg', JPEG_GRANDE(20 * 1024 * 1024 + 1))]);
+    const r = L.itfLegacy_huella('14-0001');
+    expect(r).toMatchObject({ ok: false, code: 'LEGACY_FORMATO_INVALIDO' });
+    expect(r.message).toMatch(/limite defensivo/);
+    expect(r.huella).toBeUndefined();
+  });
+  test('un legacy grande que no es imagen (PDF de 12 MB) tampoco se registra', () => {
+    const pdf = new Int8Array(12 * 1024 * 1024);
+    Buffer.from('%PDF-1.4 ').forEach((v, i) => { pdf[i] = v; });
+    entorno([archivo('id-pdf-grande', '14-0001.jpg', pdf)]);
     expect(L.itfLegacy_huella('14-0001')).toMatchObject({ ok: false, code: 'LEGACY_FORMATO_INVALIDO' });
   });
   test('se hashea SOLO el pozo pedido (no hay hash por lote)', () => {
@@ -330,6 +350,32 @@ describe('verificacion de la huella al restaurar (nunca se restaura en silencio 
   test('un id de Drive que no esta dentro de la carpeta institucional no se lee (no sirve para leer otros archivos)', () => {
     entorno([{ id: 'secreto', name: 'otra-cosa.jpg', bytes: JPEG(10), padre: 'OTRA_CARPETA' }]);
     expect(E.mods.drive.driveProfileRepository_leerPorId('secreto')).toEqual({ found: false });
+  });
+  test('un legacy de 11,54 MB: COINCIDE si es el mismo, CAMBIO si cambia un solo byte; por encima del tope defensivo siempre CAMBIO', () => {
+    const bytes = JPEG_GRANDE(11540150, 3);
+    const reg = { storageFileId: 'id-reg', sha256: sha256(bytes), bytes: bytes.length };
+    entorno([archivo('id-reg', '14-0001.jpg', bytes)]);
+    expect(L.itfLegacy_verificarHuella(reg)).toBe('COINCIDE');
+    const otro = JPEG_GRANDE(11540150, 3);
+    otro[5000000] = 99;
+    entorno([archivo('id-reg', '14-0001.jpg', otro)]);
+    expect(L.itfLegacy_verificarHuella(reg)).toBe('CAMBIO');
+    const enorme = JPEG_GRANDE(20 * 1024 * 1024 + 1, 3);
+    entorno([archivo('id-reg', '14-0001.jpg', enorme)]);
+    expect(L.itfLegacy_verificarHuella({ storageFileId: 'id-reg', sha256: sha256(enorme), bytes: enorme.length })).toBe('CAMBIO');
+  });
+  test('leerRegistrado de un legacy de 11,54 MB lo entrega si coincide y da LEGACY_CAMBIO si no', () => {
+    const bytes = JPEG_GRANDE(11540150, 4);
+    entorno([archivo('id-reg', '14-0001.jpg', bytes)]);
+    const ok = L.itfLegacy_leerRegistrado({ storageFileId: 'id-reg', sha256: sha256(bytes), bytes: bytes.length });
+    expect(ok.found).toBe(true);
+    expect(ok.blob.getBytes()).toHaveLength(11540150);
+    expect(L.itfLegacy_leerRegistrado({ storageFileId: 'id-reg', sha256: sha256(JPEG_GRANDE(11540150, 5)), bytes: bytes.length })).toEqual({ found: false, code: 'LEGACY_CAMBIO' });
+  });
+  test('leerRegistrado no entrega un archivo por encima del tope defensivo aunque su hash coincida con el registro: LEGACY_CAMBIO', () => {
+    const enorme = JPEG_GRANDE(20 * 1024 * 1024 + 1, 4);
+    entorno([archivo('id-reg', '14-0001.jpg', enorme)]);
+    expect(L.itfLegacy_leerRegistrado({ storageFileId: 'id-reg', sha256: sha256(enorme), bytes: enorme.length })).toEqual({ found: false, code: 'LEGACY_CAMBIO' });
   });
   test('leerRegistrado entrega el archivo solo si sigue coincidiendo con la huella', () => {
     const bytes = JPEG(250, 8);

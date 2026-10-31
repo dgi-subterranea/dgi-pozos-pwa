@@ -202,16 +202,14 @@ function itfLegacy_aDisponible(estado) {
 
 function itfLegacy_huellaDeBlob(blob, fileId, nombre) {
   var bytes = blob.getBytes();
-  var mimeType = itfArchivo_detectarFormato(bytes);
-  if (mimeType === null) {
-    return { ok: false, code: 'LEGACY_FORMATO_INVALIDO', message: 'el archivo legacy no es una imagen JPEG o PNG valida' };
-  }
-  if (bytes.length > ITF_ARCHIVO_BYTES_MAX) {
-    return { ok: false, code: 'LEGACY_FORMATO_INVALIDO', message: 'el archivo legacy supera el tamano maximo' };
+  // El legacy existente NO usa el limite de 3 MB de las propuestas: tiene su propio tope defensivo (itfArchivo_validarLegacy).
+  var v = itfArchivo_validarLegacy({ bytes: bytes });
+  if (!v.ok) {
+    return { ok: false, code: v.code, message: v.message };
   }
   return {
     ok: true,
-    huella: { mimeType: mimeType, bytes: bytes.length, sha256: itfArchivo_sha256Hex(bytes), storageFileId: fileId, nombreOriginal: nombre }
+    huella: { mimeType: v.mimeType, bytes: v.bytes, sha256: itfArchivo_sha256Hex(bytes), storageFileId: fileId, nombreOriginal: nombre }
   };
 }
 
@@ -242,6 +240,9 @@ function itfLegacy_verificarHuella(registrado) {
     return 'AUSENTE';
   }
   var bytes = leido.blob.getBytes();
+  if (bytes.length > ITF_LEGACY_BYTES_MAX) {
+    return 'CAMBIO';                    // un registro nunca pudo superar el tope defensivo: si ahora lo supera, el archivo es otro
+  }
   if (registrado.bytes !== undefined && bytes.length !== registrado.bytes) {
     return 'CAMBIO';
   }
@@ -255,7 +256,7 @@ function itfLegacy_leerRegistrado(registrado) {
     return { found: false, code: 'ITF_NOT_FOUND' };
   }
   var bytes = leido.blob.getBytes();
-  if (itfArchivo_sha256Hex(bytes) !== registrado.sha256) {
+  if (bytes.length > ITF_LEGACY_BYTES_MAX || itfArchivo_sha256Hex(bytes) !== registrado.sha256) {
     return { found: false, code: 'LEGACY_CAMBIO' };
   }
   return { found: true, blob: leido.blob };

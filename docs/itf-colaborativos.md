@@ -136,7 +136,7 @@ El código se compara exacto (sin recortes ni mayúsculas). El texto se normaliz
 ## 7. Archivo, hash e idempotencia
 
 - **Formatos:** `image/jpeg` e `image/png`, **verificados por los bytes reales** (JPEG `FF D8 FF`; PNG firma de 8 bytes + chunk `IHDR`). El MIME declarado tiene que coincidir con el contenido. Un PDF se rechaza (por MIME y por contenido). No es un antivirus ni verifica que la imagen se vea entera; no hay OCR.
-- **Tamaño máximo: 3 MB (3.145.728 bytes)**, igual que el storage de Fotos. Evidencia: los ITF de consulta actuales pesan unos 37–170 KB; 3 MB admite una foto de celular sin obligar a mandar un escaneo gigante por una API que transporta base64 dentro de JSON. Archivo vacío: error propio.
+- **Tamaño máximo de una PROPUESTA NUEVA: 3 MB (3.145.728 bytes)**, igual que el storage de Fotos (el legacy existente tiene un tope aparte, mucho mayor: §19.3). Evidencia: los ITF de consulta actuales pesan unos 37–170 KB; 3 MB admite una foto de celular sin obligar a mandar un escaneo gigante por una API que transporta base64 dentro de JSON. Archivo vacío: error propio.
 - **SHA-256** de los bytes reales con `Utilities.computeDigest` (`itfArchivo_sha256Hex`, digest inyectable en los tests). Es factible para estos tamaños (decenas a cientos de KB; hasta 3 MB en el peor caso); **no se midió** el tiempo en Apps Script. El hash sirve para deduplicar, para la idempotencia y para la integridad; **nunca** es un id público ni el `documentoId`.
 - **Idempotencia** (mismo `clientRequestId` del mismo usuario **y** mismo contenido): reintento exacto = el mismo resultado, sin evento nuevo ni secuencia nueva. Con otro contenido: `IDEMPOTENCY_CONFLICT`. Usuarios distintos pueden reutilizar el id; el email se normaliza.
 - **Duplicado documental** (mismo `sha256`) es otra cosa y se decide **después** de la idempotencia:
@@ -765,7 +765,7 @@ No se hizo nada de esto todavía (solo lectura). El preflight verifica el storag
 - **`preflightItfE9()`**: SOLO LECTURA. Informa `interruptor` (ENCENDIDO / APAGADO), `listoParaEncender` y 8 comprobaciones (`carpeta_legacy`, `legacy_variantes_mayusculas`, `hoja_itfeventos`, `usuarios_hoja`, `usuarios_columna_perfil_subir`, `usuarios_columna_perfil_validar`, `storage_configurado`, `storage_itf`) con un texto por cada una, más **contadores** (eventos, usuarios activos con `perfil_subir` / `perfil_validar`; nunca emails). **No** escribe propiedades, hojas, Drive ni cache; **no** crea la hoja ni la carpeta; **no** cambia permisos ni sharing; **no** crea triggers; **no** imprime ids de Drive, URL, secreto, id del spreadsheet ni emails (probado con valores centinela). Hace una única llamada al storage (`metaItf`).
 - **`itfE9Encender()`**: pone `ITF_E9_ACTIVO = SI` **solo si** el preflight está completamente en verde; si no, **no toca nada**, imprime qué falta y devuelve `{encendido:false, motivo:'PREFLIGHT_NO_OK', pendientes:[…]}`. Es la forma recomendada de encender.
 - **`itfE9Apagar()`**: pone `ITF_E9_ACTIVO = NO`. **Siempre funciona** (sin condiciones): es el **rollback inmediato**. No borra eventos ni documentos.
-- **`medirRendimientoItfE9()`**: SHA-256 de 100 KB / 500 KB / 1 MB / 3 MB / 12 MB sintéticos (12 MB = el legacy más grande medido) y disponibilidad legacy de 1 y 500 pozos (primera vez y repetida; la primera puede reconstruir el índice, que es el mecanismo de cache que ya usa la app). No es requisito del rollout; es opcional y no escribe nada salvo ese cache.
+- **`medirRendimientoItfE9()`**: SHA-256 de 100 KB / 500 KB / 1 MB / 3 MB / 12 MB sintéticos (12 MB = el legacy más grande medido; cada medición informa además `legacyRegistrable` y `propuestaNuevaAceptada`: a 12 MB debe dar `true` / `false`) y disponibilidad legacy de 1 y 500 pozos (primera vez y repetida; la primera puede reconstruir el índice, que es el mecanismo de cache que ya usa la app). No es requisito del rollout; es opcional y no escribe nada salvo ese cache.
 - Frontend: `scripts/medir_itf_consola.js` (pegar en la consola con sesión iniciada: `getItfAvailability` y `getProfile`) y, local, `scripts/medir_itf_propuesta.js`.
 - Forma **inequívoca** de ON / OFF: `itfE9Encender()` / `itfE9Apagar()` (devuelven y registran el resultado) o, a mano, Configuración del proyecto → Propiedades de la secuencia de comandos → `ITF_E9_ACTIVO` = `SI` (ON) o `NO` / borrar la propiedad (OFF). `preflightItfE9()` siempre informa el estado actual.
 
@@ -837,11 +837,11 @@ Categorías y acción **futura** (propuesta; **no se ejecuta nada** y **no se co
 
 | Cat. | Qué es | Acción futura propuesta |
 | --- | --- | --- |
-| **A. Limpia / segura** | `<wellId>.jpg` único, ≤ 3 MB, JPEG | ninguna: es el vigente legacy implícito |
+| **A. Limpia / segura** | `<wellId>.jpg` único (en cualquier capitalización de la extensión), JPEG, hasta el tope defensivo del legacy (20 MB) | ninguna: es el vigente legacy implícito |
 | **B. Nombre no canónico** | `DD-PPPP.JPG`, `.Jpg`, `.jpeg`, etc. | E9 los trata como «no se sabe» (no los muestra como vigente). Renombrar **a mano** a `DD-PPPP.jpg` previa verificación, o proponerlos por E9 |
 | **C. Duplicado** | dos o más archivos para el mismo pozo | revisión manual: elegir el correcto y **proponerlo por E9**; los duplicados quedan sin tocar (no se borran) |
 | **D. Huérfano** | nombre parece ITF pero el pozo no es válido (`00`, `20+`, `0000`) o no existe en el padrón | listar y decidir pozo por pozo; no se migra |
-| **E. Tamaño grande** | > 3 MB | no entra como propuesta E9 tal cual (el cliente lo reduce); el legacy se sigue sirviendo. Decidir si se reduce con la herramienta de reducción |
+| **E. Tamaño grande** | > 3 MB | **no es un problema para el legacy**: se lee, se registra, se reemplaza, se retira y se restaura igual (tope defensivo de 20 MB, §19.3). El límite de 3 MB es solo de las **propuestas nuevas** (el cliente las reduce) |
 | **F. Formato no soportado** | no es JPEG (PNG disfrazado, PDF, otro) | quedan fuera de E9 v1 (solo JPEG / PNG); proponer una versión en imagen |
 | **G. Requiere revisión manual** | cualquier otro caso (nombre ambiguo, tamaño nulo, auditoría incompleta) | revisión humana antes del rollout; con la auditoría incompleta no se afirma nada |
 
@@ -878,7 +878,7 @@ Secuencia (todo con el pozo de prueba): **A.** login nuevo → **B.** permisos v
 2. Elegir el **pozo de prueba** (§18.11).
 3. Completar `.gas.local.json` del storage (`pushHabilitado`, `deploymentId`) y desplegar el storage E9 (§18.3).
 4. Confirmar la persona del **smoke** y su correo en la hoja `Usuarios` (el correo **no** va en documentación).
-5. Mediciones reales en Apps Script (límite de 3 MB, tiempos; opcional, §18.4).
+5. Mediciones reales en Apps Script (límite de 3 MB de las propuestas nuevas, tiempo del hash de un legacy grande; opcional, §18.4).
 6. Deuda: limpieza completa de metadata (§18.1) y, si se quiere, Q3 (auditoría).
 
 ## 19. Auditoría legacy REAL (30/10/2026) y política de nombre revisada
@@ -929,11 +929,24 @@ Tamaños sobre los **16.602** candidatos:
 - La auditoría futura **reporta** las variantes (`variantesExtension: 3`, información de higiene histórica) pero **no las trata como bloqueo** si son únicas. No se corrigen ni se renombran (con la política nueva se **leen** tal cual están).
 - `preflightItfE9` agrega la comprobación `legacy_variantes_mayusculas`: verifica de **solo lectura** que el lookup resuelva como UNICO los tres pozos con `.JPG`. **Debe estar en verde antes de encender**: confirma en Drive real que la búsqueda de variantes funciona.
 
-### 19.3 Tamaño: 3 MB para NUEVAS propuestas, no para el legacy existente
+### 19.3 Tamaño: DOS límites separados (corregido)
 
-- El límite de **3 MB se mantiene para las propuestas nuevas** (el cliente reduce lo grande; servidor y storage lo exigen). Justificación medida: de 16.602 candidatos, solo **42** lo superan (~0,25 %) y el p99 es ~2,81 MB.
-- **No** se aplica a la **lectura** del legacy: un legacy de 11 MB se sigue sirviendo como hoy (`getProfile`, ZIP, disponibilidad). No se recodifica ni se comprime nada.
-- **Limitación conocida (deuda de performance / inventario, no bloquea):** para **reemplazar, retirar o restaurar** un legacy hay que registrarlo antes (hash SHA-256 de sus bytes) y el registro **rechaza** archivos de más de 3 MB (`LEGACY_FORMATO_INVALIDO`). Los **42** pozos con legacy > 3 MB se leen igual, pero **no se pueden reemplazar por E9 v1** hasta que se decida (a) redimensionar a mano ese legacy o (b) subir el límite del registro tras medir el costo del hash (`medirRendimientoItfE9`). No se modifica nada ahora.
+La primera versión de esta sección dejaba una limitación: el registro de la huella legacy reutilizaba el límite de 3 MB y los **42** archivos históricos más grandes no se podían reemplazar, retirar ni restaurar. **Eso se corrigió** antes de cualquier rollout: los dos límites ya no se mezclan.
+
+| | Límite A: PROPUESTA NUEVA | Límite B: LEGACY EXISTENTE |
+| --- | --- | --- |
+| Valor | **3 MB** (3.145.728 bytes), `ITF_ARCHIVO_BYTES_MAX` | **20 MB** (20.971.520 bytes), `ITF_LEGACY_BYTES_MAX` — tope **defensivo** |
+| A qué aplica | solo a lo que sube una persona: navegador → backend → storage (JPEG / PNG nuevos) | solo a las operaciones que cargan los bytes completos de un archivo institucional existente: **registrar** su huella antes de reemplazarlo / retirarlo / restaurarlo, y **verificar** esa huella al restaurar o abrir el histórico |
+| Validador | `itfArchivo_validarPropuesta` (`itfArchivo_validar` es el mismo, con el nombre histórico) | `itfArchivo_validarLegacy` |
+| Qué más exige | JPEG / PNG real por los bytes, MIME coincidente, no vacío | JPEG / PNG real por los bytes y no vacío; **no** mira el MIME declarado (no lo hay) |
+| Si se supera | `ARCHIVO_DEMASIADO_GRANDE` | `LEGACY_FORMATO_INVALIDO` con el mensaje «supera el límite defensivo», **fail-closed**: no se hashea ni se escribe nada |
+
+- **Justificación del 20 MB:** la auditoría real (30/10/2026) midió 16.602 candidatos con un máximo de **11.540.150 bytes (≈ 11,54 MB)**; **42** superan los 3 MB (~0,25 %) y el p99 es ≈ 2,81 MB. 20 MB deja casi el doble de margen sobre el máximo real, evita cargar a memoria algo absurdo y **no** mezcla la política de subida con la de los archivos institucionales existentes.
+- **Legacy existente (también los 42 archivos de más de 3 MB):** se **lee** (`getProfile`, ZIP, disponibilidad) sin límite de 3 MB, y se **registra / reemplaza / retira / restaura** con normalidad. **No se recodifica, no se comprime y no se mueve** ningún archivo. El hash SHA-256 se calcula sobre los bytes reales; si cambia un solo byte desde el registro, la restauración da `LEGACY_CAMBIO`.
+- **Propuesta nueva:** sigue en 3 MB en el navegador (que reduce), en el backend (`itfArchivo_validarPropuesta`, `Api.js`) y en el storage (`STORAGE_ITF_MAX_BYTES`). Una propuesta de 3,1 MB sigue rechazada aunque el pozo tenga un legacy de 11 MB.
+- **Dónde se aplica cada uno:** `ItfLegacyProvider.js` (`itfLegacy_huellaDeBlob`, `itfLegacy_verificarHuella`, `itfLegacy_leerRegistrado`) usa el límite B; `ItfDominioService.js` valida las filas `ITF_LEGACY_REGISTRADO` (lectura de la hoja y construcción del evento) con el límite B y las filas `ITF_PROPUESTO` con el A (`itfDominio_metadataDeCampos(campos, bytesMax)`); `ItfService.js` valida las propuestas con el A.
+- **Preflight:** `medirRendimientoItfE9` conserva el hash sintético de **12 MB** y comprueba que se puede calcular, que el legacy de ese tamaño es registrable (límite B) y que **no** se dispara el límite de propuesta (la propuesta de 12 MB se rechaza). **El rendimiento real (tiempo del SHA-256 de 12 MB en Apps Script) no está medido**: se mide cuando corra en Apps Script; no se inventa.
+- **Lo que queda abierto (no bloquea):** el costo real de hashear un legacy grande dentro del `ScriptLock` y del tiempo máximo de ejecución. Con ~11,5 MB se espera sin problema (el hash de 3 MB local tardó ≈ 45 ms), pero hay que **medirlo** en Apps Script.
 
 ### 19.4 Lo que no coincide con el patrón (762)
 
@@ -942,5 +955,9 @@ Estos 762 **no se corrigen, no se renombran y no se incorporan automáticamente 
 ### 19.5 Deudas registradas
 
 1. Inventario: los 762 nombres fuera del patrón y los 3 `.JPG` (higiene; sin acción por ahora).
-2. Performance: los 42 legacy > 3 MB (lectura OK; sin reemplazo por E9 v1; sin recompresión automática).
+2. Performance: medir en Apps Script el costo real del hash de un legacy grande (hasta ≈ 11,54 MB; los 42 archivos de más de 3 MB **sí** se reemplazan, retiran y restauran: §19.3). Sin recompresión automática.
 3. Limpieza completa de metadata (EXIF) de las imágenes (ver §18.1).
+
+### 19.6 Corrección posterior (31/10/2026): límites de tamaño separados
+
+Antes del primer `gas:push` de esta política se corrigió la limitación del punto 19.3 original: el límite de **3 MB** quedó **solo para propuestas nuevas** y el legacy existente tiene su propio tope defensivo de **20 MB** (validadores `itfArchivo_validarPropuesta` / `itfArchivo_validarLegacy`). Los **42** archivos históricos de más de 3 MB (máximo auditado ≈ 11,54 MB) son **plenamente reemplazables, retirables y restaurables**. Probado con legacy de 2 MB, 3 MB exactos, 3,1 MB, 11,54 MB, 12 MB y 20 MB exactos (registra, reemplaza, retira, restaura y detecta un hash cambiado), con rechazo explícito por encima de 20 MB y con la propuesta nueva de 3,1 MB todavía rechazada. 18 mutaciones del límite, todas detectadas.

@@ -9,7 +9,13 @@
 //   PNG   89 50 4E 47 0D 0A 1A 0A + chunk IHDR de 13 bytes   (firma + primer chunk obligatorio)
 // Esto NO es un antivirus ni garantiza que la imagen se vea entera: detecta archivos vacios, de otro formato o con la cabecera rota. No hay OCR ni interpretacion del contenido.
 //
-// TAMANO MAXIMO: 3 MB (3.145.728 bytes), el mismo tope que el storage de Fotos (storage/src/StorageDrive.js). Evidencia (E9-1): los ITF de la carpeta de consulta (THUMB) son derivados
+// DOS LIMITES DE TAMANO, SEPARADOS (no se mezclan nunca):
+//   A. PROPUESTA NUEVA: ITF_ARCHIVO_BYTES_MAX = 3 MB. Aplica SOLO a lo que sube una persona (navegador -> backend -> storage). Validador: itfArchivo_validarPropuesta.
+//   B. LEGACY EXISTENTE: ITF_LEGACY_BYTES_MAX = 20 MB. Es un tope DEFENSIVO para las operaciones que cargan los bytes completos de un archivo institucional existente (registrar su huella antes de
+//      reemplazarlo / retirarlo / restaurarlo, y verificarla). La auditoria real midio 17.364 archivos con un maximo de 11,54 MB (42 sobre 3 MB): 20 MB deja margen y no hay recodificacion ni movimiento.
+//      Validador: itfArchivo_validarLegacy. Nunca se le aplica el limite A.
+//
+// TAMANO MAXIMO DE UNA PROPUESTA: 3 MB (3.145.728 bytes), el mismo tope que el storage de Fotos (storage/src/StorageDrive.js). Evidencia (E9-1): los ITF de la carpeta de consulta (THUMB) son derivados
 // comprimidos de unos 37-170 KB (escaneos originales de ~6668x5191 reducidos a ~2958x2303, calidad 52); 3 MB deja un margen amplio para una foto de celular sin obligar a mandar un
 // escaneo gigante por una API que transporta todo en base64 dentro de JSON. Si algun dia hace falta mas, se sube aca (y en el storage) con una decision explicita.
 //
@@ -17,6 +23,7 @@
 // de enteros 0..255, que es lo que usan los tests.
 var ITF_MIME_PERMITIDOS = ['image/jpeg', 'image/png'];
 var ITF_ARCHIVO_BYTES_MAX = 3 * 1024 * 1024;
+var ITF_LEGACY_BYTES_MAX = 20 * 1024 * 1024;
 var ITF_SHA256_REGEX = /^[0-9a-f]{64}$/;
 var ITF_STORAGE_ID_REGEX = /^[A-Za-z0-9_-]{10,200}$/;
 var ITF_NOMBRE_ORIGINAL_MAX = 150;
@@ -67,7 +74,7 @@ function itfArchivo_detectarFormato(bytes) {
 // Veredicto de un archivo: entrada {mimeType, bytes}. Orden de los controles (el primero que falla manda):
 //   INVALID_ARCHIVO (no son bytes) -> ARCHIVO_VACIO -> ARCHIVO_DEMASIADO_GRANDE -> MIME_NO_PERMITIDO (incluye application/pdf) -> FORMATO_NO_RECONOCIDO (magic bytes) -> MIME_NO_COINCIDE.
 // {ok:true, mimeType (el detectado), bytes (el largo real)} | {ok:false, code, message} (sin eco del contenido).
-function itfArchivo_validar(entrada) {
+function itfArchivo_validarPropuesta(entrada) {
   var e = entrada !== null && typeof entrada === 'object' ? entrada : {};
   if (!itfArchivo_esListaDeBytes(e.bytes)) {
     return itfArchivo_error('INVALID_ARCHIVO', 'el archivo no es una secuencia de bytes');
@@ -88,6 +95,33 @@ function itfArchivo_validar(entrada) {
   }
   if (detectado !== declarado) {
     return itfArchivo_error('MIME_NO_COINCIDE', 'el tipo declarado no coincide con el contenido');
+  }
+  return { ok: true, mimeType: detectado, bytes: e.bytes.length };
+}
+
+// Nombre historico del validador de PROPUESTAS (limite de 3 MB): se conserva para no romper a quien ya lo llama. Para un archivo legacy existente NO se usa (ver itfArchivo_validarLegacy).
+function itfArchivo_validar(entrada) {
+  return itfArchivo_validarPropuesta(entrada);
+}
+
+// Veredicto de un archivo LEGACY EXISTENTE (solo para registrar su huella): entrada {bytes}. JPEG o PNG real por magic bytes, no vacio y como maximo ITF_LEGACY_BYTES_MAX (tope defensivo, NO el de 3 MB
+// de las propuestas). Fail-closed: lo que no cumple se rechaza con LEGACY_FORMATO_INVALIDO y un mensaje explicito (el codigo existente del catalogo; no se inventa otro).
+// {ok:true, mimeType (el detectado), bytes (el largo real)} | {ok:false, code:'LEGACY_FORMATO_INVALIDO', message}.
+function itfArchivo_validarLegacy(entrada) {
+  var e = entrada !== null && typeof entrada === 'object' ? entrada : {};
+  var invalido = function (mensaje) { return itfArchivo_error('LEGACY_FORMATO_INVALIDO', mensaje); };
+  if (!itfArchivo_esListaDeBytes(e.bytes)) {
+    return invalido('el archivo legacy no es una secuencia de bytes');
+  }
+  if (e.bytes.length === 0) {
+    return invalido('el archivo legacy esta vacio');
+  }
+  if (e.bytes.length > ITF_LEGACY_BYTES_MAX) {
+    return invalido('el archivo legacy supera el limite defensivo de ' + ITF_LEGACY_BYTES_MAX + ' bytes');
+  }
+  var detectado = itfArchivo_detectarFormato(e.bytes);
+  if (detectado === null) {
+    return invalido('el archivo legacy no es una imagen JPEG o PNG valida');
   }
   return { ok: true, mimeType: detectado, bytes: e.bytes.length };
 }
@@ -132,12 +166,15 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     ITF_MIME_PERMITIDOS,
     ITF_ARCHIVO_BYTES_MAX,
+    ITF_LEGACY_BYTES_MAX,
     ITF_SHA256_REGEX,
     ITF_STORAGE_ID_REGEX,
     ITF_NOMBRE_ORIGINAL_MAX,
     ITF_NOMBRE_ORIGINAL_NEUTRO,
     itfArchivo_detectarFormato,
     itfArchivo_validar,
+    itfArchivo_validarPropuesta,
+    itfArchivo_validarLegacy,
     itfArchivo_sha256Hex,
     itfArchivo_nombreOriginal
   };

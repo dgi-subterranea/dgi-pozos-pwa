@@ -1,6 +1,6 @@
 // ItfService (E9-3), ESCRITURA: itfService_ejecutar con hoja en memoria, Drive falso y storage falso. Lock + relectura adentro del lock, carrera simulada, reintento, conflicto, doble evento
 // (registro del legacy + aprobacion) en UNA operacion, fallo parcial, huella del legacy, compensacion del archivo temporal, retiro de la PROPIA propuesta, privacidad. Api.js no participa.
-const { crearEntorno, depsDe, JPEG, PNG, sha256 } = require('./itfEntorno');
+const { crearEntorno, depsDe, JPEG, JPEG_GRANDE, PNG, sha256 } = require('./itfEntorno');
 const H = require('./itfHelper');
 
 const { ana, val, ambos, lee } = H.USUARIOS;
@@ -434,6 +434,81 @@ describe('RECHAZAR / RETIRAR / REVERTIR y la huella del legacy', () => {
     const a = docDe(proponer(ana, 1));
     E.drive.estado.fallar = 'Drive caido';
     expect(ej(val, { accion: 'RECHAZAR', documentoId: a, motivoCodigo: 'INCOMPLETO', clientRequestId: crid() }).ok).toBe(true);
+  });
+});
+
+// El limite de 3 MB es SOLO de las propuestas NUEVAS. Un legacy existente (la auditoria real midio hasta 11,54 MB; 42 archivos sobre 3 MB) se registra, reemplaza, retira y restaura sin recodificarlo ni moverlo,
+// con su propio tope defensivo de 20 MB (fail-closed por encima).
+describe('legacy GRANDE: ciclo de vida completo, con limites de propuesta y de legacy separados', () => {
+  const MAX_AUDITADO = 11540150;
+  const MB20 = 20 * 1024 * 1024;
+  const conLegacy = (bytes) => entorno({ archivos: [{ id: 'legacy-' + W, name: W + '.jpg', bytes: bytes }] });
+  const reemplazarLegacy = () => { const p = proponer(ana, 1); return { p: p, a: aprobar(val, docDe(p), LEGACY_ID) }; };
+
+  test.each([
+    ['2 MB', 2 * 1024 * 1024], ['3 MB exactos', 3 * 1024 * 1024], ['3,1 MB', 3250586], ['11,54 MB (el maximo auditado)', MAX_AUDITADO], ['12 MB', 12 * 1024 * 1024], ['20 MB exactos', MB20]
+  ])('reemplazar un legacy de %s por una propuesta nueva: registra el legacy (hash real) + aprueba la nueva', (_n, tam) => {
+    const bytes = JPEG_GRANDE(tam, 5);
+    conLegacy(bytes);
+    const { p, a } = reemplazarLegacy();
+    expect(a).toMatchObject({ ok: true, accion: 'ESCRIBIR', eventosEscritos: 2 });
+    const ev = eventos();
+    expect(ev.map((e) => e.evento)).toEqual(['ITF_PROPUESTO', 'ITF_LEGACY_REGISTRADO', 'ITF_APROBADO']);
+    expect(ev[1]).toMatchObject({ documentoId: LEGACY_ID, mimeType: 'image/jpeg', bytes: tam, sha256: sha256(bytes), storageFileId: 'legacy-' + W });
+    expect(vigente()).toMatchObject({ estado: 'SI', origen: 'E9', documentoId: docDe(p) });
+  });
+  test('retirar un legacy de 11,54 MB: registra su huella y despues el retiro (dos filas); el pozo queda SIN ITF', () => {
+    conLegacy(JPEG_GRANDE(MAX_AUDITADO, 6));
+    const r = ej(val, { accion: 'RETIRAR', documentoId: LEGACY_ID, motivoCodigo: 'DESACTUALIZADO', clientRequestId: crid() });
+    expect(r).toMatchObject({ ok: true, eventosEscritos: 2 });
+    expect(eventos().map((e) => e.evento)).toEqual(['ITF_LEGACY_REGISTRADO', 'ITF_RETIRADO']);
+    expect(eventos()[0].bytes).toBe(MAX_AUDITADO);
+    expect(vigente()).toMatchObject({ estado: 'NO' });
+  });
+  test('restaurar un legacy de 11,54 MB: se vuelve a leer, recalcula el hash y vuelve a ser vigente', () => {
+    conLegacy(JPEG_GRANDE(MAX_AUDITADO, 7));
+    const { p } = reemplazarLegacy();
+    E.drive.calls.getBlob = 0;
+    const r = ej(val, { accion: 'REVERTIR', documentoId: LEGACY_ID, documentoReemplazadoId: docDe(p), motivoCodigo: 'ERROR_DE_APROBACION', clientRequestId: crid() });
+    expect(r).toMatchObject({ ok: true, eventosEscritos: 1 });
+    expect(E.drive.calls.getBlob).toBeGreaterThanOrEqual(1);
+    expect(vigente()).toMatchObject({ estado: 'SI', origen: 'LEGACY', documentoId: LEGACY_ID });
+    expect(eventos().map((e) => e.evento)).toEqual(['ITF_PROPUESTO', 'ITF_LEGACY_REGISTRADO', 'ITF_APROBADO', 'ITF_REVERTIDO']);
+  });
+  test('hash cambiado en un legacy de 11,54 MB (un byte): LEGACY_CAMBIO, no se restaura y nada se escribe', () => {
+    const bytes = JPEG_GRANDE(MAX_AUDITADO, 8);
+    conLegacy(bytes);
+    const { p } = reemplazarLegacy();
+    bytes[6000000] = 1;
+    const antes = filas().length;
+    expect(ej(val, { accion: 'REVERTIR', documentoId: LEGACY_ID, documentoReemplazadoId: docDe(p), motivoCodigo: 'ERROR_DE_APROBACION', clientRequestId: crid() })).toMatchObject({ ok: false, code: 'LEGACY_CAMBIO' });
+    expect(filas()).toHaveLength(antes);
+    expect(vigente()).toMatchObject({ origen: 'E9' });
+  });
+  test('un legacy por encima del tope defensivo (20 MB + 1): reemplazar y retirar fallan de forma explicita y fail-closed (LEGACY_FORMATO_INVALIDO), sin escribir nada', () => {
+    conLegacy(JPEG_GRANDE(MB20 + 1, 2));
+    expect(proponer(ana, 1)).toMatchObject({ ok: false, code: 'LEGACY_FORMATO_INVALIDO' });          // ya al proponer: no se sube nada que despues no se pueda registrar
+    expect(E.storage.guardados).toBe(0);
+    conLegacy(JPEG_GRANDE(300, 2));
+    const p = proponer(ana, 1);
+    E.drive.estado.archivos[0].bytes = JPEG_GRANDE(MB20 + 1, 2);                                     // el legacy crecio por encima del tope despues de proponer
+    const antes = filas().length;
+    expect(aprobar(val, docDe(p), LEGACY_ID)).toMatchObject({ ok: false, code: 'LEGACY_FORMATO_INVALIDO' });
+    expect(ej(val, { accion: 'RETIRAR', documentoId: LEGACY_ID, motivoCodigo: 'DESACTUALIZADO', clientRequestId: crid() })).toMatchObject({ ok: false, code: 'LEGACY_FORMATO_INVALIDO' });
+    expect(filas()).toHaveLength(antes);
+  });
+  test('una propuesta NUEVA de 3,1 MB sigue rechazada (ARCHIVO_DEMASIADO_GRANDE), aunque el pozo tenga un legacy grande: nada se sube ni se escribe', () => {
+    conLegacy(JPEG_GRANDE(MAX_AUDITADO, 3));
+    const r = ej(ana, { accion: 'PROPONER', wellId: W, clientRequestId: crid() }, { archivo: { bytes: JPEG_GRANDE(3250586, 1), mimeType: 'image/jpeg', nombreOriginal: 'grande.jpg' } });
+    expect(r).toMatchObject({ ok: false, code: 'ARCHIVO_DEMASIADO_GRANDE' });
+    expect(filas()).toHaveLength(0);
+    expect(E.storage.guardados).toBe(0);
+  });
+  test('una propuesta nueva de exactamente 3 MB entra aunque el legacy sea de 11,54 MB', () => {
+    conLegacy(JPEG_GRANDE(MAX_AUDITADO, 3));
+    const r = ej(ana, { accion: 'PROPONER', wellId: W, clientRequestId: crid() }, { archivo: { bytes: JPEG_GRANDE(3 * 1024 * 1024, 1), mimeType: 'image/jpeg', nombreOriginal: 'justo.jpg' } });
+    expect(r).toMatchObject({ ok: true });
+    expect(E.storage.guardados).toBe(1);
   });
 });
 

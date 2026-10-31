@@ -165,7 +165,9 @@ function itfDominio_idDocumento(v) {
 // --- Metadata de un documento ---
 
 // Campos {mimeType, bytes, sha256, storageFileId, nombreOriginal} -> {ok:true, meta} | {ok:false}. Es la MISMA regla para leer una fila y para validar lo que va a escribirse.
-function itfDominio_metadataDeCampos(c) {
+// bytesMax: tope de tamano. Por omision el de las PROPUESTAS (3 MB); el registro del legacy EXISTENTE pasa ITF_LEGACY_BYTES_MAX (tope defensivo aparte). Los dos limites no se mezclan.
+function itfDominio_metadataDeCampos(c, bytesMax) {
+  var tope = typeof bytesMax === 'number' ? bytesMax : ITF_ARCHIVO_BYTES_MAX;
   var d = c !== null && typeof c === 'object' ? c : {};
   var mime = typeof d.mimeType === 'string' ? d.mimeType.trim() : '';
   if (ITF_MIME_PERMITIDOS.indexOf(mime) < 0) {
@@ -173,7 +175,7 @@ function itfDominio_metadataDeCampos(c) {
   }
   var b = d.bytes;
   var bytes = typeof b === 'number' ? b : (typeof b === 'string' && /^\d+$/.test(b.trim()) ? Number(b.trim()) : NaN);
-  if (!isFinite(bytes) || Math.floor(bytes) !== bytes || bytes < 1 || bytes > ITF_ARCHIVO_BYTES_MAX) {
+  if (!isFinite(bytes) || Math.floor(bytes) !== bytes || bytes < 1 || bytes > tope) {
     return { ok: false };
   }
   var sha = typeof d.sha256 === 'string' ? d.sha256.trim() : '';
@@ -308,7 +310,7 @@ function itfDominio_parsearEvento(e, orden) {
   var camposMeta = { mimeType: itfDominio_texto(e.mimeType), bytes: (e.bytes === null || e.bytes === undefined) ? '' : e.bytes, sha256: itfDominio_texto(e.sha256), storageFileId: itfDominio_texto(e.storageFileId), nombreOriginal: itfDominio_texto(e.nombreOriginal) };
   var meta = null;
   if (conMetadata) {
-    var m = itfDominio_metadataDeCampos(camposMeta);
+    var m = itfDominio_metadataDeCampos(camposMeta, esLegacy ? ITF_LEGACY_BYTES_MAX : ITF_ARCHIVO_BYTES_MAX);
     if (!m.ok) {
       return falla('METADATA_INVALIDA');
     }
@@ -985,7 +987,7 @@ function itfDominio_contextoPozo(wellId, ctx) {
 // El evento de registro del legacy, a partir de la huella que arma el servicio (lee el archivo, calcula el hash). null si la huella no es valida.
 function itfDominio_eventoLegacy(wellId, snapshot, comun) {
   var s = snapshot !== null && typeof snapshot === 'object' ? snapshot : {};
-  var m = itfDominio_metadataDeCampos(s);
+  var m = itfDominio_metadataDeCampos(s, ITF_LEGACY_BYTES_MAX);      // el legacy existente tiene su propio tope, no el de 3 MB de las propuestas
   if (!m.ok) {
     return null;
   }

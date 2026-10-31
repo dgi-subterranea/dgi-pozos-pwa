@@ -7,8 +7,11 @@ const H = require('./itfHelper');
 
 const JPEG = (n, relleno) => { const b = new Uint8Array(n); b[0] = 0xFF; b[1] = 0xD8; b[2] = 0xFF; if (relleno !== undefined) { for (let i = 3; i < n; i += 1) { b[i] = relleno; } } return Array.from(b).map((v) => (v > 127 ? v - 256 : v)); };
 const PNG = (n) => { const b = new Uint8Array(Math.max(n, 16)); [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, 0x49, 0x48, 0x44, 0x52].forEach((v, i) => { b[i] = v; }); return Array.from(b).map((v) => (v > 127 ? v - 256 : v)); };
-const sha256 = (bytes) => crypto.createHash('sha256').update(Buffer.from(bytes.map((v) => v & 0xFF))).digest('hex');
-const digestNode = (b) => Array.from(crypto.createHash('sha256').update(Buffer.from(Array.from(b).map((v) => v & 0xFF))).digest()).map((v) => (v > 127 ? v - 256 : v));
+// JPEG de n bytes como Int8Array (bytes CON SIGNO, como Blob.getBytes() de Apps Script) sin copias: para los casos de 3 a 20 MB (legacy grande) sin gastar segundos ni cientos de MB en arrays comunes.
+const JPEG_GRANDE = (n, relleno) => { const b = new Int8Array(n); b.fill(relleno === undefined ? 7 : relleno); b[0] = -1; b[1] = -40; b[2] = -1; return b; };
+const crudos = (bytes) => (bytes instanceof Int8Array ? Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length) : Buffer.from(Array.from(bytes).map((v) => v & 0xFF)));
+const sha256 = (bytes) => crypto.createHash('sha256').update(crudos(bytes)).digest('hex');
+const digestNode = (b) => Array.from(crypto.createHash('sha256').update(crudos(b)).digest()).map((v) => (v > 127 ? v - 256 : v));
 
 function iterador(lista) {
   let i = 0;
@@ -121,4 +124,4 @@ function depsDe(entorno, extra) {
   return Object.assign(base, extra || {});
 }
 
-module.exports = { JPEG, PNG, sha256, digestNode, crearDrive, crearStorage, crearEntorno, depsDe, iterador };
+module.exports = { JPEG, JPEG_GRANDE, PNG, sha256, digestNode, crearDrive, crearStorage, crearEntorno, depsDe, iterador };
