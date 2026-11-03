@@ -847,7 +847,8 @@ function handleRegisterDescargaItf(sessionToken, resumen) {
 // (lista BLANCA de campos: wellId, imageBase64, mimeType, nombreOriginal, clientRequestId; documentoId, hash, bytes, storageFileId, email, nombre, timestamp o estado se RECHAZAN) -> servicio.
 // El actor (email, nombre) sale SIEMPRE de la sesion + hoja Usuarios. Con el interruptor encendido y la hoja ItfEventos o el storage faltantes: SERVICE_UNAVAILABLE / ITF_STORAGE_NO_CONFIGURADO
 // (nada se crea solo, y no hay fallback a la carpeta legacy). Historial: UNA fila por propuesta escrita (accion + pozo + OK), sin base64, sin hash, sin id de storage, sin nombre del archivo; un
-// reintento idempotente NO escribe otra. Sin Telegram. Respuesta: {documentoId, wellId, estado:'PROPUESTO', mimeType, bytes, nombreOriginal, timestampUtc, warnings} y nada mas (ni storageFileId, ni hash,
+// reintento idempotente NO escribe otra. Sin Telegram. Aviso por email a los validadores SOLO tras escribir la propuesta (avisarValidadoresPropuestaItf: best-effort, una fila mas en Historial con el resultado, nunca
+// cambia la respuesta). Respuesta: {documentoId, wellId, estado:'PROPUESTO', mimeType, bytes, nombreOriginal, timestampUtc, warnings} y nada mas (ni storageFileId, ni hash,
 // ni email, ni clientRequestId, ni secuencia).
 // Codigos: INVALID_REQUEST / INVALID_WELL_ID / INVALID_ARCHIVO (entrada), MIME_NO_PERMITIDO / FORMATO_NO_RECONOCIDO / MIME_NO_COINCIDE / ARCHIVO_VACIO / ARCHIVO_DEMASIADO_GRANDE (archivo),
 // PERMISSION_DENIED, ITF_E9_INACTIVO, POZO_NOT_FOUND, LEGACY_AMBIGUO / LEGACY_NOMBRE_NO_CANONICO / LEGACY_FORMATO_INVALIDO / ITF_STATE_UNKNOWN (requiere revision), TOO_MANY_PENDING,
@@ -920,6 +921,7 @@ function handleProponerItf(sessionToken, body) {
   }
   if (resultado.accion === 'ESCRIBIR') {
     logHistoryEvent(session.email, 'proponerItf', b.wellId, 'OK');
+    avisarValidadoresPropuestaItf(session.email, access.nombre, b.wellId, resultado);
   }
   var propuesta = resultado.propuesta;
   return {
@@ -935,6 +937,35 @@ function handleProponerItf(sessionToken, body) {
       warnings: []
     }
   };
+}
+
+// Aviso por email a quienes validan ITF (PropuestaNotificacion.js, tipo 'ITF': usuarios ACTIVOS con perfil y perfil_validar = SI) cuando una propuesta NUEVA quedo REALMENTE escrita (ITF_PROPUESTO confirmado).
+// Solo se llama con accion 'ESCRIBIR': un intento fallido nunca llega hasta aca y un reintento idempotente ('REINTENTO') tampoco. Es best-effort: cualquier problema (sin permiso de MailApp, cuota, hoja de
+// Usuarios) se registra en Historial (sin cuerpo ni direcciones) y NUNCA cambia la respuesta ni deshace la propuesta (no hay rollback de storage ni de evento). El email no lleva imagen, documentoId, storage, hash,
+// clientRequestId ni direcciones.
+function avisarValidadoresPropuestaItf(email, nombre, wellId, resultado) {
+  var aviso;
+  try {
+    aviso = propuestaNotificacion_notificar({
+      tipo: 'ITF',
+      objetoId: wellId,
+      wellId: wellId,
+      propuestaId: resultado.resultado.documentoId,
+      proponente: { email: email, nombre: nombre },
+      timestamp: resultado.propuesta.timestampUtc
+    });
+  } catch (err) {
+    aviso = { resultado: 'ERROR' };
+  }
+  var texto = null;
+  try {
+    texto = propuestaNotificacion_textoAuditoria(aviso);
+  } catch (err) {
+    texto = null;
+  }
+  if (texto) {
+    logHistoryEvent(email, 'notificarPropuestaItf', wellId, texto);
+  }
 }
 
 // --- E9-5: moderacion institucional de ITF (local, NO productivo) ---
