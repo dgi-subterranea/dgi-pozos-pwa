@@ -780,6 +780,72 @@ describe('procesarPendientes: limite por corrida y una que falla no bloquea a la
   });
 });
 
+describe('best-effort total: el subsistema de avisos NUNCA lanza, ni siquiera cuando falla el log o el texto del error es ilegible', () => {
+  const logCaido = () => { global.Logger = { log: jest.fn(() => { throw new Error('logger caido'); }) }; };
+
+  test('notificar con el outbox roto y el log caido: devuelve OUTBOX_NO_DISPONIBLE sin lanzar', () => {
+    global.propuestaNotificacionesRepository_asegurar = jest.fn(() => { throw new Error('hoja inaccesible'); });
+    logCaido();
+    expect(() => notificar()).not.toThrow();
+    expect(notificar().resultado).toBe('OUTBOX_NO_DISPONIBLE');
+    expect(enviados).toHaveLength(0);
+  });
+
+  test('notificar con Usuarios ilegible, MailApp caido y el log caido: queda ERROR en la hoja y no lanza', () => {
+    global.sheetUserRepository_listarConPermisos = jest.fn(() => { throw new Error('sin Usuarios'); });
+    logCaido();
+    expect(notificar().resultado).toBe('ERROR');
+    expect(outbox()[0]).toMatchObject({ estado: 'ERROR', ultimoError: 'LECTURA_USUARIOS' });
+  });
+
+  test('un fallo de MailApp con el log caido: el intento se cuenta y queda reintentable', () => {
+    cuota.falloEnvio = () => true;
+    logCaido();
+    expect(notificar().resultado).toBe('FALLO');
+    expect(outbox()[0]).toMatchObject({ estado: 'ERROR', intentos: 1, ultimoError: 'FALLO (0 de 2 enviados)' });
+  });
+
+  test('registrarResultado lanza y el log tambien: ni entregar ni notificar lanzan; la fila no se pierde', () => {
+    global.propuestaNotificacionesRepository_registrarResultado = jest.fn(() => { throw new Error('la hoja ya no existe'); });
+    logCaido();
+    expect(() => notificar()).not.toThrow();
+    expect(outbox()).toHaveLength(1);
+    expect(enviados).toHaveLength(2);
+  });
+
+  test('un estado desconocido en la fila con el log caido: entregar no lanza y no toca la fila', () => {
+    notificar({ propuestaId: ID2 });
+    logCaido();
+    const fila = Object.assign({}, outbox()[0], { estado: 'RARO' });
+    expect(() => N.propuestaNotificacion_entregar(fila)).not.toThrow();
+    expect(N.propuestaNotificacion_entregar(fila).resultado).toBe('ERROR');
+  });
+
+  test('un error inesperado FUERA de los pasos controlados (fila nula) no sale de entregar: resultado ERROR', () => {
+    expect(() => N.propuestaNotificacion_entregar(null)).not.toThrow();
+    expect(N.propuestaNotificacion_entregar(null).resultado).toBe('ERROR');
+    expect(log()).toContain('error inesperado');
+  });
+
+  test('un error inesperado al leer el pedido (propiedad que lanza) no sale de notificar: resultado ERROR, sin fila ni email', () => {
+    const hostil = { get tipo() { throw new Error('getter hostil'); } };
+    expect(() => N.propuestaNotificacion_notificar(hostil)).not.toThrow();
+    expect(N.propuestaNotificacion_notificar(hostil).resultado).toBe('ERROR');
+    expect(outbox()).toHaveLength(0);
+    expect(enviados).toHaveLength(0);
+  });
+
+  test('propuestaNotificacion_errorSeguro con un error cuyo mensaje no se puede leer: devuelve un texto fijo y no lanza', () => {
+    const raro = { get message() { throw new Error('ilegible'); }, toString() { throw new Error('ilegible'); } };
+    expect(N.propuestaNotificacion_errorSeguro(raro)).toBe('error sin detalle');
+  });
+
+  test('propuestaNotificacion_errorSeguro sigue enmascarando emails y acotando a 160 caracteres', () => {
+    expect(N.propuestaNotificacion_errorSeguro(new Error('fallo con ana@example.com'))).toBe('fallo con <email>');
+    expect(N.propuestaNotificacion_errorSeguro(new Error('x'.repeat(500)))).toHaveLength(160);
+  });
+});
+
 describe('diagnosticoPropuestasItfEmail (editor): informa y NO envia ni escribe', () => {
   test('muestra cuota, URL, validadores enmascarados y el estado del outbox', () => {
     usuarios = [{ email: 'valeria@example.com', nombre: 'Valeria' }];

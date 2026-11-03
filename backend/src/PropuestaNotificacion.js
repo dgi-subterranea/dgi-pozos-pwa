@@ -94,8 +94,21 @@ function propuestaNotificacion_formatearFecha(iso) {
 
 // Texto de un error para el log o para la hoja: sin direcciones de email y acotado.
 function propuestaNotificacion_errorSeguro(err) {
-  var t = String(err && err.message ? err.message : err);
-  return t.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+/g, '<email>').slice(0, 160);
+  try {
+    var t = String(err && err.message ? err.message : err);
+    return t.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+/g, '<email>').slice(0, 160);
+  } catch (e) {
+    return 'error sin detalle';
+  }
+}
+
+// Log que NUNCA lanza: los manejadores de error del subsistema de avisos no pueden convertirse en un error nuevo (ni siquiera si Logger falla).
+function propuestaNotificacion_log(texto) {
+  try {
+    Logger.log(texto);
+  } catch (e) {
+    // sin log disponible: no hay nada mas que hacer
+  }
 }
 
 // Ordena el pedido: {config, tipo, wellId, propuestaId, nombre, emailProponente, timestamp, permisosValidador}. null = no se puede avisar (tipo desconocido, sin propuestaId o permisos invalidos).
@@ -183,7 +196,7 @@ function propuestaNotificacion_guardar(notificacionId, cambios) {
   try {
     return propuestaNotificacionesRepository_registrarResultado(notificacionId, cambios) === true;
   } catch (err) {
-    Logger.log('Aviso de propuesta: no se pudo guardar el resultado en la hoja del outbox: ' + propuestaNotificacion_errorSeguro(err));
+    propuestaNotificacion_log('Aviso de propuesta: no se pudo guardar el resultado en la hoja del outbox: ' + propuestaNotificacion_errorSeguro(err));
     return false;
   }
 }
@@ -218,7 +231,7 @@ function propuestaNotificacion_entregar(fila) {
       return resumen;
     }
     if (fila.estado !== ESTADOS.PENDIENTE && fila.estado !== ESTADOS.ERROR) {
-      Logger.log('Aviso de propuesta: una fila del outbox tiene un estado desconocido y no se toca.');
+      propuestaNotificacion_log('Aviso de propuesta: una fila del outbox tiene un estado desconocido y no se toca.');
       return resumen;
     }
     var ahora = Date.now();
@@ -260,7 +273,7 @@ function propuestaNotificacion_entregar(fila) {
     try {
       destinatarios = propuestaNotificacion_destinatarios(n.permisosValidador, n.emailProponente, n.config.incluirProponente);
     } catch (err) {
-      Logger.log('Aviso de propuesta (' + n.tipo + '): no se pudo leer la lista de validadores: ' + propuestaNotificacion_errorSeguro(err));
+      propuestaNotificacion_log('Aviso de propuesta (' + n.tipo + '): no se pudo leer la lista de validadores: ' + propuestaNotificacion_errorSeguro(err));
       propuestaNotificacion_guardar(fila.notificacionId, { estado: ESTADOS.ERROR, ultimoError: 'LECTURA_USUARIOS' });
       return resumen;
     }
@@ -304,7 +317,7 @@ function propuestaNotificacion_entregar(fila) {
           resumen.enviados += 1;
         } catch (err) {
           resumen.fallidos += 1;
-          Logger.log('Aviso de propuesta (' + n.tipo + '): fallo el envio a un validador: ' + propuestaNotificacion_errorSeguro(err));
+          propuestaNotificacion_log('Aviso de propuesta (' + n.tipo + '): fallo el envio a un validador: ' + propuestaNotificacion_errorSeguro(err));
         }
       });
     }
@@ -324,7 +337,7 @@ function propuestaNotificacion_entregar(fila) {
     resumen.resultado = entregados === 0 ? 'FALLO' : 'PARCIAL';
     return resumen;
   } catch (err) {
-    Logger.log('Aviso de propuesta: error inesperado: ' + propuestaNotificacion_errorSeguro(err));
+    propuestaNotificacion_log('Aviso de propuesta: error inesperado: ' + propuestaNotificacion_errorSeguro(err));
     resumen.resultado = 'ERROR';
     return resumen;
   }
@@ -353,13 +366,13 @@ function propuestaNotificacion_notificar(propuesta) {
         propuestaTimestampUtc: n.timestamp && !isNaN(d.getTime()) ? d.toISOString() : ''
       }, new Date(Date.now()).toISOString(), Utilities.getUuid()).notificacion;
     } catch (err) {
-      Logger.log('Aviso de propuesta (' + n.tipo + '): no se pudo registrar en el outbox: ' + propuestaNotificacion_errorSeguro(err));
+      propuestaNotificacion_log('Aviso de propuesta (' + n.tipo + '): no se pudo registrar en el outbox: ' + propuestaNotificacion_errorSeguro(err));
       resumen.resultado = 'OUTBOX_NO_DISPONIBLE';
       return resumen;
     }
     return propuestaNotificacion_entregar(fila);
   } catch (err) {
-    Logger.log('Aviso de propuesta: error inesperado: ' + propuestaNotificacion_errorSeguro(err));
+    propuestaNotificacion_log('Aviso de propuesta: error inesperado: ' + propuestaNotificacion_errorSeguro(err));
     resumen.resultado = 'ERROR';
     return resumen;
   }
@@ -392,7 +405,7 @@ function propuestaNotificacion_procesarPendientes(limite) {
     });
     return r;
   } catch (err) {
-    Logger.log('Aviso de propuesta: no se pudo procesar el outbox: ' + propuestaNotificacion_errorSeguro(err));
+    propuestaNotificacion_log('Aviso de propuesta: no se pudo procesar el outbox: ' + propuestaNotificacion_errorSeguro(err));
     r.fallo = true;
     return r;
   }

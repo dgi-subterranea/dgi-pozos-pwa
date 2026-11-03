@@ -462,6 +462,131 @@ describe('7. fallo de MailApp -> la propuesta sigue creada y el aviso persiste',
   });
 });
 
+describe('7b. BEST-EFFORT TOTAL: ITF_PROPUESTO confirmado => la API responde exito aunque falle CUALQUIER parte del subsistema de avisos', () => {
+  const RESPUESTA = ['bytes', 'documentoId', 'estado', 'mimeType', 'nombreOriginal', 'timestampUtc', 'warnings', 'wellId'];
+  const logCaido = () => global.Logger.log.mockImplementation(() => { throw new Error('el log no esta disponible'); });
+
+  // La propuesta quedo confirmada y NADA se deshizo: ni ItfEventos ni el storage; la respuesta es la de siempre y el Historial solo tiene la propuesta.
+  function propuestaIntacta(r) {
+    expect(r.status).toBe('ok');
+    expect(r.data.estado).toBe('PROPUESTO');
+    expect(Object.keys(r.data).sort()).toEqual(RESPUESTA);
+    expect(filas()).toHaveLength(1);
+    expect(JSON.stringify(filas()[0])).toContain('ITF_PROPUESTO');
+    expect(Object.keys(almacen)).toHaveLength(1);
+    expect(trasheados).toEqual([]);
+    expect(historial()).toEqual(soloLaPropuesta());
+  }
+
+  test('1-4. ITF_PROPUESTO se confirma, ASEGURAR el outbox lanza una excepcion: la API devuelve la propuesta exitosa y no se revierte storage ni ItfEventos', () => {
+    global.propuestaNotificacionesRepository_asegurar = jest.fn(() => { throw new Error('Exception: no se pudo abrir la hoja'); });
+    const r = proponer();
+    propuestaIntacta(r);
+    expect(global.propuestaNotificacionesRepository_asegurar).toHaveBeenCalledTimes(1);
+    expect(outbox()).toHaveLength(0);
+    expect(enviados).toHaveLength(0);
+  });
+
+  test('asegurar el outbox lanza Y ademas el log esta caido: sigue siendo exito (el manejo del error tampoco puede romper la respuesta)', () => {
+    global.propuestaNotificacionesRepository_asegurar = jest.fn(() => { throw new Error('boom'); });
+    logCaido();
+    propuestaIntacta(proponer());
+    expect(enviados).toHaveLength(0);
+  });
+
+  test('el outbox no se pudo asegurar: el REINTENTO idempotente del proponente repara la fila y recien ahi sale el aviso (una sola vez)', () => {
+    const real = global.propuestaNotificacionesRepository_asegurar;
+    global.propuestaNotificacionesRepository_asegurar = jest.fn(() => { throw new Error('boom'); });
+    const b = cuerpo();
+    const primera = proponer(b);
+    propuestaIntacta(primera);
+    expect(outbox()).toHaveLength(0);
+    global.propuestaNotificacionesRepository_asegurar = real;
+    expect(proponer(b)).toEqual(primera);
+    expect(outbox()).toHaveLength(1);
+    expect(outbox()[0].estado).toBe('ENVIADA');
+    expect(destinatarios()).toEqual(['val1@example.com', 'val2@example.com']);
+    expect(proponer(b)).toEqual(primera);
+    expect(enviados).toHaveLength(2);
+    expect(filas()).toHaveLength(1);
+  });
+
+  test('RESERVAR el intento lanza (lock, hoja): exito, nada se envia y la fila queda PENDIENTE sin intentos gastados', () => {
+    global.propuestaNotificacionesRepository_reservarIntento = jest.fn(() => { throw new Error('No se pudo obtener el lock'); });
+    propuestaIntacta(proponer());
+    expect(enviados).toHaveLength(0);
+    expect(outbox()[0]).toMatchObject({ estado: 'PENDIENTE', intentos: 0 });
+  });
+
+  test('LEER Usuarios lanza y el log tambien esta caido: exito; la fila queda en ERROR reintentable', () => {
+    global.sheetUserRepository_listarConPermisos = jest.fn(() => { throw new Error('Usuarios no existe'); });
+    logCaido();
+    propuestaIntacta(proponer());
+    expect(enviados).toHaveLength(0);
+    expect(outbox()[0]).toMatchObject({ estado: 'ERROR', ultimoError: 'LECTURA_USUARIOS' });
+  });
+
+  test('MailApp lanza en cada envio y el log tambien esta caido: exito; la fila queda en ERROR reintentable', () => {
+    cuota.falloEnvio = () => true;
+    logCaido();
+    propuestaIntacta(proponer());
+    expect(outbox()[0]).toMatchObject({ estado: 'ERROR', intentos: 1, ultimoError: 'FALLO (0 de 2 enviados)' });
+  });
+
+  test('MailApp.getRemainingDailyQuota lanza: se intenta enviar igual y la propuesta no se ve afectada', () => {
+    global.MailApp.getRemainingDailyQuota = jest.fn(() => { throw new Error('sin permiso de cuota'); });
+    propuestaIntacta(proponer());
+    expect(outbox()[0].estado).toBe('ENVIADA');
+  });
+
+  test('ACTUALIZAR el estado de la notificacion lanza (hoja borrada, lock): exito; el email ya salio y la fila no se pierde', () => {
+    global.propuestaNotificacionesRepository_registrarResultado = jest.fn(() => { throw new Error('la hoja ya no existe'); });
+    propuestaIntacta(proponer());
+    expect(enviados).toHaveLength(2);
+    expect(outbox()).toHaveLength(1);
+    expect(outbox()[0]).toMatchObject({ estado: 'PENDIENTE', intentos: 1 });
+  });
+
+  test('ACTUALIZAR el estado lanza Y el log esta caido: exito igual', () => {
+    global.propuestaNotificacionesRepository_registrarResultado = jest.fn(() => { throw new Error('boom'); });
+    logCaido();
+    propuestaIntacta(proponer());
+  });
+
+  test('la verificacion de vigencia del tipo lanza: exito; el aviso queda como esta y se reintenta', () => {
+    const real = global.PROPUESTA_TIPOS.ITF.verificar;
+    global.PROPUESTA_TIPOS.ITF.verificar = jest.fn(() => { throw new Error('boom'); });
+    try {
+      propuestaIntacta(proponer());
+      expect(enviados).toHaveLength(0);
+      expect(outbox()).toHaveLength(1);
+    } finally {
+      global.PROPUESTA_TIPOS.ITF.verificar = real;
+    }
+  });
+
+  test('el notificador entero lanza con un error cuyo texto no se puede ni leer, y el log esta caido: exito igual', () => {
+    const raro = { get message() { throw new Error('mensaje ilegible'); }, toString() { throw new Error('toString ilegible'); } };
+    global.propuestaNotificacion_notificar = jest.fn(() => { throw raro; });
+    logCaido();
+    propuestaIntacta(proponer());
+    expect(global.propuestaNotificacion_notificar).toHaveBeenCalledTimes(1);
+  });
+
+  test('el notificador ni siquiera esta cargado (ReferenceError): exito igual', () => {
+    delete global.propuestaNotificacion_notificar;
+    propuestaIntacta(proponer());
+    expect(enviados).toHaveLength(0);
+  });
+
+  test('NO regresion: con todo el subsistema sano sale el email y la respuesta es identica a la de los casos de falla', () => {
+    const sana = proponer();
+    expect(Object.keys(sana.data).sort()).toEqual(RESPUESTA);
+    expect(enviados).toHaveLength(2);
+    expect(outbox()[0].estado).toBe('ENVIADA');
+  });
+});
+
 describe('8. propuesta fallida -> NO hay email ni fila en el outbox', () => {
   const sinAviso = () => {
     expect(global.MailApp.sendEmail).not.toHaveBeenCalled();
@@ -516,6 +641,20 @@ describe('8. propuesta fallida -> NO hay email ni fila en el outbox', () => {
     expect(global.MailApp.sendEmail).not.toHaveBeenCalled();
     expect(filas()).toHaveLength(1);
     expect(outbox()).toHaveLength(1);
+  });
+
+  test('INVERSO: el ITF_PROPUESTO NO llega a escribirse (la hoja rechaza la escritura): error al cliente, archivo compensado, ni fila de outbox ni email ni lectura de Usuarios', () => {
+    const original = E.hoja.getRange.bind(E.hoja);
+    E.hoja.getRange = (...args) => {
+      const rango = original(...args);
+      rango.setValues = () => { throw new Error('Exception: la hoja rechazo la escritura'); };
+      return rango;
+    };
+    const r = proponer();
+    expect(r.status).toBe('error');
+    expect(filas()).toHaveLength(0);
+    expect(Object.keys(almacen)).toHaveLength(0);
+    sinAviso();
   });
 
   test('sin sesion valida: nada', () => {

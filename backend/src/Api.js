@@ -847,8 +847,8 @@ function handleRegisterDescargaItf(sessionToken, resumen) {
 // (lista BLANCA de campos: wellId, imageBase64, mimeType, nombreOriginal, clientRequestId; documentoId, hash, bytes, storageFileId, email, nombre, timestamp o estado se RECHAZAN) -> servicio.
 // El actor (email, nombre) sale SIEMPRE de la sesion + hoja Usuarios. Con el interruptor encendido y la hoja ItfEventos o el storage faltantes: SERVICE_UNAVAILABLE / ITF_STORAGE_NO_CONFIGURADO
 // (nada se crea solo, y no hay fallback a la carpeta legacy). Historial: UNA fila por propuesta escrita (accion + pozo + OK), sin base64, sin hash, sin id de storage, sin nombre del archivo; un
-// reintento idempotente NO escribe otra. Sin Telegram. Aviso por email a los validadores SOLO tras escribir la propuesta (avisarValidadoresPropuestaItf: best-effort con cola persistente, NO escribe en el Historial, nunca
-// cambia la respuesta). Respuesta: {documentoId, wellId, estado:'PROPUESTO', mimeType, bytes, nombreOriginal, timestampUtc, warnings} y nada mas (ni storageFileId, ni hash,
+// reintento idempotente NO escribe otra. Sin Telegram. Aviso por email a los validadores SOLO tras CONFIRMAR la propuesta y ANTES de responder (avisarValidadoresPropuestaItf: asegura el outbox e intenta el envio, best-effort total con cola
+// persistente: ITF_PROPUESTO confirmado => la respuesta es exito aunque falle el subsistema de avisos; NO escribe en el Historial). Respuesta: {documentoId, wellId, estado:'PROPUESTO', mimeType, bytes, nombreOriginal, timestampUtc, warnings} y nada mas (ni storageFileId, ni hash,
 // ni email, ni clientRequestId, ni secuencia).
 // Codigos: INVALID_REQUEST / INVALID_WELL_ID / INVALID_ARCHIVO (entrada), MIME_NO_PERMITIDO / FORMATO_NO_RECONOCIDO / MIME_NO_COINCIDE / ARCHIVO_VACIO / ARCHIVO_DEMASIADO_GRANDE (archivo),
 // PERMISSION_DENIED, ITF_E9_INACTIVO, POZO_NOT_FOUND, LEGACY_AMBIGUO / LEGACY_NOMBRE_NO_CANONICO / LEGACY_FORMATO_INVALIDO / ITF_STATE_UNKNOWN (requiere revision), TOO_MANY_PENDING,
@@ -942,10 +942,13 @@ function handleProponerItf(sessionToken, body) {
 }
 
 // Aviso por email a quienes validan ITF (PropuestaNotificacion.js, tipo 'ITF': usuarios ACTIVOS con perfil y perfil_validar = SI) cuando una propuesta quedo REALMENTE escrita (ITF_PROPUESTO confirmado).
-// Se llama con accion 'ESCRIBIR' (propuesta nueva) y tambien con 'REINTENTO' (el mismo pedido idempotente repetido): si el proceso murio entre confirmar la propuesta y registrar el aviso, el reintento lo recupera;
-// si el aviso ya estaba ENVIADA no hace nada (la cola persistente PropuestaNotificaciones tiene UNA fila por propuesta, asi que un reintento jamas manda un segundo email). Un intento fallido nunca llega hasta aca.
-// Es best-effort: cualquier problema (outbox sin crear, sin permiso de MailApp, cuota, hoja de Usuarios) queda en la hoja del outbox y en el log de Apps Script, NUNCA en el Historial del pozo, y NUNCA cambia la
-// respuesta ni deshace la propuesta (no hay rollback de storage ni de evento). El email no lleva imagen, documentoId, storage, hash, clientRequestId ni direcciones.
+// Orden en handleProponerItf: validar -> almacenar -> confirmar ITF_PROPUESTO -> (aca) asegurar la fila del outbox y intentar el envio inmediato -> devolver la respuesta de la propuesta. Asi la ventana en la
+// que la propuesta existe sin su aviso registrado se reduce al instante entre la confirmacion y esta llamada; si el proceso muere ahi, el REINTENTO idempotente del proponente (accion 'REINTENTO', mismo
+// clientRequestId) vuelve a pasar por aca y repara la fila que falte. Con la fila ya ENVIADA no hace nada (UNA fila por propuesta: jamas un segundo email); PENDIENTE / ERROR se reintentan; una propuesta que
+// ya no esta pendiente queda OMITIDA; los limites de intentos, el lease y los destinatarios parciales los resuelve el outbox. Un intento fallido nunca llega hasta aca.
+// BEST-EFFORT TOTAL: lo que ocurra aca (outbox sin crear o roto, lock, hoja de Usuarios, MailApp, cuota, actualizar el estado de la notificacion, incluso un fallo del propio log) queda en la hoja del outbox y
+// en el log de Apps Script, NUNCA en el Historial del pozo, y NUNCA cambia la respuesta ni deshace la propuesta (no hay rollback de storage ni de ItfEventos). El email no lleva imagen, documentoId, storage,
+// hash, clientRequestId ni direcciones.
 function avisarValidadoresPropuestaItf(email, nombre, wellId, resultado) {
   try {
     propuestaNotificacion_notificar({
@@ -956,7 +959,11 @@ function avisarValidadoresPropuestaItf(email, nombre, wellId, resultado) {
       timestamp: resultado.propuesta.timestampUtc
     });
   } catch (err) {
-    Logger.log('proponerItf: no se pudo avisar a los validadores: ' + api_limpiarMensajeLog(err));
+    try {
+      Logger.log('proponerItf: no se pudo avisar a los validadores: ' + api_limpiarMensajeLog(err));
+    } catch (errLog) {
+      // ni siquiera el log esta disponible: la propuesta ya esta confirmada y la respuesta no cambia
+    }
   }
 }
 
