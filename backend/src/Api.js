@@ -847,7 +847,7 @@ function handleRegisterDescargaItf(sessionToken, resumen) {
 // (lista BLANCA de campos: wellId, imageBase64, mimeType, nombreOriginal, clientRequestId; documentoId, hash, bytes, storageFileId, email, nombre, timestamp o estado se RECHAZAN) -> servicio.
 // El actor (email, nombre) sale SIEMPRE de la sesion + hoja Usuarios. Con el interruptor encendido y la hoja ItfEventos o el storage faltantes: SERVICE_UNAVAILABLE / ITF_STORAGE_NO_CONFIGURADO
 // (nada se crea solo, y no hay fallback a la carpeta legacy). Historial: UNA fila por propuesta escrita (accion + pozo + OK), sin base64, sin hash, sin id de storage, sin nombre del archivo; un
-// reintento idempotente NO escribe otra. Sin Telegram. Aviso por email a los validadores SOLO tras escribir la propuesta (avisarValidadoresPropuestaItf: best-effort, una fila mas en Historial con el resultado, nunca
+// reintento idempotente NO escribe otra. Sin Telegram. Aviso por email a los validadores SOLO tras escribir la propuesta (avisarValidadoresPropuestaItf: best-effort con cola persistente, NO escribe en el Historial, nunca
 // cambia la respuesta). Respuesta: {documentoId, wellId, estado:'PROPUESTO', mimeType, bytes, nombreOriginal, timestampUtc, warnings} y nada mas (ni storageFileId, ni hash,
 // ni email, ni clientRequestId, ni secuencia).
 // Codigos: INVALID_REQUEST / INVALID_WELL_ID / INVALID_ARCHIVO (entrada), MIME_NO_PERMITIDO / FORMATO_NO_RECONOCIDO / MIME_NO_COINCIDE / ARCHIVO_VACIO / ARCHIVO_DEMASIADO_GRANDE (archivo),
@@ -921,6 +921,8 @@ function handleProponerItf(sessionToken, body) {
   }
   if (resultado.accion === 'ESCRIBIR') {
     logHistoryEvent(session.email, 'proponerItf', b.wellId, 'OK');
+  }
+  if (resultado.accion === 'ESCRIBIR' || resultado.accion === 'REINTENTO') {
     avisarValidadoresPropuestaItf(session.email, access.nombre, b.wellId, resultado);
   }
   var propuesta = resultado.propuesta;
@@ -939,32 +941,22 @@ function handleProponerItf(sessionToken, body) {
   };
 }
 
-// Aviso por email a quienes validan ITF (PropuestaNotificacion.js, tipo 'ITF': usuarios ACTIVOS con perfil y perfil_validar = SI) cuando una propuesta NUEVA quedo REALMENTE escrita (ITF_PROPUESTO confirmado).
-// Solo se llama con accion 'ESCRIBIR': un intento fallido nunca llega hasta aca y un reintento idempotente ('REINTENTO') tampoco. Es best-effort: cualquier problema (sin permiso de MailApp, cuota, hoja de
-// Usuarios) se registra en Historial (sin cuerpo ni direcciones) y NUNCA cambia la respuesta ni deshace la propuesta (no hay rollback de storage ni de evento). El email no lleva imagen, documentoId, storage, hash,
-// clientRequestId ni direcciones.
+// Aviso por email a quienes validan ITF (PropuestaNotificacion.js, tipo 'ITF': usuarios ACTIVOS con perfil y perfil_validar = SI) cuando una propuesta quedo REALMENTE escrita (ITF_PROPUESTO confirmado).
+// Se llama con accion 'ESCRIBIR' (propuesta nueva) y tambien con 'REINTENTO' (el mismo pedido idempotente repetido): si el proceso murio entre confirmar la propuesta y registrar el aviso, el reintento lo recupera;
+// si el aviso ya estaba ENVIADA no hace nada (la cola persistente PropuestaNotificaciones tiene UNA fila por propuesta, asi que un reintento jamas manda un segundo email). Un intento fallido nunca llega hasta aca.
+// Es best-effort: cualquier problema (outbox sin crear, sin permiso de MailApp, cuota, hoja de Usuarios) queda en la hoja del outbox y en el log de Apps Script, NUNCA en el Historial del pozo, y NUNCA cambia la
+// respuesta ni deshace la propuesta (no hay rollback de storage ni de evento). El email no lleva imagen, documentoId, storage, hash, clientRequestId ni direcciones.
 function avisarValidadoresPropuestaItf(email, nombre, wellId, resultado) {
-  var aviso;
   try {
-    aviso = propuestaNotificacion_notificar({
+    propuestaNotificacion_notificar({
       tipo: 'ITF',
-      objetoId: wellId,
       wellId: wellId,
       propuestaId: resultado.resultado.documentoId,
       proponente: { email: email, nombre: nombre },
       timestamp: resultado.propuesta.timestampUtc
     });
   } catch (err) {
-    aviso = { resultado: 'ERROR' };
-  }
-  var texto = null;
-  try {
-    texto = propuestaNotificacion_textoAuditoria(aviso);
-  } catch (err) {
-    texto = null;
-  }
-  if (texto) {
-    logHistoryEvent(email, 'notificarPropuestaItf', wellId, texto);
+    Logger.log('proponerItf: no se pudo avisar a los validadores: ' + api_limpiarMensajeLog(err));
   }
 }
 

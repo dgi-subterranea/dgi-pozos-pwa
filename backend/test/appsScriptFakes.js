@@ -152,7 +152,6 @@ function installAppsScriptFakes() {
   global.ubicacionCorreccionNotificacion_notificarPendiente = jest.fn();
   global.ubicacionCorreccionNotificacion_textoAuditoria = jest.fn();
   global.propuestaNotificacion_notificar = jest.fn();
-  global.propuestaNotificacion_textoAuditoria = jest.fn();
   global.FOTOS_UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 }
 

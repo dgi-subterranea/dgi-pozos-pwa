@@ -1,11 +1,16 @@
-// Aviso por email a los validadores al PROPONER un ITF (handleProponerItf -> avisarValidadoresPropuestaItf -> PropuestaNotificacion), con la cadena REAL (Api -> ItfService -> proveedor de storage) y la hoja
-// ItfEventos / el storage en memoria. Se simula Usuarios (con el filtro real de SheetUserRepository), MailApp, la cuota y el cache: no sale ningun email real. Verifica: el aviso sale SOLO despues de confirmar el
-// ITF_PROPUESTO, nunca por un intento fallido ni por un reintento idempotente, y que ningun fallo de email deshace la propuesta ni cambia la respuesta.
+// Aviso por email a los validadores al PROPONER un ITF (handleProponerItf -> avisarValidadoresPropuestaItf -> PropuestaNotificacion + outbox PropuestaNotificaciones), con la cadena REAL (Api -> ItfService ->
+// proveedor de storage) y las hojas ItfEventos / PropuestaNotificaciones / el storage en memoria. Se simula Usuarios (con el filtro real de SheetUserRepository), MailApp, la cuota y la hora: no sale ningun
+// email real. Verifica: el aviso se REGISTRA en el outbox despues de confirmar el ITF_PROPUESTO, nunca por un intento fallido, un reintento no duplica pero SI recupera un aviso que no llego a salir, ningun fallo
+// de email deshace la propuesta ni cambia la respuesta, y el Historial del pozo no recibe filas tecnicas.
 const { crearEntorno, JPEG } = require('./itfEntorno');
+const { crearHoja } = require('./fakeSheets');
 
 const EMAIL = 'sesion@example.com';
 const W = '14-0130';
 const PROPONE = { perfil: true, perfil_subir: true };
+const NOMBRE = 'PropuestaNotificaciones';
+const LEASE = 300000;
+const T0 = Date.parse('2026-11-03T17:05:00.000Z');
 
 // Hoja Usuarios simulada (encabezado + filas); se filtra con la funcion REAL del repositorio. Validan (activos, perfil=SI, perfil_validar=SI): val1 y val2.
 const ENCABEZADO = ['email', 'nombre', 'estado', 'perfil', 'perfil_subir', 'perfil_validar'];
@@ -27,11 +32,14 @@ const USUARIOS = [
 
 let E;
 let Api;
+let R;
 let almacen;
 let enviados;
 let usuarios;
 let cuota;
 let trasheados;
+let ahoraMs;
+let dateNow;
 let n = 0;
 
 const crid = () => { n += 1; return 'noti-req-' + String(n).padStart(8, '0'); };
@@ -39,9 +47,12 @@ const b64 = (arr) => Buffer.from(arr.map((v) => v & 0xFF)).toString('base64');
 const cuerpo = (extra) => Object.assign({ wellId: W, imageBase64: b64(JPEG(400, 1)), mimeType: 'image/jpeg', nombreOriginal: 'itf-14-0130.jpg', clientRequestId: crid() }, extra || {});
 const proponer = (b) => Api.handleProponerItf('t', b === undefined ? cuerpo() : b);
 const filas = () => E.hoja.filas.slice(1);
+const outbox = () => R.propuestaNotificacionesRepository_leerTodas();
 const historial = () => global.logHistoryEvent.mock.calls.map((c) => c.join('|'));
-const filasAviso = () => global.logHistoryEvent.mock.calls.filter((c) => c[1] === 'notificarPropuestaItf');
+const filasAviso = () => global.logHistoryEvent.mock.calls.filter((c) => /notific/i.test(String(c[1])));
 const destinatarios = () => enviados.map((m) => m.to).sort();
+const avanzar = (ms) => { ahoraMs += ms; };
+const soloLaPropuesta = () => [EMAIL + '|proponerItf|' + W + '|OK'];
 
 function como(permisos) {
   global.verifySessionToken.mockReturnValue({ valid: true, email: EMAIL });
@@ -50,10 +61,15 @@ function como(permisos) {
 }
 
 function montar(opciones) {
-  E = crearEntorno(Object.assign({ archivos: [], props: { ITF_E9_ACTIVO: 'SI' } }, opciones || {}));
+  const o = opciones || {};
+  E = crearEntorno(Object.assign({ archivos: [], props: { ITF_E9_ACTIVO: 'SI' } }, o.entorno || {}));
   Api = require('../src/Api');
-  // el aviso REAL (en Apps Script es un archivo mas del proyecto: globales) y el filtro REAL de usuarios
-  Object.assign(global, require('../src/PropuestaNotificacion'), require('../src/SheetUserRepository'));
+  // el aviso REAL (en Apps Script es un archivo mas del proyecto: globales), su outbox y el filtro REAL de usuarios
+  R = require('../src/PropuestaNotificacionesRepository');
+  Object.assign(global, require('../src/PropuestaNotificacion'), R, require('../src/SheetUserRepository'));
+  if (o.sinOutbox !== true) {
+    E.hojas[NOMBRE] = crearHoja(NOMBRE, [R.PROPUESTA_NOTIF_COLUMNAS]);
+  }
   global.getUserAccess.mockReturnValue({ nombre: 'Ana Proponente' });
   como(PROPONE);
   almacen = {};
@@ -61,6 +77,9 @@ function montar(opciones) {
   trasheados = [];
   usuarios = USUARIOS;
   cuota = { restante: 100, falloEnvio: null, alEnviar: null };
+  ahoraMs = T0;
+  if (dateNow) { dateNow.mockRestore(); }
+  dateNow = jest.spyOn(Date, 'now').mockImplementation(() => ahoraMs);
   global.sheetUserRepository_listarConPermisos = jest.fn((permisos) => global.sheetUserRepository_filtrarConPermisos(usuarios, permisos));
   global.getPwaUrl = jest.fn(() => 'https://pozos.example.org/app/');
   global.MailApp = {
@@ -96,8 +115,9 @@ function montar(opciones) {
 }
 
 beforeEach(() => montar());
+afterEach(() => { if (dateNow) { dateNow.mockRestore(); dateNow = null; } });
 
-describe('1. propuesta nueva -> notifica', () => {
+describe('1. propuesta nueva -> se registra en el outbox y notifica', () => {
   test('el aviso sale con el asunto y el cuerpo pedidos, y la respuesta al cliente es la de siempre (sin rastro del aviso)', () => {
     const r = proponer();
     expect(r.status).toBe('ok');
@@ -124,17 +144,48 @@ describe('1. propuesta nueva -> notifica', () => {
     });
   });
 
-  test('ORDEN: cuando se envia el email la propuesta YA esta escrita (ITF_PROPUESTO confirmado) y el archivo ya esta en el storage', () => {
-    const vistos = [];
-    cuota.alEnviar = () => vistos.push({ filas: filas().length, archivos: Object.keys(almacen).length, evento: filas().length === 1 && JSON.stringify(filas()[0]).indexOf('ITF_PROPUESTO') >= 0 });
-    proponer();
-    expect(vistos).toHaveLength(2);
-    vistos.forEach((v) => expect(v).toEqual({ filas: 1, archivos: 1, evento: true }));
+  test('la fila del outbox no guarda el cuerpo, ni storageFileId, ni hash, ni clientRequestId, ni imagen', () => {
+    const b = cuerpo();
+    proponer(b);
+    const ref = Object.keys(almacen)[0];
+    const hoja = JSON.stringify(E.hojas[NOMBRE].filas);
+    [ref, b.clientRequestId, b.imageBase64.slice(0, 12), 'sha256', 'Abrí la app', 'pendiente de validación'].forEach((prohibido) => {
+      expect(hoja).not.toContain(prohibido);
+    });
+    expect(hoja).not.toMatch(/[0-9a-f]{40,}/i);
+    // los emails SOLO aparecen donde corresponde: el del proponente y los validadores que ya recibieron el aviso (para no duplicar)
+    const o = outbox()[0];
+    const conEmail = Object.keys(o).filter((k) => /@/.test(String(o[k])));
+    expect(conEmail.sort()).toEqual(['destinatariosEnviados', 'proponenteEmail']);
+    expect(E.hojas[NOMBRE].filas[0]).toEqual(R.PROPUESTA_NOTIF_COLUMNAS);
   });
 
-  test('queda UNA fila de Historial por el aviso (resultado y cantidad, sin cuerpo ni direcciones), despues de la de la propuesta', () => {
+  test('ORDEN: al enviar el email la propuesta YA esta escrita, el archivo YA esta en el storage y el aviso YA esta registrado en el outbox', () => {
+    const vistos = [];
+    cuota.alEnviar = () => vistos.push({
+      filas: filas().length,
+      archivos: Object.keys(almacen).length,
+      evento: filas().length === 1 && JSON.stringify(filas()[0]).indexOf('ITF_PROPUESTO') >= 0,
+      outbox: outbox().map((x) => x.estado + ':' + x.intentos)
+    });
     proponer();
-    expect(historial()).toEqual([EMAIL + '|proponerItf|' + W + '|OK', EMAIL + '|notificarPropuestaItf|' + W + '|EMAIL_ENVIADO (2 destinatarios)']);
+    expect(vistos).toHaveLength(2);
+    vistos.forEach((v) => expect(v).toEqual({ filas: 1, archivos: 1, evento: true, outbox: ['PENDIENTE:1'] }));
+  });
+
+  test('queda UNA fila ENVIADA en el outbox con los datos necesarios para reenviar', () => {
+    const r = proponer();
+    expect(outbox()).toHaveLength(1);
+    expect(outbox()[0]).toMatchObject({
+      tipo: 'ITF', propuestaId: r.data.documentoId, wellId: W, permisosValidador: 'perfil,perfil_validar', proponenteNombre: 'Ana Proponente', proponenteEmail: EMAIL, propuestaTimestampUtc: r.data.timestampUtc,
+      estado: 'ENVIADA', intentos: 1, ultimoError: '', destinatariosEnviados: 'val1@example.com;val2@example.com'
+    });
+  });
+
+  test('10. NO hay fila tecnica extra en el Historial del pozo: solo la de la propuesta', () => {
+    proponer();
+    expect(historial()).toEqual(soloLaPropuesta());
+    expect(filasAviso()).toHaveLength(0);
   });
 
   test('una propuesta PNG tambien notifica (el formato no cambia el aviso)', () => {
@@ -148,11 +199,12 @@ describe('1. propuesta nueva -> notifica', () => {
     proponer(cuerpo({ wellId: '14-0131', imageBase64: b64(JPEG(420, 9)) }));
     expect(enviados).toHaveLength(4);
     expect(enviados.slice(2).every((m) => m.subject === 'DGI Pozos | Nueva propuesta de ITF | 14-0131')).toBe(true);
+    expect(outbox()).toHaveLength(2);
   });
 });
 
 describe('1b. la identidad del aviso es la PROPUESTA, no el pozo', () => {
-  test('retirar la propuesta propia y volver a proponer en el MISMO pozo es otra propuesta: avisa de nuevo', () => {
+  test('8. dos propuestas DISTINTAS del mismo pozo (retirar la propia y volver a proponer) -> dos notificaciones', () => {
     const r1 = proponer();
     const retiro = Api.handleRetirarPropuestaItf('t', { action: 'retirarPropuestaItf', sessionToken: 't', documentoId: r1.data.documentoId, clientRequestId: crid() });
     expect(retiro.status).toBe('ok');
@@ -161,7 +213,8 @@ describe('1b. la identidad del aviso es la PROPUESTA, no el pozo', () => {
     expect(r2.status).toBe('ok');
     expect(r2.data.documentoId).not.toBe(r1.data.documentoId);
     expect(enviados).toHaveLength(4);
-    expect(filasAviso()).toHaveLength(2);
+    expect(outbox().map((x) => x.propuestaId)).toEqual([r1.data.documentoId, r2.data.documentoId]);
+    expect(outbox().every((x) => x.wellId === W && x.estado === 'ENVIADA')).toBe(true);
   });
 });
 
@@ -176,6 +229,21 @@ describe('2. dos validadores -> ambos reciben', () => {
     proponer();
     expect(global.sheetUserRepository_listarConPermisos).toHaveBeenCalledWith(['perfil', 'perfil_validar']);
   });
+
+  test('CONTRATO: reciben el aviso exactamente quienes pueden abrir la cola «ITF pendientes» (mismos permisos exigidos por el backend)', () => {
+    const exigidos = global.PROPUESTA_TIPOS.ITF.permisosValidador;
+    const denegado = (permisos) => { como(permisos); return Api.handleGetItfPendientes('t', { action: 'getItfPendientes', sessionToken: 't' }).code === 'PERMISSION_DENIED'; };
+    const todos = {};
+    exigidos.forEach((p) => { todos[p] = true; });
+    expect(denegado(todos)).toBe(false);
+    exigidos.forEach((falta) => {
+      const parcial = Object.assign({}, todos);
+      delete parcial[falta];
+      expect(denegado(parcial)).toBe(true);
+    });
+    // y ningun permiso extra hace falta para abrir la cola: los exigidos son TODOS los que el backend mira
+    expect(denegado({ perfil: true, perfil_subir: true, perfil_validar: true })).toBe(false);
+  });
 });
 
 describe('3. usuario sin permiso -> no recibe', () => {
@@ -186,11 +254,11 @@ describe('3. usuario sin permiso -> no recibe', () => {
     });
   });
 
-  test('si la hoja ni siquiera tiene la columna perfil_validar: NADIE recibe (fail-closed) y la propuesta funciona', () => {
+  test('si la hoja ni siquiera tiene la columna perfil_validar: NADIE recibe (fail-closed), la propuesta funciona y el aviso queda reintentable', () => {
     usuarios = [['email', 'nombre', 'estado', 'perfil'], ['val1@example.com', 'V', 'activo', 'SI']];
     expect(proponer().status).toBe('ok');
     expect(enviados).toHaveLength(0);
-    expect(filasAviso()[0][3]).toBe('EMAIL_SIN_DESTINATARIOS');
+    expect(outbox()[0]).toMatchObject({ estado: 'ERROR', ultimoError: 'SIN_DESTINATARIOS' });
   });
 });
 
@@ -215,61 +283,101 @@ describe('5. email duplicado -> uno solo', () => {
   });
 });
 
-describe('6. reintento idempotente -> NO segundo email', () => {
-  test('mismo clientRequestId y mismo contenido: devuelve la propuesta original y NO manda ni intenta otro email', () => {
+describe('6. reintento idempotente del proponente', () => {
+  test('con el aviso ya ENVIADA: devuelve la propuesta original y NO manda ni intenta otro email (el notificador se invoca y la hoja lo frena)', () => {
     const real = global.propuestaNotificacion_notificar;
     global.propuestaNotificacion_notificar = jest.fn((p) => real(p));
     const b = cuerpo();
     const primera = proponer(b);
     expect(enviados).toHaveLength(2);
-    expect(global.propuestaNotificacion_notificar).toHaveBeenCalledTimes(1);
     global.MailApp.sendEmail.mockClear();
     global.sheetUserRepository_listarConPermisos.mockClear();
     const segunda = proponer(b);
-    // la decision de "no avisar" es del handler (solo accion ESCRIBIR): ni siquiera se invoca al notificador (la marca de cache es solo la segunda defensa)
-    expect(global.propuestaNotificacion_notificar).toHaveBeenCalledTimes(1);
+    expect(global.propuestaNotificacion_notificar).toHaveBeenCalledTimes(2);
+    expect(global.propuestaNotificacion_notificar.mock.results[1].value.resultado).toBe('YA_ENVIADA');
     expect(segunda.status).toBe('ok');
     expect(segunda.data.documentoId).toBe(primera.data.documentoId);
     expect(filas()).toHaveLength(1);
     expect(global.MailApp.sendEmail).not.toHaveBeenCalled();
     expect(global.sheetUserRepository_listarConPermisos).not.toHaveBeenCalled();
     expect(enviados).toHaveLength(2);
-    expect(filasAviso()).toHaveLength(1);
+    expect(outbox()).toHaveLength(1);
+    expect(historial()).toEqual(soloLaPropuesta());
   });
 
-  test('varios reintentos seguidos: sigue habiendo UN solo aviso por destinatario', () => {
+  test('la respuesta del reintento es identica a la del primer intento', () => {
+    const b = cuerpo();
+    const primera = proponer(b);
+    expect(proponer(b)).toEqual(primera);
+  });
+
+  test('varios reintentos seguidos: sigue habiendo UN solo aviso por destinatario y UNA fila', () => {
     const b = cuerpo();
     for (let i = 0; i < 4; i += 1) { expect(proponer(b).status).toBe('ok'); }
     expect(filas()).toHaveLength(1);
     expect(enviados).toHaveLength(2);
+    expect(outbox()).toHaveLength(1);
   });
 
-  test('si el primer intento termino con el email caido, el reintento TAMPOCO manda (la propuesta ya existe: no se vuelve a avisar)', () => {
+  test('5. el primer intento termino con el email caido: el reintento posterior (pasado el lease) ENVIA y la fila pasa a ENVIADA', () => {
+    cuota.falloEnvio = () => true;
+    const b = cuerpo();
+    const primera = proponer(b);
+    expect(outbox()[0]).toMatchObject({ estado: 'ERROR', intentos: 1 });
+    cuota.falloEnvio = null;
+    avanzar(LEASE);
+    const segunda = proponer(b);
+    expect(segunda).toEqual(primera);
+    expect(destinatarios()).toEqual(['val1@example.com', 'val2@example.com']);
+    expect(outbox()).toHaveLength(1);
+    expect(outbox()[0]).toMatchObject({ estado: 'ENVIADA', intentos: 2, ultimoError: '' });
+    expect(filas()).toHaveLength(1);
+  });
+
+  test('el reintento INMEDIATO (otro intento en curso) no manda de nuevo', () => {
     cuota.falloEnvio = () => true;
     const b = cuerpo();
     proponer(b);
     cuota.falloEnvio = null;
-    global.MailApp.sendEmail.mockClear();
     expect(proponer(b).status).toBe('ok');
-    expect(global.MailApp.sendEmail).not.toHaveBeenCalled();
+    expect(enviados).toHaveLength(0);
+    expect(outbox()[0].intentos).toBe(1);
   });
 
-  test('la segunda defensa: aunque el servicio dijera ESCRIBIR dos veces para el mismo documento, la marca de cache evita el segundo email', () => {
+  test('el proceso murio entre confirmar ITF_PROPUESTO y registrar el aviso: el reintento del proponente RECUPERA el aviso (ya no se pierde)', () => {
     const real = global.propuestaNotificacion_notificar;
-    const resumenes = [];
-    global.propuestaNotificacion_notificar = jest.fn((p) => { const r = real(p); resumenes.push(r.resultado); return r; });
+    global.propuestaNotificacion_notificar = jest.fn(() => { throw new Error('el proceso muere aca'); });
     const b = cuerpo();
-    proponer(b);
-    // se simula una carrera: el mismo pedido de aviso se repite con el mismo documento
-    const llamada = global.propuestaNotificacion_notificar.mock.calls[0][0];
-    expect(real(llamada).resultado).toBe('DEDUPED');
-    expect(resumenes).toEqual(['ENVIADO']);
+    const primera = proponer(b);
+    expect(primera.status).toBe('ok');
+    expect(filas()).toHaveLength(1);
+    expect(outbox()).toHaveLength(0);
+    expect(enviados).toHaveLength(0);
+    global.propuestaNotificacion_notificar = real;
+    const segunda = proponer(b);
+    expect(segunda).toEqual(primera);
+    expect(filas()).toHaveLength(1);
+    expect(outbox()).toHaveLength(1);
+    expect(outbox()[0].estado).toBe('ENVIADA');
+    expect(destinatarios()).toEqual(['val1@example.com', 'val2@example.com']);
+    expect(proponer(b).status).toBe('ok');
+    expect(enviados).toHaveLength(2);
+  });
+
+  test('el aviso no se registro porque el outbox todavia no estaba creado: al crearlo, el reintento del proponente lo recupera', () => {
+    montar({ sinOutbox: true });
+    const b = cuerpo();
+    expect(proponer(b).status).toBe('ok');
+    expect(enviados).toHaveLength(0);
+    E.hojas[NOMBRE] = crearHoja(NOMBRE, [R.PROPUESTA_NOTIF_COLUMNAS]);
+    expect(proponer(b).status).toBe('ok');
+    expect(outbox()).toHaveLength(1);
     expect(enviados).toHaveLength(2);
   });
 });
 
-describe('7. fallo de MailApp -> la propuesta sigue creada', () => {
-  test('MailApp rechaza todo: respuesta OK identica, evento escrito, archivo en el storage, SIN compensacion, y el fallo queda auditado', () => {
+describe('7. fallo de MailApp -> la propuesta sigue creada y el aviso persiste', () => {
+  test('MailApp rechaza todo: respuesta OK identica, evento escrito, archivo en el storage, SIN compensacion, outbox ERROR y Historial limpio', () => {
     cuota.falloEnvio = () => true;
     const r = proponer();
     expect(r.status).toBe('ok');
@@ -278,52 +386,87 @@ describe('7. fallo de MailApp -> la propuesta sigue creada', () => {
     expect(filas()).toHaveLength(1);
     expect(Object.keys(almacen)).toHaveLength(1);
     expect(trasheados).toEqual([]);
-    expect(historial()).toEqual([EMAIL + '|proponerItf|' + W + '|OK', EMAIL + '|notificarPropuestaItf|' + W + '|EMAIL_FALLO (0 de 2 enviados)']);
+    expect(outbox()).toHaveLength(1);
+    expect(outbox()[0]).toMatchObject({ estado: 'ERROR', intentos: 1, ultimoError: 'FALLO (0 de 2 enviados)' });
+    expect(historial()).toEqual(soloLaPropuesta());
   });
 
-  test('falla un solo destinatario: el otro lo recibe y queda EMAIL_PARCIAL', () => {
+  test('4. propuesta confirmada + MailApp falla -> el outbox persiste y despues procesarNotificacionesPropuestasPendientes lo envia', () => {
+    cuota.falloEnvio = () => true;
+    proponer();
+    cuota.falloEnvio = null;
+    avanzar(LEASE);
+    expect(global.procesarNotificacionesPropuestasPendientes()).toMatchObject({ revisadas: 1, enviadas: 1, errores: 0 });
+    expect(destinatarios()).toEqual(['val1@example.com', 'val2@example.com']);
+    expect(outbox()[0]).toMatchObject({ estado: 'ENVIADA', intentos: 2 });
+    expect(historial()).toEqual(soloLaPropuesta());
+  });
+
+  test('falla un solo destinatario: el otro lo recibe, queda ERROR parcial y el reintento completa SOLO al que faltaba', () => {
     cuota.falloEnvio = (m) => m.to === 'val1@example.com';
     expect(proponer().status).toBe('ok');
     expect(destinatarios()).toEqual(['val2@example.com']);
-    expect(filasAviso()[0][3]).toBe('EMAIL_PARCIAL (1 de 2 enviados)');
+    expect(outbox()[0]).toMatchObject({ estado: 'ERROR', ultimoError: 'PARCIAL (1 de 2 enviados)' });
+    cuota.falloEnvio = null;
+    avanzar(LEASE);
+    global.procesarNotificacionesPropuestasPendientes();
+    expect(destinatarios()).toEqual(['val1@example.com', 'val2@example.com']);
+    expect(outbox()[0].estado).toBe('ENVIADA');
   });
 
-  test('cuota diaria agotada: la propuesta sigue creada y se audita', () => {
+  test('cuota diaria agotada: la propuesta sigue creada y el aviso queda reintentable', () => {
     cuota.restante = 0;
     expect(proponer().status).toBe('ok');
     expect(filas()).toHaveLength(1);
-    expect(filasAviso()[0][3]).toBe('EMAIL_FALLO (0 de 2 enviados, cuota diaria agotada)');
+    expect(outbox()[0]).toMatchObject({ estado: 'ERROR', ultimoError: 'FALLO (0 de 2 enviados, cuota diaria agotada)' });
   });
 
-  test('la hoja de Usuarios no se puede leer: la propuesta sigue creada y se audita EMAIL_ERROR', () => {
+  test('la hoja de Usuarios no se puede leer: la propuesta sigue creada y el aviso queda ERROR', () => {
     global.sheetUserRepository_listarConPermisos = jest.fn(() => { throw new Error('No existe una hoja llamada "Usuarios"'); });
     expect(proponer().status).toBe('ok');
     expect(filas()).toHaveLength(1);
     expect(enviados).toHaveLength(0);
-    expect(filasAviso()[0][3]).toBe('EMAIL_ERROR');
+    expect(outbox()[0]).toMatchObject({ estado: 'ERROR', ultimoError: 'LECTURA_USUARIOS' });
   });
 
-  test('aunque el propio notificador reviente (lance una excepcion), la respuesta es la de exito y queda EMAIL_ERROR', () => {
+  test('aunque el propio notificador reviente (lance una excepcion), la respuesta es la de exito, no se deshace nada y el Historial queda limpio', () => {
     global.propuestaNotificacion_notificar = jest.fn(() => { throw new Error('explota'); });
     const r = proponer();
     expect(r.status).toBe('ok');
     expect(filas()).toHaveLength(1);
     expect(trasheados).toEqual([]);
-    expect(filasAviso()[0][3]).toBe('EMAIL_ERROR');
+    expect(historial()).toEqual(soloLaPropuesta());
+    expect(global.Logger.log.mock.calls.map((c) => c[0]).join('\n')).toContain('no se pudo avisar a los validadores');
   });
 
-  test('aunque falle el armado del texto de auditoria, la respuesta sigue siendo de exito (solo falta la fila del aviso)', () => {
-    global.propuestaNotificacion_textoAuditoria = jest.fn(() => { throw new Error('explota'); });
-    expect(proponer().status).toBe('ok');
+  test('el outbox NO existe (setup sin correr): la propuesta funciona, no se manda nada y el Historial queda limpio', () => {
+    montar({ sinOutbox: true });
+    const r = proponer();
+    expect(r.status).toBe('ok');
     expect(filas()).toHaveLength(1);
+    expect(enviados).toHaveLength(0);
+    expect(historial()).toEqual(soloLaPropuesta());
+    expect(E.hojas[NOMBRE]).toBeUndefined();
+  });
+
+  test.each([
+    ['todo falla', (c) => { c.falloEnvio = () => true; }],
+    ['parcial', (c) => { c.falloEnvio = (m) => m.to === 'val1@example.com'; }],
+    ['cuota agotada', (c) => { c.restante = 0; }],
+    ['todo bien', () => {}]
+  ])('9. Historial limpio en cualquier resultado del aviso (%s): nunca una fila notificarPropuestaItf ni de email', (nombre, preparar) => {
+    preparar(cuota);
+    proponer();
+    expect(historial()).toEqual(soloLaPropuesta());
     expect(filasAviso()).toHaveLength(0);
   });
 });
 
-describe('8. propuesta fallida -> NO hay email', () => {
+describe('8. propuesta fallida -> NO hay email ni fila en el outbox', () => {
   const sinAviso = () => {
     expect(global.MailApp.sendEmail).not.toHaveBeenCalled();
     expect(global.sheetUserRepository_listarConPermisos).not.toHaveBeenCalled();
+    expect(outbox()).toHaveLength(0);
     expect(filasAviso()).toHaveLength(0);
   };
 
@@ -350,22 +493,21 @@ describe('8. propuesta fallida -> NO hay email', () => {
   });
 
   test('la hoja ItfEventos no existe: SERVICE_UNAVAILABLE y ningun email', () => {
-    montar({ sinHoja: true });
+    montar({ entorno: { sinHoja: true } });
     expect(proponer()).toMatchObject({ status: 'error', code: 'SERVICE_UNAVAILABLE' });
     sinAviso();
   });
 
-  test('el mismo clientRequestId con OTRO contenido: IDEMPOTENCY_CONFLICT, y no se manda otro email (ya hubo el del original)', () => {
+  test('el mismo clientRequestId con OTRO contenido: IDEMPOTENCY_CONFLICT, y no se manda otro email ni se crea otra fila', () => {
     const b = cuerpo();
     expect(proponer(b).status).toBe('ok');
     global.MailApp.sendEmail.mockClear();
-    const antes = filasAviso().length;
     expect(proponer(Object.assign({}, b, { imageBase64: b64(JPEG(500, 8)) })).code).toBe('IDEMPOTENCY_CONFLICT');
     expect(global.MailApp.sendEmail).not.toHaveBeenCalled();
-    expect(filasAviso()).toHaveLength(antes);
+    expect(outbox()).toHaveLength(1);
   });
 
-  test('el mismo archivo ya propuesto con otro clientRequestId: rechazado como duplicado y SIN segundo email', () => {
+  test('el mismo archivo ya propuesto con otro clientRequestId: rechazado como duplicado y SIN segundo email ni segunda fila', () => {
     const b = cuerpo();
     expect(proponer(b).status).toBe('ok');
     global.MailApp.sendEmail.mockClear();
@@ -373,6 +515,7 @@ describe('8. propuesta fallida -> NO hay email', () => {
     expect(r.status).toBe('error');
     expect(global.MailApp.sendEmail).not.toHaveBeenCalled();
     expect(filas()).toHaveLength(1);
+    expect(outbox()).toHaveLength(1);
   });
 
   test('sin sesion valida: nada', () => {
@@ -387,7 +530,7 @@ describe('9. el proponente tambien es validador -> comportamiento definido: RECI
     usuarios = USUARIOS.map((f, i) => (i === 1 ? [EMAIL, 'Ana Proponente', 'activo', 'SI', 'SI', 'SI'] : f));
     expect(proponer().status).toBe('ok');
     expect(destinatarios()).toEqual(['sesion@example.com', 'val1@example.com', 'val2@example.com']);
-    expect(filasAviso()[0][3]).toBe('EMAIL_ENVIADO (3 destinatarios)');
+    expect(outbox()[0]).toMatchObject({ estado: 'ENVIADA', destinatariosEnviados: 'sesion@example.com;val1@example.com;val2@example.com' });
   });
 
   test('si el proponente NO valida, no recibe nada', () => {
@@ -397,14 +540,15 @@ describe('9. el proponente tambien es validador -> comportamiento definido: RECI
 });
 
 describe('10. cero validadores -> la propuesta funciona igualmente', () => {
-  test('nadie con perfil_validar: propuesta creada, sin emails, y se audita EMAIL_SIN_DESTINATARIOS', () => {
+  test('nadie con perfil_validar: propuesta creada, sin emails, aviso reintentable y Historial limpio', () => {
     usuarios = [ENCABEZADO, FILA_PROPONENTE, ['inactivo@example.com', 'Inactivo', 'inactivo', 'SI', 'NO', 'SI']];
     const r = proponer();
     expect(r.status).toBe('ok');
     expect(r.data.estado).toBe('PROPUESTO');
     expect(filas()).toHaveLength(1);
     expect(global.MailApp.sendEmail).not.toHaveBeenCalled();
-    expect(historial()).toEqual([EMAIL + '|proponerItf|' + W + '|OK', EMAIL + '|notificarPropuestaItf|' + W + '|EMAIL_SIN_DESTINATARIOS']);
+    expect(outbox()[0]).toMatchObject({ estado: 'ERROR', ultimoError: 'SIN_DESTINATARIOS' });
+    expect(historial()).toEqual(soloLaPropuesta());
   });
 
   test('hoja de usuarios vacia (ni encabezado): igual', () => {
@@ -413,13 +557,48 @@ describe('10. cero validadores -> la propuesta funciona igualmente', () => {
     expect(filas()).toHaveLength(1);
     expect(enviados).toHaveLength(0);
   });
+
+  test('cuando despues se da de alta un validador, el reintento lo avisa', () => {
+    usuarios = [ENCABEZADO, FILA_PROPONENTE];
+    proponer();
+    usuarios = USUARIOS;
+    avanzar(LEASE);
+    expect(global.procesarNotificacionesPropuestasPendientes().enviadas).toBe(1);
+    expect(destinatarios()).toEqual(['val1@example.com', 'val2@example.com']);
+  });
 });
 
-describe('interruptor apagado: modo legacy puro, ni un solo email', () => {
+describe('la propuesta deja de estar pendiente antes de que salga el aviso', () => {
+  test('retirada por el proponente despues de un envio fallido: el reintento NO manda un «pendiente» falso y queda OMITIDA', () => {
+    cuota.falloEnvio = () => true;
+    const r = proponer();
+    cuota.falloEnvio = null;
+    expect(Api.handleRetirarPropuestaItf('t', { action: 'retirarPropuestaItf', sessionToken: 't', documentoId: r.data.documentoId, clientRequestId: crid() }).status).toBe('ok');
+    avanzar(LEASE);
+    expect(global.procesarNotificacionesPropuestasPendientes()).toMatchObject({ revisadas: 1, omitidas: 1, enviadas: 0 });
+    expect(enviados).toHaveLength(0);
+    expect(outbox()[0]).toMatchObject({ estado: 'OMITIDA', ultimoError: 'YA_NO_PENDIENTE' });
+  });
+
+  test('con el interruptor apagado el aviso pendiente espera y sale cuando se vuelve a encender', () => {
+    cuota.falloEnvio = () => true;
+    proponer();
+    cuota.falloEnvio = null;
+    avanzar(LEASE);
+    E.props.ITF_E9_ACTIVO = 'NO';
+    expect(global.procesarNotificacionesPropuestasPendientes()).toMatchObject({ enEspera: 1, enviadas: 0 });
+    expect(enviados).toHaveLength(0);
+    E.props.ITF_E9_ACTIVO = 'SI';
+    expect(global.procesarNotificacionesPropuestasPendientes().enviadas).toBe(1);
+  });
+});
+
+describe('interruptor apagado: modo legacy puro, ni un solo email ni fila de outbox', () => {
   test('con ITF_E9_ACTIVO ausente proponer da ITF_E9_INACTIVO y no se lee Usuarios ni se envia nada', () => {
-    montar({ props: {} });
+    montar({ entorno: { props: {} } });
     expect(proponer().code).toBe('ITF_E9_INACTIVO');
     expect(global.sheetUserRepository_listarConPermisos).not.toHaveBeenCalled();
     expect(global.MailApp.sendEmail).not.toHaveBeenCalled();
+    expect(outbox()).toHaveLength(0);
   });
 });
