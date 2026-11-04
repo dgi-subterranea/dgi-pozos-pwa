@@ -580,3 +580,180 @@ describe('no expone datos sensibles', () => {
     expect(cand.split(' | ')[1].length).toBeLessThanOrEqual(40);
   });
 });
+
+// ---------- salidas PARCIALES (presentacion: mismo calculo, un JSON corto por ejecucion) ----------
+
+const PARCIALES = [
+  ['diagnosticoE10Administradores', 'administradores'],
+  ['diagnosticoE10Tipo', 'tipo'],
+  ['diagnosticoE10EmailVerified', 'email_verified'],
+  ['diagnosticoE10Telegram', 'telegram'],
+  ['diagnosticoE10Recomendaciones', 'recomendaciones']
+];
+
+// 11 usuarios activos como los reales del piloto (11 con ubicacion y corregir, 3 validadores), con nombres y permisos amplios: el caso que truncaba el registro
+function escenarioReal11() {
+  const e = escenario();
+  const todos = COLS.slice(4);
+  const filas = [];
+  for (let i = 1; i <= 11; i += 1) {
+    filas.push(fila('persona' + i + '@irrigacion.gov.ar', 'Persona Numero ' + i + ' Apellido Largo', 'activo', i <= 3 ? todos : todos.filter((c) => !/_validar|_moderar|_anular/.test(c))));
+  }
+  e.hojas.Usuarios = usuarios(...filas);
+  return e;
+}
+
+// usuarios numerosos con nombres largos: fuerza el recorte de las listas
+function escenarioGrande(n) {
+  const e = escenario();
+  const todos = COLS.slice(4);
+  const filas = [];
+  for (let i = 1; i <= n; i += 1) {
+    filas.push(fila('usuario' + i + '@dominio-muy-largo-de-prueba' + (i % 7) + '.gov.ar', 'Nombre Muy Largo Numero ' + i + ' ' + 'X'.repeat(30), 'activo', i % 2 ? todos : ['perfil']));
+  }
+  e.hojas.Usuarios = usuarios(...filas);
+  return e;
+}
+
+describe('salidas parciales', () => {
+  afterEach(limpiarGlobales);
+
+  const correr = (nombre, e) => {
+    const { hojas } = instalarTodoSoloLectura({ ...e.hojas, Busquedas: [['t'], [1]], Historial: [['t'], [1], [2]] });
+    const objeto = D[nombre]();
+    expect(global.Logger.log).toHaveBeenCalledTimes(1);
+    return { hojas, objeto, texto: global.Logger.log.mock.calls[0][0] };
+  };
+
+  test('existen las 5 funciones de Apps Script y exponen los nombres exactos', () => {
+    PARCIALES.forEach(([nombre]) => expect(typeof D[nombre]).toBe('function'));
+    expect(PARCIALES.map(([n]) => n)).toEqual(['diagnosticoE10Administradores', 'diagnosticoE10Tipo', 'diagnosticoE10EmailVerified', 'diagnosticoE10Telegram', 'diagnosticoE10Recomendaciones']);
+  });
+
+  test.each(PARCIALES)('%s: UN solo registro, JSON valido, de la seccion pedida, con EL MISMO calculo que el diagnostico completo', (nombre, seccion) => {
+    const e = escenario();
+    e.conteos = { Busquedas: 1, Historial: 2 };        // las filas que cuenta el Apps Script falso de `correr`
+    const completo = informe(e);
+    const { texto } = correr(nombre, e);
+    const salida = JSON.parse(texto);
+    expect(salida.seccion).toBe(seccion);
+    expect(salida.soloLectura).toBe(true);
+    expect(salida.errores).toEqual([]);
+    expect(salida[seccion]).toEqual(completo[seccion]);        // mismo calculo, sin recortes en el caso normal
+    expect(Object.keys(salida)).toEqual(['version', 'seccion', 'soloLectura', seccion, 'errores']);
+  });
+
+  test.each(PARCIALES)('%s: con los 11 usuarios del piloto entra holgado en el tope', (nombre) => {
+    const { texto } = correr(nombre, escenarioReal11());
+    expect(texto.length).toBeLessThan(D.DIAG_E10_MAX_SALIDA);
+    expect(() => JSON.parse(texto)).not.toThrow();
+  });
+
+  test('cada seccion por separado es mucho mas corta que el diagnostico completo que se truncaba', () => {
+    const e = escenarioReal11();
+    const total = JSON.stringify(informe(e), null, 2).length;
+    PARCIALES.forEach(([nombre]) => {
+      instalarTodoSoloLectura({ ...e.hojas, Busquedas: [['t']], Historial: [['t']] });
+      global.Logger.log.mockClear();
+      D[nombre]();
+      expect(global.Logger.log.mock.calls[0][0].length).toBeLessThan(total / 2);
+    });
+  });
+
+  test.each(PARCIALES)('%s: con muchos usuarios nunca supera el tope; recorta las listas e informa cuantos omitio', (nombre, seccion) => {
+    const { texto, objeto } = correr(nombre, escenarioGrande(300));
+    expect(texto.length).toBeLessThanOrEqual(D.DIAG_E10_MAX_SALIDA);
+    const salida = JSON.parse(texto);
+    expect(salida.seccion).toBe(seccion);
+    expect(salida).toEqual(objeto);
+    expect(salida.error).toBeUndefined();
+  });
+
+  test('administradores con 300 usuarios: se omiten candidatos y queda dicho', () => {
+    const { texto } = correr('diagnosticoE10Administradores', escenarioGrande(300));
+    const s = JSON.parse(texto);
+    expect(s.administradores.candidatos.length).toBeGreaterThan(0);
+    expect(s.administradores._omitidos_candidatos).toBeGreaterThan(0);
+    expect(s.administradores.candidatos.length + s.administradores._omitidos_candidatos).toBe(15);
+  });
+
+  test('ajustarTamano: quita de a uno el ultimo de la lista mas pesada y, si no hay listas que quitar, devuelve un error corto en vez de truncar', () => {
+    const r = D.diagE10_ajustarTamano({ seccion: 'x', a: ['1'.repeat(300), '2'.repeat(300), '3'.repeat(300)], b: ['z'] }, 500);
+    const o = JSON.parse(r.texto);
+    expect(r.texto.length).toBeLessThanOrEqual(500);
+    expect(o.a).toEqual(['1'.repeat(300)]);
+    expect(o._omitidos_a).toBe(2);
+    expect(o.b).toEqual(['z']);
+    const sinListas = D.diagE10_ajustarTamano({ seccion: 'x', largo: 'y'.repeat(5000) }, 1000);
+    expect(JSON.parse(sinListas.texto)).toEqual({ version: 1, seccion: 'x', soloLectura: true, error: 'SECCION_DEMASIADO_LARGA' });
+  });
+
+  test.each(PARCIALES)('%s: SOLO LECTURA: corre sobre hojas, propiedades, cache, lock, red y mail que lanzan ante cualquier escritura, sin modificar nada', (nombre) => {
+    const e = escenario();
+    const { hojas, accesos } = instalarTodoSoloLectura({ ...e.hojas, Busquedas: [['t'], [1]], Historial: [['t']] });
+    const antes = JSON.stringify(Object.keys(hojas).map((n) => hojas[n].filas));
+    expect(() => D[nombre]()).not.toThrow();
+    expect(JSON.stringify(Object.keys(hojas).map((n) => hojas[n].filas))).toBe(antes);
+    expect([...new Set(accesos)].filter((m) => /^(set|append|insert|delete|clear|remove|copy|move|hide|protect|sort|merge)/i.test(m))).toEqual([]);
+  });
+
+  test.each(PARCIALES)('%s: tolera hojas y columnas faltantes, hoja vacia y filas invalidas', (nombre, seccion) => {
+    [
+      {},
+      { Usuarios: [] },
+      { Usuarios: [[]] },
+      { Usuarios: [['email', 'estado'], ['a@x.com', 'activo'], [42, {}, new Date()], [null, null]] },
+      { Usuarios: [COLS] }
+    ].forEach((hojas) => {
+      const { texto } = correr(nombre, { hojas, conteos: {} });
+      const s = JSON.parse(texto);
+      expect(s.seccion).toBe(seccion);
+      expect(s.error).toBeUndefined();
+      limpiarGlobales();
+    });
+  });
+
+  test('si el spreadsheet no se puede abrir: un JSON corto con el error acotado (sin ids), no una excepcion', () => {
+    instalarTodoSoloLectura({});
+    global.SpreadsheetApp = { openById: () => { throw new Error('sin acceso a 1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 de ana@irrigacion.gov.ar'); } };
+    PARCIALES.forEach(([nombre, seccion]) => {
+      global.Logger.log.mockClear();
+      let r;
+      expect(() => { r = D[nombre](); }).not.toThrow();
+      expect(global.Logger.log).toHaveBeenCalledTimes(1);
+      expect(r.seccion).toBe(seccion);
+      expect(r.error).toMatch(/NO_SE_PUDO_CONSTRUIR_EL_INFORME/);
+      expect(global.Logger.log.mock.calls[0][0]).not.toContain('ana@irrigacion.gov.ar');
+    });
+  });
+
+  test('una lectura fallida se informa como codigo en `errores` de la parcial, sin romper', () => {
+    const e = escenario();
+    const original = deps(e.hojas, e.conteos);
+    const r = D.diagE10_salidaParcial(D.diagE10_construir({ datosHoja: (n) => { if (n === 'UbicacionCorrecciones') { throw new Error('fallo con ana@irrigacion.gov.ar'); } return original.datosHoja(n); }, contarFilas: original.contarFilas }), 'tipo');
+    const s = JSON.parse(r.texto);
+    expect(s.errores.some((x) => /LECTURA_UbicacionCorrecciones/.test(x))).toBe(true);
+    expect(r.texto).not.toContain('ana@irrigacion.gov.ar');
+    expect(s.tipo.totalActivos).toBe(7);
+  });
+
+  test('privacidad: ninguna parcial muestra un email completo salvo los candidatos a administrador', () => {
+    const e = escenario();
+    const todos = ['ana@irrigacion.gov.ar', 'beto@irrigacion.gov.ar', 'carla@irrigacion.gov.ar', 'dario@irrigacion.gov.ar', 'elena@irrigacion.gov.ar', 'fede@gmail.com', 'gaby@irrigacion.gov.ar', 'hugo@irrigacion.gov.ar'];
+    PARCIALES.forEach(([nombre, seccion]) => {
+      const { texto } = correr(nombre, e);
+      const completos = todos.filter((m) => texto.includes(m));
+      expect(completos).toEqual(seccion === 'administradores' ? ['ana@irrigacion.gov.ar', 'beto@irrigacion.gov.ar'] : []);
+      limpiarGlobales();
+    });
+  });
+
+  test('el diagnostico completo sigue igual: diagnosticoE10UsuariosPermisos() imprime todas las secciones en un solo registro', () => {
+    const e = escenario();
+    instalarTodoSoloLectura({ ...e.hojas, Busquedas: [['t']], Historial: [['t']] });
+    D.diagnosticoE10UsuariosPermisos();
+    expect(global.Logger.log).toHaveBeenCalledTimes(1);
+    const s = JSON.parse(global.Logger.log.mock.calls[0][0]);
+    expect(Object.keys(s)).toEqual(['version', 'soloLectura', 'usuarios', 'mapa', 'ubicacion', 'administradores', 'tipo', 'email_verified', 'telegram', 'errores', 'recomendaciones']);
+  });
+});

@@ -2,6 +2,12 @@
 //
 //   diagnosticoE10UsuariosPermisos()   Se corre a mano desde el editor de Apps Script. Informa en el Logger (y devuelve) UN JSON con las secciones:
 //                                      usuarios | mapa | ubicacion | administradores | tipo | email_verified | telegram | recomendaciones
+//                                      (puede superar lo que Apps Script muestra en el registro: para consultar por partes usar las funciones siguientes)
+//   diagnosticoE10Administradores()    UNA seccion por ejecucion, con el MISMO calculo y un tope de tamano para que el registro no se trunque:
+//   diagnosticoE10Tipo()               administradores | tipo | email_verified | telegram | recomendaciones
+//   diagnosticoE10EmailVerified()
+//   diagnosticoE10Telegram()
+//   diagnosticoE10Recomendaciones()
 //
 // SOLO LECTURA, de forma estricta: lee las hojas Usuarios, UbicacionFuenteSugerencias, UbicacionCorrecciones, UbicacionCorreccionesLog y UbicacionFuenteDecisiones (valores) y cuenta las filas de
 // Busquedas e Historial (sin leer su contenido). NO escribe celdas, NO agrega filas ni columnas, NO crea hojas, NO escribe Script Properties, NO toca el cache ni el lock, NO crea triggers, NO manda
@@ -711,6 +717,94 @@ function diagE10_depsReales() {
   };
 }
 
+// --- salidas PARCIALES (presentacion, mismo calculo) ---
+//
+// El registro de Apps Script se trunca cuando es largo: diagnosticoE10UsuariosPermisos() imprime TODO en un solo JSON. Estas funciones usan EXACTAMENTE el mismo calculo (diagE10_construir) pero
+// imprimen UNA seccion cada una, y garantizan un tope de tamano (DIAG_E10_MAX_SALIDA caracteres): si una seccion no entra, se van quitando los ultimos elementos de su lista mas larga y se
+// informa cuantos se omitieron (_omitidos_<lista>). Mismas garantias de siempre: solo lectura, emails enmascarados (salvo los candidatos a administrador), sin ninguna API de escritura.
+var DIAG_E10_MAX_SALIDA = 6000;
+
+function diagE10_arreglos(nodo, salida) {
+  if (nodo !== null && typeof nodo === 'object') {
+    Object.keys(nodo).forEach(function (k) {
+      var v = nodo[k];
+      if (Array.isArray(v)) {
+        if (v.length > 0) {
+          salida.push({ padre: nodo, clave: k });
+        }
+        v.forEach(function (x) { diagE10_arreglos(x, salida); });
+      } else if (v !== null && typeof v === 'object') {
+        diagE10_arreglos(v, salida);
+      }
+    });
+  }
+  return salida;
+}
+
+// Devuelve {texto, objeto}: el JSON (con sangria de 1 espacio) de una copia de `obj` que no supera `max` caracteres, quitando de a un elemento el ultimo de la lista mas pesada.
+function diagE10_ajustarTamano(obj, max) {
+  var copia = JSON.parse(JSON.stringify(obj));
+  for (var i = 0; i < 2000; i += 1) {
+    var texto = JSON.stringify(copia, null, 1);
+    if (texto.length <= max) {
+      return { texto: texto, objeto: copia };
+    }
+    var candidatas = diagE10_arreglos(copia, []);
+    if (candidatas.length === 0) {
+      break;
+    }
+    var peor = candidatas[0];
+    var pesoPeor = -1;
+    candidatas.forEach(function (c) {
+      var peso = JSON.stringify(c.padre[c.clave]).length;
+      if (peso > pesoPeor) { pesoPeor = peso; peor = c; }
+    });
+    peor.padre[peor.clave].pop();
+    peor.padre['_omitidos_' + peor.clave] = (peor.padre['_omitidos_' + peor.clave] || 0) + 1;
+  }
+  var minimo = { version: DIAG_E10_VERSION, seccion: obj && obj.seccion, soloLectura: true, error: 'SECCION_DEMASIADO_LARGA' };
+  return { texto: JSON.stringify(minimo, null, 1), objeto: minimo };
+}
+
+// Pura: arma la salida de UNA seccion a partir del informe completo. seccion: una clave de informe (administradores, tipo, email_verified, telegram, recomendaciones, ...).
+function diagE10_salidaParcial(informe, seccion) {
+  var salida = { version: DIAG_E10_VERSION, seccion: seccion, soloLectura: true };
+  salida[seccion] = informe ? informe[seccion] : undefined;
+  salida.errores = informe && Array.isArray(informe.errores) ? informe.errores : [];
+  return diagE10_ajustarTamano(salida, DIAG_E10_MAX_SALIDA);
+}
+
+function diagE10_emitirParcial(seccion) {
+  var resultado;
+  try {
+    resultado = diagE10_salidaParcial(diagE10_construir(diagE10_depsReales()), seccion);
+  } catch (err) {
+    resultado = diagE10_ajustarTamano({ version: DIAG_E10_VERSION, seccion: seccion, soloLectura: true, error: 'NO_SE_PUDO_CONSTRUIR_EL_INFORME: ' + diagE10_errorSeguro(err) }, DIAG_E10_MAX_SALIDA);
+  }
+  Logger.log(resultado.texto);
+  return resultado.objeto;
+}
+
+function diagnosticoE10Administradores() {
+  return diagE10_emitirParcial('administradores');
+}
+
+function diagnosticoE10Tipo() {
+  return diagE10_emitirParcial('tipo');
+}
+
+function diagnosticoE10EmailVerified() {
+  return diagE10_emitirParcial('email_verified');
+}
+
+function diagnosticoE10Telegram() {
+  return diagE10_emitirParcial('telegram');
+}
+
+function diagnosticoE10Recomendaciones() {
+  return diagE10_emitirParcial('recomendaciones');
+}
+
 // --- entrada de Apps Script (a mano) ---
 
 function diagnosticoE10UsuariosPermisos() {
@@ -727,6 +821,14 @@ function diagnosticoE10UsuariosPermisos() {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     diagnosticoE10UsuariosPermisos,
+    diagnosticoE10Administradores,
+    diagnosticoE10Tipo,
+    diagnosticoE10EmailVerified,
+    diagnosticoE10Telegram,
+    diagnosticoE10Recomendaciones,
+    diagE10_salidaParcial,
+    diagE10_ajustarTamano,
+    DIAG_E10_MAX_SALIDA,
     diagE10_construir,
     diagE10_depsReales,
     diagE10_analizarUsuarios,
