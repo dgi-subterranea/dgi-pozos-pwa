@@ -357,6 +357,49 @@ body:has(#screen-loading:not([hidden])) {
   color: var(--color-text);
 }
 
+/* Credito del desarrollo ("Desarrollado por Hidrogeologia (Albrieu - Ryan)"): texto chico y de jerarquia secundaria
+   (tamano apagado, color --color-text-soft para mantener contraste AA), siempre debajo del logo/nombre institucional.
+   Tres apariciones, nunca dos a la vez: arranque (.credito-app-inicio), login (.credito-app-login) y UN footer global
+   (.credito-app-pie) que se oculta en esas dos pantallas. Ninguna es position:fixed: el footer va en el flujo normal del body
+   (columna flex), asi no tapa botones ni contenido, y suma la safe area inferior de los iPhone en modo PWA. */
+.credito-app {
+  margin: 0;
+  font-size: 0.7rem;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+  text-align: center;
+  color: var(--color-text-soft);
+}
+.credito-app-pie {
+  width: 100%;
+  max-width: 420px;
+  margin-top: auto;
+  padding: 22px 0 env(safe-area-inset-bottom, 0px);
+}
+body:has(#screen-loading:not([hidden])) .credito-app-pie,
+body:has(#screen-login:not([hidden])) .credito-app-pie {
+  display: none;
+}
+.credito-app-login {
+  margin-top: 22px;
+}
+/* En arranque ocupa el borde inferior del bloque (que ya mide el viewport menos body y safe areas) sin mover el centrado del logo y el pozo:
+   el mismo relleno arriba y abajo reserva su lugar. */
+#screen-loading:not([hidden]) {
+  position: relative;
+  padding-top: 44px;
+  padding-bottom: 44px;
+}
+.credito-app-inicio {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+@media (min-width: 640px) {
+  .credito-app-pie { max-width: 480px; }
+}
+
 /* Version chica y apagada del logo institucional, al pie del resto de
    pantallas - visible pero fuera del camino del buscador/perfil. En el
    estado vacio de la pantalla principal (sin resultado ni error) se

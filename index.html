@@ -29,6 +29,9 @@
       <p class="inicio-nombre">Consulta de Pozos</p>
     </div>
     <div class="cargando cargando-lg" data-cargando>Cargando…</div>
+    <p class="credito-app credito-app-inicio">
+      Desarrollado por Hidrogeología (Albrieu - Ryan)
+    </p>
   </div>
 
   <div id="screen-login" class="screen" hidden>
@@ -56,6 +59,9 @@
       <span class="login-brand-caption">Un servicio de</span>
       <svg class="irr-logo irr-logo-login" role="img" aria-label="Irrigación"><use href="#irr-logo"></use></svg>
     </div>
+    <p class="credito-app credito-app-login">
+      Desarrollado por Hidrogeología (Albrieu - Ryan)
+    </p>
   </div>
 
   <div id="screen-main" class="screen" hidden>
@@ -2120,6 +2126,12 @@
       </div>
     </div>
   </div>
+
+  <!-- Credito del desarrollo: UN solo footer global, en el flujo normal (no fijo), despues de la pantalla visible. Se oculta en arranque y login,
+       que llevan su propio credito (ver css: .credito-app). -->
+  <footer class="credito-app credito-app-pie">
+    Desarrollado por Hidrogeología (Albrieu - Ryan)
+  </footer>
 
   <script src="js/wellIdValidator.js"></script>
   <script src="js/errorMessages.js"></script>
