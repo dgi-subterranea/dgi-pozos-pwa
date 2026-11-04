@@ -1020,3 +1020,19 @@ Estados: `PENDIENTE` (todavía no se intentó), `ENVIADA` (todos los validadores
 **Limitaciones honestas.** (1) Si el proceso muriera justo después de que MailApp aceptó un envío y antes de guardar el resultado, un reintento posterior (pasado el lease) podría repetir ese email: es la ventana mínima de cualquier cola «al menos una vez», mitigada porque solo se manda a quienes aún no figuran en `destinatariosEnviados`. (2) Sin la hoja creada el aviso **no se guarda ni se envía** (la propuesta sigue válida y el log lo dice); la hoja nunca se crea sola. (3) Sin trigger, los reintentos ocurren cuando el proponente repite el pedido o cuando se corre `procesarNotificacionesPropuestasPendientes()`.
 
 **Verificación y despliegue.** `diagnosticoPropuestasItfEmail` (editor de Apps Script) muestra cuota restante, `PWA_URL`, **cuántos** validadores recibirían el aviso (direcciones enmascaradas) y cuántas filas hay en cada estado del outbox; no envía ni escribe nada. `setupPropuestaNotificacionesSheet` (idempotente: crea la hoja con su encabezado si no existe; si existe solo la valida y falla si el esquema no coincide) **no se ejecutó**. Tests con MailApp, hojas, lock, `Usuarios` y hora simulados (nunca emails reales): `backend/test/PropuestaNotificacion.test.js`, `backend/test/PropuestaNotificacionesRepository.test.js` y `backend/test/ApiProponerItfNotificacion.test.js`. **Nada de esto está desplegado**: es código local (el commit `34dcbea` anterior, con la versión sin outbox, tampoco se desplegó); no se creó ninguna versión de Apps Script ni se hizo `gas:push`.
+
+### 19.9 Backend v48 en producción y smoke real de E9 (04/11/2026)
+
+**Despliegue.** El backend productivo quedó en la **versión 48** («E9 ITF proposal notifications outbox»; creada y desplegada el 04/11/2026 UTC) sobre el deployment productivo existente, con la **misma URL `/exec`** (no se creó ningún deployment nuevo; `@HEAD` sigue separado). El storage sigue en la **v6**. Rollback del backend: `npm run gas:deploy:main -- --version 47 --permitir-retroceso` (y repetir con el token de confirmación que imprime el comando).
+
+**Smoke productivo (informado por quien lo ejecutó, con la bandera `ITF_E9_ACTIVO` encendida y el preflight en verde).** Una propuesta incorrecta se creó y se rechazó con `NO_CORRESPONDE_POZO` (el legacy siguió vigente); una propuesta real nueva generó **una sola fila** en `PropuestaNotificaciones` con `estado = ENVIADA`, `intentos = 1`, `ultimoError` vacío y `destinatariosEnviados` con los dos validadores, y ambos recibieron el email; la propuesta real se aprobó y `ItfEventos` pasó de 3 a 5 filas (registro del legacy + `ITF_APROBADO`).
+
+**Pendiente de comprobar a mano (no se agregó ninguna función de diagnóstico):**
+
+1. la propuesta aprobada ya no figura `PENDIENTE`;
+2. el pozo tiene **un solo** ITF vigente (el nuevo);
+3. el legacy anterior quedó como histórico/reemplazado;
+4. `PropuestaNotificaciones` sigue con **una sola fila** para esa propuesta, todavía `ENVIADA`;
+5. la aprobación **no** generó un email adicional a los validadores.
+
+**Todavía sin hacer.** `procesarNotificacionesPropuestasPendientes()` no tiene trigger (se ejecuta a mano); crearlo queda para una decisión posterior.
