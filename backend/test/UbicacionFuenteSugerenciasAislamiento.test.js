@@ -74,7 +74,8 @@ describe('separacion estricta: una sugerencia no es una decision', () => {
   });
 
   test('solo los 3 archivos nuevos, Api.js y el servicio de decisiones (invalidacion del cache y nucleo) conocen el modulo; el resto del backend no', () => {
-    const permitidos = NUEVOS.concat(['Api.js', 'UbicacionFuenteDecisionesService.js']);
+    // DiagnosticoE10.js: diagnostico manual de SOLO LECTURA de E10-1; lee la hoja de sugerencias por nombre para medir autores historicos, no escribe y ningun endpoint lo llama
+    const permitidos = NUEVOS.concat(['Api.js', 'UbicacionFuenteDecisionesService.js', 'DiagnosticoE10.js']);
     fs.readdirSync(src).filter((f) => permitidos.indexOf(f) === -1).forEach((f) => {
       expect(leer('backend', 'src', f)).not.toMatch(/ubicacionFuenteSugerencias|UbicacionFuenteSugerencias|UFS_|ufs_/);
     });
