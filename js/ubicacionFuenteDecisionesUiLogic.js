@@ -11,7 +11,9 @@
 //     hasta que un validador las aprueba. El validador NO ve botones «Sugerir»: decide directo (y revisa las sugerencias en su cola).
 //
 // Dependencias (globales en el navegador, cargadas antes): ubicacionesConocidasLogic_escapar (se usa solo para el HTML).
-var UFDUI_ROL = { VALIDADOR: 'VALIDADOR', LECTOR: 'LECTOR' };
+// E10-1: `ubicacion` es solo LECTURA. VALIDADOR = ubicacion + ubicacion_validar (decide). LECTOR (nombre historico) = ubicacion + ubicacion_corregir: es quien SUGIERE y cancela sus sugerencias
+// (mutaciones). CONSULTA = solo ubicacion: ve los estados de las fuentes, sin ninguna accion.
+var UFDUI_ROL = { VALIDADOR: 'VALIDADOR', LECTOR: 'LECTOR', CONSULTA: 'CONSULTA' };
 var UFDUI_ESTADOS = { SIN_REVISAR: 'SIN_REVISAR', ACEPTADA: 'ACEPTADA', DESCARTADA: 'DESCARTADA' };
 var UFDUI_ETIQUETA_ESTADO = { SIN_REVISAR: 'Sin revisar', ACEPTADA: 'Aceptada', DESCARTADA: 'Descartada' };
 var UFDUI_TIPOS_REGISTRALES = { REPORTE_POZOS: true, IRRIGACION: true };
@@ -111,7 +113,10 @@ function ufdui_rol(permisos) {
   if (!permisos || permisos.ubicacion !== true) {
     return null;
   }
-  return permisos.ubicacion_validar === true ? UFDUI_ROL.VALIDADOR : UFDUI_ROL.LECTOR;
+  if (permisos.ubicacion_validar === true) {
+    return UFDUI_ROL.VALIDADOR;
+  }
+  return permisos.ubicacion_corregir === true ? UFDUI_ROL.LECTOR : UFDUI_ROL.CONSULTA;
 }
 
 // --- Vinculo entre las fuentes que dibuja la ficha y las que informa el backend ---

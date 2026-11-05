@@ -82,7 +82,8 @@ describe('handleLogin', () => {
 
     const result = AuthService.handleLogin('un-id-token-cualquiera');
 
-    expect(result.data.permisos).toEqual({ perfil: true, datos: true, ubicacion: false, ne: false });
+    // E10-1: los permisos salen del catalogo (siempre TODOS los ids, en booleano): lo que la hoja no trae es false
+    expect(result.data.permisos).toEqual({ ...global.permisosCatalogo_vacios(), perfil: true, datos: true });
 
     const payloadB64 = result.data.sessionToken.split('.')[0];
     const payload = JSON.parse(global.Utilities.base64DecodeWebSafe(payloadB64).toString('utf8'));
@@ -370,7 +371,7 @@ describe('handleCheckSession', () => {
 
     const result = AuthService.handleCheckSession(token);
 
-    expect(result.data.permisos).toEqual({ perfil: true, datos: false, ubicacion: true, ne: false });
+    expect(result.data.permisos).toEqual({ ...global.permisosCatalogo_vacios(), perfil: true, ubicacion: true });
   });
 });
 
@@ -410,10 +411,11 @@ describe('permiso reemplazo (Modulo Reemplazos v1)', () => {
 
   test('sin permisos en el repositorio, los permisos vacios incluyen reemplazo=false', () => {
     global.sheetUserRepository_getUserStatus.mockReturnValue({ found: true, active: true });
-    expect(AuthService.getUserAccess('f@example.com').permisos).toEqual({
-      perfil: false, perfil_subir: false, perfil_validar: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false, fotos_moderar: false,
-      ubicacion_corregir: false, ubicacion_validar: false, observaciones: false, observaciones_agregar: false, observaciones_anular: false
-    });
+    const permisos = AuthService.getUserAccess('f@example.com').permisos;
+    expect(permisos).toEqual(global.permisosCatalogo_vacios());
+    expect(permisos.reemplazo).toBe(false);
+    expect(Object.keys(permisos).sort()).toEqual(global.permisosCatalogo_ids().sort());     // 17: los 15 de siempre + mapa + usuarios_admin
+    expect(Object.keys(permisos)).toHaveLength(17);
   });
 });
 

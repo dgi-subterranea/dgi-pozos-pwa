@@ -10,6 +10,7 @@ var ERROR_MESSAGES = {
   INVALID_WELL_ID_RANGE: 'El departamento debe estar entre 01 y 19.',
   UNAUTHORIZED: 'Tu sesión venció. Iniciá sesión de nuevo.',
   USER_DISABLED: 'Tu cuenta no tiene acceso habilitado. Contactá al administrador.',
+  EMAIL_NO_VERIFICADO: 'Tu cuenta de Google no tiene el correo verificado. Verificalo en Google e intentá de nuevo.',
   PROFILE_NOT_FOUND: 'No se encontró información para el pozo {wellId}.',
   PERMISSION_DENIED: 'No tenés permiso para esta función.',
   SERVICE_UNAVAILABLE: 'No se pudo completar la consulta. Intentá nuevamente.',

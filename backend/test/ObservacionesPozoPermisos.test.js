@@ -7,6 +7,8 @@ let Repo;
 
 const BASE = ['email', 'nombre', 'estado', 'fecha_alta', 'perfil', 'datos', 'ubicacion', 'ne', 'reemplazo', 'fotos', 'fotos_carga', 'fotos_moderar', 'ubicacion_corregir', 'ubicacion_validar'];
 const NUEVOS = ['observaciones', 'observaciones_agregar', 'observaciones_anular'];
+// E10-1: el catalogo suma dos permisos (mapa, usuarios_admin); la columna de cada uno puede faltar en la hoja (fail-closed)
+const E10 = ['mapa', 'usuarios_admin'];
 const PERMISOS_VIEJOS = ['perfil', 'perfil_subir', 'perfil_validar', 'datos', 'ubicacion', 'ne', 'reemplazo', 'fotos', 'fotos_carga', 'fotos_moderar', 'ubicacion_corregir', 'ubicacion_validar'];
 
 function usuarios(header, filas) {
@@ -50,7 +52,7 @@ describe('hoja Usuarios con las columnas nuevas', () => {
     const r = Repo.sheetUserRepository_getUserStatus('nadie@x.com');
     expect(r.found).toBe(false);
     expect(r.active).toBe(false);
-    expect(Object.keys(r.permisos).sort()).toEqual(PERMISOS_VIEJOS.concat(NUEVOS).sort());
+    expect(Object.keys(r.permisos).sort()).toEqual(PERMISOS_VIEJOS.concat(NUEVOS, E10).sort());
     Object.keys(r.permisos).forEach((k) => expect(r.permisos[k]).toBe(false));
   });
 });
@@ -63,7 +65,7 @@ describe('compatibilidad: la hoja Usuarios SIN las columnas nuevas (todavia no a
     expect(s.active).toBe(true);
     expect(s.permisos).toEqual({
       perfil: true, perfil_subir: false, perfil_validar: false, datos: true, ubicacion: true, ne: false, reemplazo: true, fotos: true, fotos_carga: false, fotos_moderar: false, ubicacion_corregir: true, ubicacion_validar: false,
-      observaciones: false, observaciones_agregar: false, observaciones_anular: false
+      observaciones: false, observaciones_agregar: false, observaciones_anular: false, mapa: false, usuarios_admin: false
     });
   });
 
@@ -85,26 +87,25 @@ describe('compatibilidad: la hoja Usuarios SIN las columnas nuevas (todavia no a
     header2.slice(4).forEach((c) => { todos[c] = 'SI'; });
     usuarios(header2, [fila(header2, Object.assign({ email: 'b@x.com', estado: 'activo' }, todos))]);
     const q = Repo.sheetUserRepository_getUserStatus('b@x.com').permisos;
-    expect(Object.keys(q).sort()).toEqual(PERMISOS_VIEJOS.concat(NUEVOS).sort());
-    Object.keys(q).forEach((k) => expect(q[k]).toBe(k !== 'perfil_subir' && k !== 'perfil_validar'));      // E9-4: esas dos columnas todavia no estan en la hoja -> false (fail-closed)
+    expect(Object.keys(q).sort()).toEqual(PERMISOS_VIEJOS.concat(NUEVOS, E10).sort());
+    Object.keys(q).forEach((k) => expect(q[k]).toBe(['perfil_subir', 'perfil_validar'].concat(E10).indexOf(k) < 0));      // E9-4: esas dos columnas todavia no estan en la hoja -> false (fail-closed)
   });
 });
 
 describe('listas de permisos y defaults', () => {
-  test('USUARIOS_COLUMNAS_PERMISO incluye los tres nuevos (ademas de los 9 de siempre)', () => {
+  test('las columnas de permiso salen del CATALOGO (fuente unica): incluyen los tres de observaciones y los 12 de siempre, mas mapa y usuarios_admin de E10-1', () => {
+    expect(Repo.sheetUserRepository_columnasPermiso().sort()).toEqual(PERMISOS_VIEJOS.concat(NUEVOS, E10).sort());
     const fuente = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'SheetUserRepository.js'), 'utf8');
-    const m = fuente.match(/var USUARIOS_COLUMNAS_PERMISO = \[([^\]]*)\]/);
-    const lista = m[1].split(',').map((x) => x.trim().replace(/'/g, ''));
-    expect(lista).toEqual(PERMISOS_VIEJOS.concat(NUEVOS));
+    expect(fuente).not.toMatch(/var USUARIOS_COLUMNAS_PERMISO/);
   });
 
-  test('permisos vacios (repositorio y AuthService): los 12 en false', () => {
+  test('permisos vacios (repositorio y AuthService): salen del catalogo, todos en false', () => {
     const fuenteAuth = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'AuthService.js'), 'utf8');
-    NUEVOS.forEach((n) => expect(fuenteAuth).toContain(n + ': false'));
+    expect(fuenteAuth).not.toMatch(/observaciones: false|perfil_subir: false/);        // ya no hay una lista literal en AuthService
     global.sheetUserRepository_getUserStatus.mockReturnValue({ found: true, active: true });
     const Auth = require('../src/AuthService');
     const p = Auth.getUserAccess('x@x.com').permisos;
-    expect(Object.keys(p).sort()).toEqual(PERMISOS_VIEJOS.concat(NUEVOS).sort());
+    expect(Object.keys(p).sort()).toEqual(PERMISOS_VIEJOS.concat(NUEVOS, E10).sort());
     Object.keys(p).forEach((k) => expect(p[k]).toBe(false));
   });
 

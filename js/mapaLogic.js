@@ -204,13 +204,18 @@ function mapaLogic_filtrarPorNE(pozos, wellIdSet, activo) {
 // app.js (que botones del hub y tarjetas del selector mostrar), para
 // mapa.js/cercaMio.js (defensa en profundidad al abrir) y para el selector
 // de mapas. Reglas (decididas por producto):
-//   - Pozos cerca mio: todo usuario ACTIVO, sin depender de ningun permiso.
-//   - Mapa Pozos Provincia: perfil=SI (o ne=SI: quien ve Niveles Estaticos
-//     tambien ve las dos opciones en el selector).
-//   - Mapa Niveles Estaticos: solo ne=SI.
-//   - Selector de mapas ('selector'): cuando hay DOS opciones (ne=SI);
-//     'provincia' = entra directo a Provincia sin selector (perfil=SI,
-//     ne=NO); 'ninguno' = sin acceso a Mapas (perfil=NO y ne=NO).
+//   - E10-1: TODO lo que usa el dataset general de pozos (Pozos cerca mio, mapa
+//     Pozos Provincia, seleccion por radio / poligono, Buscar reemplazo) exige el
+//     permiso `mapa` (el backend lo exige en los tres endpoints del dataset
+//     general). Sin `mapa` no se ofrece nada de eso.
+//   - Pozos cerca mio: mapa=SI.
+//   - Mapa Pozos Provincia: mapa=SI y (perfil=SI o ne=SI: quien ve Niveles
+//     Estaticos tambien ve las dos opciones en el selector).
+//   - Mapa Niveles Estaticos: solo ne=SI (su dataset es aparte: no depende de `mapa`).
+//   - Selector de mapas ('selector'): cuando hay DOS opciones (ne=SI y mapa=SI);
+//     'provincia' = entra directo a Provincia sin selector (mapa=SI, perfil=SI,
+//     ne=NO); 'ne' = entra directo a Niveles Estaticos (ne=SI, mapa=NO);
+//     'ninguno' = sin acceso a Mapas.
 //   - Perfil/ITF: perfil=SI. Evaluacion/Reemplazo: reemplazo=SI.
 //   - datos y ubicacion NO deciden ninguno de estos accesos: siguen
 //     controlando solo su informacion protegida (ficha / ubicacion
@@ -221,12 +226,14 @@ function mapaLogic_calcularAccesos(permisos, activo) {
     return { cercaMio: false, mapas: 'ninguno', provincia: false, ne: false, itf: false, reemplazo: false };
   }
   var p = permisos || {};
+  var mapa = p.mapa === true;
   var perfil = p.perfil === true;
   var ne = p.ne === true;
+  var provincia = mapa && (perfil || ne);
   return {
-    cercaMio: true,
-    mapas: ne ? 'selector' : (perfil ? 'provincia' : 'ninguno'),
-    provincia: perfil || ne,
+    cercaMio: mapa,
+    mapas: provincia ? (ne ? 'selector' : 'provincia') : (ne ? 'ne' : 'ninguno'),
+    provincia: provincia,
     ne: ne,
     itf: perfil,
     reemplazo: p.reemplazo === true
@@ -234,7 +241,7 @@ function mapaLogic_calcularAccesos(permisos, activo) {
 }
 
 // Que le corresponde ver al usuario al tocar "Mapa de pozos" ('selector' |
-// 'provincia' | 'ninguno') - ver mapaLogic_calcularAccesos.
+// 'provincia' | 'ne' | 'ninguno') - ver mapaLogic_calcularAccesos.
 function mapaLogic_determinarAccesoMapas(permisos) {
   return mapaLogic_calcularAccesos(permisos, true).mapas;
 }

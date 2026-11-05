@@ -78,7 +78,8 @@ function crearLeafletFalso() {
 const posgar = (ctx, p) => { const c = ctx.coordenadas_wgs84APosgar(p.lat, p.lon); return { x: Math.round(c.este * 1000) / 1000, y: Math.round(c.norte * 1000) / 1000 }; };
 
 const PERM_VALIDADOR = { perfil: true, datos: true, ubicacion: true, ubicacion_validar: true };
-const PERM_LECTOR = { perfil: true, datos: true, ubicacion: true, ubicacion_validar: false };
+const PERM_LECTOR = { perfil: true, datos: true, ubicacion: true, ubicacion_corregir: true, ubicacion_validar: false };   // E10-1: LECTOR = quien SUGIERE (ubicacion + ubicacion_corregir); `ubicacion` sola es solo consulta
+const PERM_CONSULTA = { perfil: true, datos: true, ubicacion: true };   // E10-1: solo lectura: ve estados, ninguna accion
 const PERM_CORREGIR = { perfil: true, datos: true, ubicacion: true, ubicacion_corregir: true };
 const PERM_SIN_UBICACION = { perfil: true, datos: true, ubicacion: false, ubicacion_validar: true };
 
@@ -237,6 +238,15 @@ describe('quien NO valida: lectura y botones de sugerir', () => {
     expect(t.el('ubic-conocidas').innerHTML).toContain('>Sugerir aceptar<');
     expect(t.el('ubic-conocidas').innerHTML).not.toMatch(PROHIBIDAS_AUTORITATIVAS);
     expect(t.el('ubic-conocidas').innerHTML).not.toMatch(/Quitar aceptaci/);
+  });
+
+  test('E10-1: con solo `ubicacion` (sin ubicacion_corregir) ve los estados pero NINGUNA accion (ni sugerir ni decidir) y la lectura de sugerencias no se pide', async () => {
+    const t = cargar({ permisos: PERM_CONSULTA });
+    await abrir(t, ['ACEPTADA', 'SIN_REVISAR', 'DESCARTADA']);
+    expect((t.el('ubic-conocidas').innerHTML.match(/<li class="ucon-fuente/g) || []).length).toBe(3);
+    ['REPORTE_POZOS', 'IRRIGACION_1', 'IRRIGACION_2'].forEach((f) => expect(accionesDe(tarjeta(t, f))).toEqual([]));
+    expect(t.el('ubic-conocidas').innerHTML).not.toMatch(/Sugerir|Aceptar|Descartar|Restaurar/);
+    expect(t.llamadas.sugeridas).toEqual([]);
   });
 
   test('"Validada en campo" sigue sin acciones de este dominio', async () => {

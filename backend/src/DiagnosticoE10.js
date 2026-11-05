@@ -23,7 +23,6 @@
 var DIAG_E10_VERSION = 1;
 var DIAG_E10_COLUMNAS_PROPUESTAS = ['tipo', 'version', 'actualizado_utc', 'actualizado_por', 'usuarios_admin', 'mapa'];
 var DIAG_E10_COLUMNAS_NO_PERMISO = ['email', 'nombre', 'estado', 'fecha_alta'];
-var DIAG_E10_AUTORIDAD = ['perfil_validar', 'ubicacion_validar', 'fotos_moderar', 'observaciones_anular'];
 var DIAG_E10_MODULOS_BUSQUEDA = ['perfil', 'datos', 'ubicacion', 'ne'];
 var DIAG_E10_CORREO_PERSONAL = ['gmail.com', 'googlemail.com', 'hotmail.com', 'hotmail.com.ar', 'outlook.com', 'outlook.com.ar', 'live.com', 'live.com.ar', 'yahoo.com', 'yahoo.com.ar', 'icloud.com', 'me.com', 'msn.com', 'proton.me', 'protonmail.com'];
 var DIAG_E10_HOJAS = {
@@ -47,6 +46,11 @@ var DIAG_E10_MAX_LISTA = 50;
 var DIAG_E10_MAX_ADMIN_CANDIDATOS = 15;
 
 // --- utilidades puras ---
+
+// Permisos de MODERACION / validacion del catalogo (E10-1: la lista sale del catalogo canonico, no se repite aca).
+function diagE10_autoridad() {
+  return permisosCatalogo_lista().filter(function (p) { return p.categoria === 'moderacion'; }).map(function (p) { return p.id; });
+}
 
 function diagE10_texto(v) {
   if (v === null || v === undefined) {
@@ -142,7 +146,8 @@ function diagE10_analizarUsuarios(data) {
   var header = data[0];
   var normHeaders = header.map(diagE10_norm);
   var indices = sheetUserRepository_indiceColumnas(header);
-  var esperadas = Object.keys(indices);
+  // E10-1: el indice del repositorio incluye ahora las columnas propuestas (mapa, usuarios_admin, tipo...). Este diagnostico sigue midiendo lo ACTUAL: las propuestas se informan aparte.
+  var esperadas = Object.keys(indices).filter(function (c) { return DIAG_E10_COLUMNAS_PROPUESTAS.indexOf(c) < 0; });
   var permisosCols = esperadas.filter(function (c) { return DIAG_E10_COLUMNAS_NO_PERMISO.indexOf(c) < 0; });
   out.permisosCols = permisosCols;
   var vistos = {};
@@ -409,7 +414,7 @@ function diagE10_informeAdministradores(an) {
   var activos = diagE10_activos(an);
   var tieneAdmin = an.columnas ? an.columnas.propuestasE10.usuarios_admin === true : false;
   var puntuados = activos.map(function (u) {
-    var autoridad = DIAG_E10_AUTORIDAD.filter(function (c) { return u.perm[c] === true; });
+    var autoridad = diagE10_autoridad().filter(function (c) { return u.perm[c] === true; });
     return { u: u, autoridad: autoridad, total: diagE10_concedidos(u).length };
   });
   function mejor(a, b) {
@@ -423,7 +428,7 @@ function diagE10_informeAdministradores(an) {
   elegidos = elegidos.slice(0, DIAG_E10_MAX_ADMIN_CANDIDATOS);
   return {
     totalActivos: activos.length,
-    criterio: 'activos con al menos uno de ' + DIAG_E10_AUTORIDAD.join(', ') + ' (orden: cantidad de esos permisos y luego total de permisos); si hay menos de 2 se agregan los de mas permisos (motivo "amplio")',
+    criterio: 'activos con al menos uno de ' + diagE10_autoridad().join(', ') + ' (orden: cantidad de esos permisos y luego total de permisos); si hay menos de 2 se agregan los de mas permisos (motivo "amplio")',
     columnaUsuariosAdminExiste: tieneAdmin,
     nota: 'SOLO candidatos para decidir: no se asigna nada. La decision y los emails los define el usuario',
     candidatos: elegidos.map(function (e) {

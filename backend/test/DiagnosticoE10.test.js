@@ -5,6 +5,8 @@ const path = require('path');
 const { instalarSheetsFalsos } = require('./fakeSheets');
 
 // En Apps Script estas funciones del login son globales (otro archivo del proyecto); el diagnostico las usa para medir EXACTAMENTE lo que el sistema interpreta.
+Object.assign(global, require('../src/PermisosCatalogo'));
+Object.assign(global, require('../src/UsuariosDominio'));
 Object.assign(global, require('../src/SheetUserRepository'));
 const D = require('../src/DiagnosticoE10');
 

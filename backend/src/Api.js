@@ -519,6 +519,36 @@ function handleGetWellLocation(sessionToken, wellId) {
 // respuesta de esta accion. Ambos son secundarios respecto de la
 // busqueda real del usuario, que ya se resolvio en el frontend antes de
 // llamar aca - por eso esto siempre devuelve status:'ok'.
+// E10-1: la telemetria ya no es "cualquier usuario activo".
+//   registerWellSearch   exige AL MENOS UNO de perfil / datos / ubicacion / ne (los modulos que componen una busqueda; no hay un permiso nuevo solo para telemetria) y que el pozo EXISTA
+//                        (pozoExistenciaService_verificar: la fuente institucional unica, UNA verificacion por llamada, sin lecturas nuevas). Pozo inexistente o indeterminado: sin ningun efecto
+//                        (ni Busquedas ni Telegram). Los flags de `modulos` son informativos y se acotan a los permisos reales de quien llama.
+//   registerDescargaItf  exige perfil (es la unica forma de descargar ITF) y un resumen coherente.
+// Se conserva la deduplicacion existente. El LIMITE DE TASA (por usuario y global, en particular para externos) queda PENDIENTE: E10-5.
+var API_MODULOS_BUSQUEDA = ['perfil', 'datos', 'ubicacion', 'ne'];
+
+function api_algunPermiso(permisos, lista) {
+  var p = permisos !== null && typeof permisos === 'object' ? permisos : {};
+  return lista.some(function (m) { return p[m] === true; });
+}
+
+function api_puedeRegistrarBusqueda(permisos) {
+  return api_algunPermiso(permisos, API_MODULOS_BUSQUEDA);
+}
+
+function api_puedeRegistrarDescarga(permisos) {
+  return !!permisos && permisos.perfil === true;
+}
+
+// modulos declarados por el cliente -> solo los 4 modulos de busqueda, en booleano estricto y SOLO si el usuario tiene ese permiso (nadie puede declarar un modulo que no tiene).
+function api_modulosCoherentes(modulos, permisos) {
+  var declarados = modulos !== null && typeof modulos === 'object' ? modulos : {};
+  var p = permisos !== null && typeof permisos === 'object' ? permisos : {};
+  var salida = {};
+  API_MODULOS_BUSQUEDA.forEach(function (m) { salida[m] = declarados[m] === true && p[m] === true; });
+  return salida;
+}
+
 function handleRegisterWellSearch(sessionToken, wellId, modulos) {
   var validation = validateSessionAndWellId(sessionToken, wellId, 'registerWellSearch');
   if (!validation.ok) {
@@ -526,7 +556,25 @@ function handleRegisterWellSearch(sessionToken, wellId, modulos) {
   }
   var session = validation.session;
   var access = getUserAccess(session.email);
-  var modulosSeguros = modulos || {};
+  if (!api_puedeRegistrarBusqueda(access.permisos)) {
+    logHistoryEvent(session.email, 'registerWellSearch', wellId, 'PERMISSION_DENIED');
+    return { status: 'error', code: 'PERMISSION_DENIED', message: 'usuario sin ningun modulo de busqueda: ' + session.email };
+  }
+  var existencia;
+  try {
+    existencia = pozoExistenciaService_verificar(wellId);
+  } catch (err) {
+    logHistoryEvent(session.email, 'registerWellSearch', wellId, 'SERVICE_UNAVAILABLE');
+    return { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'no se pudo verificar el pozo ' + wellId };
+  }
+  if (!existencia || existencia.existe !== true) {
+    var indeterminado = !existencia || existencia.indeterminado === true;
+    logHistoryEvent(session.email, 'registerWellSearch', wellId, indeterminado ? 'SERVICE_UNAVAILABLE' : 'POZO_NOT_FOUND');
+    return indeterminado
+      ? { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'no se pudo verificar el pozo ' + wellId }
+      : { status: 'error', code: 'POZO_NOT_FOUND', message: 'no se encontro el pozo ' + wellId };
+  }
+  var modulosSeguros = api_modulosCoherentes(modulos, access.permisos);
 
   try {
     var logResult = searchHistoryService_registerSearch(session.email, access.nombre, wellId, modulosSeguros);
@@ -550,12 +598,11 @@ function handleRegisterWellSearch(sessionToken, wellId, modulos) {
 }
 
 // Mapa de Pozos: dataset general (todos los puntos con coordenada
-// confirmada/disponible). Ya NO se gatea por un permiso de modulo: lo
-// consumen "Pozos cerca mio" (disponible para TODO usuario activo), el
-// mapa Pozos Provincia (perfil=SI o ne=SI) y la seleccion por radio/
-// poligono, asi que cualquier gate de modulo (antes "ubicacion") dejaria
-// afuera a alguien que si debe usar esas funciones. Alcanza con sesion
-// valida + usuario activo. El dataset es estructuralmente general (ver
+// confirmada/disponible). E10-1: se gatea por el permiso propio `mapa` (el mismo para
+// getUbicacionesValidadas y getDecisionesFuentesDelta): antes alcanzaba con sesion valida + usuario
+// activo y TODO usuario activo recibia el dataset (la migracion de E10-1 dio mapa = SI a todos los
+// usuarios activos de ese momento, asi que nadie perdio acceso). Lo consumen "Pozos cerca mio", el
+// mapa Pozos Provincia (perfil=SI o ne=SI) y la seleccion por radio/poligono. El dataset es estructuralmente general (ver
 // MapaService.js: wellId/lat/lon/estado/cuenca y los campos tecnicos de
 // filtro, NUNCA titular ni ningun campo registral), y todo lo individual y
 // protegido sigue gateado aparte: getWellLocation ("ubicacion"),
@@ -568,6 +615,11 @@ function handleGetMapaPozos(sessionToken) {
   var validation = validateSession(sessionToken, 'getMapaPozos');
   if (!validation.ok) {
     return validation.response;
+  }
+  // E10-1: el dataset general exige el permiso `mapa` (junto con getUbicacionesValidadas y getDecisionesFuentesDelta: los tres se piden juntos desde mapaDataset_obtener y se gatean juntos).
+  var permisoMapa = validarPermiso(validation.session, 'getMapaPozos', null, 'mapa');
+  if (!permisoMapa.ok) {
+    return permisoMapa.response;
   }
 
   var result;
@@ -591,6 +643,10 @@ function handleGetUbicacionesValidadas(sessionToken) {
   var validation = validateSession(sessionToken, 'getUbicacionesValidadas');
   if (!validation.ok) {
     return validation.response;
+  }
+  var permisoMapa = validarPermiso(validation.session, 'getUbicacionesValidadas', null, 'mapa');
+  if (!permisoMapa.ok) {
+    return permisoMapa.response;
   }
   try {
     return { status: 'ok', data: ubicacionCorreccionService_getUbicacionesValidadas() };
@@ -797,7 +853,7 @@ function validarResumenDescargaItf(resumen) {
   var camposNumericos = ['totalSeleccionados', 'solicitados', 'descargados', 'fallidos'];
   for (var i = 0; i < camposNumericos.length; i++) {
     var v = resumen[camposNumericos[i]];
-    if (typeof v !== 'number' || v < 0 || !isFinite(v)) {
+    if (typeof v !== 'number' || v < 0 || !isFinite(v) || Math.floor(v) !== v) {
       return { ok: false, response: { status: 'error', code: 'INVALID_REQUEST', message: 'campo invalido: ' + camposNumericos[i] } };
     }
   }
@@ -807,6 +863,10 @@ function validarResumenDescargaItf(resumen) {
   }
   if (resumen.wellIds.length > DESCARGA_ITF_MAX_WELLIDS) {
     return { ok: false, response: { status: 'error', code: 'INVALID_REQUEST', message: 'demasiados wellIds (maximo ' + DESCARGA_ITF_MAX_WELLIDS + ')' } };
+  }
+  // E10-1: coherencia del resumen (lo declara el cliente, pero no puede contradecirse): se pidieron tantos como wellIds, cada uno termino descargado o fallido, y no se pidieron mas que los seleccionados.
+  if (resumen.solicitados !== resumen.wellIds.length || resumen.descargados + resumen.fallidos !== resumen.solicitados || resumen.solicitados > resumen.totalSeleccionados) {
+    return { ok: false, response: { status: 'error', code: 'INVALID_REQUEST', message: 'resumen incoherente' } };
   }
   return { ok: true };
 }
@@ -824,6 +884,10 @@ function handleRegisterDescargaItf(sessionToken, resumen) {
   }
 
   var access = getUserAccess(session.email);
+  if (!api_puedeRegistrarDescarga(access.permisos)) {
+    logHistoryEvent(session.email, 'registerDescargaItf', null, 'PERMISSION_DENIED');
+    return { status: 'error', code: 'PERMISSION_DENIED', message: 'usuario sin permiso "perfil": ' + session.email };
+  }
 
   try {
     var resultado = notificationService_notifyDescargaItf(session.email, access.nombre, resumen);
@@ -1894,6 +1958,10 @@ function handleGetDecisionesFuentesDelta(sessionToken) {
   if (!validation.ok) {
     return validation.response;
   }
+  var permisoMapa = validarPermiso(validation.session, 'getDecisionesFuentesDelta', null, 'mapa');
+  if (!permisoMapa.ok) {
+    return permisoMapa.response;
+  }
   var data;
   try {
     data = ubicacionFuenteDecisionesService_getDelta();
@@ -2003,7 +2071,8 @@ function handleSugerirDecisionFuente(sessionToken, datos) {
   }
   var session = validation.session;
 
-  var permiso = validarPermiso(session, 'sugerirDecisionFuente', d.wellId, 'ubicacion');
+  // E10-1: sugerir es una MUTACION: ubicacion (lectura) + ubicacion_corregir (escritura/propuesta/cancelacion), igual que proponerCorreccionUbicacion.
+  var permiso = validarPermisosTodos(session, 'sugerirDecisionFuente', d.wellId, ['ubicacion', 'ubicacion_corregir']);
   if (!permiso.ok) {
     return permiso.response;
   }
@@ -2145,7 +2214,7 @@ function handleCancelarSugerenciaFuente(sessionToken, datos) {
   }
   var session = validation.session;
 
-  var permiso = validarPermiso(session, 'cancelarSugerenciaFuente', null, 'ubicacion');
+  var permiso = validarPermisosTodos(session, 'cancelarSugerenciaFuente', null, ['ubicacion', 'ubicacion_corregir']);
   if (!permiso.ok) {
     return permiso.response;
   }
@@ -2307,6 +2376,12 @@ function handleAnularObservacionPozo(sessionToken, datos) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     doPost,
+    API_MODULOS_BUSQUEDA,
+    api_algunPermiso,
+    api_puedeRegistrarBusqueda,
+    api_puedeRegistrarDescarga,
+    api_modulosCoherentes,
+    validarResumenDescargaItf,
     handleSugerirDecisionFuente,
     handleGetSugerenciasFuentesPozo,
     handleGetSugerenciasFuentesPendientes,

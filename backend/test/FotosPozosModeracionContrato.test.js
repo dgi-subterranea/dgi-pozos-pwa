@@ -256,7 +256,8 @@ describe('E8-3: alcance del cableado (backend si; frontend, storage, Drive y leg
 
   // E8-4 agrego la UI: el frontend conoce el permiso y las acciones SOLO en api.js (wrappers) y en los dos archivos de moderacion. Nada mas (ni app.js, ni fotosPozos.js) decide permisos ni llama endpoints.
   test('fotos_moderar existe en el backend de permisos y en el frontend SOLO en la logica de moderacion', () => {
-    ['AuthService.js', 'SheetUserRepository.js'].forEach((f) => {
+    // E10-1: el permiso vive en el catalogo canonico (el parser y AuthService lo derivan de ahi)
+    ['PermisosCatalogo.js'].forEach((f) => {
       expect(leer('backend', 'src', f)).toContain('fotos_moderar');
     });
     const conPermiso = jsFrontend().filter((f) => !/\.test\.js$/.test(f) && /fotos_moderar/.test(sinComentarios(leer('js', f))));
@@ -311,8 +312,11 @@ describe('E8-3: alcance del cableado (backend si; frontend, storage, Drive y leg
     expect(sinComentarios(leer('backend', 'src', 'FotosPozoEventosRepository.js'))).not.toMatch(/'ACTIVA'|'RETIRADA'|visible/);
   });
 
-  test('USUARIOS_COLUMNAS_PERMISO suma fotos_moderar (justo despues de fotos_carga); E9-4 agrega perfil_subir / perfil_validar junto a perfil', () => {
-    expect(leer('backend', 'src', 'SheetUserRepository.js')).toContain("var USUARIOS_COLUMNAS_PERMISO = ['perfil', 'perfil_subir', 'perfil_validar', 'datos', 'ubicacion', 'ne', 'reemplazo', 'fotos', 'fotos_carga', 'fotos_moderar', 'ubicacion_corregir', 'ubicacion_validar', 'observaciones', 'observaciones_agregar', 'observaciones_anular'];");
+  test('el catalogo de permisos suma fotos_moderar (justo despues de fotos_carga) y perfil_subir / perfil_validar junto a perfil; el parser ya no mantiene una lista propia (E10-1)', () => {
+    const ids = require('../src/PermisosCatalogo').permisosCatalogo_ids();
+    expect(ids.indexOf('fotos_moderar')).toBe(ids.indexOf('fotos_carga') + 1);
+    expect(ids.slice(ids.indexOf('perfil'), ids.indexOf('perfil') + 3)).toEqual(['perfil', 'perfil_subir', 'perfil_validar']);
+    expect(leer('backend', 'src', 'SheetUserRepository.js')).not.toMatch(/var USUARIOS_COLUMNAS_PERMISO/);
   });
 
   test('un cambio de nombre de columna de eventos que el dominio lee seria detectado: el repositorio produce todo lo que el dominio parsea', () => {

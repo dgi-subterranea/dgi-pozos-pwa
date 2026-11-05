@@ -601,7 +601,7 @@ describe('sugerencias: solo APROBAR cambia la resolucion', () => {
 
   test('SUGERIR y CANCELAR (el flujo de sugerencias de la ficha, por el mismo dialogo) NO invalidan', async () => {
     const t = await arrancar();
-    t.permisos = { ubicacion: true, ubicacion_validar: false };               // quien no valida sugiere
+    t.permisos = { ubicacion: true, ubicacion_corregir: true, ubicacion_validar: false };               // quien no valida sugiere (E10-1: sugerir exige ubicacion_corregir)
     const flujo = t.ctx.ubicacionFuenteDecisionesUi_flujoSugerencias();
     tocar(t, 'SUGERIR_ACEPTAR', 'C');
     await flush();

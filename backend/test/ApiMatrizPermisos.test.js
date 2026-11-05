@@ -2,8 +2,8 @@ const { installAppsScriptFakes } = require('./appsScriptFakes');
 const Api = require('../src/Api');
 
 // Matriz de permisos del backend (fail-closed). Contrato:
-//  - getMapaPozos (dataset general que usan Pozos cerca mio y el mapa
-//    Pozos Provincia): TODO usuario activo, sin permiso de modulo.
+//  - E10-1: getMapaPozos, getUbicacionesValidadas y getDecisionesFuentesDelta (el dataset general que usan Pozos cerca mio, el mapa
+//    Pozos Provincia y la seleccion) exigen el permiso `mapa`: ni `ubicacion` ni `perfil` ni nada mas lo reemplaza.
 //  - Todo lo protegido sigue gateado por SU permiso: getMapaNE ("ne"),
 //    getWellLocation ("ubicacion"), getWellRecord/getWellSummary/
 //    getIndiceBusquedaProvincia ("datos"), getProfile/getItfAvailability
@@ -55,9 +55,9 @@ const endpoints = {
 };
 // permiso que exige cada endpoint (null = solo usuario activo)
 const exige = {
-  getMapaPozos: null,
-  getUbicacionesValidadas: null,
-  getDecisionesFuentesDelta: null,
+  getMapaPozos: 'mapa',
+  getUbicacionesValidadas: 'mapa',
+  getDecisionesFuentesDelta: 'mapa',
   getDecisionesFuentesPozo: 'ubicacion',
   getSugerenciasFuentesPozo: 'ubicacion',
   getSugerenciasFuentesPendientes: ['ubicacion', 'ubicacion_validar'],
@@ -89,7 +89,9 @@ const perfiles = [
   ['solo fotos_carga (cargar, no ver)', { fotos_carga: true }],
   ['fotos + fotos_carga', { fotos: true, fotos_carga: true }],
   ['ne + reemplazo sin fotos', { ne: true, reemplazo: true }],
-  ['todos los permisos', { perfil: true, datos: true, ubicacion: true, ne: true, reemplazo: true, fotos: true, fotos_carga: true }],
+  ['todos los permisos', { perfil: true, datos: true, ubicacion: true, ne: true, reemplazo: true, fotos: true, fotos_carga: true, mapa: true }],
+  ['solo mapa', { mapa: true }],
+  ['todo menos mapa (ubicacion, perfil, ne, datos...)', { perfil: true, datos: true, ubicacion: true, ne: true, reemplazo: true, fotos: true, fotos_carga: true, ubicacion_corregir: true, ubicacion_validar: true }],
   ['solo ubicacion (ve y sugiere, no valida)', { ubicacion: true }],
   ['solo ubicacion_validar (sin ubicacion: no alcanza)', { ubicacion_validar: true }],
   ['ubicacion + ubicacion_corregir (corregir no concede validar)', { ubicacion: true, ubicacion_corregir: true }],
@@ -112,16 +114,18 @@ describe.each(perfiles)('usuario activo: %s', (nombre, permisos) => {
     });
   });
 
-  test('Pozos cerca mio / Provincia: el dataset llega aunque ubicacion=NO', () => {
+  test('el dataset del mapa depende SOLO de `mapa`: llega con mapa aunque ubicacion=NO y NO llega sin mapa aunque ubicacion=SI', () => {
     como({ ...permisos, ubicacion: false }, true);
-    expect(endpoints.getMapaPozos().status).toBe('ok');
+    expect(endpoints.getMapaPozos().status).toBe(permisos.mapa === true ? 'ok' : 'error');
+    como({ ...permisos, ubicacion: true }, true);
+    expect(endpoints.getMapaPozos().status).toBe(permisos.mapa === true ? 'ok' : 'error');
   });
 });
 
 describe('usuario inactivo: nada, aunque tenga todos los permisos', () => {
   Object.keys(endpoints).forEach((ep) => {
     test(ep + ' -> USER_DISABLED', () => {
-      como({ perfil: true, datos: true, ubicacion: true, ne: true, reemplazo: true, fotos: true, fotos_carga: true }, false);
+      como({ perfil: true, datos: true, ubicacion: true, ne: true, reemplazo: true, fotos: true, fotos_carga: true, mapa: true }, false);
       const r = endpoints[ep]();
       expect(r.status).toBe('error');
       expect(r.code).toBe('USER_DISABLED');
@@ -138,7 +142,7 @@ describe('la ubicacion individual sigue protegida (no se relajo)', () => {
   });
 
   test('el dataset general no trae titular ni campos registrales', () => {
-    como({}, true);
+    como({ mapa: true }, true);
     const r = Api.handleGetMapaPozos('t');
     Object.keys(r.data.pozos[0]).forEach((k) => {
       expect(['wellId', 'lat', 'lon', 'estado', 'cuenca', 'profundidad', 'tramosFiltrantes', 'surgencia']).toContain(k);

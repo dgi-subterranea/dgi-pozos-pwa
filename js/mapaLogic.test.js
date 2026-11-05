@@ -374,16 +374,23 @@ describe('mapaLogic_filtrarPorNE', () => {
   });
 });
 
-describe('mapaLogic_determinarAccesoMapas (matriz perfil/ne)', () => {
-  test('ne=SI -> "selector" (las dos opciones), con o sin perfil', () => {
-    expect(mapaLogic_determinarAccesoMapas({ perfil: true, ne: true })).toBe('selector');
-    expect(mapaLogic_determinarAccesoMapas({ perfil: false, ne: true })).toBe('selector');
-    expect(mapaLogic_determinarAccesoMapas({ ne: true })).toBe('selector');
+describe('mapaLogic_determinarAccesoMapas (matriz perfil/ne/mapa)', () => {
+  test('ne=SI y mapa=SI -> "selector" (las dos opciones), con o sin perfil', () => {
+    expect(mapaLogic_determinarAccesoMapas({ perfil: true, ne: true, mapa: true })).toBe('selector');
+    expect(mapaLogic_determinarAccesoMapas({ perfil: false, ne: true, mapa: true })).toBe('selector');
+    expect(mapaLogic_determinarAccesoMapas({ ne: true, mapa: true })).toBe('selector');
   });
 
-  test('perfil=SI, ne=NO -> "provincia" (entra directo, sin selector ni NE)', () => {
-    expect(mapaLogic_determinarAccesoMapas({ perfil: true, ne: false })).toBe('provincia');
-    expect(mapaLogic_determinarAccesoMapas({ perfil: true })).toBe('provincia');
+  test('perfil=SI, ne=NO, mapa=SI -> "provincia" (entra directo, sin selector ni NE)', () => {
+    expect(mapaLogic_determinarAccesoMapas({ perfil: true, ne: false, mapa: true })).toBe('provincia');
+    expect(mapaLogic_determinarAccesoMapas({ perfil: true, mapa: true })).toBe('provincia');
+  });
+
+  test('E10-1: sin `mapa` no hay Provincia: ne=SI entra directo a Niveles Estaticos ("ne") y perfil=SI solo no abre ningun mapa', () => {
+    expect(mapaLogic_determinarAccesoMapas({ perfil: true, ne: true })).toBe('ne');
+    expect(mapaLogic_determinarAccesoMapas({ ne: true })).toBe('ne');
+    expect(mapaLogic_determinarAccesoMapas({ perfil: true })).toBe('ninguno');
+    expect(mapaLogic_determinarAccesoMapas({ perfil: true, mapa: false })).toBe('ninguno');
   });
 
   test('perfil=NO y ne=NO -> "ninguno"', () => {
@@ -392,8 +399,8 @@ describe('mapaLogic_determinarAccesoMapas (matriz perfil/ne)', () => {
   });
 
   test('ubicacion, datos y reemplazo NO deciden el acceso a Mapas', () => {
-    expect(mapaLogic_determinarAccesoMapas({ ubicacion: true, datos: true, reemplazo: true })).toBe('ninguno');
-    expect(mapaLogic_determinarAccesoMapas({ perfil: true, ubicacion: false, datos: false })).toBe('provincia');
+    expect(mapaLogic_determinarAccesoMapas({ ubicacion: true, datos: true, reemplazo: true, mapa: true })).toBe('ninguno');
+    expect(mapaLogic_determinarAccesoMapas({ perfil: true, ubicacion: false, datos: false, mapa: true })).toBe('provincia');
   });
 
   test('permisos ausente/null -> "ninguno", no rompe', () => {
@@ -409,22 +416,30 @@ describe('mapaLogic_calcularAccesos (matriz de permisos)', () => {
   const T = true;
   const F = false;
   const casos = [
-    // nombre, permisos, activo, esperado
-    ['solo perfil', { perfil: T }, T,
+    // nombre, permisos, activo, esperado. E10-1: todo lo que usa el dataset general exige `mapa`.
+    ['solo perfil + mapa', { perfil: T, mapa: T }, T,
       { cercaMio: T, mapas: 'provincia', provincia: T, ne: F, itf: T, reemplazo: F }],
-    ['solo ne', { ne: T }, T,
+    ['solo ne + mapa', { ne: T, mapa: T }, T,
       { cercaMio: T, mapas: 'selector', provincia: T, ne: T, itf: F, reemplazo: F }],
-    ['perfil + ne', { perfil: T, ne: T }, T,
+    ['perfil + ne + mapa', { perfil: T, ne: T, mapa: T }, T,
       { cercaMio: T, mapas: 'selector', provincia: T, ne: T, itf: T, reemplazo: F }],
-    ['solo reemplazo', { reemplazo: T }, T,
+    ['solo reemplazo + mapa', { reemplazo: T, mapa: T }, T,
       { cercaMio: T, mapas: 'ninguno', provincia: F, ne: F, itf: F, reemplazo: T }],
-    ['perfil + reemplazo (caso real: datos=NO, ubicacion=NO, ne=NO)', { perfil: T, reemplazo: T, datos: F, ubicacion: F, ne: F }, T,
+    ['perfil + reemplazo + mapa (caso real: datos=NO, ubicacion=NO, ne=NO)', { perfil: T, reemplazo: T, datos: F, ubicacion: F, ne: F, mapa: T }, T,
       { cercaMio: T, mapas: 'provincia', provincia: T, ne: F, itf: T, reemplazo: T }],
+    ['solo mapa (nada mas): Cerca mio, sin mapas', { mapa: T }, T,
+      { cercaMio: T, mapas: 'ninguno', provincia: F, ne: F, itf: F, reemplazo: F }],
     ['ningun permiso funcional pero activo', { perfil: F, datos: F, ubicacion: F, ne: F, reemplazo: F }, T,
-      { cercaMio: T, mapas: 'ninguno', provincia: F, ne: F, itf: F, reemplazo: F }],
+      { cercaMio: F, mapas: 'ninguno', provincia: F, ne: F, itf: F, reemplazo: F }],
     ['solo datos + ubicacion (no deciden nada)', { datos: T, ubicacion: T }, T,
-      { cercaMio: T, mapas: 'ninguno', provincia: F, ne: F, itf: F, reemplazo: F }],
-    ['usuario inactivo (aunque tenga todo)', { perfil: T, datos: T, ubicacion: T, ne: T, reemplazo: T }, F,
+      { cercaMio: F, mapas: 'ninguno', provincia: F, ne: F, itf: F, reemplazo: F }],
+    ['SIN mapa: perfil no abre Provincia ni Cerca mio', { perfil: T, ubicacion: T, datos: T }, T,
+      { cercaMio: F, mapas: 'ninguno', provincia: F, ne: F, itf: T, reemplazo: F }],
+    ['ne SIN mapa: entra directo a Niveles Estaticos (su dataset es aparte), sin Provincia ni Cerca mio', { ne: T }, T,
+      { cercaMio: F, mapas: 'ne', provincia: F, ne: T, itf: F, reemplazo: F }],
+    ['perfil + ne SIN mapa: solo Niveles Estaticos', { perfil: T, ne: T }, T,
+      { cercaMio: F, mapas: 'ne', provincia: F, ne: T, itf: T, reemplazo: F }],
+    ['usuario inactivo (aunque tenga todo)', { perfil: T, datos: T, ubicacion: T, ne: T, reemplazo: T, mapa: T }, F,
       { cercaMio: F, mapas: 'ninguno', provincia: F, ne: F, itf: F, reemplazo: F }]
   ];
 
@@ -432,10 +447,13 @@ describe('mapaLogic_calcularAccesos (matriz de permisos)', () => {
     expect(mapaLogic_calcularAccesos(permisos, activo)).toEqual(esperado);
   });
 
-  test('Cerca Mio: todo usuario activo, aunque ubicacion=NO y sin permisos', () => {
-    expect(mapaLogic_calcularAccesos({ ubicacion: false }, true).cercaMio).toBe(true);
-    expect(mapaLogic_calcularAccesos(undefined, true).cercaMio).toBe(true);
-    expect(mapaLogic_calcularAccesos({ ubicacion: true }, false).cercaMio).toBe(false);
+  test('Cerca Mio (E10-1): solo con `mapa`; ubicacion no lo habilita y sin permisos (o con permisos no booleanos) no hay Cerca mio', () => {
+    expect(mapaLogic_calcularAccesos({ mapa: true }, true).cercaMio).toBe(true);
+    expect(mapaLogic_calcularAccesos({ ubicacion: true }, true).cercaMio).toBe(false);
+    expect(mapaLogic_calcularAccesos({ ubicacion: false }, true).cercaMio).toBe(false);
+    expect(mapaLogic_calcularAccesos(undefined, true).cercaMio).toBe(false);
+    ['SI', 1, 'true', {}, null].forEach((v) => expect(mapaLogic_calcularAccesos({ mapa: v, perfil: true }, true).cercaMio).toBe(false));
+    expect(mapaLogic_calcularAccesos({ mapa: true }, false).cercaMio).toBe(false);
   });
 
   test('selector de mapas: nunca muestra una sola opcion (selector solo si hay 2: ne=SI)', () => {
@@ -447,15 +465,18 @@ describe('mapaLogic_calcularAccesos (matriz de permisos)', () => {
   });
 
   test('valores no booleanos (strings, 1) no conceden nada: fail-closed', () => {
-    expect(mapaLogic_calcularAccesos({ perfil: 'SI', ne: 1, reemplazo: 'true' }, true)).toMatchObject({
-      mapas: 'ninguno', provincia: false, ne: false, itf: false, reemplazo: false, cercaMio: true
+    expect(mapaLogic_calcularAccesos({ perfil: 'SI', ne: 1, reemplazo: 'true', mapa: 'SI' }, true)).toMatchObject({
+      mapas: 'ninguno', provincia: false, ne: false, itf: false, reemplazo: false, cercaMio: false
     });
   });
 
-  test('mapaLogic_puedeVerProvincia: perfil o ne', () => {
-    expect(mapaLogic_puedeVerProvincia({ perfil: true })).toBe(true);
-    expect(mapaLogic_puedeVerProvincia({ ne: true })).toBe(true);
-    expect(mapaLogic_puedeVerProvincia({ ubicacion: true, datos: true, reemplazo: true })).toBe(false);
+  test('mapaLogic_puedeVerProvincia: mapa y (perfil o ne)', () => {
+    expect(mapaLogic_puedeVerProvincia({ perfil: true, mapa: true })).toBe(true);
+    expect(mapaLogic_puedeVerProvincia({ ne: true, mapa: true })).toBe(true);
+    expect(mapaLogic_puedeVerProvincia({ perfil: true })).toBe(false);                 // E10-1: sin mapa no hay dataset
+    expect(mapaLogic_puedeVerProvincia({ ne: true })).toBe(false);
+    expect(mapaLogic_puedeVerProvincia({ mapa: true })).toBe(false);                   // mapa solo no alcanza para Provincia: hace falta perfil o ne
+    expect(mapaLogic_puedeVerProvincia({ ubicacion: true, datos: true, reemplazo: true, mapa: true })).toBe(false);
     expect(mapaLogic_puedeVerProvincia(undefined)).toBe(false);
   });
 });

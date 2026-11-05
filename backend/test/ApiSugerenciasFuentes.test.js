@@ -47,7 +47,9 @@ describe('enrutado por doPost', () => {
 
 describe('permisos (fail-closed, mas usuario activo)', () => {
   test.each([
-    ['lee@x.com (ubicacion)', 'lee@x.com', true], ['ana@x.com (ubicacion + corregir)', 'ana@x.com', true], ['val@x.com (valida: tecnicamente puede)', 'val@x.com', true],
+    // E10-1: sugerir es una MUTACION: ubicacion + ubicacion_corregir (ubicacion sola es LECTURA; un validador sin ubicacion_corregir tampoco sugiere: decide directo)
+    ['lee@x.com (ubicacion + corregir)', 'lee@x.com', true], ['ana@x.com (ubicacion + corregir)', 'ana@x.com', true], ['carla@x.com (corregir + valida)', 'carla@x.com', true],
+    ['lector@x.com (SOLO ubicacion: lectura)', 'lector@x.com', false], ['val@x.com (valida pero sin corregir)', 'val@x.com', false],
     ['soloval@x.com (valida pero SIN ubicacion)', 'soloval@x.com', false], ['nada@x.com', 'nada@x.com', false]
   ])('sugerirDecisionFuente con %s', (_n, email, permitido) => {
     const r = sugerir({}, email);
@@ -84,12 +86,16 @@ describe('permisos (fail-closed, mas usuario activo)', () => {
     expect(cola('ana@x.com').code).toBe('PERMISSION_DENIED');
   });
 
-  test('getSugerenciasFuentesPozo y cancelarSugerenciaFuente exigen ubicacion', () => {
+  test('getSugerenciasFuentesPozo exige ubicacion (lectura); cancelarSugerenciaFuente exige ubicacion + ubicacion_corregir (mutacion)', () => {
     const id = nueva();
     expect(verPozo('soloval@x.com').code).toBe('PERMISSION_DENIED');
     expect(verPozo('nada@x.com').code).toBe('PERMISSION_DENIED');
+    expect(verPozo('lector@x.com').status).toBe('ok');                      // la lectura sigue abierta a quien tiene ubicacion
     expect(cancelar(id, {}, 'soloval@x.com').code).toBe('PERMISSION_DENIED');
     expect(cancelar(id, {}, 'nada@x.com').code).toBe('PERMISSION_DENIED');
+    expect(cancelar(id, {}, 'lector@x.com').code).toBe('PERMISSION_DENIED');   // ubicacion sola no cancela
+    expect(cancelar(id, {}, 'val@x.com').code).toBe('PERMISSION_DENIED');      // un validador sin corregir tampoco
+    expect(t.filasSug()).toHaveLength(1);                                        // nada se escribio
   });
 
   test('usuario inactivo: USER_DISABLED aunque tenga todos los permisos; token invalido: UNAUTHORIZED; no se escribe nada', () => {
@@ -260,7 +266,7 @@ describe('resolver y cancelar por API', () => {
   test('cancelar: solo el autor; los demas reciben SUGGESTION_NOT_FOUND', () => {
     const id = nueva({}, 'lee@x.com');
     expect(cancelar(id, {}, 'ana@x.com')).toMatchObject({ status: 'error', code: 'SUGGESTION_NOT_FOUND' });
-    expect(cancelar(id, {}, 'val@x.com')).toMatchObject({ status: 'error', code: 'SUGGESTION_NOT_FOUND' });
+    expect(cancelar(id, {}, 'carla@x.com')).toMatchObject({ status: 'error', code: 'SUGGESTION_NOT_FOUND' });
     const ok = cancelar(id, { motivo: 'me equivoque' }, 'lee@x.com');
     expect(ok).toMatchObject({ status: 'ok', data: { duplicada: false, sugerencia: { estado: 'CANCELADA' } } });
   });

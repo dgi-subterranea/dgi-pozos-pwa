@@ -158,9 +158,11 @@ describe('app.js: el hub', () => {
     expect(codigoApp).toMatch(/if \(!itfLogic_puedeValidar\(permisosActuales\)\) \{\n\s+toggleAccesosUbicacion\(\);/);
   });
 
-  test('los permisos por defecto (inicio y cierre de sesion) incluyen perfil_subir y perfil_validar en false', () => {
-    const defectos = codigoApp.match(/permisosActuales = \{ perfil: false, perfil_subir: false, perfil_validar: false,/g) || [];
-    expect(defectos).toHaveLength(2);
+  test('los permisos por defecto (inicio y cierre de sesion) son un objeto VACIO: perfil_subir y perfil_validar ausentes = false (fail-closed)', () => {
+    // E10-1: el frontend NO mantiene una lista de permisos (la fuente canonica es el catalogo del backend). Arranca y se reinicia al cerrar sesion VACIO: ningun permiso (fail-closed, una clave ausente es falsa).
+    const vacios = codigoApp.match(/permisosActuales = \{\};/g) || [];
+    expect(vacios).toHaveLength(2);                                                       // inicial y logout
+    expect(codigoApp).not.toMatch(/permisosActuales = \{ perfil: false/);
   });
 
   test('Q2: buscar un pozo consulta la DISPONIBILIDAD de ese pozo (una llamada liviana) y NO baja la imagen; getProfile se pide solo al abrir Perfil (en itfPerfil.js)', () => {

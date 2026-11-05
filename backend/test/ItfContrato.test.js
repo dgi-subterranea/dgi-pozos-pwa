@@ -51,11 +51,13 @@ describe('E9-2 no esta cableado: ningun archivo vivo de la app lo referencia', (
 
   test('E9-4: perfil_subir y perfil_validar existen en el parser del backend (mismo patron exacto SI -> true, columna ausente -> false) pero NO hay UI ni frontend', () => {
     const src = SRC('SheetUserRepository.js');
-    const permisos = /var USUARIOS_COLUMNAS_PERMISO = \[([^\]]*)\]/.exec(src)[1].split(',').map((c) => c.trim().replace(/'/g, ''));
-    expect(permisos).toHaveLength(15);
+    // E10-1: la lista de permisos vive SOLO en PermisosCatalogo (15 de siempre + mapa + usuarios_admin); ni el parser ni AuthService mantienen una lista propia
+    const permisos = require('../src/PermisosCatalogo').permisosCatalogo_ids();
+    expect(permisos).toHaveLength(17);
     expect(permisos).toEqual(expect.arrayContaining(['perfil', 'perfil_subir', 'perfil_validar']));
-    expect(SRC('AuthService.js')).toContain('perfil_subir: false, perfil_validar: false');
-    expect(src).toContain('perfil_subir: false, perfil_validar: false');
+    expect(SRC('AuthService.js')).not.toMatch(/perfil_subir: false/);
+    expect(src).not.toMatch(/perfil_subir: false|var USUARIOS_COLUMNAS_PERMISO/);
+    expect(src).toContain('permisosCatalogo_ids()');
   });
 
   test('E9-5: Api.js expone SOLO las rutas de ITF colaborativos esperadas y solo habla con el servicio (nunca con el dominio, la hoja, Drive ni el storage)', () => {

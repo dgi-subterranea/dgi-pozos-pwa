@@ -326,11 +326,10 @@ describe('contrato de acciones y permisos', () => {
   });
 
   test('los permisos que mira el frontend existen en el modelo del backend (Usuarios / login) con esos nombres exactos', () => {
-    const usuarios = leer('backend', 'src', 'SheetUserRepository.js');
-    const auth = leer('backend', 'src', 'AuthService.js');
+    // E10-1: el modelo de permisos del backend es el catalogo (fuente unica); el login devuelve TODOS sus ids
+    const ids = require('../src/PermisosCatalogo').permisosCatalogo_ids();
     ['ubicacion', 'ubicacion_corregir'].forEach((p) => {
-      expect(usuarios).toMatch(new RegExp("USUARIOS_COLUMNAS_PERMISO = \\[[^\\]]*'" + p + "'"));
-      expect(auth).toMatch(new RegExp(p + ': false'));
+      expect(ids).toContain(p);
     });
     const front = leer('js', 'ubicacionCorreccionLogic.js');
     expect(front).toContain('permisos.ubicacion === true && permisos.ubicacion_corregir === true');
@@ -342,8 +341,9 @@ describe('contrato de acciones y permisos', () => {
   });
 
   test('el login real devuelve los permisos de correccion como booleanos que el frontend interpreta', () => {
-    const auth = leer('backend', 'src', 'AuthService.js');
-    expect(auth).toMatch(/ubicacion_corregir: false, ubicacion_validar: false/);
+    const vacios = require('../src/PermisosCatalogo').permisosCatalogo_vacios();     // E10-1: el login devuelve TODOS los ids del catalogo, en booleano
+    expect(vacios.ubicacion_corregir).toBe(false);
+    expect(vacios.ubicacion_validar).toBe(false);
     expect(F.ubicacionCorreccionLogic_puedeCorregir({ ubicacion: true, ubicacion_corregir: true, ubicacion_validar: false })).toBe(true);
   });
 

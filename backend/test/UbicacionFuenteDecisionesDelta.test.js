@@ -1008,13 +1008,23 @@ describe('Api: getDecisionesFuentesDelta', () => {
     expect(r.data.decisiones[0]).toMatchObject({ wellId: U, estado: 'R' });
   });
 
+  // E10-1: el delta exige el permiso `mapa`, igual que getMapaPozos y getUbicacionesValidadas (los tres se piden juntos y se gatean juntos)
+  test.each([
+    ['con mapa y solo ubicacion', 'tok-lee@x.com'],
+    ['validador con mapa', 'tok-val@x.com'],
+    ['con mapa y sin ubicacion_corregir', 'tok-lector@x.com']
+  ])('usuario activo %s -> OK', (nombre, token) => {
+    expect(pedir(token).status).toBe('ok');
+  });
+
   test.each([
     ['sin ningun permiso funcional (solo activo)', 'tok-nada@x.com'],
-    ['solo ubicacion', 'tok-lee@x.com'],
-    ['validador', 'tok-val@x.com'],
-    ['solo ubicacion_validar (sin ubicacion)', 'tok-soloval@x.com']
-  ])('usuario activo %s -> OK (como getMapaPozos y getUbicacionesValidadas: no exige permiso de modulo)', (nombre, token) => {
-    expect(pedir(token).status).toBe('ok');
+    ['solo ubicacion_validar (sin mapa)', 'tok-soloval@x.com']
+  ])('usuario activo %s -> PERMISSION_DENIED y el servicio ni se consulta', (nombre, token) => {
+    const espia = jest.spyOn(t.S, 'ubicacionFuenteDecisionesService_getDelta');
+    expect(pedir(token)).toMatchObject({ status: 'error', code: 'PERMISSION_DENIED' });
+    expect(espia).not.toHaveBeenCalled();
+    espia.mockRestore();
   });
 
   test('usuario inactivo -> USER_DISABLED; token invalido o vacio -> UNAUTHORIZED; el servicio ni se consulta', () => {

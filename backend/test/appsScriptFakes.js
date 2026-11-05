@@ -66,6 +66,14 @@ function installAppsScriptFakes() {
   // Verificacion de existencia de un pozo (E4): tambien un archivo mas del proyecto. Sus fuentes se simulan abajo: por defecto NINGUNA confirma (ITF, NE y las correcciones previas dicen "no").
   Object.assign(global, require('../src/PozoExistenciaService'));
 
+  // E10-1: catalogo de permisos, reglas de usuarios y flags: en Apps Script son archivos del proyecto (globales); el acceso por request y el login los usan.
+  Object.assign(global, require('../src/PermisosCatalogo'));
+  Object.assign(global, require('../src/UsuariosDominio'));
+  Object.assign(global, require('../src/E10Flags'));
+  // Script Properties: por defecto ninguna (todos los interruptores de E10 apagados, EMAIL_VERIFIED_MODO ausente = OBSERVAR). Un test puede poner valores en global.__propiedades.
+  global.__propiedades = {};
+  global.PropertiesService = { getScriptProperties: () => ({ getProperty: (k) => (Object.prototype.hasOwnProperty.call(global.__propiedades, k) ? global.__propiedades[k] : null) }) };
+
   global.GOOGLE_CLIENT_ID = 'test-client-id.apps.googleusercontent.com';
   global.getSessionSecret = () => 'test-session-secret';
   global.getTelegramBotToken = () => 'test-telegram-token-nunca-debe-aparecer-en-un-error';

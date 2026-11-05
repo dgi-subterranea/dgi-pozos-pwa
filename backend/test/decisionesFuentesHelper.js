@@ -14,15 +14,18 @@ const padronInicial = () => ({
   '03-0003': { coordenadas: null, coordenadasProvincia: [] }
 });
 
+// E10-1: `mapa` (dataset general) y `ubicacion_corregir` (sugerir / cancelar son MUTACIONES) son permisos propios. `lee@x.com` conserva el nombre historico pero es el SUGERIDOR por defecto de estos tests
+// (ubicacion + ubicacion_corregir); `lector@x.com` es el de SOLO LECTURA (ubicacion): puede ver, no sugerir ni cancelar.
 const USUARIOS = {
-  'val@x.com': { nombre: 'Valeria Validadora', permisos: { ubicacion: true, ubicacion_validar: true } },
-  'vero@x.com': { nombre: 'Vero Validadora', permisos: { ubicacion: true, ubicacion_validar: true } },
-  'ana@x.com': { nombre: 'Ana Corrige', permisos: { ubicacion: true, ubicacion_corregir: true } },
-  'carla@x.com': { nombre: 'Carla Directa', permisos: { ubicacion: true, ubicacion_corregir: true, ubicacion_validar: true } },
-  'lee@x.com': { nombre: 'Lee Soloubicacion', permisos: { ubicacion: true } },
+  'val@x.com': { nombre: 'Valeria Validadora', permisos: { ubicacion: true, ubicacion_validar: true, mapa: true } },
+  'vero@x.com': { nombre: 'Vero Validadora', permisos: { ubicacion: true, ubicacion_validar: true, mapa: true } },
+  'ana@x.com': { nombre: 'Ana Corrige', permisos: { ubicacion: true, ubicacion_corregir: true, mapa: true } },
+  'carla@x.com': { nombre: 'Carla Directa', permisos: { ubicacion: true, ubicacion_corregir: true, ubicacion_validar: true, mapa: true } },
+  'lee@x.com': { nombre: 'Lee Soloubicacion', permisos: { ubicacion: true, ubicacion_corregir: true, mapa: true } },
+  'lector@x.com': { nombre: 'Lector Solo Lectura', permisos: { ubicacion: true, mapa: true } },
   'soloval@x.com': { nombre: 'Solo Validar', permisos: { ubicacion_validar: true } },
   'nada@x.com': { nombre: 'Sin Permisos', permisos: {} },
-  'baja@x.com': { nombre: 'Usuario Inactivo', permisos: { ubicacion: true, ubicacion_validar: true }, inactivo: true }
+  'baja@x.com': { nombre: 'Usuario Inactivo', permisos: { ubicacion: true, ubicacion_validar: true, mapa: true }, inactivo: true }
 };
 
 function crearCache() {

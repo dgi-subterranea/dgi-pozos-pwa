@@ -106,9 +106,11 @@ describe('integracion en app.js', () => {
     expect(app).toMatch(/ubicacionCorreccionController_inicializar\(function \(\) \{\s*return \{\s*sessionToken: sessionToken,\s*permisos: permisosActuales,\s*onSessionExpired: function \(\) \{\s*logout\(\);/);
   });
 
-  test('permisos por defecto fail-closed incluyen ubicacion_corregir y ubicacion_validar en false (inicio y logout)', () => {
-    const defecto = app.match(/permisosActuales = \{[^}]*ubicacion_corregir: false, ubicacion_validar: false[^}]* \}/g) || [];
-    expect(defecto.length).toBe(2);
+  test('permisos por defecto fail-closed: vacios (ubicacion_corregir y ubicacion_validar ausentes = false) al inicio y en logout', () => {
+    // E10-1: el frontend NO mantiene una lista de permisos (la fuente canonica es el catalogo del backend). Arranca y se reinicia al cerrar sesion VACIO: ningun permiso (fail-closed, una clave ausente es falsa).
+    const vacios = app.match(/permisosActuales = \{\};/g) || [];
+    expect(vacios).toHaveLength(2);                                                       // inicial y logout
+    expect(app).not.toMatch(/permisosActuales = \{ perfil: false/);
   });
 
   test('logout cierra un modal abierto', () => {

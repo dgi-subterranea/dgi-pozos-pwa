@@ -79,7 +79,7 @@ function crearLeafletFalso() {
 const posgar = (ctx, p) => { const c = ctx.coordenadas_wgs84APosgar(p.lat, p.lon); return { x: Math.round(c.este * 1000) / 1000, y: Math.round(c.norte * 1000) / 1000 }; };
 
 const PERM_VALIDADOR = { perfil: true, datos: true, ubicacion: true, ubicacion_validar: true };
-const PERM_LECTOR = { perfil: true, datos: true, ubicacion: true, ubicacion_validar: false };
+const PERM_LECTOR = { perfil: true, datos: true, ubicacion: true, ubicacion_corregir: true, ubicacion_validar: false };   // E10-1: LECTOR = quien SUGIERE (ubicacion + ubicacion_corregir); `ubicacion` sola es solo consulta
 const PERM_CORREGIR = { perfil: true, datos: true, ubicacion: true, ubicacion_corregir: true };
 const PERM_SIN_UBICACION = { perfil: true, datos: true, ubicacion: false, ubicacion_validar: true };
 

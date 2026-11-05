@@ -179,7 +179,8 @@
   // permiso. Se usan solo para decidir que fetch conviene ni siquiera
   // disparar - el backend vuelve a validar cada uno igual, esto es una
   // optimizacion de red, no el limite de seguridad real.
-  var permisosActuales = { perfil: false, perfil_subir: false, perfil_validar: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false, ubicacion_corregir: false, ubicacion_validar: false, observaciones: false, observaciones_agregar: false, observaciones_anular: false };
+  // E10-1: el frontend NO mantiene una lista de permisos (la fuente canonica es el catalogo del backend). Vacio = ninguno: todo chequeo es sobre una clave que puede no existir (undefined = false).
+  var permisosActuales = {};
 
   var ICON_PERFIL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5.5-5.5L11 15l-3-3-4.5 4.5"/></svg>';
   var ICON_DATOS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>';
@@ -1269,7 +1270,7 @@
     localStorage.removeItem('sessionToken');
     sessionToken = null;
     currentEmail = null;
-    permisosActuales = { perfil: false, perfil_subir: false, perfil_validar: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false, ubicacion_corregir: false, ubicacion_validar: false, observaciones: false, observaciones_agregar: false, observaciones_anular: false };
+    permisosActuales = {};
     // un modal de correccion abierto no sobrevive a la sesion
     ubicacionCorreccionController_cerrar();
     // ni el visor de ubicaciones conocidas

@@ -23,21 +23,35 @@ var USER_STATUS_CACHE_SECONDS = 300;
 // La contrapartida es asimetrica y deliberada: deshabilitar a alguien
 // que YA estaba cacheado como activo puede tardar hasta
 // USER_STATUS_CACHE_SECONDS en notarse (ese caso si sigue cacheado) -
-// ya documentado como aceptado.
+// ya documentado como aceptado PARA LAS EDICIONES MANUALES DE LA HOJA.
 //
-// Los permisos por modulo (perfil/perfil_subir/perfil_validar/datos/ubicacion/ne/reemplazo/fotos/fotos_carga/fotos_moderar/ubicacion_corregir/ubicacion_validar/observaciones/observaciones_agregar/observaciones_anular) viajan en el MISMO
-// objeto cacheado que el estado activo/inactivo, con la misma regla
-// asimetrica: solo se cachean junto a un usuario activo. Esto significa
-// que otorgar O quitar un permiso a un usuario ya activo (y por lo tanto
-// ya cacheado) puede tardar hasta USER_STATUS_CACHE_SECONDS en
-// reflejarse - mismo trade-off que ya existia para activo/inactivo,
-// ahora extendido a permisos. Nunca se guardan permisos en el
-// sessionToken (ver createSessionToken) - el token sigue siendo pura
-// identidad, los permisos se recalculan (con este cache) en cada
-// request.
+// E10-1: los cambios hechos desde la ADMINISTRACION (UsuariosAdminService) invalidan el cache del usuario
+// afectado al instante (authService_invalidarAcceso: remove + tombstone corto), asi que una baja, quitar o
+// agregar un permiso surte efecto en la SIGUIENTE request.
+//
+// Los permisos (los ids de PermisosCatalogo, fuente unica) viajan en el MISMO objeto cacheado que el estado
+// activo/inactivo, con la misma regla asimetrica: solo se cachean junto a un usuario activo. Nunca se
+// guardan permisos en el sessionToken (ver createSessionToken) - el token sigue siendo pura identidad,
+// los permisos se recalculan (con este cache) en cada request. Los permisos son los EFECTIVOS
+// (UsuariosDominio): un permiso no aplicable a EXTERNO (usuarios_admin) solo vale para un INTERNO.
+//
+// Cache v2: la clave lleva version porque el objeto cacheado cambio de forma (tipo, version); las entradas
+// viejas (user_access_<email>) expiran solas y nunca se leen.
+var USER_ACCESS_CACHE_PREFIJO = 'user_access_v2_';
+var USER_ACCESS_CACHE_PREFIJO_VIEJO = 'user_access_';
+var USER_ACCESS_TOMBSTONE_PREFIJO = 'user_access_inv_';
+// El tombstone cubre la ventana en la que una request que ya leyo la hoja ANTES de un cambio administrativo
+// podria guardar en el cache el valor viejo DESPUES del remove. Mientras existe, getUserAccess lee la hoja
+// y NO escribe el cache.
+var USER_ACCESS_TOMBSTONE_SECONDS = 15;
+
+function authService_claveCache(prefijo, email) {
+  return prefijo + String(email).trim().toLowerCase();
+}
+
 function getUserAccess(email) {
   var cache = CacheService.getScriptCache();
-  var cacheKey = 'user_access_' + String(email).trim().toLowerCase();
+  var cacheKey = authService_claveCache(USER_ACCESS_CACHE_PREFIJO, email);
 
   var cached = cache.get(cacheKey);
   if (cached !== null) {
@@ -48,22 +62,32 @@ function getUserAccess(email) {
   // Fail-closed tambien si el repositorio no trajo permisos por algun
   // motivo (forma inesperada, columna faltante que ademas rompio el
   // objeto entero, etc.) - nunca se asume acceso por ausencia de dato.
-  var permisosVacios = { perfil: false, perfil_subir: false, perfil_validar: false, datos: false, ubicacion: false, ne: false, reemplazo: false, fotos: false, fotos_carga: false, fotos_moderar: false, ubicacion_corregir: false, ubicacion_validar: false, observaciones: false, observaciones_agregar: false, observaciones_anular: false };
   // nombre viaja en el MISMO objeto cacheado (misma lectura de Sheets
   // que ya trae estado/permisos) - se usa para notificaciones de
   // Telegram (ver NotificationService.js), no requiere una consulta
   // aparte. Mismo trade-off de cache que el resto: un cambio de nombre
   // en la hoja para un usuario ya activo puede tardar hasta
   // USER_STATUS_CACHE_SECONDS en reflejarse.
-  var access = {
-    active: status.found && status.active,
-    permisos: (status.found && status.permisos) ? status.permisos : permisosVacios,
-    nombre: status.found ? (status.nombre || null) : null
-  };
-  if (access.active) {
+  var access = usuariosDominio_accesoEfectivo(status);
+  if (access.active && cache.get(authService_claveCache(USER_ACCESS_TOMBSTONE_PREFIJO, email)) === null) {
     cache.put(cacheKey, JSON.stringify(access), USER_STATUS_CACHE_SECONDS);
   }
   return access;
+}
+
+// Invalida AL INSTANTE el acceso cacheado de un usuario (cambios administrativos): borra la clave y deja un
+// tombstone corto para que ninguna request en vuelo vuelva a cachear el valor viejo. Nunca lanza: devuelve
+// {ok:false} si el cache no esta disponible (el cambio ya esta escrito: en el peor caso rige el TTL).
+function authService_invalidarAcceso(email) {
+  try {
+    var cache = CacheService.getScriptCache();
+    cache.put(authService_claveCache(USER_ACCESS_TOMBSTONE_PREFIJO, email), '1', USER_ACCESS_TOMBSTONE_SECONDS);
+    cache.remove(authService_claveCache(USER_ACCESS_CACHE_PREFIJO, email));
+    cache.remove(authService_claveCache(USER_ACCESS_CACHE_PREFIJO_VIEJO, email));
+    return { ok: true };
+  } catch (err) {
+    return { ok: false };
+  }
 }
 
 function isUserActive(email) {
@@ -149,6 +173,21 @@ function handleCheckSession(sessionToken) {
   };
 }
 
+// Categoria SEGURA de la claim email_verified (nunca el valor crudo): 'VERDADERO' | 'FALSO' | 'AUSENTE' | 'OTRO'.
+// tokeninfo devuelve las claims como CADENAS ("true"), asi que se acepta la cadena exacta 'true' y el booleano true; igual con false.
+function authService_clasificarEmailVerified(valor) {
+  if (valor === true || valor === 'true') {
+    return 'VERDADERO';
+  }
+  if (valor === false || valor === 'false') {
+    return 'FALSO';
+  }
+  if (valor === undefined || valor === null || valor === '') {
+    return 'AUSENTE';
+  }
+  return 'OTRO';
+}
+
 function handleLogin(idToken) {
   if (!idToken) {
     return { status: 'error', code: 'UNAUTHORIZED', message: 'falta idToken' };
@@ -173,6 +212,24 @@ function handleLogin(idToken) {
     return { status: 'error', code: 'UNAUTHORIZED', message: 'aud no coincide con nuestro client id' };
   }
 
+  // Sin email no hay identidad: nunca se consulta la hoja con undefined.
+  if (typeof tokenInfo.email !== 'string' || tokenInfo.email.trim() === '') {
+    return { status: 'error', code: 'UNAUTHORIZED', message: 'el token no trae email' };
+  }
+
+  // E10-1: email_verified. OBSERVAR (estado inicial del rollout, y valor por defecto): NO bloquea; registra solo la CATEGORIA segura en Historial
+  // (nunca el token, el idToken ni el valor crudo). EXIGIR: todo valor distinto de verdadero -> EMAIL_NO_VERIFICADO, sin sesion. Se evalua ANTES de consultar la hoja Usuarios.
+  var verificado = authService_clasificarEmailVerified(tokenInfo.email_verified);
+  var modo = e10Flags_emailVerifiedModo();
+  if (modo.modo === 'EXIGIR') {
+    if (verificado !== 'VERDADERO') {
+      logHistoryEvent(tokenInfo.email, 'login', null, 'EMAIL_NO_VERIFICADO');
+      return { status: 'error', code: 'EMAIL_NO_VERIFICADO', message: 'el email de la cuenta de Google no esta verificado' };
+    }
+  } else {
+    logHistoryEvent(tokenInfo.email, 'login', null, 'EMAIL_VERIFIED_' + verificado + (modo.origen === 'INVALIDO' ? '_MODO_INVALIDO' : ''));
+  }
+
   var access = getUserAccess(tokenInfo.email);
   if (!access.active) {
     logHistoryEvent(tokenInfo.email, 'login', null, 'USER_DISABLED');
@@ -187,7 +244,7 @@ function handleLogin(idToken) {
     data: {
       email: tokenInfo.email,
       name: tokenInfo.name || null,
-      emailVerified: tokenInfo.email_verified === 'true' || tokenInfo.email_verified === true,
+      emailVerified: verificado === 'VERDADERO',
       sessionToken: sessionToken,
       permisos: access.permisos
     }
@@ -198,6 +255,10 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     isUserActive,
     getUserAccess,
+    authService_invalidarAcceso,
+    authService_clasificarEmailVerified,
+    USER_ACCESS_CACHE_PREFIJO,
+    USER_ACCESS_TOMBSTONE_PREFIJO,
     hasPermission,
     signPayload,
     createSessionToken,

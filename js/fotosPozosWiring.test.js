@@ -103,9 +103,11 @@ describe('gating por permisos en el controlador', () => {
 });
 
 describe('app.js', () => {
-  test('permisos por defecto y logout incluyen fotos y fotos_carga (fail-closed)', () => {
-    const coincidencias = app.match(/fotos: false, fotos_carga: false/g) || [];
-    expect(coincidencias.length).toBe(2);
+  test('permisos por defecto y logout: vacios, sin lista literal (fail-closed)', () => {
+    // E10-1: el frontend NO mantiene una lista de permisos (la fuente canonica es el catalogo del backend). Arranca y se reinicia al cerrar sesion VACIO: ningun permiso (fail-closed, una clave ausente es falsa).
+    const vacios = app.match(/permisosActuales = \{\};/g) || [];
+    expect(vacios).toHaveLength(2);                                                       // inicial y logout
+    expect(app).not.toMatch(/permisosActuales = \{ perfil: false/);
   });
 
   test('logout descarta el resumen, la galeria y la cola', () => {

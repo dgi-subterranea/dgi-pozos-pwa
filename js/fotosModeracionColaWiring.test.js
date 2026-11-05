@@ -126,7 +126,8 @@ describe('tarjeta del hub', () => {
     expect(codigoApp.slice(i, i + 700)).toMatch(/fotosModeracionColaController_abrir\(\)/);
     ['function toggleAccesosUbicacion', 'function enterMain', 'function showScreen'].forEach((f) => {
       const j = codigoApp.indexOf(f);
-      expect(codigoApp.slice(j, j + 900)).not.toMatch(/fotosModeracionColaController_/);
+      const fin = codigoApp.indexOf('\n  function ', j + 10);        // el cuerpo de ESA funcion (no una ventana fija de caracteres, que se corre con cualquier cambio de arriba)
+      expect(codigoApp.slice(j, fin < 0 ? j + 900 : fin)).not.toMatch(/fotosModeracionColaController_/);
     });
   });
 

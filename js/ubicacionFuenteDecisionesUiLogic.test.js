@@ -28,14 +28,17 @@ const vinculado = (estados, extra, vigente) => U.ufdui_aplicarDecisiones(modeloB
 describe('rol (fail-closed: solo con los permisos exactamente en true)', () => {
   test.each([
     [{ ubicacion: true, ubicacion_validar: true }, 'VALIDADOR'],
-    [{ ubicacion: true, ubicacion_validar: false }, 'LECTOR'],
-    [{ ubicacion: true }, 'LECTOR'],
-    [{ ubicacion: true, ubicacion_corregir: true }, 'LECTOR'],                       // corregir NO concede decidir
+    [{ ubicacion: true, ubicacion_validar: false }, 'CONSULTA'],                      // E10-1: ubicacion es LECTURA: sin acciones
+    [{ ubicacion: true }, 'CONSULTA'],
+    [{ ubicacion: true, ubicacion_corregir: true }, 'LECTOR'],                       // LECTOR (nombre historico) = quien SUGIERE; corregir NO concede decidir
+    [{ ubicacion: true, ubicacion_corregir: true, ubicacion_validar: true }, 'VALIDADOR'],
+    [{ ubicacion: true, ubicacion_corregir: 'SI' }, 'CONSULTA'],
+    [{ ubicacion: false, ubicacion_corregir: true }, null],
     [{ ubicacion: false, ubicacion_validar: true }, null],
     [{ ubicacion_validar: true }, null],
     [{ ubicacion: 'SI', ubicacion_validar: 'SI' }, null],
     [{ ubicacion: 1, ubicacion_validar: 1 }, null],
-    [{ ubicacion: true, ubicacion_validar: 'true' }, 'LECTOR'],
+    [{ ubicacion: true, ubicacion_validar: 'true' }, 'CONSULTA'],
     [{}, null], [null, null], [undefined, null]
   ])('%j -> %s', (permisos, esperado) => {
     expect(U.ufdui_rol(permisos)).toBe(esperado);

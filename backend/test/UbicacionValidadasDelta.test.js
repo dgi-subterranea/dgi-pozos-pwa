@@ -14,9 +14,11 @@ const apiFrontend = fs.readFileSync(path.join(raiz, 'js', 'api.js'), 'utf8');
 const OFICIAL = { estado: 'unica', fuente: 'reportePozos', lat: -33.34765, lon: -69.14545 };
 const norte = (grados) => OFICIAL.lat + grados;
 const USUARIOS = {
-  'ana@x.com': { nombre: 'Ana Pérez', permisos: { ubicacion: true, ubicacion_corregir: true } },
-  'carla@x.com': { nombre: 'Carla Directa', permisos: { ubicacion: true, ubicacion_corregir: true, ubicacion_validar: true } },
-  'val@x.com': { nombre: 'Valeria Validadora', permisos: { ubicacion: true, ubicacion_validar: true } },
+  'ana@x.com': { nombre: 'Ana Pérez', permisos: { ubicacion: true, ubicacion_corregir: true, mapa: true } },
+  'carla@x.com': { nombre: 'Carla Directa', permisos: { ubicacion: true, ubicacion_corregir: true, ubicacion_validar: true, mapa: true } },
+  'val@x.com': { nombre: 'Valeria Validadora', permisos: { ubicacion: true, ubicacion_validar: true, mapa: true } },
+  'soloMapa@x.com': { nombre: 'Solo Mapa', permisos: { mapa: true } },
+  'sinMapa@x.com': { nombre: 'Sin Mapa', permisos: { ubicacion: true, ubicacion_corregir: true, ubicacion_validar: true } },
   'nada@x.com': { nombre: 'Sin Permisos', permisos: {} }
 };
 
@@ -532,7 +534,8 @@ describe('endpoint getUbicacionesValidadas: permisos y contrato frontend/backend
     expect(llamadas).toEqual([{ action: 'getUbicacionesValidadas', sessionToken: 'tok-x' }]);
   });
 
-  test.each([['ana@x.com'], ['carla@x.com'], ['val@x.com'], ['nada@x.com']])('CUALQUIER usuario activo puede llamarlo (%s), tenga o no ubicacion / ubicacion_corregir / ubicacion_validar', async (u) => {
+  // E10-1: el endpoint exige el permiso `mapa` (y NINGUN otro): ubicacion / ubicacion_corregir / ubicacion_validar no cambian nada
+  test.each([['ana@x.com'], ['carla@x.com'], ['val@x.com'], ['soloMapa@x.com']])('quien tiene `mapa` puede llamarlo (%s), tenga o no ubicacion / ubicacion_corregir / ubicacion_validar', async (u) => {
     auto(1);
     const r = await llamar(u);
     expect(r.status).toBe('ok');
@@ -540,10 +543,17 @@ describe('endpoint getUbicacionesValidadas: permisos y contrato frontend/backend
     expect(r.data.ubicaciones).toHaveLength(1);
   });
 
-  test('sin permiso de modulo alguno (nada@x.com) recibe el mismo contenido que un validador', async () => {
+  test('sin `mapa` (sinMapa@x.com, aunque tenga todos los permisos de ubicacion) -> PERMISSION_DENIED y ningun dato', async () => {
+    auto(1);
+    const r = await llamar('sinMapa@x.com');
+    expect(r).toMatchObject({ status: 'error', code: 'PERMISSION_DENIED' });
+    expect(r.data).toBeUndefined();
+  });
+
+  test('quien solo tiene `mapa` recibe el mismo contenido que un validador', async () => {
     auto(1);
     auto(2);
-    expect(await llamar('nada@x.com')).toEqual(await llamar('val@x.com'));
+    expect(await llamar('soloMapa@x.com')).toEqual(await llamar('val@x.com'));
   });
 
   test('sesion invalida -> UNAUTHORIZED; usuario inactivo -> USER_DISABLED; ninguno consulta las hojas', async () => {
@@ -564,14 +574,14 @@ describe('endpoint getUbicacionesValidadas: permisos y contrato frontend/backend
 
   test('si el servicio falla: SERVICE_UNAVAILABLE (el cliente cae a la base); no se cachea el error', async () => {
     global.ubicacionCorreccionRepository_listarCorrecciones = jest.fn(() => { throw new Error('Sheets caido'); });
-    expect(await llamar('nada@x.com')).toMatchObject({ status: 'error', code: 'SERVICE_UNAVAILABLE' });
+    expect(await llamar('soloMapa@x.com')).toMatchObject({ status: 'error', code: 'SERVICE_UNAVAILABLE' });
     expect(cache.store[KEY()]).toBeUndefined();
   });
 
   test('CONTRATO: {ubicaciones:[{wellId, lat, lon, vts}]} con tipos exactos y vts ISO', async () => {
     auto(1);
     auto(2);
-    const r = await llamar('nada@x.com');
+    const r = await llamar('soloMapa@x.com');
     expect(r.data.ubicaciones).toHaveLength(2);
     r.data.ubicaciones.forEach((d) => {
       expect(claves(d)).toEqual(['lat', 'lon', 'vts', 'wellId']);
@@ -584,14 +594,14 @@ describe('endpoint getUbicacionesValidadas: permisos y contrato frontend/backend
 
   test('SEGURIDAD: la respuesta completa no trae emails, nombres, observaciones, metodo, motivos, ids ni la coordenada original ingresada', async () => {
     auto(1, { observacion: 'Observacion privada del agente', metodo: 'COORDENADAS_GMS', coordenadaOriginal: { lat: { g: 33, m: 20, s: 51.54, h: 'S' }, lon: { g: 69, m: 8, s: 43.62, h: 'O' } }, lat: -33.3476500, lon: -69.1454500 });
-    const crudo = JSON.stringify(await llamar('nada@x.com'));
+    const crudo = JSON.stringify(await llamar('soloMapa@x.com'));
     expect(crudo).not.toMatch(/@|Carla|Ana|Valeria|privada|COORDENADAS|GMS|GPS_ACTUAL|PUNTO_EN_MAPA|motivo|Validada automaticamente|EPSG|[0-9a-f]{8}-[0-9a-f]{4}-4|irr|distancia|padron|clientRequestId|correccionId/i);
   });
 
   test('el endpoint devuelve la MISMA ubicacion que getCorreccionesUbicacionPozo expone como vigente, sin sumar nada que ese endpoint no daria', async () => {
     auto(1);
     const delPozo = (await ctxFrontend.apiGetCorreccionesUbicacionPozo('tok-val@x.com', '14-0001')).data.vigente;
-    const d = (await llamar('nada@x.com')).data.ubicaciones[0];
+    const d = (await llamar('soloMapa@x.com')).data.ubicaciones[0];
     expect([d.lat, d.lon]).toEqual([delPozo.lat, delPozo.lon]);
     expect(d.vts).toBe(delPozo.resolucion.timestamp);
   });
@@ -608,7 +618,7 @@ describe('endpoint getUbicacionesValidadas: permisos y contrato frontend/backend
   test('COMPATIBILIDAD con el modulo puro del punto operativo: el overlay acepta el payload tal cual, sin descartar nada', async () => {
     auto(1);
     auto(2);
-    const r = await llamar('nada@x.com');
+    const r = await llamar('soloMapa@x.com');
     const base = [{ wellId: '14-0001', lat: OFICIAL.lat, lon: OFICIAL.lon, estado: 'D', cuenca: 'X', profundidad: 10, tramosFiltrantes: [], surgencia: null }];
     const out = OperativaLogic.ubicacionOperativaLogic_aplicarOverlay(base, r.data.ubicaciones);
     expect(out.resumen).toMatchObject({ recibidas: 2, aplicadas: 2, nuevos: 1, descartadas: [] });

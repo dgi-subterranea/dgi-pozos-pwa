@@ -26,6 +26,9 @@ function crearHoja(nombre, filas) {
       this.filas.forEach((f) => { if (f.length > posicion) { f.splice(posicion, 0, ...new Array(cantidad).fill('')); } });
       this.columnasFisicas = this.getMaxColumns() + cantidad;
     },
+    // E10-1: borrado de una fila / columna (rollback de un alta cuya auditoria fallo; rollback de la migracion). Como Sheets: las filas de abajo suben, las columnas de la derecha se corren.
+    deleteRow(fila) { if (!Number.isInteger(fila) || fila < 1 || fila > this.filas.length) { throw new Error('deleteRow: fila invalida ' + fila); } this.filas.splice(fila - 1, 1); },
+    deleteColumn(col) { if (!Number.isInteger(col) || col < 1) { throw new Error('deleteColumn: columna invalida ' + col); } this.filas.forEach((f) => { if (f.length >= col) { f.splice(col - 1, 1); } }); },
     getLastRow() { return this.filas.length; },
     getLastColumn() { return this.filas.reduce((m, f) => Math.max(m, f.length), 0); },
     getDataRange() { const self = this; return { getValues: () => self.filas.map((f) => f.slice()) }; },

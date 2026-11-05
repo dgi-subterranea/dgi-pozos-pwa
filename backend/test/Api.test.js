@@ -540,13 +540,18 @@ describe('validarPermiso', () => {
 });
 
 describe('handleRegisterWellSearch', () => {
-  function mockAccess(nombre) {
+  function mockAccess(nombre, permisos) {
     global.getUserAccess.mockReturnValue({
       active: true,
-      permisos: { perfil: true, datos: true, ubicacion: true, ne: true },
+      permisos: permisos || { perfil: true, datos: true, ubicacion: true, ne: true },
       nombre: nombre === undefined ? 'Juan Pérez' : nombre
     });
   }
+
+  // E10-1: el pozo tiene que EXISTIR (pozoExistenciaService_verificar, la fuente institucional unica). Por defecto existe.
+  beforeEach(() => {
+    global.pozoExistenciaService_verificar = jest.fn(() => ({ existe: true, enPadron: true, fuentes: ['PADRON'], indeterminado: false, noVerificadas: [] }));
+  });
 
   // Por defecto ambos efectos "salen bien" - los tests de cada falla se
   // encargan de pisar esto donde corresponda.
@@ -600,12 +605,10 @@ describe('handleRegisterWellSearch', () => {
 
     Api.handleRegisterWellSearch('token-valido', '04-0263', { perfil: true, email: 'atacante@evil.com' });
 
-    expect(global.searchHistoryService_registerSearch).toHaveBeenCalledWith(
-      'real@example.com', 'Usuario Real', '04-0263', { perfil: true, email: 'atacante@evil.com' }
-    );
-    expect(global.notificationService_notifyWellSearch).toHaveBeenCalledWith(
-      'real@example.com', 'Usuario Real', '04-0263', { perfil: true, email: 'atacante@evil.com' }
-    );
+    // E10-1: `modulos` se acota a los 4 modulos de busqueda en booleano estricto: el email (u otro campo) del body no llega a ningun efecto
+    const esperado = { perfil: true, datos: false, ubicacion: false, ne: false };
+    expect(global.searchHistoryService_registerSearch).toHaveBeenCalledWith('real@example.com', 'Usuario Real', '04-0263', esperado);
+    expect(global.notificationService_notifyWellSearch).toHaveBeenCalledWith('real@example.com', 'Usuario Real', '04-0263', esperado);
   });
 
   test('pozo encontrado: registra Y notifica con los modulos recibidos, devuelve status ok', () => {
@@ -624,16 +627,91 @@ describe('handleRegisterWellSearch', () => {
     );
   });
 
-  test('pozo no encontrado (modulos vacio): igual registra y notifica, devuelve status ok', () => {
+  test('pozo que existe pero la busqueda no encontro nada en los modulos (modulos vacio): igual registra y notifica, devuelve status ok', () => {
     mockValidSession();
     mockAccess();
     mockAmbosOk();
+    const vacios = { perfil: false, datos: false, ubicacion: false, ne: false };
 
     const result = Api.handleRegisterWellSearch('token-valido', '05-9999', {});
 
     expect(result).toEqual({ status: 'ok' });
-    expect(global.searchHistoryService_registerSearch).toHaveBeenCalledWith(expect.any(String), expect.anything(), '05-9999', {});
-    expect(global.notificationService_notifyWellSearch).toHaveBeenCalledWith(expect.any(String), expect.anything(), '05-9999', {});
+    expect(global.searchHistoryService_registerSearch).toHaveBeenCalledWith(expect.any(String), expect.anything(), '05-9999', vacios);
+    expect(global.notificationService_notifyWellSearch).toHaveBeenCalledWith(expect.any(String), expect.anything(), '05-9999', vacios);
+  });
+
+  // E10-1: el pozo debe EXISTIR segun la fuente institucional (no basta el formato DD-PPPP). Sin existencia confirmada no hay NINGUN efecto.
+  test('pozo inexistente: POZO_NOT_FOUND, se audita y NO se escribe Busquedas ni se manda Telegram', () => {
+    mockValidSession('user@example.com');
+    mockAccess();
+    mockAmbosOk();
+    global.pozoExistenciaService_verificar.mockReturnValue({ existe: false, enPadron: false, fuentes: [], indeterminado: false, noVerificadas: [] });
+
+    const result = Api.handleRegisterWellSearch('token-valido', '05-9999', { perfil: true });
+
+    expect(result).toMatchObject({ status: 'error', code: 'POZO_NOT_FOUND' });
+    expect(global.searchHistoryService_registerSearch).not.toHaveBeenCalled();
+    expect(global.notificationService_notifyWellSearch).not.toHaveBeenCalled();
+    expect(global.logHistoryEvent).toHaveBeenCalledWith('user@example.com', 'registerWellSearch', '05-9999', 'POZO_NOT_FOUND');
+  });
+
+  test('existencia INDETERMINADA (no se pudo verificar): SERVICE_UNAVAILABLE sin efectos (fail-closed: un error de Drive no es "existe")', () => {
+    mockValidSession('user@example.com');
+    mockAccess();
+    mockAmbosOk();
+    global.pozoExistenciaService_verificar.mockReturnValue({ existe: false, enPadron: false, fuentes: [], indeterminado: true, noVerificadas: ['PADRON'] });
+
+    const result = Api.handleRegisterWellSearch('token-valido', '04-0263', { perfil: true });
+
+    expect(result).toMatchObject({ status: 'error', code: 'SERVICE_UNAVAILABLE' });
+    expect(global.searchHistoryService_registerSearch).not.toHaveBeenCalled();
+    expect(global.notificationService_notifyWellSearch).not.toHaveBeenCalled();
+    expect(global.logHistoryEvent).toHaveBeenCalledWith('user@example.com', 'registerWellSearch', '04-0263', 'SERVICE_UNAVAILABLE');
+  });
+
+  test('el verificador de existencia lanza: SERVICE_UNAVAILABLE sin efectos, no lanza hacia afuera', () => {
+    mockValidSession();
+    mockAccess();
+    mockAmbosOk();
+    global.pozoExistenciaService_verificar.mockImplementation(() => { throw new Error('Drive caido'); });
+
+    let result;
+    expect(() => { result = Api.handleRegisterWellSearch('token-valido', '04-0263', {}); }).not.toThrow();
+    expect(result).toMatchObject({ status: 'error', code: 'SERVICE_UNAVAILABLE' });
+    expect(global.searchHistoryService_registerSearch).not.toHaveBeenCalled();
+    expect(global.notificationService_notifyWellSearch).not.toHaveBeenCalled();
+  });
+
+  test('UNA sola verificacion de existencia por llamada, con el wellId (sin N+1)', () => {
+    mockValidSession();
+    mockAccess();
+    mockAmbosOk();
+
+    Api.handleRegisterWellSearch('token-valido', '04-0263', { perfil: true });
+
+    expect(global.pozoExistenciaService_verificar).toHaveBeenCalledTimes(1);
+    expect(global.pozoExistenciaService_verificar).toHaveBeenCalledWith('04-0263');
+  });
+
+  test('un usuario no puede declarar un modulo que no tiene: los flags se acotan a sus permisos reales', () => {
+    mockValidSession('user@example.com');
+    mockAccess('Solo Perfil', { perfil: true });
+    mockAmbosOk();
+
+    Api.handleRegisterWellSearch('token-valido', '04-0263', { perfil: true, datos: true, ubicacion: true, ne: true });
+
+    expect(global.searchHistoryService_registerSearch).toHaveBeenCalledWith('user@example.com', 'Solo Perfil', '04-0263', { perfil: true, datos: false, ubicacion: false, ne: false });
+    expect(global.notificationService_notifyWellSearch).toHaveBeenCalledWith('user@example.com', 'Solo Perfil', '04-0263', { perfil: true, datos: false, ubicacion: false, ne: false });
+  });
+
+  test('los flags que no son booleano estricto (cadenas, numeros, objetos) cuentan como false', () => {
+    mockValidSession();
+    mockAccess();
+    mockAmbosOk();
+
+    Api.handleRegisterWellSearch('token-valido', '04-0263', { perfil: 'true', datos: 1, ubicacion: {}, ne: null });
+
+    expect(global.searchHistoryService_registerSearch).toHaveBeenCalledWith(expect.any(String), expect.anything(), '04-0263', { perfil: false, datos: false, ubicacion: false, ne: false });
   });
 
   test('Telegram deduplicado: status ok igual, no se audita como error, el registro en Busquedas se intenta igual', () => {
@@ -703,17 +781,55 @@ describe('handleRegisterWellSearch', () => {
     expect(global.logHistoryEvent).not.toHaveBeenCalled();
   });
 
-  test('no requiere ningun permiso especifico de modulo - cualquier usuario activo puede registrar su propia busqueda', () => {
+  // E10-1: ya no es "cualquier usuario activo": hace falta AL MENOS UNO de perfil / datos / ubicacion / ne (los modulos que componen una busqueda). No hay un permiso nuevo solo para telemetria.
+  test.each([['perfil'], ['datos'], ['ubicacion'], ['ne']])('con solo %s alcanza para registrar la busqueda', (modulo) => {
     mockValidSession();
-    global.hasPermission.mockReturnValue(false); // sin ningun permiso de modulo
-    mockAccess();
+    mockAccess('Uno', { [modulo]: true });
     mockAmbosOk();
 
-    const result = Api.handleRegisterWellSearch('token-valido', '04-0263', {});
+    const result = Api.handleRegisterWellSearch('token-valido', '04-0263', { [modulo]: true });
 
     expect(result).toEqual({ status: 'ok' });
     expect(global.searchHistoryService_registerSearch).toHaveBeenCalled();
     expect(global.notificationService_notifyWellSearch).toHaveBeenCalled();
+  });
+
+  test.each([
+    ['ningun permiso', {}],
+    ['solo mapa, reemplazo, fotos, observaciones y permisos de escritura', { mapa: true, reemplazo: true, fotos: true, observaciones: true, perfil_subir: true, ubicacion_corregir: true, usuarios_admin: true }]
+  ])('sin ningun modulo de busqueda (%s): PERMISSION_DENIED, se audita y no hay NINGUN efecto (ni Busquedas, ni Telegram, ni verificacion del pozo)', (nombre, permisos) => {
+    mockValidSession('user@example.com');
+    mockAccess('Sin Modulos', permisos);
+    mockAmbosOk();
+
+    const result = Api.handleRegisterWellSearch('token-valido', '04-0263', { perfil: true });
+
+    expect(result).toMatchObject({ status: 'error', code: 'PERMISSION_DENIED' });
+    expect(global.searchHistoryService_registerSearch).not.toHaveBeenCalled();
+    expect(global.notificationService_notifyWellSearch).not.toHaveBeenCalled();
+    expect(global.pozoExistenciaService_verificar).not.toHaveBeenCalled();
+    expect(global.logHistoryEvent).toHaveBeenCalledWith('user@example.com', 'registerWellSearch', '04-0263', 'PERMISSION_DENIED');
+  });
+
+  test('orden de chequeos: sesion -> formato de wellId -> permiso -> existencia del pozo', () => {
+    mockValidSession();
+    mockAccess('Sin Modulos', {});
+    expect(Api.handleRegisterWellSearch('token', '01-ABC', {}).code).toBe('INVALID_WELL_ID');          // formato antes que permiso
+    expect(Api.handleRegisterWellSearch('token', '04-0263', {}).code).toBe('PERMISSION_DENIED');       // permiso antes que existencia
+    expect(global.pozoExistenciaService_verificar).not.toHaveBeenCalled();
+  });
+
+  test('la deduplicacion existente se conserva: la dedupe vive en notificationService_notifyWellSearch y se sigue invocando una vez por llamada', () => {
+    mockValidSession();
+    mockAccess();
+    global.searchHistoryService_registerSearch.mockReturnValue({ logged: true });
+    global.notificationService_notifyWellSearch.mockReturnValue({ sent: false, reason: 'DEDUPED' });
+
+    expect(Api.handleRegisterWellSearch('token', '04-0263', { perfil: true })).toEqual({ status: 'ok' });
+    expect(Api.handleRegisterWellSearch('token', '04-0263', { perfil: true })).toEqual({ status: 'ok' });
+
+    expect(global.notificationService_notifyWellSearch).toHaveBeenCalledTimes(2);
+    expect(global.logHistoryEvent).not.toHaveBeenCalled();
   });
 });
 
@@ -738,17 +854,11 @@ describe('handleGetMapaPozos', () => {
     expect(result.code).toBe('USER_DISABLED');
   });
 
-  // Cerca Mio es para TODO usuario activo y Pozos Provincia para
-  // perfil/ne: el dataset general ya no se gatea por un permiso de modulo
-  // (antes "ubicacion"), alcanza con sesion valida + usuario activo.
+  // E10-1: el dataset general exige el permiso `mapa` (y ningun otro). Antes alcanzaba con sesion valida + usuario activo; la migracion le dio mapa = SI a todos los activos de ese momento.
   test.each([
-    ['ningun permiso funcional (solo activo)', {}],
-    ['solo perfil', { perfil: true }],
-    ['solo ne', { ne: true }],
-    ['solo reemplazo', { reemplazo: true }],
-    ['solo datos', { datos: true }],
-    ['ubicacion=NO con todo lo demas en SI', { perfil: true, datos: true, ne: true, reemplazo: true }]
-  ])('usuario activo con %s: OK, sin consultar permisos de modulo', (nombre, permisos) => {
+    ['solo mapa', { mapa: true }],
+    ['mapa con ubicacion=NO y todo lo demas en SI', { mapa: true, perfil: true, datos: true, ne: true, reemplazo: true }]
+  ])('usuario activo con %s: OK', (nombre, permisos) => {
     global.verifySessionToken.mockReturnValue({ valid: true, email: 'user@example.com' });
     global.isUserActive.mockReturnValue(true);
     global.hasPermission.mockImplementation((email, modulo) => !!permisos[modulo]);
@@ -757,7 +867,25 @@ describe('handleGetMapaPozos', () => {
     const result = Api.handleGetMapaPozos('token-valido');
 
     expect(result.status).toBe('ok');
-    expect(global.hasPermission).not.toHaveBeenCalled();
+    expect(global.hasPermission).toHaveBeenCalledWith('user@example.com', 'mapa');
+  });
+
+  test.each([
+    ['ningun permiso funcional (solo activo)', {}],
+    ['solo perfil', { perfil: true }],
+    ['solo ne', { ne: true }],
+    ['solo reemplazo', { reemplazo: true }],
+    ['solo datos', { datos: true }],
+    ['ubicacion=SI y todo lo demas en SI pero SIN mapa', { ubicacion: true, ubicacion_corregir: true, ubicacion_validar: true, perfil: true, datos: true, ne: true, reemplazo: true }]
+  ])('usuario activo con %s: PERMISSION_DENIED y el servicio nunca se consulta', (nombre, permisos) => {
+    global.verifySessionToken.mockReturnValue({ valid: true, email: 'user@example.com' });
+    global.isUserActive.mockReturnValue(true);
+    global.hasPermission.mockImplementation((email, modulo) => !!permisos[modulo]);
+
+    const result = Api.handleGetMapaPozos('token-valido');
+
+    expect(result).toMatchObject({ status: 'error', code: 'PERMISSION_DENIED' });
+    expect(global.mapaService_getPozos).not.toHaveBeenCalled();
   });
 
   test('usuario INACTIVO: USER_DISABLED aunque tenga todos los permisos (fail-closed), no consulta el servicio', () => {
@@ -771,9 +899,9 @@ describe('handleGetMapaPozos', () => {
     expect(global.mapaService_getPozos).not.toHaveBeenCalled();
   });
 
-  test('ubicacion=SI con datos=NO: OK, funciona sin necesitar el permiso "datos"', () => {
+  test('mapa=SI con datos=NO: OK, funciona sin necesitar el permiso "datos"', () => {
     mockValidSession();
-    global.hasPermission.mockImplementation((email, modulo) => modulo === 'ubicacion');
+    global.hasPermission.mockImplementation((email, modulo) => modulo === 'mapa');
     global.mapaService_getPozos.mockReturnValue({
       found: true,
       pozos: [{ wellId: '04-0263', lat: -32.86865, lon: -68.7507, estado: 'C' }],
@@ -1305,23 +1433,26 @@ describe('handleGetItfAvailability', () => {
 });
 
 describe('handleRegisterDescargaItf', () => {
-  function mockAccess(nombre) {
+  function mockAccess(nombre, permisos) {
     global.getUserAccess.mockReturnValue({
       active: true,
-      permisos: { perfil: true, datos: true, ubicacion: true, ne: true },
+      permisos: permisos || { perfil: true, datos: true, ubicacion: true, ne: true },
       nombre: nombre === undefined ? 'Juan Pérez' : nombre
     });
   }
 
   function resumenValido(overrides) {
+    // E10-1: el resumen tiene que ser coherente (solicitados = wellIds.length, descargados + fallidos = solicitados, solicitados <= totalSeleccionados)
     return Object.assign({
       totalSeleccionados: 10,
-      solicitados: 10,
-      descargados: 9,
+      solicitados: 2,
+      descargados: 1,
       fallidos: 1,
       wellIds: ['01-0012', '02-0005']
     }, overrides || {});
   }
+
+  const idsDe = (n) => Array.from({ length: n }, (_, i) => '01-' + String(1000 + i));
 
   test('sessionToken invalido: UNAUTHORIZED, no notifica', () => {
     global.verifySessionToken.mockReturnValue({ valid: false, reason: 'expirado' });
@@ -1392,25 +1523,70 @@ describe('handleRegisterDescargaItf', () => {
     expect(global.notificationService_notifyDescargaItf).not.toHaveBeenCalled();
   });
 
-  // No requiere permiso de modulo - es auditoria, no acceso a datos
-  // (mismo criterio que registerWellSearch; el acceso real a cada imagen
-  // ya paso por getProfile, gateado por "perfil").
-  test('sin ningun permiso de modulo habilitado: igual funciona, no es un acceso a datos', () => {
+  // E10-1: exige `perfil` (la unica forma de descargar ITF). Antes alcanzaba con ser usuario activo.
+  test('con perfil: OK', () => {
     mockValidSession();
-    mockAccess();
-    global.hasPermission.mockReturnValue(false);
+    mockAccess('Uno', { perfil: true });
     global.notificationService_notifyDescargaItf.mockReturnValue({ sent: true });
+
+    expect(Api.handleRegisterDescargaItf('token-valido', resumenValido())).toEqual({ status: 'ok' });
+    expect(global.notificationService_notifyDescargaItf).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    ['ningun permiso', {}],
+    ['todo menos perfil (datos, ubicacion, ne, mapa, perfil_subir...)', { datos: true, ubicacion: true, ne: true, mapa: true, perfil_subir: true, perfil_validar: true, usuarios_admin: true }]
+  ])('sin `perfil` (%s): PERMISSION_DENIED, se audita y NO se manda Telegram', (nombre, permisos) => {
+    mockValidSession('user@example.com');
+    mockAccess('Sin Perfil', permisos);
 
     const result = Api.handleRegisterDescargaItf('token-valido', resumenValido());
 
-    expect(result).toEqual({ status: 'ok' });
+    expect(result).toMatchObject({ status: 'error', code: 'PERMISSION_DENIED' });
+    expect(global.notificationService_notifyDescargaItf).not.toHaveBeenCalled();
+    expect(global.logHistoryEvent).toHaveBeenCalledWith('user@example.com', 'registerDescargaItf', null, 'PERMISSION_DENIED');
+  });
+
+  test.each([
+    ['solicitados distinto de la cantidad de wellIds', { solicitados: 3 }],
+    ['descargados + fallidos distinto de solicitados', { descargados: 2, fallidos: 1 }],
+    ['solicitados mayor que los seleccionados', { totalSeleccionados: 1 }],
+    ['conteo no entero', { descargados: 1.5, fallidos: 0.5 }],
+    ['conteo negativo', { descargados: 3, fallidos: -1 }]
+  ])('resumen incoherente (%s): INVALID_REQUEST y no se manda Telegram', (nombre, extra) => {
+    mockValidSession();
+    mockAccess();
+
+    const result = Api.handleRegisterDescargaItf('token-valido', resumenValido(extra));
+
+    expect(result).toMatchObject({ status: 'error', code: 'INVALID_REQUEST' });
+    expect(global.notificationService_notifyDescargaItf).not.toHaveBeenCalled();
+  });
+
+  test('un lote de 500 coherente se acepta; con 501 wellIds se rechaza', () => {
+    mockValidSession();
+    mockAccess();
+    global.notificationService_notifyDescargaItf.mockReturnValue({ sent: true });
+
+    expect(Api.handleRegisterDescargaItf('token-valido', resumenValido({ totalSeleccionados: 800, solicitados: 500, descargados: 498, fallidos: 2, wellIds: idsDe(500) }))).toEqual({ status: 'ok' });
+    expect(Api.handleRegisterDescargaItf('token-valido', resumenValido({ totalSeleccionados: 800, solicitados: 501, descargados: 501, fallidos: 0, wellIds: idsDe(501) }))).toMatchObject({ code: 'INVALID_REQUEST' });
+  });
+
+  test('la deduplicacion existente se conserva: se sigue invocando notifyDescargaItf (que la aplica) una vez por llamada', () => {
+    mockValidSession();
+    mockAccess();
+    global.notificationService_notifyDescargaItf.mockReturnValue({ sent: false, reason: 'DEDUPED' });
+
+    expect(Api.handleRegisterDescargaItf('token-valido', resumenValido())).toEqual({ status: 'ok' });
+    expect(Api.handleRegisterDescargaItf('token-valido', resumenValido())).toEqual({ status: 'ok' });
+    expect(global.notificationService_notifyDescargaItf).toHaveBeenCalledTimes(2);
   });
 
   test('pasa el resumen completo (los 4 conteos + wellIds) a la notificacion', () => {
     mockValidSession('juan@example.com');
     mockAccess('Juan Pérez');
     global.notificationService_notifyDescargaItf.mockReturnValue({ sent: true });
-    const resumen = resumenValido({ totalSeleccionados: 80, solicitados: 50, descargados: 47, fallidos: 3 });
+    const resumen = resumenValido({ totalSeleccionados: 80, solicitados: 50, descargados: 47, fallidos: 3, wellIds: idsDe(50) });
 
     Api.handleRegisterDescargaItf('token-valido', resumen);
 
@@ -1470,7 +1646,7 @@ describe('privacidad: seleccion geografica nunca llega al backend', () => {
 
   test('handleRegisterDescargaItf nunca recibe ni reenvia lat/lon/poligono/radio', () => {
     mockValidSession();
-    global.getUserAccess.mockReturnValue({ active: true, permisos: {}, nombre: 'Juan' });
+    global.getUserAccess.mockReturnValue({ active: true, permisos: { perfil: true }, nombre: 'Juan' });
     global.notificationService_notifyDescargaItf.mockReturnValue({ sent: true });
 
     Api.handleRegisterDescargaItf('token-valido', {

@@ -29,11 +29,11 @@ const padron04 = (extra) => JSON.stringify(Object.assign({
 const METADATA = JSON.stringify({ generadoEl: '2026-09-14T12:58:36-03:00', fuente: { archivo: 'Reporte Pozos 09_2026.csv', periodo: '2026-09' } });
 
 const USUARIOS = {
-  'ana@x.com': { nombre: 'Ana', permisos: { ubicacion: true, ubicacion_corregir: true } },
-  'carla@x.com': { nombre: 'Carla', permisos: { ubicacion: true, ubicacion_corregir: true, ubicacion_validar: true } },
-  'valeria@x.com': { nombre: 'Valeria', permisos: { ubicacion: true, ubicacion_validar: true } },
-  'lector@x.com': { nombre: 'Lector', permisos: { ubicacion: true } },
-  'sinubic@x.com': { nombre: 'Sin', permisos: { perfil: true, datos: true } }
+  'ana@x.com': { nombre: 'Ana', permisos: { ubicacion: true, ubicacion_corregir: true, mapa: true } },
+  'carla@x.com': { nombre: 'Carla', permisos: { ubicacion: true, ubicacion_corregir: true, ubicacion_validar: true, mapa: true } },
+  'valeria@x.com': { nombre: 'Valeria', permisos: { ubicacion: true, ubicacion_validar: true, mapa: true } },
+  'lector@x.com': { nombre: 'Lector', permisos: { ubicacion: true, mapa: true } },
+  'sinubic@x.com': { nombre: 'Sin', permisos: { perfil: true, datos: true, mapa: true } }
 };
 
 // Drive en memoria: SOLO lectura. getFilesByName(nombre) devuelve el archivo si existe (el padron .json y los <wellId>.jpg de la carpeta ITF).

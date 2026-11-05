@@ -173,14 +173,11 @@ describe('hub: tarjeta, permisos y navegacion', () => {
     expect(logout).toMatch(/observacionesPozoController_reset\(\)/);
   });
 
-  test('defaults de permisos: las tres claves nuevas en false en todos los objetos de permisos del frontend', () => {
-    const objetos = codigoApp.match(/permisosActuales = \{ perfil: false[^}]*\}/g);
-    expect(objetos).toHaveLength(2);                                    // inicial y logout
-    objetos.forEach((o) => {
-      expect(o).toContain('observaciones: false');
-      expect(o).toContain('observaciones_agregar: false');
-      expect(o).toContain('observaciones_anular: false');
-    });
+  test('defaults de permisos: vacios (las claves de observaciones ausentes = false, fail-closed), sin lista literal en el frontend', () => {
+    // E10-1: el frontend NO mantiene una lista de permisos (la fuente canonica es el catalogo del backend). Arranca y se reinicia al cerrar sesion VACIO: ningun permiso (fail-closed, una clave ausente es falsa).
+    const vacios = codigoApp.match(/permisosActuales = \{\};/g) || [];
+    expect(vacios).toHaveLength(2);                                                       // inicial y logout
+    expect(codigoApp).not.toMatch(/permisosActuales = \{ perfil: false/);
   });
 
   test('compatibilidad con un backend viejo sin las claves: los permisos se asignan tal cual y el chequeo es ===true (ausente = false)', () => {
