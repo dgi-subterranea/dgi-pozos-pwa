@@ -302,7 +302,8 @@ describe('el helper es el UNICO lugar: nadie mas consulta ITF por existencia', (
 
   test('solo lo llaman: la correccion de ubicacion (snapshot), el handler de getWellLocation y -desde E5-2- agregar una observacion (la anulacion de E5-3 NO)', () => {
     const usuarios = fs.readdirSync(path.join(__dirname, '..', 'src')).filter((f) => f !== 'PozoExistenciaService.js' && /pozoExistenciaService_/.test(src(f)));
-    expect(usuarios.sort()).toEqual(['Api.js', 'ItfService.js', 'ObservacionesPozoService.js', 'UbicacionCorreccionService.js']);
+    // DiagnosticoBusquedaE10.js (E10-1): herramienta MANUAL de solo medicion; llama al helper para CRONOMETRAR la misma verificacion que registerWellSearch, no decide nada con ella.
+    expect(usuarios.sort()).toEqual(['Api.js', 'DiagnosticoBusquedaE10.js', 'ItfService.js', 'ObservacionesPozoService.js', 'UbicacionCorreccionService.js']);
   });
 
   test('E9-3: ItfService lo usa con la fuente ITF EXCLUIDA (ningun ITF es evidencia de existencia) y nada mas', () => {

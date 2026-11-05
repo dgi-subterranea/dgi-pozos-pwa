@@ -134,3 +134,11 @@ Rollback: el backend v48 ignora las columnas nuevas y no conoce los gates (volve
 - La revisión de una muestra real de ITF antes de E10-3 sigue pendiente (método en el documento de auditoría §12).
 - `tokeninfo` no es apto para producción según Google (puede limitarse): contención en E10-5.
 - `js/seleccionLogic.test.js` (prueba de rendimiento «polígono de 100 vértices … tiempo»): **flaky preexistente y ajeno a E10**. Falló una vez bajo carga durante la suite completa; aislada y en las corridas completas posteriores pasa. No se tocó el código ni el umbral; si vuelve a fallar bajo carga, repetirla aislada antes de atribuirla a un cambio.
+
+## 15. Incidente del primer deploy (v49) y diagnóstico de la búsqueda
+
+El 2026-11-05 se desplegó el backend E10-1 como **v49** en el deployment productivo y el smoke funcional falló: con el frontend publicado (pre-E10) la búsqueda de un pozo quedaba en «Buscando pozo…». Se volvió a **v48** (la app volvió a funcionar con la hoja `Usuarios` ya migrada: la migración no es la causa; la regresión está en el código de v49). Producción permanece en v48 durante la investigación; `@HEAD` conserva E10-1.
+
+- El frontend pre-E10 dispara en paralelo `getItfAvailability`, `getWellRecord`, `getWellLocation` y `getMonitoringPoint` y luego `registerWellSearch` sin esperarlo. El spinner solo puede quedar fijo si una de esas cuatro lecturas queda pendiente.
+- Esos cuatro handlers no cambiaron en E10-1; cambió lo que comparten: la resolución de acceso (`getUserAccess`: cache v2, tombstone, `getUserStatus`, catálogo, `usuariosDominio_accesoEfectivo`). `BusquedaFrontendPreE10.test.js` (módulos reales, hojas en memoria) **no** reproduce el problema, así que no es evidencia suficiente.
+- `diagnosticoBusquedaE10_ejecutar()` (`backend/src/DiagnosticoBusquedaE10.js`) mide esas etapas en el runtime real de Apps Script, sin escribir nada. Ver el encabezado del archivo.
