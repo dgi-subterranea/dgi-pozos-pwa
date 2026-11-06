@@ -1,8 +1,12 @@
 const { installAppsScriptFakes } = require('./appsScriptFakes');
 const ItfAvailabilityService = require('../src/ItfAvailabilityService');
+// E10-1: la reconstruccion del indice la hace UN solo reconstructor (ScriptLock solo para reclamar); en Apps Script es otro archivo del mismo espacio global.
+Object.assign(global, require('../src/ItfIndiceReconstruccion'));
 
+// E10-1: con UN solo pozo la disponibilidad es un lookup directo (sin indice): estos tests del INDICE usan lotes de 2 o mas pozos distintos. El lookup directo se prueba en ItfDisponibilidadIndividual.test.js.
 beforeEach(() => {
   installAppsScriptFakes();
+  global.LockService = { getScriptLock: () => ({ waitLock: jest.fn(), releaseLock: jest.fn() }) };
 });
 
 describe('itfAvailabilityService_departamentosValidos', () => {
@@ -19,17 +23,17 @@ describe('itfAvailabilityService_checkDisponibilidad', () => {
   test('wellId con archivo real en THUMB -> true', () => {
     global.driveProfileRepository_listarArchivosThumb.mockReturnValue(['01-0012.jpg', '03-0050.jpg']);
 
-    const resultado = ItfAvailabilityService.itfAvailabilityService_checkDisponibilidad(['01-0012']);
+    const resultado = ItfAvailabilityService.itfAvailabilityService_checkDisponibilidad(['01-0012', '03-0050']);
 
-    expect(resultado).toEqual({ '01-0012': true });
+    expect(resultado).toEqual({ '01-0012': true, '03-0050': true });
   });
 
   test('wellId sin archivo -> false', () => {
     global.driveProfileRepository_listarArchivosThumb.mockReturnValue(['01-0012.jpg']);
 
-    const resultado = ItfAvailabilityService.itfAvailabilityService_checkDisponibilidad(['01-0013']);
+    const resultado = ItfAvailabilityService.itfAvailabilityService_checkDisponibilidad(['01-0013', '01-0014']);
 
-    expect(resultado).toEqual({ '01-0013': false });
+    expect(resultado).toEqual({ '01-0013': false, '01-0014': false });
   });
 
   test('lote mixto: cada wellId resuelto de forma independiente', () => {
@@ -48,9 +52,9 @@ describe('itfAvailabilityService_checkDisponibilidad', () => {
   test('archivos que no siguen DD-PPPP.jpg se ignoran, no rompen el indice', () => {
     global.driveProfileRepository_listarArchivosThumb.mockReturnValue(['readme.txt', 'foto_vieja.jpg', '01-0012.jpg', 'temp']);
 
-    const resultado = ItfAvailabilityService.itfAvailabilityService_checkDisponibilidad(['01-0012']);
+    const resultado = ItfAvailabilityService.itfAvailabilityService_checkDisponibilidad(['01-0012', '01-0013']);
 
-    expect(resultado).toEqual({ '01-0012': true });
+    expect(resultado).toEqual({ '01-0012': true, '01-0013': false });
   });
 
   test('carpeta vacia -> todo false, no rompe', () => {
@@ -68,7 +72,7 @@ describe('itfAvailabilityService_checkDisponibilidad', () => {
   test('eficiencia: dos llamadas seguidas (mismo o distinto lote) solo recorren Drive UNA vez', () => {
     global.driveProfileRepository_listarArchivosThumb.mockReturnValue(['01-0012.jpg', '05-0099.jpg']);
 
-    ItfAvailabilityService.itfAvailabilityService_checkDisponibilidad(['01-0012']);
+    ItfAvailabilityService.itfAvailabilityService_checkDisponibilidad(['01-0012', '01-0013']);
     ItfAvailabilityService.itfAvailabilityService_checkDisponibilidad(['05-0099', '05-0100']);
     const tercera = ItfAvailabilityService.itfAvailabilityService_checkDisponibilidad(['01-0012', '05-0099']);
 
@@ -125,7 +129,7 @@ describe('fallback ante expulsion parcial de CacheService (item 2 del cierre)', 
     global.driveProfileRepository_listarArchivosThumb.mockReturnValue(['05-0099.jpg']);
 
     // Primera llamada construye el indice completo (19 buckets, incluido "05": ["0099"]).
-    ItfAvailabilityService.itfAvailabilityService_checkDisponibilidad(['05-0099']);
+    ItfAvailabilityService.itfAvailabilityService_checkDisponibilidad(['05-0099', '05-0100']);
     expect(global.driveProfileRepository_listarArchivosThumb).toHaveBeenCalledTimes(1);
 
     // Simula que CacheService expulso SOLO el bucket "05" (bajo presion
@@ -133,23 +137,23 @@ describe('fallback ante expulsion parcial de CacheService (item 2 del cierre)', 
     const cache = global.CacheService.getScriptCache();
     cache.remove('itf_idx_05');
 
-    const resultado = ItfAvailabilityService.itfAvailabilityService_checkDisponibilidad(['05-0099']);
+    const resultado = ItfAvailabilityService.itfAvailabilityService_checkDisponibilidad(['05-0099', '05-0100']);
 
     // Si el codigo tratara el bucket faltante como "sin archivos" sin
     // reconstruir, esto daria false a pesar de que el archivo existe.
-    expect(resultado).toEqual({ '05-0099': true });
+    expect(resultado).toEqual({ '05-0099': true, '05-0100': false });
     expect(global.driveProfileRepository_listarArchivosThumb).toHaveBeenCalledTimes(2);
   });
 
   test('bucket faltante para un departamento NO pedido no dispara una reconstruccion innecesaria', () => {
     global.driveProfileRepository_listarArchivosThumb.mockReturnValue(['01-0001.jpg']);
 
-    ItfAvailabilityService.itfAvailabilityService_checkDisponibilidad(['01-0001']);
+    ItfAvailabilityService.itfAvailabilityService_checkDisponibilidad(['01-0001', '01-0002']);
     expect(global.driveProfileRepository_listarArchivosThumb).toHaveBeenCalledTimes(1);
 
     // Solo se vuelve a pedir el departamento "01" (ya en cache) - nunca
     // dispara una reconstruccion aunque OTROS buckets no se hayan tocado.
-    ItfAvailabilityService.itfAvailabilityService_checkDisponibilidad(['01-0001']);
+    ItfAvailabilityService.itfAvailabilityService_checkDisponibilidad(['01-0001', '01-0002']);
     expect(global.driveProfileRepository_listarArchivosThumb).toHaveBeenCalledTimes(1);
   });
 });

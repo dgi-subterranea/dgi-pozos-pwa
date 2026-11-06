@@ -91,6 +91,7 @@ function crearEntorno(opciones) {
     dominio: require('../src/ItfDominioService'),
     repo: require('../src/ItfEventosRepository'),
     drive: require('../src/DriveProfileRepository'),
+    indice: require('../src/ItfIndiceReconstruccion'),
     disp: require('../src/ItfAvailabilityService'),
     perfil: require('../src/ProfileService'),
     legacy: require('../src/ItfLegacyProvider'),

@@ -251,7 +251,19 @@ describe('disponibilidad en lote', () => {
     CacheService.getScriptCache().remove('itf_idx_14');
     expect(S.itfService_disponibilidad(ids(700))).toEqual(viejo);
   });
-  test.each([1, 50, 500, 700])('%i pozos: UNA lectura de ItfEventos, UNA pasada por la carpeta, CERO busquedas por nombre (no hay N+1)', (n) => {
+  // E10-1: con UN solo pozo la disponibilidad es un lookup directo (sin indice ni recorrido de la carpeta); el lote (2 o mas) usa el indice.
+  test('1 pozo: UNA lectura de ItfEventos, CERO recorridos de la carpeta (lookup directo por nombre)', () => {
+    entorno({ archivos: carpeta() });
+    activar();
+    cargar(H.propuesto(1, { wellId: '14-0003' }), H.aprobado(1, null, { wellId: '14-0003' }));
+    const lecturas = lecturasHoja();
+    const r = S.itfService_disponibilidad(ids(1));
+    expect(Object.keys(r)).toHaveLength(1);
+    expect(lecturas()).toBe(1);
+    expect(E.drive.calls.getFiles).toBe(0);
+    expect(E.drive.calls.getBlob).toBe(0);
+  });
+  test.each([2, 50, 500, 700])('%i pozos (lote): UNA lectura de ItfEventos, UNA pasada por la carpeta, CERO busquedas por nombre (no hay N+1)', (n) => {
     entorno({ archivos: carpeta() });
     activar();
     cargar(H.propuesto(1, { wellId: '14-0003' }), H.aprobado(1, null, { wellId: '14-0003' }));
@@ -437,7 +449,7 @@ describe('contadores de lecturas remotas: el costo crece en CPU / memoria, NO en
   };
   const ids = (n) => { const out = []; for (let i = 1; i <= n; i += 1) { out.push('14-' + String(i).padStart(4, '0')); } return out; };
 
-  test.each([1, 50, 500, 700])('%i pozos: 1 lectura de ItfEventos, 1 llamada al proveedor legacy, 0 busquedas por pozo, 1 derivacion', (n) => {
+  test.each([2, 50, 500, 700])('%i pozos (lote): 1 lectura de ItfEventos, 1 llamada al proveedor legacy, 0 busquedas por pozo, 1 derivacion', (n) => {
     entorno({ archivos: carpeta() });
     activar();
     cargar(H.propuesto(1, { wellId: '14-0003' }), H.aprobado(1, null, { wellId: '14-0003' }));

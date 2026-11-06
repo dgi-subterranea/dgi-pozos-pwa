@@ -57,7 +57,7 @@ describe('disponibilidad en lote: UN indice, UNA pasada por la carpeta', () => {
     expect(L.itfLegacy_disponibilidad(null)).toEqual({});
     expect(E.drive.calls.getFiles).toBe(0);
   });
-  test.each([1, 50, 500, 700])('%i pozos: las lecturas de Drive no dependen de N (1 listada la primera vez, 0 despues)', (n) => {
+  test.each([2, 50, 500, 700])('%i pozos (lote): las lecturas de Drive no dependen de N (1 listada la primera vez, 0 despues)', (n) => {
     entorno([archivo('a', '14-0001.jpg'), archivo('b', '14-0002.jpg')]);
     const ids = [];
     for (let i = 1; i <= n; i += 1) { ids.push('14-' + String(i).padStart(4, '0')); }
@@ -78,7 +78,7 @@ describe('disponibilidad en lote: UN indice, UNA pasada por la carpeta', () => {
     entorno([archivo('a', '14-0001.jpg')]);
     const original = L.itfLegacy_reconstruirIndice;
     const cache = CacheService.getScriptCache();
-    L.itfLegacy_disponibilidad(['14-0001']);
+    L.itfLegacy_disponibilidad(['14-0001', '14-0002']);
     cache.remove('itf_leg_v2_14');
     const put = cache.put;
     cache.put = (k, v) => { if (k !== 'itf_leg_v2_14') { put(k, v); } };       // el cache "no guarda" ese bucket
@@ -90,13 +90,13 @@ describe('disponibilidad en lote: UN indice, UNA pasada por la carpeta', () => {
     entorno([archivo('a', '14-0001.jpg')]);
     CacheService.getScriptCache().put('itf_leg_v2_14', 'esto no es json', 3600);
     for (let d = 1; d <= 19; d += 1) { const k = 'itf_leg_v2_' + String(d).padStart(2, '0'); if (k !== 'itf_leg_v2_14') { CacheService.getScriptCache().put(k, '{"u":[],"a":[],"n":[]}', 3600); } }
-    expect(L.itfLegacy_disponibilidad(['14-0001'])).toEqual({ '14-0001': 'DESCONOCIDO' });
+    expect(L.itfLegacy_disponibilidad(['14-0001', '14-0002'])).toEqual({ '14-0001': 'DESCONOCIDO', '14-0002': 'DESCONOCIDO' });
     CacheService.getScriptCache().put('itf_leg_v2_14', '{"u":"no","a":[],"n":[]}', 3600);
-    expect(L.itfLegacy_disponibilidad(['14-0001'])).toEqual({ '14-0001': 'DESCONOCIDO' });
+    expect(L.itfLegacy_disponibilidad(['14-0001', '14-0002'])).toEqual({ '14-0001': 'DESCONOCIDO', '14-0002': 'DESCONOCIDO' });
   });
   test('el indice vive en su propio espacio de claves (no pisa el itf_idx_ existente)', () => {
     entorno([archivo('a', '14-0001.jpg')]);
-    L.itfLegacy_disponibilidad(['14-0001']);
+    L.itfLegacy_disponibilidad(['14-0001', '14-0002']);
     const cache = CacheService.getScriptCache();
     expect(cache.get('itf_idx_14')).toBeNull();
     expect(JSON.parse(cache.get('itf_leg_v2_14'))).toEqual({ u: ['0001'], a: [], n: [] });
@@ -104,44 +104,53 @@ describe('disponibilidad en lote: UN indice, UNA pasada por la carpeta', () => {
   test('Drive caido al reconstruir: LANZA (no se inventa un "No") y no deja la bandera de reconstruccion', () => {
     entorno([archivo('a', '14-0001.jpg')]);
     E.drive.estado.fallar = 'Drive no responde';
-    expect(() => L.itfLegacy_disponibilidad(['14-0001'])).toThrow(/Drive/);
+    expect(() => L.itfLegacy_disponibilidad(['14-0001', '14-0002'])).toThrow(/Drive/);
     expect(CacheService.getScriptCache().get(L.ITF_LEGACY_REBUILD_FLAG)).toBeNull();
     E.drive.estado.fallar = null;
-    expect(L.itfLegacy_disponibilidad(['14-0001'])).toEqual({ '14-0001': 'UNICO' });
+    expect(L.itfLegacy_disponibilidad(['14-0001', '14-0002'])).toEqual({ '14-0001': 'UNICO', '14-0002': 'NO' });
   });
 });
 
-describe('Q4: reconstruccion single-flight (sin ScriptLock)', () => {
+describe('Q4 (E10-1): reconstruccion con UN solo reconstructor (ScriptLock solo para reclamar)', () => {
+  const lote = ['14-0001', '14-0002'];
+  const indiceCompleto = (cache) => { for (let d = 1; d <= 19; d += 1) { cache.put('itf_leg_v2_' + String(d).padStart(2, '0'), '{"u":["0001"],"a":[],"n":[]}', 3600); } };
   test('si otra ejecucion esta reconstruyendo, espera y NO recorre la carpeta cuando el indice aparece', () => {
     entorno([archivo('a', '14-0001.jpg')]);
     const cache = CacheService.getScriptCache();
     cache.put(L.ITF_LEGACY_REBUILD_FLAG, '1', 60);
-    Utilities.sleep.mockImplementation(() => { for (let d = 1; d <= 19; d += 1) { cache.put('itf_leg_v2_' + String(d).padStart(2, '0'), '{"u":["0001"],"a":[],"n":[]}', 3600); } });
-    expect(L.itfLegacy_disponibilidad(['14-0001'])).toEqual({ '14-0001': 'UNICO' });
+    Utilities.sleep.mockImplementation(() => indiceCompleto(cache));
+    expect(L.itfLegacy_disponibilidad(lote)).toEqual({ '14-0001': 'UNICO', '14-0002': 'NO' });
     expect(Utilities.sleep).toHaveBeenCalledTimes(1);
     expect(E.drive.calls.getFiles).toBe(0);
   });
-  test('una bandera trabada no bloquea para siempre: tras el maximo de esperas reconstruye y la limpia', () => {
+  test('una bandera trabada NO se pisa: tras el maximo de sondeos FALLA (SERVICE_UNAVAILABLE para el cliente) en vez de recorrer la carpeta por su cuenta', () => {
     entorno([archivo('a', '14-0001.jpg')]);
     CacheService.getScriptCache().put(L.ITF_LEGACY_REBUILD_FLAG, '1', 60);
-    expect(L.itfLegacy_disponibilidad(['14-0001'])).toEqual({ '14-0001': 'UNICO' });
-    expect(Utilities.sleep).toHaveBeenCalledTimes(L.ITF_LEGACY_ESPERA_MAX);
-    expect(E.drive.calls.getFiles).toBe(1);
-    expect(CacheService.getScriptCache().get(L.ITF_LEGACY_REBUILD_FLAG)).toBeNull();
+    expect(() => L.itfLegacy_disponibilidad(lote)).toThrow(/ITF_INDEX_RECONSTRUYENDO/);
+    expect(Utilities.sleep).toHaveBeenCalledTimes(E.mods.indice.ITF_INDICE_ESPERA_MAX);
+    expect(E.drive.calls.getFiles).toBe(0);
   });
   test('sin otra ejecucion: no espera, reconstruye una vez y limpia la bandera', () => {
     entorno([archivo('a', '14-0001.jpg')]);
-    L.itfLegacy_disponibilidad(['14-0001']);
+    L.itfLegacy_disponibilidad(lote);
     expect(Utilities.sleep).not.toHaveBeenCalled();
     expect(E.drive.calls.getFiles).toBe(1);
     expect(CacheService.getScriptCache().get(L.ITF_LEGACY_REBUILD_FLAG)).toBeNull();
   });
-  test('NO usa el ScriptLock: es el lock global de las hojas', () => {
+  test('el ScriptLock se toma SOLO para reclamar (revalida el indice dentro) y se suelta ANTES de recorrer la carpeta', () => {
     entorno([archivo('a', '14-0001.jpg')]);
-    L.itfLegacy_disponibilidad(['14-0001']);
-    expect(E.lock.waitLock).not.toHaveBeenCalled();
-    const fuente = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'ItfLegacyProvider.js'), 'utf8').replace(/\/\/.*$/gm, '');
-    expect(fuente).not.toMatch(/LockService|waitLock|tryLock/);
+    let tomado = 0;
+    let soltado = 0;
+    E.lock.waitLock.mockImplementation(() => { tomado += 1; });
+    E.lock.releaseLock.mockImplementation(() => { soltado += 1; });
+    let tomadoDuranteElRecorrido = null;
+    const original = global.driveProfileRepository_listarArchivosThumb;
+    global.driveProfileRepository_listarArchivosThumb = () => { tomadoDuranteElRecorrido = tomado - soltado; return original(); };
+    L.itfLegacy_disponibilidad(lote);
+    global.driveProfileRepository_listarArchivosThumb = original;
+    expect(tomadoDuranteElRecorrido).toBe(0);
+    expect(tomado).toBeGreaterThanOrEqual(1);
+    expect(soltado).toBe(tomado);
   });
 });
 
@@ -459,9 +468,8 @@ describe('single-flight con solicitudes simultaneas', () => {
     expect(cache.get(L.ITF_LEGACY_REBUILD_FLAG)).toBeNull();
     cache.put(L.ITF_LEGACY_REBUILD_FLAG, '1', 60);
     for (let d = 1; d <= 19; d += 1) { cache.remove('itf_leg_v2_' + String(d).padStart(2, '0')); }
-    L.itfLegacy_disponibilidad(ids);                                                     // bandera trabada: agota las esperas y reconstruye
-    expect(cache.get(L.ITF_LEGACY_REBUILD_FLAG)).toBeNull();
-    expect(E.lock.waitLock).not.toHaveBeenCalled();
+    expect(() => L.itfLegacy_disponibilidad(ids)).toThrow(/ITF_INDEX_RECONSTRUYENDO/);   // bandera trabada: agota los sondeos y FALLA (no reconstruye)
+    expect(E.lock.releaseLock).toHaveBeenCalledTimes(E.lock.waitLock.mock.calls.length);  // el lock de cada reclamo se libero
   });
 });
 
@@ -507,7 +515,7 @@ describe('single-flight: la bandera se pone mientras se reconstruye y se limpia 
     const original = global.driveProfileRepository_listarArchivosThumb;
     let durante = null;
     global.driveProfileRepository_listarArchivosThumb = () => { durante = cache.get(L.ITF_LEGACY_REBUILD_FLAG); return original(); };
-    L.itfLegacy_disponibilidad(['14-0001']);
+    L.itfLegacy_disponibilidad(['14-0001', '14-0002']);
     global.driveProfileRepository_listarArchivosThumb = original;
     expect(durante).toBe('1');
     expect(cache.get(L.ITF_LEGACY_REBUILD_FLAG)).toBeNull();
@@ -516,9 +524,10 @@ describe('single-flight: la bandera se pone mientras se reconstruye y se limpia 
     entorno([archivo('a', '14-0001.jpg')]);
     const cache = CacheService.getScriptCache();
     const put = jest.spyOn(cache, 'put');
-    L.itfLegacy_disponibilidad(['14-0001']);
+    L.itfLegacy_disponibilidad(['14-0001', '14-0002']);
     const llamada = put.mock.calls.find((c) => c[0] === L.ITF_LEGACY_REBUILD_FLAG);
-    expect(llamada[2]).toBe(60);
+    expect(llamada[2]).toBe(E.mods.indice.ITF_INDICE_BANDERA_SEGUNDOS);        // debe cubrir una reconstruccion de ~130 s (antes 60 s: vencia a mitad y todos recorrian la carpeta)
+    expect(llamada[2]).toBeGreaterThan(160);
     put.mockRestore();
   });
 });

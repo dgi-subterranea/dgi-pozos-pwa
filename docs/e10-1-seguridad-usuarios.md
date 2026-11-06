@@ -142,3 +142,15 @@ El 2026-11-05 se desplegó el backend E10-1 como **v49** en el deployment produc
 - El frontend pre-E10 dispara en paralelo `getItfAvailability`, `getWellRecord`, `getWellLocation` y `getMonitoringPoint` y luego `registerWellSearch` sin esperarlo. El spinner solo puede quedar fijo si una de esas cuatro lecturas queda pendiente.
 - Esos cuatro handlers no cambiaron en E10-1; cambió lo que comparten: la resolución de acceso (`getUserAccess`: cache v2, tombstone, `getUserStatus`, catálogo, `usuariosDominio_accesoEfectivo`). `BusquedaFrontendPreE10.test.js` (módulos reales, hojas en memoria) **no** reproduce el problema, así que no es evidencia suficiente.
 - `diagnosticoBusquedaE10_ejecutar()` (`backend/src/DiagnosticoBusquedaE10.js`) mide esas etapas en el runtime real de Apps Script, sin escribir nada. Ver el encabezado del archivo.
+
+### Causa raíz y arreglo (local; sin desplegar)
+
+Reproducida con el frontend publicado + un deployment temporal de v49 + 4 requests concurrentes: `getItfAvailability` tardó **128 s** mientras las otras tres lecturas terminaban en ~5 s. Con el índice de disponibilidad vencido (TTL 1 h), `itfAvailabilityService_asegurarIndice` / `itfLegacy_asegurarIndice` reconstruían **todo** el índice recorriendo la carpeta THUMB de Drive. El código es idéntico en v48 (explica las ejecuciones de v48 de 31–160 s): **no es una regresión de E10-1**.
+
+Arreglo (contrato público sin cambios; el frontend no se toca):
+- **1 pozo → lookup directo** por nombre (`itfLegacy_disponibilidadDirecta`, `itfAvailabilityService_disponibilidadDirecta`): sin índice, sin recorrer THUMB, igual con el cache vacío o vencido. **Lote (2 o más pozos distintos) → índice** (selección / exportación).
+- **Un solo reconstructor** (`ItfIndiceReconstruccion.js`): el ScriptLock se toma solo para *reclamar* (revalida el índice, mira la bandera y la pone; milisegundos) y se suelta **antes** del recorrido pesado; la bandera dura 300 s (antes 60 s, vencía a mitad de la reconstrucción); los que esperan no recorren la carpeta: si agotan los sondeos fallan con `SERVICE_UNAVAILABLE` (reintentable).
+- El TTL de los índices no cambia (1 h).
+- Guarda arquitectónica (`ItfDisponibilidadIndividual.test.js`): el grafo de llamadas del código real impide que la consulta individual alcance el recorrido de THUMB.
+- Evidencia directa de que la consulta individual no usa el índice: `diagnosticoDisponibilidadItfE10()` (`backend/src/DiagnosticoDisponibilidadItfE10.js`, manual, sin parámetros) llama al handler real con 1 pozo y cuenta (cache y lock observados con envoltorios que delegan; recorrido de THUMB bloqueado y contado) los accesos a `itf_leg_v2_*` / `itf_idx_*`, los recorridos de THUMB y los `ScriptLock`: todos deben dar 0, con el índice frío o caliente.
+- Crash del reconstructor: la bandera (300 s) vence sola y otra ejecución reconstruye; mientras vive, nadie más recorre THUMB; el ScriptLock se libera siempre antes del recorrido, así que no puede quedar un lock huérfano.

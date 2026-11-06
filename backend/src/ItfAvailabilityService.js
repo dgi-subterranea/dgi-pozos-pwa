@@ -15,6 +15,9 @@
 // 1 hora de TTL: el contenido de THUMB se sube a mano (ver
 // reindex_mapa.py y comentarios de .gitignore), cambia con poca
 // frecuencia - no hace falta recalcular en cada request.
+//
+// E10-1 (incidente v49): reconstruir este indice recorre la carpeta THUMB ENTERA (~128 s medidos), asi que (1) la consulta de UN solo pozo ya NO lo usa: es un lookup directo por nombre
+// (itfAvailabilityService_disponibilidadDirecta), y (2) la reconstruccion para un lote la hace UN solo reconstructor (ver ItfIndiceReconstruccion.js). El TTL no cambia.
 var ITF_INDEX_CACHE_SECONDS = 3600;
 var ITF_INDEX_CACHE_PREFIX = 'itf_idx_';
 
@@ -76,13 +79,24 @@ function itfAvailabilityService_asegurarIndice(deptosNecesarios) {
     ? deptosNecesarios
     : itfAvailabilityService_departamentosValidos();
 
-  var faltaAlguno = deptos.some(function (d) {
-    return cache.get(ITF_INDEX_CACHE_PREFIX + d) === null;
+  itfIndice_asegurar({
+    cache: cache,
+    banderaClave: ITF_INDICE_BANDERA_ANTIGUO,
+    hayIndice: function () {
+      return !deptos.some(function (d) { return cache.get(ITF_INDEX_CACHE_PREFIX + d) === null; });
+    },
+    reconstruir: itfAvailabilityService_reconstruirIndice
   });
-  if (!faltaAlguno) {
-    return;
-  }
-  itfAvailabilityService_reconstruirIndice();
+}
+
+// Disponibilidad de UN pozo por LOOKUP DIRECTO (sin indice, sin recorrer la carpeta): {wellId: boolean}. Misma semantica que el indice: tiene ITF si hay AL MENOS UN archivo DD-PPPP.jpg (extension en
+// cualquier capitalizacion; dos o mas tambien cuentan como true) y fuera de los departamentos 01..19 o con un formato que no es DD-PPPP es false sin tocar Drive. Lanza si Drive falla (nunca se
+// inventa un "No"). ESTA funcion no puede llegar al recorrido de la carpeta: un test lo exige por estructura (grafo de llamadas).
+function itfAvailabilityService_disponibilidadDirecta(wellId) {
+  var resultado = {};
+  var valido = /^\d{2}-\d{4}$/.test(String(wellId)) && itfAvailabilityService_departamentosValidos().indexOf(String(wellId).substring(0, 2)) >= 0;
+  resultado[wellId] = valido ? driveProfileRepository_buscarCandidatosLegacy(wellId).length > 0 : false;
+  return resultado;
 }
 
 // Devuelve SOLO {wellId: boolean} - nunca ids ni URLs de Drive (ver
@@ -95,6 +109,11 @@ function itfAvailabilityService_asegurarIndice(deptosNecesarios) {
 function itfAvailabilityService_checkDisponibilidad(wellIds) {
   if (!wellIds || wellIds.length === 0) {
     return {};
+  }
+  // REGLA: 1 pozo (un solo wellId distinto) -> lookup directo; 2 o mas -> indice (ver ItfIndiceReconstruccion.js).
+  var distintos = itfIndice_unicos(wellIds);
+  if (distintos.length === 1) {
+    return itfAvailabilityService_disponibilidadDirecta(distintos[0]);
   }
   var deptosNecesarios = itfAvailabilityService_deptosDeWellIds(wellIds);
   itfAvailabilityService_asegurarIndice(deptosNecesarios);
@@ -122,6 +141,7 @@ if (typeof module !== 'undefined' && module.exports) {
     itfAvailabilityService_deptosDeWellIds,
     itfAvailabilityService_reconstruirIndice,
     itfAvailabilityService_asegurarIndice,
+    itfAvailabilityService_disponibilidadDirecta,
     itfAvailabilityService_checkDisponibilidad
   };
 }

@@ -14,8 +14,9 @@
 //
 // INDICE DE DISPONIBILIDAD (nuevo, aparte del existente 'itf_idx_' que NO se toca): CacheService, por departamento 01..19, clave 'itf_leg_v1_DD', TTL 1 hora, valor
 // {"u":[PPPP unicos], "a":[PPPP ambiguos], "n":[PPPP no canonicos]}; lo que no esta en ninguna lista es 'NO'. Se reconstruye entero (una pasada por la carpeta) ante cualquier departamento faltante.
-// Q4 (single-flight): mientras una ejecucion reconstruye, deja una bandera corta en el cache y las demas esperan (hasta ~6 s) a que aparezca el indice en vez de recorrer la carpeta todas a la vez.
-// NO usa el ScriptLock: es el mismo lock global que serializa TODAS las escrituras de hojas y recorrer la carpeta lleva segundos.
+// Q4 (single-flight, REVISADO en E10-1 tras el incidente v49): ver ItfIndiceReconstruccion.js. UN solo reconstructor: el ScriptLock se toma SOLO para reclamar la reconstruccion (milisegundos: revalida el
+// indice, mira la bandera y la pone) y se suelta ANTES de recorrer la carpeta; los demas esperan al indice y NUNCA recorren la carpeta por su cuenta. Ademas, la consulta de UN solo pozo ya no usa este
+// indice: es un lookup directo por nombre (itfLegacy_disponibilidadDirecta), asi que el cold start del indice no afecta la busqueda individual del hub.
 //
 // HUELLA: mimeType (por los bytes reales, no por el nombre), bytes, SHA-256 de los bytes reales, id de Drive del archivo (referencia INTERNA, nunca sale al cliente) y nombre. Se calcula SOLO cuando se
 // va a registrar el legacy (primer reemplazo / retiro) o a verificar (restauracion): no se hashean miles de archivos.
@@ -23,9 +24,6 @@ var ITF_LEGACY_EXTENSION = '.jpg';
 var ITF_LEGACY_INDEX_PREFIX = 'itf_leg_v2_';
 var ITF_LEGACY_INDEX_SECONDS = 3600;
 var ITF_LEGACY_REBUILD_FLAG = 'itf_leg_v2_rebuilding';
-var ITF_LEGACY_REBUILD_FLAG_SECONDS = 60;
-var ITF_LEGACY_ESPERA_MS = 500;
-var ITF_LEGACY_ESPERA_MAX = 12;
 var ITF_LEGACY_NOMBRE_REGEX = /^(\d{2})-(\d{4})\.jpg$/i;
 var ITF_LEGACY_ESTADOS = { NO: 'NO', UNICO: 'UNICO', AMBIGUO: 'AMBIGUO', NO_CANONICO: 'NO_CANONICO' };
 
@@ -106,34 +104,40 @@ function itfLegacy_reconstruirIndice() {
 function itfLegacy_asegurarIndice(deptosNecesarios) {
   var cache = CacheService.getScriptCache();
   var deptos = deptosNecesarios && deptosNecesarios.length > 0 ? deptosNecesarios : itfLegacy_departamentos();
-  function falta() {
-    return deptos.some(function (d) { return cache.get(ITF_LEGACY_INDEX_PREFIX + d) === null; });
-  }
-  if (!falta()) {
-    return;
-  }
-  var esperas = 0;
-  while (cache.get(ITF_LEGACY_REBUILD_FLAG) !== null && esperas < ITF_LEGACY_ESPERA_MAX) {
-    Utilities.sleep(ITF_LEGACY_ESPERA_MS);
-    esperas += 1;
-    if (!falta()) {
-      return;                                              // otra ejecucion ya lo reconstruyo
-    }
-  }
-  cache.put(ITF_LEGACY_REBUILD_FLAG, '1', ITF_LEGACY_REBUILD_FLAG_SECONDS);
-  try {
-    itfLegacy_reconstruirIndice();
-  } finally {
-    cache.remove(ITF_LEGACY_REBUILD_FLAG);
-  }
+  itfIndice_asegurar({
+    cache: cache,
+    banderaClave: ITF_LEGACY_REBUILD_FLAG,
+    hayIndice: function () {
+      return !deptos.some(function (d) { return cache.get(ITF_LEGACY_INDEX_PREFIX + d) === null; });
+    },
+    reconstruir: itfLegacy_reconstruirIndice
+  });
 }
 
-// Estado legacy de MUCHOS pozos con UNA lectura del indice (y a lo sumo UNA pasada por la carpeta): {wellId: 'NO'|'UNICO'|'AMBIGUO'|'NO_CANONICO'|'DESCONOCIDO'}. 'DESCONOCIDO' solo si un
+// Estado legacy de UN pozo por LOOKUP DIRECTO (sin indice, sin recorrer la carpeta): {wellId: 'NO'|'UNICO'|'AMBIGUO'}. Misma regla que el indice: fuera de los departamentos 01..19 no hay ITF indexable
+// (NO, sin tocar Drive); si no, itfLegacy_buscar cuenta los candidatos del pozo (0 -> NO, 1 -> UNICO, 2 o mas -> AMBIGUO). Lanza si Drive falla (nunca se inventa un "No"). ESTA funcion no puede llegar al
+// recorrido de la carpeta: un test lo exige por estructura (grafo de llamadas).
+function itfLegacy_disponibilidadDirecta(wellId) {
+  var resultado = {};
+  if (itfLegacy_departamentos().indexOf(String(wellId).substring(0, 2)) < 0) {
+    resultado[wellId] = ITF_LEGACY_ESTADOS.NO;
+    return resultado;
+  }
+  resultado[wellId] = itfLegacy_buscar(wellId).estado;
+  return resultado;
+}
+
+// Estado legacy de MUCHOS pozos (lote de 2 o mas) con UNA lectura del indice (y a lo sumo UNA pasada por la carpeta, hecha por UN solo reconstructor); con 1 pozo es un lookup directo: {wellId: 'NO'|'UNICO'|'AMBIGUO'|'NO_CANONICO'|'DESCONOCIDO'}. 'DESCONOCIDO' solo si un
 // departamento sigue sin aparecer en el cache despues de reconstruir (CacheService lo expulso en el medio): nunca se lo toma como "sin archivos". Lanza si Drive falla.
 function itfLegacy_disponibilidad(wellIds) {
   var resultado = {};
   if (!wellIds || wellIds.length === 0) {
     return resultado;
+  }
+  // REGLA: 1 pozo (un solo wellId distinto) -> lookup directo; 2 o mas -> indice (ver ItfIndiceReconstruccion.js).
+  var distintos = itfIndice_unicos(wellIds);
+  if (distintos.length === 1) {
+    return itfLegacy_disponibilidadDirecta(distintos[0]);
   }
   var validos = itfLegacy_departamentos();
   var necesarios = {};
@@ -268,7 +272,6 @@ if (typeof module !== 'undefined' && module.exports) {
     ITF_LEGACY_INDEX_PREFIX,
     ITF_LEGACY_INDEX_SECONDS,
     ITF_LEGACY_REBUILD_FLAG,
-    ITF_LEGACY_ESPERA_MAX,
     ITF_LEGACY_ESTADOS,
     itfLegacy_departamentos,
     itfLegacy_nombre,
@@ -276,6 +279,7 @@ if (typeof module !== 'undefined' && module.exports) {
     itfLegacy_estadoDe,
     itfLegacy_reconstruirIndice,
     itfLegacy_asegurarIndice,
+    itfLegacy_disponibilidadDirecta,
     itfLegacy_disponibilidad,
     itfLegacy_buscar,
     itfLegacy_aDisponible,
