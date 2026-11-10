@@ -228,3 +228,9 @@ Estado: ideas documentadas, sin diseño técnico ni implementación.
 ## Relación entre estas ideas y las fases ya registradas
 
 No se duplica nada: ITF colaborativos, fotos colaborativas / moderadas, observaciones del pozo y QR + NFC público quedan como están. Las ideas nuevas se enlazan así: la visibilidad pública de la ubicación y el QR + NFC comparten la regla fail-closed; el guardado parcial de fotos y la miniatura en Buscar reemplazo dependen de la fase de fotos; la ubicación validada reemplazada se apoya en `UbicacionCorrecciones` y en las sugerencias / decisiones auditables de fuentes ya implementadas.
+
+## Backlog futuro (SIN etapa ni prioridad; no altera el roadmap ni la secuencia actual)
+
+- **Planos catastrales asociados a pozos.** Federico dispone de archivos en su PC identificados por NC y número de pozo. Objetivo futuro: mostrar el plano al consultar el pozo, de forma similar al ITF. Sin diseño ni etapa asignada.
+- **Reportes / sugerencias / contacto.** Futura sección para reportar problemas, sugerir mejoras o contactar al equipo. Sin diseño ni etapa asignada.
+- **Rendimiento del ITF batch.** Optimizar en el futuro la demora al consultar la disponibilidad de ITF sobre selecciones grandes (hoy el primer lote tras un índice vencido espera la reconstrucción de ~90–160 s; ver `docs/e10-1-seguridad-usuarios.md` §16). Sin diseño ni etapa asignada.

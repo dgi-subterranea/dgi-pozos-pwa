@@ -1,6 +1,6 @@
-# E10-1: seguridad, catálogo de permisos y esquema base de usuarios (implementación local; NO desplegada)
+# E10-1: seguridad, catálogo de permisos y esquema base de usuarios (EN PRODUCCIÓN: backend v51, validado)
 
-Estado: **implementado y probado en local el 05/11/2026. Sin `gas:push`, sin versión, sin deploy, sin `git push`, sin migrar `Usuarios`, sin crear hojas reales, sin tocar Script Properties, sin encender flags.** Producción sigue en v48 y storage en v6. Contexto y auditoría previa: [e10-acceso-externo-y-administracion-usuarios.md](e10-acceso-externo-y-administracion-usuarios.md).
+Estado: **CERRADA y VALIDADA EN PRODUCCIÓN (10/11/2026).** Backend `dgi-pozos-backend` **v51** en el deployment productivo (v51 = E10-1 + el arreglo de disponibilidad ITF de §15); storage v6; `Usuarios` migrada; los dos flags E10 **permanecen APAGADOS**. Detalle en [§16](#16-estado-en-producción-validado-el-10112026). Contexto y auditoría previa: [e10-acceso-externo-y-administracion-usuarios.md](e10-acceso-externo-y-administracion-usuarios.md).
 
 Alcance de E10-1: seguridad, autenticación, catálogo de permisos, permisos nuevos, esquema base de `Usuarios`, auditoría, infraestructura de administración, separación INTERNO / EXTERNO y fail-closed. **No** hay pantalla de administración (E10-2), **no** se decide qué ve un usuario externo (E10-3 / E10-4) y **no** se crean usuarios externos.
 
@@ -117,7 +117,7 @@ Reglas del plan: cada email debe existir; un administrador debe estar activo y n
 
 `preflightE10_1()` (solo lectura; no imprime emails): columnas, catálogo, `UsuariosEventos`, `mapa` (todo activo con `mapa = SI`), administradores (≥ 1 efectivo, ningún EXTERNO con `usuarios_admin`), flags (se informan; en E10-1 deben estar apagados → advertencia si no), `tipo`, consistencia (emails, estados, `version ≥ 1`, `actualizado_*`, valores de permisos), último administrador y techo EXTERNO (**se ejercitan las reglas reales con datos sintéticos**), modo de `email_verified` y gates de telemetría (idem). Un solo administrador efectivo da advertencia, no rojo.
 
-## 13. Orden de despliegue y rollback (todo pendiente de autorización)
+## 13. Orden de despliegue y rollback (EJECUTADO: ver §16)
 
 1. Copia de la hoja `Usuarios`; cargar `E10_MIGRACION_PARAMETROS`; `setupUsuariosEventosSheet()`.
 2. `migracionE10Planificar()` → revisar → `migracionE10Ejecutar()` → `preflightE10_1()` en verde.
@@ -143,7 +143,7 @@ El 2026-11-05 se desplegó el backend E10-1 como **v49** en el deployment produc
 - Esos cuatro handlers no cambiaron en E10-1; cambió lo que comparten: la resolución de acceso (`getUserAccess`: cache v2, tombstone, `getUserStatus`, catálogo, `usuariosDominio_accesoEfectivo`). `BusquedaFrontendPreE10.test.js` (módulos reales, hojas en memoria) **no** reproduce el problema, así que no es evidencia suficiente.
 - `diagnosticoBusquedaE10_ejecutar()` (`backend/src/DiagnosticoBusquedaE10.js`) mide esas etapas en el runtime real de Apps Script, sin escribir nada. Ver el encabezado del archivo.
 
-### Causa raíz y arreglo (local; sin desplegar)
+### Causa raíz y arreglo (desplegado en v51)
 
 Reproducida con el frontend publicado + un deployment temporal de v49 + 4 requests concurrentes: `getItfAvailability` tardó **128 s** mientras las otras tres lecturas terminaban en ~5 s. Con el índice de disponibilidad vencido (TTL 1 h), `itfAvailabilityService_asegurarIndice` / `itfLegacy_asegurarIndice` reconstruían **todo** el índice recorriendo la carpeta THUMB de Drive. El código es idéntico en v48 (explica las ejecuciones de v48 de 31–160 s): **no es una regresión de E10-1**.
 
@@ -154,3 +154,25 @@ Arreglo (contrato público sin cambios; el frontend no se toca):
 - Guarda arquitectónica (`ItfDisponibilidadIndividual.test.js`): el grafo de llamadas del código real impide que la consulta individual alcance el recorrido de THUMB.
 - Evidencia directa de que la consulta individual no usa el índice: `diagnosticoDisponibilidadItfE10()` (`backend/src/DiagnosticoDisponibilidadItfE10.js`, manual, sin parámetros) llama al handler real con 1 pozo y cuenta (cache y lock observados con envoltorios que delegan; recorrido de THUMB bloqueado y contado) los accesos a `itf_leg_v2_*` / `itf_idx_*`, los recorridos de THUMB y los `ScriptLock`: todos deben dar 0, con el índice frío o caliente.
 - Crash del reconstructor: la bandera (300 s) vence sola y otra ejecución reconstruye; mientras vive, nadie más recorre THUMB; el ScriptLock se libera siempre antes del recorrido, así que no puede quedar un lock huérfano.
+
+## 16. Estado en producción (validado el 10/11/2026)
+
+**Backend productivo = v51** ("ITF index rebuilder: 180 s wait, lock-free polling"), mismo deployment `…UZRq1Z` y misma URL `/exec` de siempre. Historia: v48 → v49 (E10-1; revertido a v48 a los 15 min por el spinner de la búsqueda, §15) → v50 (lookup directo) → **v51**. Storage: v6.
+
+- **Migración de `Usuarios` hecha** (no se vuelve a ejecutar): 11 usuarios activos, 9 INTERNO, 2 EXTERNO, 2 administradores efectivos, 11 con `mapa = SI`; hoja `UsuariosEventos` creada; respaldo `Usuarios_backup_E10-1_<timestamp>`. `preflightE10_1()` = `listo: true`, sin advertencias.
+- **Flags E10 APAGADOS:** `E10_ADMIN_USUARIOS_ACTIVO` y `E10_GESTION_EXTERNOS_ACTIVO`. `EMAIL_VERIFIED_MODO` ausente (= OBSERVAR). No hay endpoints ni pantalla de administración todavía (E10-2).
+- **Smoke manual productivo completo OK** con backend v51: login, búsqueda, Perfil / ITF, mapa, Cerca mío, niveles, fotos, observaciones, reemplazo, ubicación, Mi selección y ZIP ITF; no volvió a aparecer el spinner indefinido.
+- **Rollback exacto** (solo si hiciera falta): `npm run gas:deploy:main -- --version 48 --confirmar-despliegue v48@UZRq1Z --permitir-retroceso --permitir-distinta`. Conserva columnas E10, `UsuariosEventos`, tipos, admins, `mapa` y respaldo (v48 los ignora). No ejecutar `migracionE10Revertir()` salvo decisión expresa.
+
+### Disponibilidad ITF (arreglo incluido en v51)
+- **Búsqueda individual (1 `wellId`) = lookup directo** por nombre en Drive; ya **no depende del índice global**: no lo lee, no lo reconstruye, no recorre THUMB y no toma el `ScriptLock` (probado con `diagnosticoDisponibilidadItfE10()`: 0 accesos al índice, 0 recorridos, 0 locks, índice frío y caliente; ~0,9–1,0 s en el servidor).
+- **Lote (2 o más pozos distintos) = índice** (selección / exportación), con **un solo reconstructor**: el `ScriptLock` solo para reclamar (revalida índice y bandera) y fuera del lock el recorrido; bandera de 300 s; TTL del índice 1 h (sin cambios).
+- **Espera de los consumidores batch = 180 s** (60 sondeos); **polling = 3 s** (índice + bandera, 2 lecturas de cache por sondeo, sin tomar el lock). Agotada la espera: `ITF_INDEX_RECONSTRUYENDO` (`SERVICE_UNAVAILABLE`, reintentable). El lock se toma solo si no hay índice **ni** bandera.
+- **Validación con índice frío real (v51):** 3 lotes concurrentes terminaron `ok` a ~100 s (ninguno falló cerca de los 90 s), la consulta individual respondió en 3,7 s en plena reconstrucción y un cuarto lote lanzado a los 30 s terminó junto a los demás (+100,7 s). Reconstrucción fría medida: 88–96 s (128 s el 6/11; histórico hasta ~160 s).
+- Contrato público sin cambios (`status`, `code`, `{wellId: boolean}`).
+
+### Frontend E10-1
+Va a Pages con el `git push` de esta etapa (sin cambios en `index.html`, `sw.js`, `css`, `manifest`): soporte del permiso `mapa` (`js/mapaLogic.js`), `ubicacion_corregir` en `ufdui_rol` (rol CONSULTA de solo lectura), mensaje `EMAIL_NO_VERIFICADO` (`js/errorMessages.js`) y eliminación de la lista duplicada de permisos (`permisosActuales = {}` en `js/app.js`). **No** incluye Administración → Usuarios, ni creación o edición de usuarios, ni gestión de externos.
+
+### Siguiente etapa
+E10-2 — Administración → Usuarios (no iniciada).
