@@ -197,7 +197,7 @@ describe.each(VARIANTES)('CRASH del reconstructor: la bandera vence sola, nunca 
   const conReloj = () => {
     const reloj = crearCacheConTtl();
     global.CacheService = { getScriptCache: () => reloj };
-    Utilities.sleep.mockImplementation(() => reloj.avanzar(1));
+    Utilities.sleep.mockImplementation((ms) => reloj.avanzar(ms / 1000));
     return reloj;
   };
 
@@ -250,6 +250,141 @@ describe.each(VARIANTES)('CRASH del reconstructor: la bandera vence sola, nunca 
     reloj.put(v.bandera, '1', E.mods.indice.ITF_INDICE_BANDERA_SEGUNDOS);
     expect(v.consultar(['14-0001'])).toEqual({ '14-0001': v.si });
     expect(Utilities.sleep).not.toHaveBeenCalled();
+  });
+});
+
+describe.each(VARIANTES)('ESPERA de los consumidores batch: ~180 s, sondeo cada 3 s, SIN tomar el lock mientras otro reconstruye - $nombre', (v) => {
+  const IND = () => E.mods.indice;
+  // cache con reloj; Utilities.sleep avanza lo que se le pide. `alSondear(ahora)` simula lo que hace el OTRO proceso mientras este espera.
+  const conReloj = (alSondear) => {
+    const reloj = crearCacheConTtl();
+    global.CacheService = { getScriptCache: () => reloj };
+    Utilities.sleep.mockImplementation((ms) => { reloj.avanzar(ms / 1000); if (alSondear) { alSondear(reloj.estado.ahora, reloj); } });
+    return reloj;
+  };
+  const terminaEn = (segundos) => { let hecho = false; return (ahora, reloj) => { if (!hecho && ahora >= segundos) { hecho = true; indiceCompleto(v); reloj.remove(v.bandera); } }; };
+
+  test('constantes: sondeo de 3 s, espera maxima 60 sondeos = 180 s, por debajo de la bandera (300 s) y del limite de ejecucion (360 s)', () => {
+    entorno([]);
+    expect(IND().ITF_INDICE_ESPERA_SONDEO_MS).toBe(3000);
+    expect(IND().ITF_INDICE_ESPERA_MAX * IND().ITF_INDICE_ESPERA_SONDEO_MS).toBe(180000);
+    expect(IND().ITF_INDICE_ESPERA_MAX * IND().ITF_INDICE_ESPERA_SONDEO_MS).toBeLessThan(IND().ITF_INDICE_BANDERA_SEGUNDOS * 1000);
+    expect(IND().ITF_INDICE_BANDERA_SEGUNDOS).toBe(300);
+    expect(IND().ITF_INDICE_ESPERA_MAX * IND().ITF_INDICE_ESPERA_SONDEO_MS).toBeLessThan(360000);
+  });
+
+  test('A. el reconstructor tarda 160 s: el consumidor (espera 180 s) TERMINA bien, sin recorrer la carpeta', () => {
+    entorno([archivo('a', '14-0001.jpg')]);
+    const reloj = conReloj(terminaEn(160));
+    reloj.put(v.bandera, '1', IND().ITF_INDICE_BANDERA_SEGUNDOS);                  // otro reconstruye
+    expect(v.consultar(LOTE)).toEqual({ '14-0001': v.si, '14-0002': v.no });
+    expect(E.drive.calls.getFiles).toBe(0);
+    expect(Utilities.sleep.mock.calls.length).toBeGreaterThan(50);                 // espero ~54 sondeos de 3 s
+    expect(Utilities.sleep.mock.calls.length).toBeLessThan(IND().ITF_INDICE_ESPERA_MAX);
+    Utilities.sleep.mock.calls.forEach((c) => expect(c[0]).toBe(3000));
+  });
+
+  test('B. el reconstructor supera los 180 s: el consumidor FALLA de forma reintentable y el reintento (con el indice ya listo) funciona', () => {
+    entorno([archivo('a', '14-0001.jpg')]);
+    const reloj = conReloj(terminaEn(190));
+    reloj.put(v.bandera, '1', IND().ITF_INDICE_BANDERA_SEGUNDOS);
+    expect(() => v.consultar(LOTE)).toThrow(/ITF_INDEX_RECONSTRUYENDO/);
+    expect(Utilities.sleep).toHaveBeenCalledTimes(IND().ITF_INDICE_ESPERA_MAX);
+    expect(reloj.estado.ahora).toBeGreaterThanOrEqual(180);
+    expect(E.drive.calls.getFiles).toBe(0);
+    reloj.avanzar(20);                                                             // el reconstructor termina
+    indiceCompleto(v); reloj.remove(v.bandera);
+    expect(v.consultar(LOTE)).toEqual({ '14-0001': v.si, '14-0002': v.no });       // reintento
+  });
+
+  test('C. durante el sondeo normal (otro reconstruye, bandera viva) NO se toma el ScriptLock y las lecturas de cache son pocas (2 por sondeo)', () => {
+    entorno([archivo('a', '14-0001.jpg')]);
+    const reloj = conReloj(terminaEn(160));
+    reloj.put(v.bandera, '1', IND().ITF_INDICE_BANDERA_SEGUNDOS);
+    const get = jest.spyOn(reloj, 'get');
+    v.consultar(LOTE);
+    expect(E.lock.waitLock).not.toHaveBeenCalled();
+    expect(E.lock.releaseLock).not.toHaveBeenCalled();
+    expect(get.mock.calls.length).toBeLessThanOrEqual(2 * (Utilities.sleep.mock.calls.length + 1) + 2);
+    expect(get.mock.calls.length).toBeLessThan(150);                               // ~120 en 180 s, no cientos
+    get.mockRestore();
+  });
+
+  test('D. la bandera DESAPARECE sin indice (el reconstructor murio y vencio): el consumidor toma el lock UNA vez, revalida y reconstruye', () => {
+    entorno([archivo('a', '14-0001.jpg')]);
+    const reloj = conReloj((ahora, r) => { if (ahora >= 100) { r.remove(v.bandera); } });
+    reloj.put(v.bandera, '1', IND().ITF_INDICE_BANDERA_SEGUNDOS);
+    expect(v.consultar(LOTE)).toEqual({ '14-0001': v.si, '14-0002': v.no });
+    expect(E.lock.waitLock).toHaveBeenCalledTimes(1);
+    expect(E.lock.releaseLock).toHaveBeenCalledTimes(1);
+    expect(E.drive.calls.getFiles).toBe(1);
+    expect(reloj.get(v.bandera)).toBeNull();
+  });
+
+  test('E. si DENTRO del lock aparece el indice: no reconstruye', () => {
+    entorno([archivo('a', '14-0001.jpg')]);
+    conReloj();
+    E.lock.waitLock.mockImplementationOnce(() => { indiceCompleto(v); });
+    expect(v.consultar(LOTE)).toEqual({ '14-0001': v.si, '14-0002': v.no });
+    expect(E.drive.calls.getFiles).toBe(0);
+    expect(Utilities.sleep).not.toHaveBeenCalled();
+  });
+
+  test('F. si DENTRO del lock aparece una bandera nueva (otro reclamo antes): no reconstruye y vuelve a esperar', () => {
+    entorno([archivo('a', '14-0001.jpg')]);
+    const reloj = conReloj(terminaEn(30));
+    E.lock.waitLock.mockImplementationOnce(() => { reloj.put(v.bandera, '1', IND().ITF_INDICE_BANDERA_SEGUNDOS); });
+    expect(v.consultar(LOTE)).toEqual({ '14-0001': v.si, '14-0002': v.no });
+    expect(E.drive.calls.getFiles).toBe(0);
+    expect(E.lock.waitLock).toHaveBeenCalledTimes(1);
+    expect(Utilities.sleep).toHaveBeenCalled();
+    expect(E.lock.releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  test('G. SOLO un proceso reclama la reconstruccion: el segundo reclamo (con el primero vivo) es OCUPADO', () => {
+    entorno([]);
+    const reloj = conReloj();
+    const cfg = { cache: reloj, banderaClave: v.bandera, hayIndice: () => false };
+    expect(IND().itfIndice_reclamar(cfg)).toBe('PROPIO');
+    expect(IND().itfIndice_reclamar(cfg)).toBe('OCUPADO');
+    expect(IND().itfIndice_reclamar(cfg)).toBe('OCUPADO');
+    reloj.remove(v.bandera);                                                       // el primero termina sin dejar indice (murio)
+    expect(IND().itfIndice_reclamar(cfg)).toBe('PROPIO');
+    expect(E.lock.releaseLock).toHaveBeenCalledTimes(E.lock.waitLock.mock.calls.length);
+  });
+
+  test('G. tres consumidores, UN reconstructor: el que reclama recorre; los otros dos (dentro del recorrido) esperan sin lock y fallan reintentables si el indice no llega', () => {
+    entorno([archivo('a', '14-0001.jpg')]);
+    conReloj();
+    Utilities.sleep.mockImplementation(() => {});                                  // el reloj no avanza: la bandera del reconstructor sigue viva (si venciera, otro podria reclamar: caso D)
+    const original = global.driveProfileRepository_listarArchivosThumb;
+    let recorridos = 0;
+    const errores = [];
+    global.driveProfileRepository_listarArchivosThumb = () => {
+      recorridos += 1;
+      const locksAntes = E.lock.waitLock.mock.calls.length;
+      [2, 3].forEach(() => { try { v.consultar(LOTE); } catch (err) { errores.push(String(err.message)); } });
+      expect(E.lock.waitLock.mock.calls.length).toBe(locksAntes);                  // esperar no toma el lock
+      return original();
+    };
+    expect(v.consultar(LOTE)).toEqual({ '14-0001': v.si, '14-0002': v.no });
+    global.driveProfileRepository_listarArchivosThumb = original;
+    expect(recorridos).toBe(1);
+    expect(errores).toHaveLength(2);
+    errores.forEach((m) => expect(m).toMatch(/ITF_INDEX_RECONSTRUYENDO/));
+  });
+
+  test('H. la consulta individual jamas espera: ni sondea, ni toma el lock, ni lee el indice, con la bandera viva', () => {
+    entorno([archivo('a', '14-0001.jpg')]);
+    const reloj = conReloj();
+    reloj.put(v.bandera, '1', IND().ITF_INDICE_BANDERA_SEGUNDOS);
+    const get = jest.spyOn(reloj, 'get');
+    expect(v.consultar(['14-0001'])).toEqual({ '14-0001': v.si });
+    expect(Utilities.sleep).not.toHaveBeenCalled();
+    expect(E.lock.waitLock).not.toHaveBeenCalled();
+    expect(get.mock.calls.filter((c) => /^itf_(idx|leg_v2)_/.test(c[0]))).toEqual([]);
+    expect(E.drive.calls.getFiles).toBe(0);
+    get.mockRestore();
   });
 });
 

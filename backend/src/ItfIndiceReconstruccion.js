@@ -15,14 +15,18 @@
 //     reconstruccion y, si nadie la tiene, se la pone (cache, TTL ITF_INDICE_BANDERA_SEGUNDOS). El lock se SUELTA ANTES del recorrido pesado: el ScriptLock es el mismo lock global que serializa TODAS las
 //     escrituras de hojas (fotos, observaciones, ubicaciones...) y retenerlo ~130 s las dejaria afuera.
 //   - El que reclama ("PROPIO") reconstruye FUERA del lock y SIEMPRE quita la bandera (finally); si la ejecucion muere sin pasar por el finally, la bandera vence sola.
-//   - Los demas NO recorren la carpeta: sondean (ITF_INDICE_ESPERA_SONDEO_MS) hasta que el indice aparece, y si pasan ITF_INDICE_ESPERA_MAX sondeos sin indice FALLAN (SERVICE_UNAVAILABLE para el cliente, que
-//     puede reintentar) en vez de lanzarse a reconstruir: la carpeta se recorre una vez, no una por proceso. Jamas se afirma "sin ITF" por no haber podido reconstruir.
+//   - Los demas NO recorren la carpeta: ESPERAN al indice sin tomar el lock. Cada sondeo (cada ITF_INDICE_ESPERA_SONDEO_MS = 3 s) lee el indice y la bandera (2 lecturas de cache) y duerme; el ScriptLock se toma
+//     SOLO cuando no hay indice Y NO hay bandera (el reconstructor termino sin dejar indice, murio o su bandera vencio): ahi, dentro del lock, se REVALIDA el indice (si aparecio, se usa), se REVALIDA la
+//     bandera (si otro ya reclamo, se vuelve a esperar) y recien si sigue todo libre se reclama. La espera maxima es ITF_INDICE_ESPERA_MAX sondeos (60 x 3 s = ~180 s): cubre las reconstrucciones medidas
+//     (88 s a 160 s) y queda por debajo de la bandera (300 s) y del limite de ejecucion de Apps Script (360 s). Pasado ese tiempo FALLAN (SERVICE_UNAVAILABLE para el cliente, que puede reintentar) en vez de
+//     lanzarse a reconstruir: la carpeta se recorre una vez, no una por proceso. Jamas se afirma "sin ITF" por no haber podido reconstruir. Con 3 s, un consumidor se entera como mucho 3 s despues de que el
+//     reconstructor termino (menos del 4 % de una reconstruccion de 90 s) y hace ~120 lecturas de cache en 180 s (con 1 s serian ~360, sin ningun beneficio perceptible).
 //   - Lo que se esconde detras de un indice incompleto sigue igual que antes: un departamento que desaparece del cache entre la reconstruccion y la lectura es "DESCONOCIDO" (nunca "No").
 // El TTL de los indices NO cambia (1 hora): con el lookup directo el cold start deja de afectar la busqueda individual, y el del lote lo absorbe el unico reconstructor.
 var ITF_INDICE_CLAIM_ESPERA_MS = 2000;
 var ITF_INDICE_BANDERA_SEGUNDOS = 300;
-var ITF_INDICE_ESPERA_SONDEO_MS = 1000;
-var ITF_INDICE_ESPERA_MAX = 90;
+var ITF_INDICE_ESPERA_SONDEO_MS = 3000;
+var ITF_INDICE_ESPERA_MAX = 60;
 var ITF_INDICE_BANDERA_ANTIGUO = 'itf_idx_rebuilding';
 
 // Cantidad de wellId DISTINTOS de un lote (los repetidos cuentan una vez). La regla "1 pozo -> directo" se decide con esto.
@@ -62,30 +66,31 @@ function itfIndice_reclamar(cfg) {
 }
 
 // Se asegura de que el indice exista con UN SOLO reconstructor. cfg = {cache, banderaClave, hayIndice(), reconstruir()}. Lanza si Drive falla (el que reconstruye) o si esperando al reconstructor se agotan
-// los sondeos.
+// los sondeos. El lock SOLO se toma dentro de itfIndice_reclamar, y SOLO si no hay indice y no hay bandera.
 function itfIndice_asegurar(cfg) {
-  if (cfg.hayIndice()) {
-    return;
-  }
   for (var sondeo = 0; ; sondeo++) {
-    var r = itfIndice_reclamar(cfg);
-    if (r === 'LISTO') {
-      return;
-    }
-    if (r === 'PROPIO') {
-      try {
-        cfg.reconstruir();
-      } finally {
-        try {
-          cfg.cache.remove(cfg.banderaClave);
-        } catch (err) {
-          // la bandera vence sola (TTL): nunca tapa el resultado ni el error de la reconstruccion
-        }
-      }
-      return;
-    }
     if (cfg.hayIndice()) {
-      return;                                              // el reconstructor termino mientras no se pudo tomar el lock (o mientras se esperaba)
+      return;
+    }
+    if (cfg.cache.get(cfg.banderaClave) === null) {
+      // sin indice y sin bandera: este proceso podria convertirse en el reconstructor -> reclamo bajo lock (revalida indice y bandera)
+      var r = itfIndice_reclamar(cfg);
+      if (r === 'LISTO') {
+        return;
+      }
+      if (r === 'PROPIO') {
+        try {
+          cfg.reconstruir();
+        } finally {
+          try {
+            cfg.cache.remove(cfg.banderaClave);
+          } catch (err) {
+            // la bandera vence sola (TTL): nunca tapa el resultado ni el error de la reconstruccion
+          }
+        }
+        return;
+      }
+      // 'OCUPADO': otro reclamo entre medio (o no se pudo tomar el lock): se vuelve a esperar
     }
     if (sondeo >= ITF_INDICE_ESPERA_MAX) {
       throw new Error('ITF_INDEX_RECONSTRUYENDO: otra ejecucion esta reconstruyendo el indice de disponibilidad; reintentar');
