@@ -5,7 +5,7 @@
 // que no se reconoce y NUNCA se crea sola: la crea setupUsuariosEventosSheet a mano):
 //   eventoId          UUID
 //   secuencia         entero creciente (max + 1), calculado BAJO EL LOCK del servicio que escribe
-//   evento            USUARIO_CREADO | USUARIO_EDITADO | USUARIO_DESACTIVADO | USUARIO_REACTIVADO | PERMISOS_MODIFICADOS | USUARIO_MIGRADO | USUARIO_MIGRACION_REVERTIDA
+//   evento            USUARIO_CREADO | USUARIO_ACTUALIZADO | USUARIO_DESACTIVADO | USUARIO_REACTIVADO | USUARIO_MIGRADO | USUARIO_MIGRACION_REVERTIDA
 //   usuarioObjetivo   email (normalizado) del usuario afectado
 //   nombreObjetivo    nombre del usuario DESPUES del evento
 //   nombreAnterior    nombre ANTES (campo tecnico adicional, justificado: sin el, un cambio de solo el nombre no dejaria el valor previo en la auditoria)
@@ -25,7 +25,7 @@ var USUARIOS_EVENTOS_COLUMNAS = [
   'versionAnterior', 'versionNueva', 'permisosAntes', 'permisosDespues', 'motivo', 'clientRequestId', 'origen'
 ];
 var USUARIOS_EVENTOS_NUMERICAS = { secuencia: '0', versionAnterior: '0', versionNueva: '0' };
-var USUARIOS_EVENTOS_NOMBRES = ['USUARIO_CREADO', 'USUARIO_EDITADO', 'USUARIO_DESACTIVADO', 'USUARIO_REACTIVADO', 'PERMISOS_MODIFICADOS', 'USUARIO_MIGRADO', 'USUARIO_MIGRACION_REVERTIDA'];
+var USUARIOS_EVENTOS_NOMBRES = ['USUARIO_CREADO', 'USUARIO_ACTUALIZADO', 'USUARIO_DESACTIVADO', 'USUARIO_REACTIVADO', 'USUARIO_MIGRADO', 'USUARIO_MIGRACION_REVERTIDA'];
 var USUARIOS_EVENTOS_ORIGENES = ['APP', 'MIGRACION'];
 
 // --- logica pura ---

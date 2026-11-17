@@ -256,6 +256,7 @@ if (typeof module !== 'undefined' && module.exports) {
     isUserActive,
     getUserAccess,
     authService_invalidarAcceso,
+    authService_claveCache,
     authService_clasificarEmailVerified,
     USER_ACCESS_CACHE_PREFIJO,
     USER_ACCESS_TOMBSTONE_PREFIJO,

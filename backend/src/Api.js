@@ -224,6 +224,21 @@ function doPost(e) {
       } else if (body.action === 'getObservacionesPozo') {
         // Solo estos 2 parametros de paginacion ademas del pozo: cualquier otro campo que mande el cliente se ignora.
         response = handleGetObservacionesPozo(body.sessionToken, body.wellId, body.limit, body.antesDeSecuencia);
+      } else if (body.action === 'adminUsuariosListar') {
+        // E10-2: administracion de usuarios (UsuariosAdminApi.js). Cada handler recibe el cuerpo ENTERO para aplicar su lista BLANCA de campos; todos exigen sesion + administrador efectivo (activo + INTERNO + usuarios_admin) + E10_ADMIN_USUARIOS_ACTIVO.
+        response = handleAdminUsuariosListar(body);
+      } else if (body.action === 'adminPermisosCatalogo') {
+        response = handleAdminPermisosCatalogo(body);
+      } else if (body.action === 'adminUsuarioObtener') {
+        response = handleAdminUsuarioObtener(body);
+      } else if (body.action === 'adminUsuarioCrear') {
+        response = handleAdminUsuarioCrear(body);
+      } else if (body.action === 'adminUsuarioActualizar') {
+        response = handleAdminUsuarioActualizar(body);
+      } else if (body.action === 'adminUsuarioDesactivar') {
+        response = handleAdminUsuarioDesactivar(body);
+      } else if (body.action === 'adminUsuarioReactivar') {
+        response = handleAdminUsuarioReactivar(body);
       } else {
         Logger.log('doPost: accion desconocida: ' + api_limpiarMensajeLog(body.action));
         response = { status: 'error', code: 'SERVICE_UNAVAILABLE', message: 'accion desconocida: ' + body.action };

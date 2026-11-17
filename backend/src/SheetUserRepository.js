@@ -174,6 +174,17 @@ function sheetUserRepository_abrirParaEscritura() {
   return { spreadsheet: spreadsheet, sheet: sheet, header: header, indices: sheetUserRepository_indiceColumnas(header), ancho: ancho };
 }
 
+// Texto de una celda: una fecha (Sheets convierte un ISO-8601 escrito como texto en Date) sale como ISO-8601 UTC; el resto, como texto recortado.
+function sheetUserRepository_texto(valor) {
+  if (valor === null || valor === undefined) {
+    return '';
+  }
+  if (Object.prototype.toString.call(valor) === '[object Date]') {
+    return isNaN(valor.getTime()) ? '' : valor.toISOString();
+  }
+  return String(valor).trim();
+}
+
 // Usuarios de la hoja (fresco, sin cache), una entrada por fila con datos: [{fila (1-based), email, nombre, estado, tipo, version, permisos, fechaAlta}]. `estado`: 'activo' | 'inactivo' | '' (otro).
 function sheetUserRepository_leerUsuarios(abierta) {
   var h = abierta || sheetUserRepository_abrirParaEscritura();
@@ -192,7 +203,9 @@ function sheetUserRepository_leerUsuarios(abierta) {
       tipo: usuariosDominio_normalizarTipo(row[h.indices.tipo]),
       version: usuariosDominio_normalizarVersion(row[h.indices.version]),
       permisos: sheetUserRepository_permisosDeFila(row, h.indices),
-      fechaAlta: row[h.indices.fecha_alta]
+      fechaAlta: row[h.indices.fecha_alta],
+      actualizadoUtc: sheetUserRepository_texto(row[h.indices.actualizado_utc]),
+      actualizadoPor: sheetUserRepository_texto(row[h.indices.actualizado_por])
     });
   }
   return usuarios;
@@ -343,6 +356,7 @@ if (typeof module !== 'undefined' && module.exports) {
     sheetUserRepository_getUserStatus,
     sheetUserRepository_indiceColumnas,
     sheetUserRepository_leerPermiso,
+    sheetUserRepository_celda,
     sheetUserRepository_permisosDeFila,
     sheetUserRepository_planEsquemaCompleto,
     sheetUserRepository_abrirParaEscritura,

@@ -7,7 +7,7 @@ const ON = { E10_ADMIN_USUARIOS_ACTIVO: 'SI' };
 const encender = (extra) => { Object.assign(global.__propiedades, ON, extra || {}); };
 const crear = (extra, actor) => E.Servicio.usuariosAdmin_crear(actor === undefined ? ACTOR : actor, Object.assign({ email: 'nuevo@x.com', nombre: 'Nuevo Usuario', tipo: 'INTERNO', permisos: ['perfil', 'datos'] }, extra || {}));
 const actualizar = (extra, actor) => E.Servicio.usuariosAdmin_actualizar(actor === undefined ? ACTOR : actor, Object.assign({ email: 'interno@x.com', versionEsperada: 1 }, extra || {}));
-const estado = (accion, extra, actor) => E.Servicio.usuariosAdmin_cambiarEstado(actor === undefined ? ACTOR : actor, Object.assign({ email: 'interno@x.com', versionEsperada: 1, accion }, extra || {}));
+const estado = (accion, extra, actor) => E.Servicio.usuariosAdmin_cambiarEstado(actor === undefined ? ACTOR : actor, Object.assign({ email: 'interno@x.com', versionEsperada: 1, accion, motivo: 'prueba' }, extra || {}));
 const usuarios = () => global.sheetUserRepository_leerUsuarios();
 const usuario = (email) => usuarios().find((u) => u.email === email);
 const eventos = () => global.usuariosEventosRepository_leer(global.usuariosEventosRepository_abrir());
@@ -129,31 +129,32 @@ describe('alta', () => {
 });
 
 describe('edicion', () => {
-  test('cambiar permisos -> PERMISOS_MODIFICADOS, version + 1, antes/despues en el evento; lo demas no cambia', () => {
+  test('cambiar permisos -> USUARIO_ACTUALIZADO, version + 1, antes/despues en el evento; lo demas no cambia', () => {
     const r = actualizar({ permisos: ['perfil', 'datos', 'ubicacion', 'fotos'] });
-    expect(r).toMatchObject({ ok: true, eventos: ['PERMISOS_MODIFICADOS'], usuario: { version: 2, permisos: ['perfil', 'datos', 'ubicacion', 'fotos'] } });
+    expect(r).toMatchObject({ ok: true, eventos: ['USUARIO_ACTUALIZADO'], usuario: { version: 2, permisos: ['perfil', 'datos', 'ubicacion', 'fotos'] } });
     expect(usuario('interno@x.com')).toMatchObject({ nombre: 'Interno Consulta', tipo: 'INTERNO', estado: 'activo', version: 2 });
     const e = eventos()[0];
-    expect(e).toMatchObject({ evento: 'PERMISOS_MODIFICADOS', versionAnterior: 1, versionNueva: 2, permisosAntes: 'perfil,datos,ubicacion,mapa', permisosDespues: 'perfil,datos,ubicacion,fotos', ejecutadoPor: ADMIN1 });
+    expect(e).toMatchObject({ evento: 'USUARIO_ACTUALIZADO', versionAnterior: 1, versionNueva: 2, permisosAntes: 'perfil,datos,ubicacion,mapa', permisosDespues: 'perfil,datos,ubicacion,fotos', ejecutadoPor: ADMIN1 });
   });
 
-  test('cambiar nombre y tipo -> USUARIO_EDITADO; nombre y permisos a la vez -> DOS eventos con las mismas versiones', () => {
-    expect(actualizar({ nombre: 'Interno Renombrado' }).eventos).toEqual(['USUARIO_EDITADO']);
+  test('cambiar nombre, tipo y/o permisos -> UN solo USUARIO_ACTUALIZADO por mutacion (con el estado completo antes/despues)', () => {
+    expect(actualizar({ nombre: 'Interno Renombrado' }).eventos).toEqual(['USUARIO_ACTUALIZADO']);
     const r = actualizar({ versionEsperada: 2, nombre: 'Otro Nombre', permisos: ['perfil'] });
-    expect(r.eventos).toEqual(['USUARIO_EDITADO', 'PERMISOS_MODIFICADOS']);
+    expect(r.eventos).toEqual(['USUARIO_ACTUALIZADO']);
     const ev = eventos();
-    expect(ev.map((e) => e.evento)).toEqual(['USUARIO_EDITADO', 'USUARIO_EDITADO', 'PERMISOS_MODIFICADOS']);
+    expect(ev.map((e) => e.evento)).toEqual(['USUARIO_ACTUALIZADO', 'USUARIO_ACTUALIZADO']);
     expect(ev[1]).toMatchObject({ nombreAnterior: 'Interno Renombrado', nombreObjetivo: 'Otro Nombre', versionAnterior: 2, versionNueva: 3 });
-    expect(ev[2]).toMatchObject({ versionAnterior: 2, versionNueva: 3 });
-    expect(ev.map((e) => e.secuencia)).toEqual([1, 2, 3]);
+    expect(ev[1]).toMatchObject({ permisosAntes: 'perfil,datos,ubicacion,mapa', permisosDespues: 'perfil' });
+    expect(ev.map((e) => e.secuencia)).toEqual([1, 2]);
   });
 
   test('un INTERNO pasado a EXTERNO conserva EXACTAMENTE sus permisos (el tipo no concede ni quita) y requiere E10_GESTION_EXTERNOS_ACTIVO', () => {
     expect(actualizar({ tipo: 'EXTERNO' })).toMatchObject({ ok: false, codigo: 'E10_GESTION_EXTERNOS_INACTIVA' });
     encender({ E10_GESTION_EXTERNOS_ACTIVO: 'SI' });
     const antes = usuario('interno@x.com').permisos;
-    const r = actualizar({ tipo: 'EXTERNO' });
-    expect(r).toMatchObject({ ok: true, eventos: ['USUARIO_EDITADO'], usuario: { tipo: 'EXTERNO' } });
+    expect(actualizar({ tipo: 'EXTERNO' })).toMatchObject({ ok: false, codigo: 'MOTIVO_REQUERIDO' });      // cambiar INTERNO <-> EXTERNO exige motivo
+    const r = actualizar({ tipo: 'EXTERNO', motivo: 'pasa a tecnico externo' });
+    expect(r).toMatchObject({ ok: true, eventos: ['USUARIO_ACTUALIZADO'], usuario: { tipo: 'EXTERNO' } });
     expect(usuario('interno@x.com').permisos).toEqual(antes);
   });
 
@@ -205,8 +206,11 @@ describe('baja logica y reactivacion (NUNCA se borra una fila)', () => {
     expect(estado('REACTIVAR', { email: 'baja@x.com', versionEsperada: 1 })).toMatchObject({ ok: true, usuario: { estado: 'activo' } });
   });
 
-  test('desactivar a quien ya esta inactivo: sin cambios', () => {
-    expect(estado('DESACTIVAR', { email: 'baja@x.com' })).toMatchObject({ ok: true, sinCambios: true });
+  test('desactivar a quien ya esta inactivo -> USUARIO_YA_INACTIVO; reactivar a quien ya esta activo -> USUARIO_YA_ACTIVO (sin tocar nada)', () => {
+    const antes = snapshot();
+    expect(estado('DESACTIVAR', { email: 'baja@x.com' })).toMatchObject({ ok: false, codigo: 'USUARIO_YA_INACTIVO' });
+    expect(estado('REACTIVAR')).toMatchObject({ ok: false, codigo: 'USUARIO_YA_ACTIVO' });
+    expect(snapshot()).toBe(antes);
   });
 
   test('accion invalida -> INVALID_REQUEST', () => {
@@ -229,19 +233,19 @@ describe('baja logica y reactivacion (NUNCA se borra una fila)', () => {
 
 describe('ULTIMO ADMIN: nunca 0 administradores efectivos (activo + INTERNO + usuarios_admin)', () => {
   const admins = () => usuarios().filter((u) => global.usuariosDominio_esAdminEfectivo(u)).map((u) => u.email);
-  const quitarAdmin = (email, v) => E.Servicio.usuariosAdmin_actualizar({ email: ADMIN1, nombre: 'A' }, { email, versionEsperada: v === undefined ? 1 : v, permisos: ['perfil'] });
+  const quitarAdmin = (email, v) => E.Servicio.usuariosAdmin_actualizar({ email: ADMIN1, nombre: 'A' }, { email, versionEsperada: v === undefined ? 1 : v, permisos: ['perfil'], motivo: 'quita administrador' });
 
   test('con dos administradores se puede desactivar uno; el ultimo NO', () => {
-    expect(E.Servicio.usuariosAdmin_cambiarEstado({ email: ADMIN1, nombre: 'A' }, { email: ADMIN2, versionEsperada: 1, accion: 'DESACTIVAR' }).ok).toBe(true);
+    expect(E.Servicio.usuariosAdmin_cambiarEstado({ email: ADMIN1, nombre: 'A' }, { email: ADMIN2, versionEsperada: 1, accion: 'DESACTIVAR', motivo: 'm' }).ok).toBe(true);
     expect(admins()).toEqual([ADMIN1]);
     const antes = snapshot();
-    expect(E.Servicio.usuariosAdmin_cambiarEstado({ email: ADMIN1, nombre: 'A' }, { email: ADMIN1, versionEsperada: 1, accion: 'DESACTIVAR' })).toMatchObject({ ok: false, codigo: 'ULTIMO_ADMIN' });
+    expect(E.Servicio.usuariosAdmin_cambiarEstado({ email: ADMIN1, nombre: 'A' }, { email: ADMIN1, versionEsperada: 1, accion: 'DESACTIVAR', motivo: 'm' })).toMatchObject({ ok: false, codigo: 'ULTIMO_ADMIN' });
     expect(snapshot()).toBe(antes);
     expect(admins()).toEqual([ADMIN1]);
   });
 
   test('quitar usuarios_admin al ultimo se rechaza', () => {
-    E.Servicio.usuariosAdmin_cambiarEstado(ACTOR, { email: ADMIN2, versionEsperada: 1, accion: 'DESACTIVAR' });
+    E.Servicio.usuariosAdmin_cambiarEstado(ACTOR, { email: ADMIN2, versionEsperada: 1, accion: 'DESACTIVAR', motivo: 'm' });
     const antes = snapshot();
     expect(quitarAdmin(ADMIN1)).toMatchObject({ ok: false, codigo: 'ULTIMO_ADMIN' });
     expect(snapshot()).toBe(antes);
@@ -249,7 +253,7 @@ describe('ULTIMO ADMIN: nunca 0 administradores efectivos (activo + INTERNO + us
 
   test('cambiar el tipo del ultimo a EXTERNO se rechaza (con y sin quitarle usuarios_admin)', () => {
     encender({ E10_GESTION_EXTERNOS_ACTIVO: 'SI' });
-    E.Servicio.usuariosAdmin_cambiarEstado(ACTOR, { email: ADMIN2, versionEsperada: 1, accion: 'DESACTIVAR' });
+    E.Servicio.usuariosAdmin_cambiarEstado(ACTOR, { email: ADMIN2, versionEsperada: 1, accion: 'DESACTIVAR', motivo: 'm' });
     const antes = snapshot();
     expect(E.Servicio.usuariosAdmin_actualizar(ACTOR, { email: ADMIN1, versionEsperada: 1, tipo: 'EXTERNO' })).toMatchObject({ ok: false });           // regla dura: EXTERNO + usuarios_admin
     expect(E.Servicio.usuariosAdmin_actualizar(ACTOR, { email: ADMIN1, versionEsperada: 1, tipo: 'EXTERNO', permisos: ['perfil'] })).toMatchObject({ ok: false, codigo: 'ULTIMO_ADMIN' });
@@ -258,9 +262,9 @@ describe('ULTIMO ADMIN: nunca 0 administradores efectivos (activo + INTERNO + us
 
   test('un administrador inactivo o un EXTERNO con usuarios_admin escrito a mano NO cuentan como ultimo respaldo', () => {
     E.hojas.Usuarios.filas[4][columna('usuarios_admin')] = 'SI';          // externo@x.com con usuarios_admin = SI
-    E.Servicio.usuariosAdmin_cambiarEstado(ACTOR, { email: ADMIN2, versionEsperada: 1, accion: 'DESACTIVAR' });
+    E.Servicio.usuariosAdmin_cambiarEstado(ACTOR, { email: ADMIN2, versionEsperada: 1, accion: 'DESACTIVAR', motivo: 'm' });
     expect(admins()).toEqual([ADMIN1]);
-    expect(E.Servicio.usuariosAdmin_cambiarEstado(ACTOR, { email: ADMIN1, versionEsperada: 1, accion: 'DESACTIVAR' })).toMatchObject({ ok: false, codigo: 'ULTIMO_ADMIN' });
+    expect(E.Servicio.usuariosAdmin_cambiarEstado(ACTOR, { email: ADMIN1, versionEsperada: 1, accion: 'DESACTIVAR', motivo: 'm' })).toMatchObject({ ok: false, codigo: 'ULTIMO_ADMIN' });
   });
 
   test('un administrador puede degradarse a si mismo si queda otro; y puede promover a un tercero', () => {
@@ -271,8 +275,8 @@ describe('ULTIMO ADMIN: nunca 0 administradores efectivos (activo + INTERNO + us
   });
 
   test('dos administradores que se desactivan mutuamente: el segundo falla (el lock los serializa y se cuenta sobre la hoja fresca)', () => {
-    const a = E.Servicio.usuariosAdmin_cambiarEstado({ email: ADMIN1, nombre: 'A' }, { email: ADMIN2, versionEsperada: 1, accion: 'DESACTIVAR' });
-    const b = E.Servicio.usuariosAdmin_cambiarEstado({ email: ADMIN2, nombre: 'B' }, { email: ADMIN1, versionEsperada: 1, accion: 'DESACTIVAR' });
+    const a = E.Servicio.usuariosAdmin_cambiarEstado({ email: ADMIN1, nombre: 'A' }, { email: ADMIN2, versionEsperada: 1, accion: 'DESACTIVAR', motivo: 'm' });
+    const b = E.Servicio.usuariosAdmin_cambiarEstado({ email: ADMIN2, nombre: 'B' }, { email: ADMIN1, versionEsperada: 1, accion: 'DESACTIVAR', motivo: 'm' });
     expect(a.ok).toBe(true);
     expect(b).toMatchObject({ ok: false, codigo: 'PERMISSION_DENIED' });          // ADMIN2 ya no es administrador efectivo cuando le toca
     expect(admins()).toEqual([ADMIN1]);
@@ -280,8 +284,8 @@ describe('ULTIMO ADMIN: nunca 0 administradores efectivos (activo + INTERNO + us
 
   test('ninguna secuencia de operaciones puede dejar 0 administradores efectivos', () => {
     const intentos = [
-      () => E.Servicio.usuariosAdmin_cambiarEstado({ email: ADMIN1, nombre: 'A' }, { email: ADMIN1, versionEsperada: usuario(ADMIN1).version, accion: 'DESACTIVAR' }),
-      () => E.Servicio.usuariosAdmin_cambiarEstado({ email: ADMIN1, nombre: 'A' }, { email: ADMIN2, versionEsperada: usuario(ADMIN2).version, accion: 'DESACTIVAR' }),
+      () => E.Servicio.usuariosAdmin_cambiarEstado({ email: ADMIN1, nombre: 'A' }, { email: ADMIN1, versionEsperada: usuario(ADMIN1).version, accion: 'DESACTIVAR', motivo: 'm' }),
+      () => E.Servicio.usuariosAdmin_cambiarEstado({ email: ADMIN1, nombre: 'A' }, { email: ADMIN2, versionEsperada: usuario(ADMIN2).version, accion: 'DESACTIVAR', motivo: 'm' }),
       () => E.Servicio.usuariosAdmin_actualizar({ email: ADMIN1, nombre: 'A' }, { email: ADMIN1, versionEsperada: usuario(ADMIN1).version, permisos: ['perfil'] }),
       () => E.Servicio.usuariosAdmin_actualizar({ email: ADMIN1, nombre: 'A' }, { email: ADMIN2, versionEsperada: usuario(ADMIN2).version, permisos: [] })
     ];

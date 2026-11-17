@@ -208,18 +208,18 @@ describe('eventos de auditoria', () => {
     expect(e[0]).toMatchObject({ evento: 'USUARIO_CREADO', usuarioObjetivo: 'a@x.com', nombreObjetivo: 'Ana', nombreAnterior: '', tipoAnterior: '', tipoNuevo: 'INTERNO', estadoAnterior: '', estadoNuevo: 'activo', versionAnterior: 0, versionNueva: 1, permisosAntes: '', permisosDespues: 'perfil' });
   });
 
-  test('cambio de permisos -> PERMISOS_MODIFICADOS con antes y despues', () => {
+  test('cambio de permisos -> USUARIO_ACTUALIZADO con antes y despues', () => {
     const e = D.usuariosDominio_eventosDe(antes, Object.assign({}, antes, { version: 3, permisos: global.permisosCatalogo_aObjeto(['perfil', 'mapa']) }));
-    expect(e.map((x) => x.evento)).toEqual(['PERMISOS_MODIFICADOS']);
+    expect(e.map((x) => x.evento)).toEqual(['USUARIO_ACTUALIZADO']);
     expect(e[0]).toMatchObject({ permisosAntes: 'perfil', permisosDespues: 'perfil,mapa', versionAnterior: 2, versionNueva: 3 });
   });
 
-  test('cambio de nombre o tipo -> USUARIO_EDITADO; ambos cambios (nombre y permisos) generan DOS eventos con las mismas versiones', () => {
+  test('cambio de nombre, tipo y/o permisos -> UN solo USUARIO_ACTUALIZADO (nombre y permisos a la vez NO generan dos eventos)', () => {
     const e = D.usuariosDominio_eventosDe(antes, Object.assign({}, antes, { version: 3, nombre: 'Ana Maria', permisos: global.permisosCatalogo_aObjeto(['perfil', 'ne']) }));
-    expect(e.map((x) => x.evento)).toEqual(['USUARIO_EDITADO', 'PERMISOS_MODIFICADOS']);
+    expect(e.map((x) => x.evento)).toEqual(['USUARIO_ACTUALIZADO']);
     expect(e.every((x) => x.versionAnterior === 2 && x.versionNueva === 3)).toBe(true);
     expect(e[0]).toMatchObject({ nombreAnterior: 'Ana', nombreObjetivo: 'Ana Maria' });
-    expect(D.usuariosDominio_eventosDe(antes, Object.assign({}, antes, { version: 3, tipo: 'EXTERNO' })).map((x) => x.evento)).toEqual(['USUARIO_EDITADO']);
+    expect(D.usuariosDominio_eventosDe(antes, Object.assign({}, antes, { version: 3, tipo: 'EXTERNO' })).map((x) => x.evento)).toEqual(['USUARIO_ACTUALIZADO']);
   });
 
   test('baja y reactivacion', () => {

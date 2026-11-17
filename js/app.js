@@ -24,6 +24,7 @@
     fotos: document.getElementById('screen-fotos'),
     fotosModeracion: document.getElementById('screen-fotos-moderacion'),
     itfModeracion: document.getElementById('screen-itf-moderacion'),
+    usuariosAdmin: document.getElementById('screen-usuarios-admin'),
     observaciones: document.getElementById('screen-observaciones'),
     lineaTiempo: document.getElementById('screen-linea-tiempo'),
     disabled: document.getElementById('screen-disabled'),
@@ -1253,6 +1254,8 @@
     // "ITF pendientes" (E9-6): solo perfil y perfil_validar === true exactos; la tarjeta no carga nada. El atajo de vuelta a la cola solo existe si se vino de "Ver pozo" y el permiso sigue.
     document.getElementById('btn-abrir-itf-moderacion').hidden = !itfLogic_puedeValidar(permisosActuales);
     document.getElementById('btn-itf-volver-moderacion').hidden = !(itfRetornoModeracion && itfLogic_puedeValidar(permisosActuales));
+    // "Administracion" (E10-2): solo con usuarios_admin === true exacto; la tarjeta no carga nada. Es solo la UI: el backend exige sesion + administrador efectivo + el flag.
+    document.getElementById('btn-abrir-usuarios-admin').hidden = !usuariosAdminLogic_puedeVer(permisosActuales);
     document.getElementById('btn-abrir-mapa').hidden = accesos.mapas === 'ninguno';
     actualizarBotonesVolverMapa();
   }
@@ -1292,6 +1295,8 @@
     // ni el Perfil con ITF colaborativos (imagen, propuestas, lo que este en vuelo) ni la moderacion de ITF (cola, visor, dialogos)
     itfPerfilController_reset();
     itfModeracionController_reset();
+    // ni Administracion -> Usuarios (listado, detalle, dialogos y lo que este en vuelo)
+    usuariosAdminController_reset();
     itfRetornoModeracion = false;
     // ni las observaciones abiertas (se descartan las respuestas en vuelo)
     observacionesPozoController_reset();
@@ -1937,6 +1942,34 @@
   document.getElementById('btn-itf-cola-volver').addEventListener('click', function () {
     itfModeracionController_cerrar();
     restaurarPantalla(itfModeracionOrigen);
+  });
+
+  // Administracion -> Usuarios (E10-2): pantalla propia. Se abre desde la tarjeta del hub (solo con usuarios_admin) y Volver regresa a la pantalla de origen; los datos se piden SOLO al abrir.
+  var usuariosAdminOrigen = { pantalla: 'main', scrollY: 0 };
+
+  usuariosAdminController_inicializar(function () {
+    return {
+      sessionToken: sessionToken,
+      permisos: permisosActuales,
+      onSessionExpired: function () {
+        logout();
+      }
+    };
+  });
+
+  document.getElementById('btn-abrir-usuarios-admin').addEventListener('click', function () {
+    if (!usuariosAdminLogic_puedeVer(permisosActuales)) {
+      toggleAccesosUbicacion();          // el permiso se perdio: la tarjeta se corrige y no se abre ni se pide nada
+      return;
+    }
+    usuariosAdminOrigen = { pantalla: pantallaActual, scrollY: window.scrollY };
+    showScreen('usuariosAdmin');
+    usuariosAdminController_abrir();
+  });
+
+  document.getElementById('btn-uadm-volver').addEventListener('click', function () {
+    usuariosAdminController_cerrar();
+    restaurarPantalla(usuariosAdminOrigen);
   });
 
   // Resumen de fotos compartido (hub, ficha NE, popup NE, Buscar reemplazo, Cerca

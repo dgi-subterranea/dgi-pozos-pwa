@@ -134,10 +134,10 @@ function usuariosDominio_validarMutacion(antes, despues, todosAntes, opciones) {
 // --- eventos de auditoria ---
 
 // Diferencias entre `antes` (o null) y `despues`. Devuelve la lista de eventos [{evento, ...campos}] SIN identidad del actor ni fechas (las pone el servicio):
-//   alta                     -> USUARIO_CREADO
-//   cambio de nombre o tipo  -> USUARIO_EDITADO
-//   cambio de permisos       -> PERMISOS_MODIFICADOS
-//   activo -> inactivo       -> USUARIO_DESACTIVADO ; inactivo -> activo -> USUARIO_REACTIVADO
+//   alta                                     -> USUARIO_CREADO
+//   cambio de nombre, tipo y/o permisos      -> USUARIO_ACTUALIZADO (UN solo evento por mutacion, con el estado completo antes/despues: los permisos agregados y quitados salen de comparar permisosAntes y permisosDespues)
+//   activo -> inactivo                       -> USUARIO_DESACTIVADO ; inactivo -> activo -> USUARIO_REACTIVADO
+// (E10-2: reemplaza a USUARIO_EDITADO + PERMISOS_MODIFICADOS de E10-1, que nunca se escribieron en produccion: la unica auditoria real hasta hoy es USUARIO_MIGRADO.)
 // Cada evento lleva el estado COMPLETO antes/despues (tipo, estado, version, permisos, nombre) para que cualquiera se lea solo.
 function usuariosDominio_eventosDe(antes, despues) {
   var a = antes || null;
@@ -166,11 +166,8 @@ function usuariosDominio_eventosDe(antes, despues) {
   if (base.estadoAnterior !== base.estadoNuevo) {
     eventos.push(evento(base.estadoNuevo === 'activo' ? 'USUARIO_REACTIVADO' : 'USUARIO_DESACTIVADO'));
   }
-  if (base.nombreAnterior !== base.nombreObjetivo || base.tipoAnterior !== base.tipoNuevo) {
-    eventos.push(evento('USUARIO_EDITADO'));
-  }
-  if (base.permisosAntes !== base.permisosDespues) {
-    eventos.push(evento('PERMISOS_MODIFICADOS'));
+  if (base.nombreAnterior !== base.nombreObjetivo || base.tipoAnterior !== base.tipoNuevo || base.permisosAntes !== base.permisosDespues) {
+    eventos.push(evento('USUARIO_ACTUALIZADO'));
   }
   return eventos;
 }

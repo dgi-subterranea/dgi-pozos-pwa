@@ -83,6 +83,8 @@ var SHELL_FILES = [
   './js/itfImagen.js',
   './js/itfPerfil.js',
   './js/itfModeracion.js',
+  './js/usuariosAdminLogic.js',
+  './js/usuariosAdmin.js',
   './js/app.js',
   './manifest.json',
   './icons/icon-192.png',

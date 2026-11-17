@@ -472,3 +472,53 @@ function apiGetFotosPozosRetiradasModeracion(sessionToken, limit, cursor) {
 function apiGetFotoPozoModeracion(sessionToken, fotoId, variante) {
   return callBackend('getFotoPozoModeracion', { sessionToken: sessionToken, fotoId: fotoId, variante: variante });
 }
+
+// --- Administracion de usuarios (E10-2). Solo para administradores (usuarios_admin) y con E10_ADMIN_USUARIOS_ACTIVO encendido; el backend manda: estos pedidos nunca llevan actor ni ejecutor (sale de la sesion). ---
+
+// Todos los usuarios (sin paginar): {usuarios, total, activos, administradoresEfectivos}.
+function apiAdminUsuariosListar(sessionToken) {
+  return callBackend('adminUsuariosListar', { sessionToken: sessionToken });
+}
+
+// El catalogo canonico de permisos (id, nombre, descripcion, modulo, categoria, aplicableInterno, aplicableExterno, dependeDe, critico, orden): el frontend NO mantiene una lista propia.
+function apiAdminPermisosCatalogo(sessionToken) {
+  return callBackend('adminPermisosCatalogo', { sessionToken: sessionToken });
+}
+
+// Detalle de un usuario (version + etag) con sus ultimos eventos de auditoria.
+function apiAdminUsuarioObtener(sessionToken, email, limiteEventos) {
+  var cuerpo = { sessionToken: sessionToken, email: email };
+  if (limiteEventos !== undefined && limiteEventos !== null) {
+    cuerpo.limiteEventos = limiteEventos;
+  }
+  return callBackend('adminUsuarioObtener', cuerpo);
+}
+
+// datos: {email, nombre, tipo, permisos:[ids], clientRequestId, motivo?}. Se copian SOLO los campos conocidos.
+function apiAdminUsuarioCrear(sessionToken, datos) {
+  return callBackend('adminUsuarioCrear', adminUsuarioCuerpo(sessionToken, datos, ['email', 'nombre', 'tipo', 'permisos', 'motivo', 'clientRequestId']));
+}
+
+// datos: {email, versionEsperada, etag, nombre?, tipo?, permisos?, motivo?, clientRequestId}. El email es INMUTABLE (identifica al usuario).
+function apiAdminUsuarioActualizar(sessionToken, datos) {
+  return callBackend('adminUsuarioActualizar', adminUsuarioCuerpo(sessionToken, datos, ['email', 'versionEsperada', 'etag', 'nombre', 'tipo', 'permisos', 'motivo', 'clientRequestId']));
+}
+
+// datos: {email, versionEsperada, etag, motivo, clientRequestId}. Baja logica: nunca se borra una fila.
+function apiAdminUsuarioDesactivar(sessionToken, datos) {
+  return callBackend('adminUsuarioDesactivar', adminUsuarioCuerpo(sessionToken, datos, ['email', 'versionEsperada', 'etag', 'motivo', 'clientRequestId']));
+}
+
+function apiAdminUsuarioReactivar(sessionToken, datos) {
+  return callBackend('adminUsuarioReactivar', adminUsuarioCuerpo(sessionToken, datos, ['email', 'versionEsperada', 'etag', 'motivo', 'clientRequestId']));
+}
+
+function adminUsuarioCuerpo(sessionToken, datos, campos) {
+  var cuerpo = { sessionToken: sessionToken };
+  campos.forEach(function (c) {
+    if (datos && datos[c] !== undefined) {
+      cuerpo[c] = datos[c];
+    }
+  });
+  return cuerpo;
+}

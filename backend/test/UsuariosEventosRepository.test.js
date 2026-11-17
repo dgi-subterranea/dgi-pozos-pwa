@@ -50,12 +50,12 @@ describe('abrir: fail-closed y nunca crea la hoja', () => {
 describe('agregar (append-only, una sola escritura, secuencia bajo lock)', () => {
   test('escribe eventoId UUID, secuencia correlativa, timestamp ISO UTC y ejecutadoPor', () => {
     const h = E.Eventos.usuariosEventosRepository_abrir();
-    const escritos = E.Eventos.usuariosEventosRepository_agregar(h, [evento(), evento({ evento: 'PERMISOS_MODIFICADOS' })], 0, 'admin1@x.com');
+    const escritos = E.Eventos.usuariosEventosRepository_agregar(h, [evento(), evento({ evento: 'USUARIO_ACTUALIZADO' })], 0, 'admin1@x.com');
     expect(escritos.map((e) => e.secuencia)).toEqual([1, 2]);
     const filas = E.hojas.UsuariosEventos.filas;
     expect(filas).toHaveLength(3);
     const leidos = E.Eventos.usuariosEventosRepository_leer(E.Eventos.usuariosEventosRepository_abrir());
-    expect(leidos.map((e) => e.evento)).toEqual(['USUARIO_CREADO', 'PERMISOS_MODIFICADOS']);
+    expect(leidos.map((e) => e.evento)).toEqual(['USUARIO_CREADO', 'USUARIO_ACTUALIZADO']);
     expect(leidos[0].eventoId).toMatch(/^[0-9a-f-]{36}$/);
     expect(leidos[0].timestampUtc).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     expect(leidos[1].secuencia).toBe(2);

@@ -138,6 +138,14 @@
         <span class="fotos-cola-acceso-desc">Validá propuestas de ITF</span>
       </span>
     </button>
+    <!-- Administracion -> Usuarios (E10-2): visible solo con usuarios_admin === true (ver toggleAccesosUbicacion en app.js). Es solo la UI: el backend exige sesion + administrador efectivo + el flag. La tarjeta NO pide nada: los datos se cargan al abrir la pantalla. -->
+    <button type="button" id="btn-abrir-usuarios-admin" class="button-secondary btn-mapa-acceso fotos-cola-acceso" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3 19c0-3.2 2.7-5.2 6-5.2s6 2 6 5.2" stroke-linecap="round"/><path d="M17 8.5v5M14.5 11h5" stroke-linecap="round"/></svg>
+      <span class="fotos-cola-acceso-textos">
+        <span class="fotos-cola-acceso-titulo">Administración</span>
+        <span class="fotos-cola-acceso-desc">Usuarios y permisos</span>
+      </span>
+    </button>
     <!-- Al llegar al pozo desde "Ver pozo" de ITF pendientes: vuelta directa a la cola (conserva lo ya cargado). -->
     <button type="button" id="btn-itf-volver-moderacion" class="button-secondary btn-mapa-acceso" hidden>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
@@ -1681,6 +1689,137 @@
     </div>
   </div>
 
+  <!-- Administracion -> Usuarios (E10-2). Listado completo (busqueda y filtros locales), detalle / editor con permisos agrupados por el catalogo del backend, alta, desactivar y reactivar. Todo texto de datos se pinta por textContent. -->
+  <div id="screen-usuarios-admin" class="screen" hidden>
+    <div class="tv-topbar tv-topbar-fija">
+      <button type="button" id="btn-uadm-volver" class="tv-volver">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+        Volver
+      </button>
+    </div>
+    <div class="tv-header">
+      <div>
+        <h1 class="mapa-titulo">Administración</h1>
+        <p class="tv-header-label">Usuarios y permisos</p>
+      </div>
+    </div>
+    <p id="uadm-aviso" class="fotos-mod-aviso" role="status" tabindex="-1" hidden></p>
+    <div id="uadm-cargando" class="mapa-loading reemplazo-cargando" role="status" hidden>
+      <div class="cargando" data-cargando>Cargando usuarios...</div>
+    </div>
+    <div id="uadm-error" class="reemplazo-bloque" hidden>
+      <p id="uadm-error-texto" class="error-message" role="alert" tabindex="-1"></p>
+      <button type="button" id="btn-uadm-reintentar" class="button-secondary">Reintentar</button>
+    </div>
+    <div id="uadm-deshabilitada" class="reemplazo-bloque uadm-estado" role="status" tabindex="-1" hidden>
+      <h2 class="uadm-estado-titulo">Administración temporalmente deshabilitada</h2>
+      <p class="uadm-estado-texto">La administración de usuarios no está habilitada en este momento. No se puede ver ni modificar nada desde esta pantalla hasta que se habilite.</p>
+      <button type="button" id="btn-uadm-reintentar-deshab" class="button-secondary">Volver a comprobar</button>
+    </div>
+    <div id="uadm-sin-permiso" class="reemplazo-bloque uadm-estado" role="alert" hidden>
+      <h2 class="uadm-estado-titulo">Sin acceso</h2>
+      <p class="uadm-estado-texto">No tenés permiso para administrar usuarios.</p>
+    </div>
+    <div id="uadm-contenido" class="uadm" hidden>
+      <div class="uadm-barra">
+        <p id="uadm-resumen" class="fotos-nota" role="status"></p>
+        <div class="uadm-barra-acciones">
+          <button type="button" id="btn-uadm-actualizar" class="button-secondary">Actualizar</button>
+          <button type="button" id="btn-uadm-nuevo" class="button-primary">Nuevo usuario</button>
+        </div>
+      </div>
+      <div id="uadm-columnas" class="uadm-columnas uadm-simple">
+        <section id="uadm-panel-lista" class="uadm-panel-lista" aria-label="Listado de usuarios">
+          <div class="uadm-filtros">
+            <label class="uadm-label" for="uadm-buscar">Buscar</label>
+            <input id="uadm-buscar" class="uadm-input" type="search" placeholder="Nombre o email" autocomplete="off" />
+            <div class="uadm-filtros-fila">
+              <div class="uadm-campo">
+                <label class="uadm-label" for="uadm-f-estado">Estado</label>
+                <select id="uadm-f-estado" class="uadm-input"><option value="todos">Todos</option><option value="activo">Activos</option><option value="inactivo">Inactivos</option></select>
+              </div>
+              <div class="uadm-campo">
+                <label class="uadm-label" for="uadm-f-tipo">Tipo</label>
+                <select id="uadm-f-tipo" class="uadm-input"><option value="todos">Todos</option><option value="INTERNO">Internos</option><option value="EXTERNO">Externos</option></select>
+              </div>
+              <div class="uadm-campo">
+                <label class="uadm-label" for="uadm-f-admin">Administración</label>
+                <select id="uadm-f-admin" class="uadm-input"><option value="todos">Todos</option><option value="admin">Administradores</option><option value="no_admin">No administradores</option></select>
+              </div>
+            </div>
+            <button type="button" id="btn-uadm-limpiar-filtros" class="button-secondary uadm-limpiar">Limpiar filtros</button>
+          </div>
+          <p id="uadm-lista-vacia" class="fotos-nota" hidden>Ningún usuario coincide con los filtros.</p>
+          <ul id="uadm-lista" class="uadm-lista"></ul>
+        </section>
+        <section id="uadm-panel-detalle" class="uadm-panel-detalle" tabindex="-1" aria-label="Detalle del usuario" hidden>
+          <button type="button" id="btn-uadm-detalle-volver" class="tv-volver uadm-volver-lista" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+            Volver al listado
+          </button>
+          <p id="uadm-detalle-vacio" class="fotos-nota uadm-detalle-vacio">Elegí un usuario del listado para ver su detalle, o creá uno nuevo.</p>
+          <h2 id="uadm-detalle-titulo" class="uadm-detalle-titulo"></h2>
+          <p id="uadm-detalle-error" class="error-message" role="alert" tabindex="-1" hidden></p>
+          <div id="uadm-detalle-cargando" class="cargando cargando-sm" data-cargando role="status" hidden>Cargando detalle…</div>
+          <div id="uadm-form" class="uadm-form" hidden>
+            <div class="uadm-campo">
+              <label class="uadm-label" for="uadm-email">Email</label>
+              <input id="uadm-email" class="uadm-input" type="email" autocomplete="off" />
+              <p id="uadm-email-nota" class="uadm-nota" hidden>El email identifica al usuario y no se puede cambiar.</p>
+            </div>
+            <div class="uadm-campo">
+              <label class="uadm-label" for="uadm-nombre">Nombre</label>
+              <input id="uadm-nombre" class="uadm-input" type="text" maxlength="80" autocomplete="off" />
+            </div>
+            <div class="uadm-campo">
+              <label class="uadm-label" for="uadm-tipo">Tipo</label>
+              <select id="uadm-tipo" class="uadm-input"><option value="INTERNO">Interno</option><option value="EXTERNO">Externo</option></select>
+              <p class="uadm-nota">El tipo no concede ni quita permisos: solo los permisos de abajo mandan. Un usuario externo nunca puede administrar usuarios.</p>
+            </div>
+            <dl class="uadm-meta">
+              <dt>Estado</dt><dd id="uadm-estado-texto"></dd>
+              <dt>Versión</dt><dd id="uadm-meta-version"></dd>
+              <dt>Última actualización</dt><dd id="uadm-meta-actualizado"></dd>
+            </dl>
+            <h3 class="uadm-subtitulo">Permisos</h3>
+            <div id="uadm-permisos" class="uadm-permisos"></div>
+            <p id="uadm-form-aviso" class="uadm-aviso-form" role="status" hidden></p>
+            <div class="uadm-acciones">
+              <button type="button" id="btn-uadm-guardar" class="button-primary" disabled>Guardar cambios</button>
+              <button type="button" id="btn-uadm-descartar" class="button-secondary" disabled>Descartar cambios</button>
+            </div>
+            <div id="uadm-zona-estado" class="uadm-zona-estado" hidden>
+              <h3 class="uadm-subtitulo">Estado del usuario</h3>
+              <p class="uadm-nota">Desactivar no borra nada: el usuario conserva sus permisos y su historial y se puede reactivar.</p>
+              <button type="button" id="btn-uadm-desactivar" class="button-secondary uadm-peligro" hidden>Desactivar usuario…</button>
+              <button type="button" id="btn-uadm-reactivar" class="button-secondary" hidden>Reactivar usuario…</button>
+            </div>
+            <div id="uadm-eventos-bloque" class="uadm-eventos-bloque" hidden>
+              <h3 class="uadm-subtitulo">Actividad reciente</h3>
+              <p id="uadm-eventos-no-disponibles" class="uadm-nota" hidden>No se pudo leer el historial de este usuario en este momento.</p>
+              <p id="uadm-eventos-vacio" class="uadm-nota" hidden>Todavía no hay actividad registrada.</p>
+              <ul id="uadm-eventos" class="uadm-eventos"></ul>
+              <button type="button" id="btn-uadm-eventos-mas" class="button-secondary" hidden>Ver más actividad</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+    <div id="uadm-overlay" class="uadm-overlay" role="dialog" aria-modal="true" aria-labelledby="uadm-dlg-titulo" hidden>
+      <div class="uadm-dlg">
+        <h2 id="uadm-dlg-titulo" class="uadm-dlg-titulo"></h2>
+        <div id="uadm-dlg-lineas" class="uadm-dlg-lineas"></div>
+        <label id="uadm-dlg-motivo-label" class="uadm-label" for="uadm-dlg-motivo" hidden>Motivo (obligatorio)</label>
+        <textarea id="uadm-dlg-motivo" class="uadm-input uadm-motivo" rows="3" maxlength="200" hidden></textarea>
+        <p id="uadm-dlg-error" class="error-message" role="alert" hidden></p>
+        <div class="uadm-dlg-botones">
+          <button type="button" id="btn-uadm-dlg-cancelar" class="button-secondary">Cancelar</button>
+          <button type="button" id="btn-uadm-dlg-confirmar" class="button-primary">Confirmar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Visor de un documento ITF (E9-6): imagen grande con zoom, datos seguros y, si el pozo ya tiene ITF vigente, comparacion propuesta / vigente (lado a lado en pantallas anchas; uno por vez en el celular). -->
   <div id="itf-vis-overlay" class="itf-vis-overlay" role="dialog" aria-modal="true" aria-labelledby="itf-vis-titulo" hidden>
     <div class="itf-vis-panel">
@@ -2192,6 +2331,8 @@
   <script src="js/itfImagen.js"></script>
   <script src="js/itfPerfil.js"></script>
   <script src="js/itfModeracion.js"></script>
+  <script src="js/usuariosAdminLogic.js"></script>
+  <script src="js/usuariosAdmin.js"></script>
   <script src="js/app.js"></script>
   <!-- Va DESPUES de app.js en el documento a proposito, para que
        onGsiLoaded/onGsiLoadError ya existan antes de que puedan

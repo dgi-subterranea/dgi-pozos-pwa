@@ -40,9 +40,10 @@ describe('el frontend no mantiene una lista de permisos', () => {
     });
   });
 
-  test('el frontend no usa el catalogo del backend ni lo duplica: ningun js/ nombra PermisosCatalogo', () => {
+  test('el frontend no usa el modulo del catalogo del backend ni lo duplica: ningun js/ nombra PermisosCatalogo (E10-2: la pantalla de administracion pide el catalogo POR EL ENDPOINT adminPermisosCatalogo, unica mencion permitida)', () => {
     fs.readdirSync(path.join(raiz, 'js')).filter((f) => f.endsWith('.js') && !f.endsWith('.test.js')).forEach((f) => {
-      expect({ f, usa: /PermisosCatalogo|permisosCatalogo_/.test(leer('js', f)) }).toEqual({ f, usa: false });
+      const sinEndpoint = leer('js', f).replace(/apiAdminPermisosCatalogo|adminPermisosCatalogo/g, '');
+      expect({ f, usa: /PermisosCatalogo|permisosCatalogo_|PERMISOS_CATALOGO/.test(sinEndpoint) }).toEqual({ f, usa: false });
     });
   });
 

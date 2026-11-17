@@ -119,7 +119,9 @@ describe('wrappers de api.js (contrato del backend)', () => {
   });
 
   test('el cliente nunca manda email, nombre, entidad, estado, secuencia ni timestamp', () => {
-    const bloque = api.slice(api.indexOf('// --- Moderacion de fotos de pozos (E8)'));
+    const desde = api.indexOf('// --- Moderacion de fotos de pozos (E8)');
+    const hasta = api.indexOf('// --- Administracion de usuarios (E10-2)');          // E10-2 agrega wrappers DESPUES (el email del usuario OBJETIVO es parte de ese contrato)
+    const bloque = api.slice(desde, hasta === -1 ? undefined : hasta);
     expect(bloque).not.toMatch(/\bemail:|\bnombre:|\bwellId:|\bmonitoringId:|\bestado:|\bsecuencia:|\btimestamp\w*:|\bentidad\w*:/);
   });
 

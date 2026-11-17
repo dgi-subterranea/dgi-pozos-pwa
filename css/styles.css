@@ -5934,6 +5934,470 @@ p.uval-primera {
   margin: 8px 0 0;
 }
 
+/* ===== Administracion -> Usuarios (E10-2) =====
+   Celular: una cosa por vez (listado o detalle, tarjetas, sin tabla horizontal). Pantalla ancha (>= 900 px, ver USUARIOS_ADMIN_ANCHO_DOBLE en js/usuariosAdminLogic.js): listado a la izquierda y
+   detalle / editor a la derecha. Las acciones sensibles (desactivar, reactivar) viven en el detalle, nunca en las filas. */
+.uadm {
+  display: block;
+}
+.uadm-barra {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin: 8px 0 12px;
+}
+.uadm-barra .fotos-nota {
+  margin: 0;
+}
+.uadm-barra-acciones {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.button-primary {
+  background: var(--color-primary);
+  color: #fff;
+  border: 1px solid var(--color-primary);
+  border-radius: 10px;
+  min-height: 44px;
+  padding: 0 16px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.button-primary:hover:not(:disabled) {
+  background: var(--color-primary-dark);
+}
+.uadm .button-secondary,
+.uadm-dlg .button-secondary {
+  padding: 8px 16px;
+}
+.button-primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.uadm .button-secondary,
+.uadm-dlg .button-secondary {
+  min-height: 44px;
+}
+.uadm-columnas.uadm-doble {
+  display: grid;
+  grid-template-columns: minmax(300px, 400px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.uadm-panel-lista,
+.uadm-panel-detalle {
+  min-width: 0;
+}
+.uadm-panel-detalle {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  padding: 14px 16px 18px;
+}
+.uadm-doble .uadm-panel-lista {
+  max-height: calc(100vh - 200px);
+  overflow-y: auto;
+}
+.uadm-filtros {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.uadm-filtros-fila {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+}
+.uadm-campo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+.uadm-filtros .uadm-campo {
+  margin-bottom: 0;
+}
+.uadm-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--color-text-soft);
+}
+.uadm-input,
+input.uadm-input,
+select.uadm-input,
+textarea.uadm-input {
+  /* anula el estilo global de input[type="text"] (campo del numero de pozo: alto, monoespaciado, centrado) */
+  width: 100%;
+  height: auto;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 1rem;
+  font-weight: 400;
+  text-align: left;
+}
+.uadm-input:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+.uadm-input[readonly] {
+  background: var(--color-bg);
+  color: var(--color-text-soft);
+}
+.uadm-motivo {
+  resize: vertical;
+}
+.uadm-limpiar {
+  align-self: flex-start;
+}
+.uadm-lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.uadm-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  min-height: 44px;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+}
+.uadm-card,
+.uadm-card:hover,
+.uadm-card:active {
+  /* el boton global es azul relleno y su :hover lo oscurece: la tarjeta es una fila clara */
+  color: var(--color-text);
+  box-shadow: none;
+  gap: 4px;
+  justify-content: flex-start;
+  font-weight: 400;
+}
+.uadm-card:hover {
+  background: var(--color-primary-tint);
+  border-color: var(--color-primary);
+}
+.uadm-card:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+.uadm-card-activa,
+.uadm-card-activa:hover {
+  border-color: var(--color-primary);
+  background: var(--color-primary-tint);
+}
+.uadm-card-nombre {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.uadm-card-email {
+  font-size: 0.85rem;
+  color: var(--color-text-soft);
+  overflow-wrap: anywhere;
+}
+.uadm-card-actualizado {
+  font-size: 0.75rem;
+  color: var(--color-text-faint);
+}
+.uadm-card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.uadm-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text-soft);
+}
+.uadm-b-activo {
+  background: #e4f4ea;
+  border-color: #b9dfc7;
+  color: #14532d;
+}
+.uadm-b-inactivo {
+  background: #f3f3f3;
+  border-color: #d9d9d9;
+  color: #555;
+}
+.uadm-b-externo {
+  background: var(--color-warn-tint);
+  border-color: #ecd9a8;
+  color: var(--color-warn);
+}
+.uadm-b-interno {
+  background: var(--color-primary-tint);
+  border-color: #c9dfe7;
+  color: var(--color-primary-dark);
+}
+.uadm-b-admin {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+}
+.uadm-b-critico {
+  background: #fdeceb;
+  border-color: #f0c2bf;
+  color: var(--color-error);
+  align-self: flex-start;
+}
+.uadm-detalle-titulo {
+  margin: 4px 0 10px;
+  font-size: 1.15rem;
+  overflow-wrap: anywhere;
+}
+.uadm-volver-lista {
+  margin-bottom: 6px;
+}
+.uadm-nota {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--color-text-soft);
+}
+.uadm-meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 14px;
+  margin: 0 0 12px;
+  font-size: 0.9rem;
+}
+.uadm-meta dt {
+  color: var(--color-text-soft);
+  font-weight: 700;
+}
+.uadm-meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.uadm-subtitulo {
+  margin: 16px 0 8px;
+  font-size: 0.95rem;
+}
+.uadm-permisos {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.uadm-grupo {
+  margin: 0;
+  padding: 8px 10px 4px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  min-width: 0;
+}
+.uadm-grupo-titulo {
+  padding: 0 6px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--color-text-soft);
+}
+.uadm-permiso {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 4px;
+  border-top: 1px solid var(--color-border-soft);
+}
+.uadm-permiso:first-of-type {
+  border-top: 0;
+}
+.uadm-permiso input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  margin-top: 2px;
+  accent-color: var(--color-primary);
+}
+.uadm-permiso-texto {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  cursor: pointer;
+}
+.uadm-permiso-nombre {
+  font-weight: 700;
+}
+.uadm-permiso-desc {
+  font-size: 0.82rem;
+  color: var(--color-text-soft);
+}
+.uadm-permiso-dep {
+  font-size: 0.78rem;
+  color: var(--color-primary-dark);
+}
+.uadm-permiso-nota {
+  font-size: 0.78rem;
+  color: var(--color-warn);
+}
+.uadm-permiso-critico {
+  background: #fff8f7;
+  border-radius: 8px;
+}
+.uadm-permiso-on .uadm-permiso-nombre {
+  color: var(--color-primary-dark);
+}
+.uadm-aviso-form {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--color-warn-tint);
+  color: var(--color-warn);
+  font-size: 0.85rem;
+}
+.uadm-acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+.uadm-zona-estado {
+  margin-top: 20px;
+  padding-top: 4px;
+  border-top: 1px solid var(--color-border);
+}
+.uadm-peligro {
+  color: var(--color-error);
+  border-color: var(--color-error);
+}
+.button-primary.uadm-peligro {
+  background: var(--color-error);
+  border-color: var(--color-error);
+  color: #fff;
+}
+.uadm-eventos {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.uadm-evento {
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 10px;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+.uadm-evento-cab {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.uadm-evento-fecha,
+.uadm-evento-quien {
+  color: var(--color-text-soft);
+  font-size: 0.78rem;
+}
+.uadm-evento-motivo {
+  margin-top: 2px;
+  font-style: italic;
+}
+.uadm-estado {
+  text-align: center;
+}
+.uadm-estado-titulo {
+  margin: 0 0 6px;
+  font-size: 1.05rem;
+}
+.uadm-estado-texto {
+  margin: 0 0 12px;
+  color: var(--color-text-soft);
+}
+.uadm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  background: rgba(22, 33, 42, 0.6);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.uadm-dlg {
+  background: var(--color-surface);
+  color: var(--color-text);
+  width: 100%;
+  max-width: 520px;
+  max-height: 94vh;
+  max-height: 94dvh;
+  overflow-y: auto;
+  border-radius: 20px 20px 0 0;
+  padding: 18px 18px 22px;
+  box-sizing: border-box;
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.25);
+}
+.uadm-dlg-titulo {
+  margin: 0 0 8px;
+  font-size: 1.1rem;
+}
+.uadm-dlg-linea {
+  margin: 0 0 8px;
+  line-height: 1.4;
+}
+.uadm-dlg-botones {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+/* El shell de la app es una tarjeta angosta (.screen, 420-480 px): esta pantalla se ensancha para el layout de dos columnas (mismo mecanismo que Buscar reemplazo y la linea de tiempo). */
+@media (min-width: 640px) {
+  #screen-usuarios-admin {
+    max-width: 680px;
+  }
+}
+@media (min-width: 900px) {
+  #screen-usuarios-admin {
+    max-width: 1160px;
+  }
+}
+@media (min-width: 640px) {
+  .uadm-overlay {
+    align-items: center;
+  }
+  .uadm-dlg {
+    border-radius: 16px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .uadm-card,
+  .button-primary {
+    transition: none;
+  }
+}
+
 /* --- ITF colaborativos (E9-6): Perfil con proponer / mis propuestas, ITF pendientes, visor con comparacion, dialogo de accion e historial. Mobile-first; los dialogos reusan .fotos-mod-*. --- */
 body.itf-mod-abierto {
   overflow: hidden;

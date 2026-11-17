@@ -1,6 +1,6 @@
-// UsuariosAdminService (E10-1): las OPERACIONES administrativas de usuarios, con todas sus protecciones. En E10-1 NINGUN endpoint, trigger ni pantalla las llama (los endpoints y la pantalla son E10-2): es
-// la infraestructura, probada de punta a punta con hojas falsas. Cuando exista el endpoint, validara ANTES sesion + usuario activo + permiso usuarios_admin (la UI nunca es una defensa); este servicio
-// vuelve a comprobar el permiso del actor contra la hoja FRESCA, sin cache.
+// UsuariosAdminService (E10-1, usado por los endpoints de E10-2 en UsuariosAdminApi.js): las OPERACIONES administrativas de usuarios, con todas sus protecciones. El endpoint valida ANTES sesion + usuario
+// activo + INTERNO + usuarios_admin (la UI nunca es una defensa); este servicio vuelve a comprobar el permiso del actor contra la hoja FRESCA, sin cache. Las lecturas (listado, detalle, catalogo) estan
+// en UsuariosAdminLectura.js.
 //
 //   usuariosAdmin_crear(actor, datos)           alta de un usuario nuevo (estado activo, version 1)
 //   usuariosAdmin_actualizar(actor, datos)      cambia nombre, tipo y/o permisos (el email NUNCA cambia: otro email es otro usuario)
@@ -15,7 +15,8 @@
 //   E10_ADMIN_INACTIVO, E10_GESTION_EXTERNOS_INACTIVA, PERMISSION_DENIED, INVALID_REQUEST, SERVICE_UNAVAILABLE (lock),
 //   USUARIOS_NO_EXISTE / USUARIOS_ESQUEMA_INCOMPLETO / AUDITORIA_NO_DISPONIBLE (fail-closed: sin esquema no se escribe nada),
 //   USUARIO_EXISTE, USUARIO_NO_ENCONTRADO, EMAIL_DUPLICADO_EN_HOJA, CONFLICT_VERSION, EMAIL_INVALIDO, NOMBRE_INVALIDO, ESTADO_INVALIDO, TIPO_INVALIDO,
-//   PERMISO_DESCONOCIDO, PERMISOS_INCONSISTENTES, TIPO_NO_PERMITE_PERMISO, ULTIMO_ADMIN.
+//   PERMISO_DESCONOCIDO, PERMISOS_INCONSISTENTES, TIPO_NO_PERMITE_PERMISO, ULTIMO_ADMIN,
+//   MOTIVO_REQUERIDO (E10-2: desactivar, reactivar, quitar usuarios_admin y cambiar INTERNO <-> EXTERNO exigen motivo), USUARIO_YA_ACTIVO / USUARIO_YA_INACTIVO (E10-2).
 // E10_GESTION_EXTERNOS_ACTIVO gobierna SOLO las altas NUEVAS de externos (crear uno, convertir uno a EXTERNO, reactivar uno): no el acceso de los externos ya existentes.
 var USUARIOS_ADMIN_LOCK_MS = 10000;
 var USUARIOS_ADMIN_MOTIVO_MAX = 200;
@@ -44,6 +45,7 @@ function usuariosAdmin_codigoDeError(err) {
 
 // Vista del usuario que devuelve la operacion (sin fila de hoja ni datos internos): lo necesario para que el cliente reenvie version y etag.
 function usuariosAdmin_vista(u) {
+  var permisos = permisosCatalogo_aLista(u.permisos);
   return {
     email: u.email,
     nombre: u.nombre,
@@ -51,8 +53,21 @@ function usuariosAdmin_vista(u) {
     estado: u.estado,
     version: u.version,
     etag: usuariosDominio_etag(u),
-    permisos: permisosCatalogo_aLista(u.permisos)
+    permisos: permisos,
+    cantidadPermisos: permisos.length,
+    esAdmin: usuariosDominio_esAdminEfectivo(u),
+    actualizadoUtc: u.actualizadoUtc || '',
+    actualizadoPor: u.actualizadoPor || ''
   };
+}
+
+// E10-2: el MOTIVO es obligatorio en las mutaciones sensibles (no por cada checkbox): desactivar, reactivar, quitar usuarios_admin y cambiar INTERNO <-> EXTERNO.
+function usuariosAdmin_exigeMotivo(antes, despues) {
+  if (!antes) {
+    return false;
+  }
+  var quitaAdmin = antes.permisos && antes.permisos.usuarios_admin === true && !(despues.permisos && despues.permisos.usuarios_admin === true);
+  return antes.estado !== despues.estado || antes.tipo !== despues.tipo || quitaAdmin === true;
 }
 
 function usuariosAdmin_motivo(datos) {
@@ -182,6 +197,11 @@ function usuariosAdmin_ejecutar(actor, datos, opciones, construir) {
       return usuariosAdmin_error(validacion.codigo, validacion.mensaje, validacion.detalle ? { detalle: validacion.detalle } : null);
     }
 
+    // el motivo se exige DESPUES de las reglas duras (ultimo admin, EXTERNO + usuarios_admin, aplicabilidad): el error mas fundamental sale primero
+    if (usuariosAdmin_exigeMotivo(antes, despues) && usuariosAdmin_motivo(datos) === '') {
+      return usuariosAdmin_error('MOTIVO_REQUERIDO', 'esta operacion exige un motivo');
+    }
+
     var eventosNuevos = usuariosDominio_eventosDe(antes, Object.assign({}, despues, { version: antes ? antes.version + 1 : 1 }));
     if (antes && eventosNuevos.length === 0) {
       return { ok: true, sinCambios: true, usuario: usuariosAdmin_vista(antes), advertencias: [] };
@@ -189,6 +209,8 @@ function usuariosAdmin_ejecutar(actor, datos, opciones, construir) {
     despues.version = antes ? antes.version + 1 : 1;
 
     var instante = new Date().toISOString();
+    despues.actualizadoUtc = instante;
+    despues.actualizadoPor = actorEmail;
     var cambios = usuariosAdmin_cambiosDeFila(despues, instante, actorEmail, antes === null);
     try {
       if (antes) {
@@ -322,9 +344,16 @@ function usuariosAdmin_cambiarEstado(actor, datos) {
     if (datos.accion !== 'DESACTIVAR' && datos.accion !== 'REACTIVAR') {
       return usuariosAdmin_error('INVALID_REQUEST', 'accion debe ser DESACTIVAR o REACTIVAR');
     }
+    if (datos.accion === 'DESACTIVAR' && antes.estado === 'inactivo') {
+      return usuariosAdmin_error('USUARIO_YA_INACTIVO', 'el usuario ya esta inactivo');
+    }
+    if (datos.accion === 'REACTIVAR' && antes.estado === 'activo') {
+      return usuariosAdmin_error('USUARIO_YA_ACTIVO', 'el usuario ya esta activo');
+    }
     return {
       ok: true,
-      cambiaPermisos: false,
+      // reactivar REVALIDA la consistencia completa (dependencias incluidas), no solo lo que cambia
+      cambiaPermisos: datos.accion === 'REACTIVAR',
       despues: { email: antes.email, nombre: antes.nombre, tipo: antes.tipo, estado: datos.accion === 'DESACTIVAR' ? 'inactivo' : 'activo', version: antes.version, permisos: Object.assign({}, antes.permisos) }
     };
   });
@@ -336,6 +365,7 @@ if (typeof module !== 'undefined' && module.exports) {
     usuariosAdmin_actualizar,
     usuariosAdmin_cambiarEstado,
     usuariosAdmin_vista,
+    usuariosAdmin_exigeMotivo,
     USUARIOS_ADMIN_LOCK_MS
   };
 }
