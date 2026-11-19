@@ -1,6 +1,6 @@
 # E10-3: política de autoridad para el usuario EXTERNO autenticado
 
-Estado: **implementada y probada en local (19/11/2026). Sin `gas push`, sin versión, sin deploy, sin `git push`, sin Pages, sin tocar Script Properties, sin tocar usuarios ni a Gualde y Dietrich.** Producción sigue en backend v53 / storage v6, con `E10_ADMIN_USUARIOS_ACTIVO = SI`, `E10_GESTION_EXTERNOS_ACTIVO` **ausente** y `EMAIL_VERIFIED_MODO = OBSERVAR`.
+Estado: **E10-3 CERRADA / PRODUCTIVA (19/11/2026).** Backend **v54** en producción (deployment `…UZRq1Z`, misma URL), frontend publicado en GitHub Pages (commits `b5d9c76` y `1c1deba`). `E10_ADMIN_USUARIOS_ACTIVO = SI`, `E10_GESTION_EXTERNOS_ACTIVO` **ausente**, `EMAIL_VERIFIED_MODO = OBSERVAR` (ninguna Script Property se tocó). Storage en v6. Detalle de la promoción en §14.
 
 Análisis previo: [e10-3-politica-usuarios-externos-auditoria.md](e10-3-politica-usuarios-externos-auditoria.md) (matriz funcional, riesgos, alternativas A/B/C). Capa pública futura: [e10-publico-anonimo-diseno.md](e10-publico-anonimo-diseno.md).
 
@@ -109,3 +109,18 @@ Ambos EXTERNO, activos, versión 1, **idénticos**: `perfil`, `perfil_subir`, `d
 ## 13. Archivos
 
 `backend/src/PermisosCatalogo.js`, `UsuariosDominio.js`, `UsuariosAdminService.js`, `E10Preflight.js`; `js/usuariosAdminLogic.js`, `js/usuariosAdmin.js`, `css/styles.css`; tests: `backend/test/E10_3PoliticaExternos.test.js`, `ApiModosAcceso.test.js` (+ `accesoEstatico.js`), ampliaciones en `PermisosCatalogo`, `E10Preflight`, `UsuariosAdminApi`, `DiagnosticoPermisosE10`, `js/usuariosAdminController.test.js` y `js/usuariosAdminLogic.test.js`, y fixtures de avisos con la columna `tipo`.
+
+## 14. Promoción a producción (19/11/2026)
+
+- **Commit candidato:** `1c1deba` (sobre `b5d9c76`, sin squash). Un checkout limpio pasa la suite completa: 208 suites / 13.277 tests con `core.autocrlf` en `true` y en `false`; árbol normal 209 suites / 13.299 tests; 32 de 32 mutantes muertos.
+- **`gas push` a `@HEAD`** (con el set local de Ubicación apartado): 5 archivos modificados (`E10Preflight.js`, `ItfPreflight.js`, `PermisosCatalogo.js`, `UsuariosAdminService.js`, `UsuariosDominio.js`), 0 agregados, 0 eliminados, 65 sin cambios; `PUSH VERIFICADO`: remoto idéntico al repo (70 archivos + manifiesto). Ningún archivo de Ubicación subió. Producción siguió en v53 hasta el deploy.
+- **Pruebas antes de versionar:** las suites de la política (catálogo, E10-3, modos de acceso de las 69 acciones, preflight E10 y E9, auth, repositorio de usuarios, diagnósticos) corridas **contra el código traído del remoto `@HEAD`**: verdes.
+- **Versión 54** («E10-3 Politica de autoridad para usuarios externos»), creada desde el `@HEAD` verificado. **Deployment productivo `…UZRq1Z` actualizado de v53 a v54** con `gas:deploy:main` (no se creó ningún deployment ni URL nueva; la verificación inmediata mostró v53 y a los ~20 s v54 por propagación). Storage sin tocar (v6).
+- **Smoke de backend en producción (solo lectura, sesión de un administrador):** `checkSession` 17/17; catálogo con los 5 permisos no aplicables a EXTERNO (`perfil_validar`, `ubicacion_validar`, `fotos_moderar`, `observaciones_anular`, `usuarios_admin`) y 12 aplicables; listado de 12 usuarios (11 activos, 10 INTERNO, 2 EXTERNO, 2 administradores) con `permisosInefectivos` en todos y ninguno con inefectivos; token inválido `UNAUTHORIZED`; `getMetadata`, `getWellLocation`, `getItfAvailability` y `getMapaPozos` (13.804 pozos) correctos.
+- **Gualde y Dietrich** (lectura administrativa, sin usar sus sesiones): EXTERNO, activos, versión 1, **11 declarados = 11 efectivos**, idénticos a los de siempre; `permisosInefectivos = []`.
+- **Los cuatro permisos reservados crudos en una fila EXTERNO son inefectivos** (y `usuarios_admin` también): verificado con el harness de pruebas contra el código del remoto, sin escribir en `Usuarios` reales (no hay hoy ninguna fila con esa situación).
+- **Pages:** `js/usuariosAdminLogic.js`, `js/usuariosAdmin.js` y `css/styles.css` idénticos al repo por hash (y `sw.js`, `index.html`, `api.js`, `app.js` sin cambios); `api.js` apunta a la URL productiva.
+- **Smoke de la UI** (Administración → Usuarios, Federico, sin escrituras): listado de 12 usuarios; Gualde con 11 permisos marcados y los 5 reservados **sin marcar y deshabilitados** con la nota «No aplicable a usuarios externos.»; al elegir EXTERNO en un administrador los incompatibles quedan **marcados** (no se desmarcan solos), aparece la lista «Un usuario externo no puede tener «…». Desmarcalo para continuar.» y **Guardar queda deshabilitado**; «Descartar» vuelve al estado guardado sin enviar nada.
+- **Rollback a v53** (comando preparado, no usado):
+  `npm run gas:deploy:main -- --version 53 --confirmar-despliegue v53@UZRq1Z --permitir-retroceso --permitir-distinta`. El código vuelve; los datos no cambian (nada se escribió). Pages: volver a `53e63f1` en `main`.
+- **Flags al cerrar:** `E10_ADMIN_USUARIOS_ACTIVO = SI`; `E10_GESTION_EXTERNOS_ACTIVO` ausente; `EMAIL_VERIFIED_MODO = OBSERVAR`.
