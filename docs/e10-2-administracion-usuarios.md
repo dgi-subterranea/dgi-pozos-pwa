@@ -1,6 +1,6 @@
-# E10-2: Administración → Usuarios (implementación local; NO desplegada)
+# E10-2: Administración → Usuarios (CERRADA y PRODUCTIVA)
 
-Estado: **implementada y probada en local el 10/11/2026. Sin `gas push`, sin versión, sin deploy, sin `git push`, sin tocar Script Properties, sin encender flags, sin crear ni editar usuarios reales.** Producción sigue en backend v51 / storage v6, con `E10_ADMIN_USUARIOS_ACTIVO` y `E10_GESTION_EXTERNOS_ACTIVO` **APAGADOS**. Base: [e10-1-seguridad-usuarios.md](e10-1-seguridad-usuarios.md) (infraestructura reutilizada sin rediseño). Contexto: [e10-acceso-externo-y-administracion-usuarios.md](e10-acceso-externo-y-administracion-usuarios.md).
+Estado: **E10-2 CERRADA / PRODUCTIVA.** Backend v53 en producción, frontend publicado en GitHub Pages (commit `b267717`), `E10_ADMIN_USUARIOS_ACTIVO = SI` y `E10_GESTION_EXTERNOS_ACTIVO` **ausente** (gestión de externos apagada). Historia de validación y promoción en §15. El texto de las §1–§14 describe el diseño y el plan de validación tal como se escribió antes de promover (el estado «local / no desplegado» de esas secciones ya no rige). Base: [e10-1-seguridad-usuarios.md](e10-1-seguridad-usuarios.md) (infraestructura reutilizada sin rediseño). Contexto: [e10-acceso-externo-y-administracion-usuarios.md](e10-acceso-externo-y-administracion-usuarios.md).
 
 Alcance: una sección **Administración → Usuarios** dentro de la app para que un administrador autorizado **liste, busque, filtre, vea el detalle, cree, edite, cambie permisos, desactive y reactive** usuarios. **No** define qué puede usar un EXTERNO (E10-3 / E10-4), **no** cambia el email de un usuario, **no** borra filas.
 
@@ -138,7 +138,8 @@ Modificados: `backend/src/Api.js` (7 rutas), `UsuariosAdminService.js`, `Usuario
 
 ## 13. Decisiones y riesgos pendientes
 
-- **El flag de administración se enciende a mano** (Script Properties) y **no** durante el desarrollo; hasta entonces la pantalla muestra «Administración temporalmente deshabilitada» a los administradores.
+- **El flag de administración se enciende a mano** (Script Properties) y **no** durante el desarrollo; hasta entonces la pantalla muestra «Administración temporalmente deshabilitada» a los administradores. (Cumplido: ver §15, el flag está hoy en `SI`.)
+- **Defecto cosmético pendiente:** en el detalle de un usuario, la sección «Actividad reciente» muestra «Todavía no hay actividad registrada.» durante los ~4–6 s que tarda el backend en devolver el detalle y recién después los eventos reales. Es un falso vacío durante la carga (no hay datos incorrectos). No se corrigió en el cierre de E10-2 (implicaría una publicación nueva); queda para una iteración posterior de pulido.
 - Un administrador con el acceso cacheado puede ver la pantalla de estado «deshabilitada» antes de que expire el cache tras un cambio manual en la hoja; la **defensa real** (comprobación fresca bajo lock) no depende de ese cache.
 - `E10_GESTION_EXTERNOS_ACTIVO` sigue apagado: crear externos, convertir un usuario a externo y reactivar un externo quedan cerrados hasta decisión expresa (E10-3 / E10-4 definen qué puede ver un externo).
 - El cambio de email se diseñará aparte (participa de identidad, sesión, auditoría y cache).
@@ -158,3 +159,49 @@ Orden **exacto**:
    La **guarda sin escrituras**: mientras corre, todas las funciones que escriben en `Usuarios` / `UsuariosEventos` (`sheetUserRepository_escribirFila`, `_agregarFila`, `_restaurarFila`, `_quitarUltimaFilaSiEs`, `_agregarColumnas`, `_escribirCeldas`, `_quitarColumnas`, `_crearRespaldo`, `usuariosEventosRepository_agregar`, `setupUsuariosEventosSheet` y `authService_invalidarAcceso`) se reemplazan por funciones que lanzan y cuentan el intento; se verifica que quedó instalada y que bloquea **antes** de llamar a ningún endpoint; se restauran siempre; y se compara una huella de ambas hojas antes y después. Un test estático exige que toda función de los repositorios que escribe una hoja esté en esa lista. **No** se apaga el flag solo: se apaga a mano al terminar, o se sigue con la Ruta B (versión numerada + deployment temporal + frontend local real + usuario de prueba `e10-2-prueba@example.com`, aprobada para esa fase y todavía no creada).
 5. Verificar en `UsuariosEventos` los eventos (`ejecutadoPor` = el administrador real).
 6. Solo después, y con autorización expresa: versión nueva, deploy productivo, `git push` y activación del flag.
+
+## 15. Validación, promoción a producción y cierre
+
+Resumen: E10-2 se validó en tres etapas (Ruta A sin escrituras, Ruta B con deployment temporal y usuario de prueba, promoción con el flag apagado) y se cerró con el flag encendido. **Cerrada y productiva.**
+
+### 15.1 Validación previa (18/11/2026)
+
+- **Ruta A** (`diagnosticoAdminFlagOnE10`, commit `b267717`): flag encendido temporalmente en `@HEAD`, cero escrituras reales, guarda explícita y huella de las dos hojas; listado, catálogo, detalle y gates en verde.
+- **Ruta B**: versión numerada 52 + deployment **temporal** + frontend local con login real. Ciclo completo por la UI del usuario de prueba `e10-2-prueba@example.com`: crear, editar nombre, agregar/quitar permisos, desactivar, reactivar y desactivar (estado final). Conflicto optimista, idempotencia y rechazos (actor falsificado, `nuevoEmail`, campos extra, motivo) verificados contra el backend real. Los 11 usuarios originales no se tocaron.
+
+### 15.2 Promoción a producción (flag apagado)
+
+- Flag `E10_ADMIN_USUARIOS_ACTIVO` confirmado **ausente** (por lectura: `E10_ADMIN_INACTIVO`); `E10_GESTION_EXTERNOS_ACTIVO` ausente.
+- Versión numerada **53** («E10-2 Administración de usuarios»), creada desde un `HEAD` limpio (`b267717`), distinta de la temporal 52.
+- Deployment productivo `…UZRq1Z` actualizado de **v51 a v53** con `gas:deploy:main`; la URL `/exec` no cambió. Storage sin tocar (v6).
+- Verificación previa: 206 suites / 13.156 tests en verde, `git diff --check` limpio, `gas:diff` 70/70 idénticos.
+- **Commit publicado: `b267717`** (incluye `69a3a93`, E10-2; `git push origin main`, `dfb5bb6..b267717`, 2 commits sin squash).
+- **Smoke de backend con flag OFF** (contra producción, sesión real de un administrador): las 7 acciones `admin*` → `E10_ADMIN_INACTIVO`; token inválido → `UNAUTHORIZED`; funciones normales (`checkSession`, metadata, mapa, búsqueda, ITF, ubicación, fotos, observaciones, reemplazo, NE) correctas. No se probó en producción un no administrador ni un externo (no hay sus sesiones): cubierto por tests y por `diagnosticoGatesAdminE10`, que corrió sobre el mismo código.
+- **Smoke de Pages con flag OFF** (Federico, app publicada): assets idénticos al repo por hash; la tarjeta «Administración» aparece y al entrar dice «Administración temporalmente deshabilitada» (sin lista ni formularios); la búsqueda de pozos y los módulos funcionan.
+
+### 15.3 Activación productiva del flag y smoke final ON
+
+- El flag `E10_ADMIN_USUARIOS_ACTIVO = SI` lo agregó **el usuario a mano** (Script Properties de `dgi-pozos-backend`). `E10_GESTION_EXTERNOS_ACTIVO` sigue **ausente**.
+- **Smoke final en producción, solo lecturas** (la única acción emitida fue `adminUsuarioObtener`; ni guardar, ni desactivar, ni reactivar, ni crear):
+  - **12 usuarios finales**: 11 activos, 1 inactivo; 10 INTERNO, 2 EXTERNO; 2 administradores efectivos (Federico Albrieu y Mariana Ryan).
+  - Filtros por estado, tipo y administración con los conteos esperados; búsqueda con resultado y con mensaje de vacío.
+  - Detalle: administrador (17/17 permisos), INTERNO no administrador (9), EXTERNO (11, `usuarios_admin` deshabilitado y «No aplicable a usuarios externos») y usuario de prueba inactivo (2 permisos, acción «Reactivar»).
+  - Auditoría: los originales con un único evento «Migración inicial (E10)» (`migracion:E10-1`, versión 1); el usuario de prueba con sus 7 eventos (v1–v7).
+- **Usuario de prueba**: `e10-2-prueba@example.com` («PRUEBA E10-2 (no usar)», INTERNO, permisos `perfil` + `perfil_subir`) queda **INACTIVO en versión 7**; no hay borrado físico y la fila se conserva.
+- **Los 11 usuarios originales siguen intactos** (versión 1, `migracion:E10-1`), incluidos Federico, Mariana Ryan, María Soledad Gualde y Sebastián Dietrich.
+
+### 15.4 Limpieza y estado final
+
+- **Deployment temporal v52 eliminado** por ID explícito (`clasp delete-deployment <id> --user main`, nunca `--all`). Quedan solo `@HEAD` y el deployment productivo `…UZRq1Z` @53; la URL productiva sigue respondiendo; storage sigue en v6.
+- **Flags**: `E10_ADMIN_USUARIOS_ACTIVO = SI` (encendido a propósito, no se elimina); `E10_GESTION_EXTERNOS_ACTIVO` ausente (apagado).
+- Pendiente cosmético: ver §13 («Actividad reciente» con falso vacío durante la carga).
+
+### 15.5 Rollback documentado
+
+El flag es global del proyecto: **apagar la administración** = borrar la property `E10_ADMIN_USUARIOS_ACTIVO` (sin redeploy; los siete endpoints responden `E10_ADMIN_INACTIVO` y la pantalla muestra el estado «deshabilitada»). **Volver el código a v51** (sin los endpoints `admin*`):
+
+```
+npm run gas:deploy:main -- --version 51 --confirmar-despliegue v51@UZRq1Z --permitir-retroceso --permitir-distinta
+```
+
+Revertir Pages: volver al commit anterior (`dfb5bb6`) en `main`. El rollback de código no deshace los datos: los usuarios y `UsuariosEventos` son append-only y siguen válidos para v51.
