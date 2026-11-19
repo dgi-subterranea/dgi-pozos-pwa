@@ -181,6 +181,7 @@
       fila.appendChild(badge(t.tipoTexto, t.externo ? 'uadm-b-externo' : 'uadm-b-interno'));
       if (t.esAdmin) { fila.appendChild(badge('Admin', 'uadm-b-admin')); }
       fila.appendChild(badge(t.permisosTexto, 'uadm-b-permisos'));
+      if (t.inefectivos > 0) { fila.appendChild(badge(t.inefectivosTexto, 'uadm-b-inefectivo')); }
       b.appendChild(fila);
       b.appendChild(crear('span', 'uadm-card-actualizado', 'Actualizado: ' + t.actualizado));
       b.addEventListener('click', function () { pedirAbrirDetalle(u.email); });
@@ -202,7 +203,7 @@
 
   function erroresDeEdicion() {
     var e = estado.edicion;
-    var errores = usuariosAdminLogic_validarSeleccion(estado.catalogo, e.tipo, e.permisos).errores.map(function (x) { return x.mensaje; });
+    var errores = usuariosAdminLogic_validarSeleccion(estado.catalogo, e.tipo, e.permisos, estado.modo === 'crear' ? null : estado.original).errores.map(function (x) { return x.mensaje; });
     if (String(e.nombre || '').trim() === '') { errores.push('Falta el nombre.'); }
     if (estado.modo === 'crear' && !usuariosAdminLogic_esEmailPlausible(e.email)) { errores.push('Ingresá un email válido.'); }
     return errores;
@@ -211,13 +212,23 @@
   function renderPermisos() {
     limpiar(el.permisos);
     var tipo = estado.edicion.tipo;
+    var original = estado.modo === 'crear' ? null : estado.original;
+    // E10-3: asignados pero INEFECTIVOS para el tipo (la hoja no se limpia sola: se muestran y el administrador decide)
+    var inefectivos = usuariosAdminLogic_inefectivos(estado.catalogo, tipo, estado.edicion.permisos);
+    var heredados = original && original.tipo === 'EXTERNO' && tipo === 'EXTERNO' ? usuariosAdminLogic_inefectivos(estado.catalogo, 'EXTERNO', original.permisos) : [];
+    if (inefectivos.length > 0) {
+      var nombresIn = inefectivos.map(function (id) { return '«' + usuariosAdminLogic_nombrePermiso(estado.catalogo, id) + '»'; }).join(', ');
+      el.permisos.appendChild(crear('p', 'uadm-aviso-inefectivos', heredados.length > 0
+        ? 'Asignados en la hoja pero INEFECTIVOS: ' + nombresIn + '. Un usuario externo no puede ejercerlos; no se limpian solos. Desmarcalos para dejarlos en regla.'
+        : 'No aplicables a un usuario ' + (tipo === 'EXTERNO' ? 'externo' : 'interno') + ': ' + nombresIn + '. Desmarcalos para poder guardar.'));
+    }
     usuariosAdminLogic_agruparCatalogo(estado.catalogo).forEach(function (g) {
       var set = crear('fieldset', 'uadm-grupo');
       set.appendChild(crear('legend', 'uadm-grupo-titulo', g.modulo));
       g.permisos.forEach(function (p) {
         var marcado = estado.edicion.permisos.indexOf(p.id) >= 0;
         var aplicable = usuariosAdminLogic_aplicable(p, tipo);
-        var fila = crear('div', 'uadm-permiso' + (p.critico ? ' uadm-permiso-critico' : '') + (marcado ? ' uadm-permiso-on' : ''));
+        var fila = crear('div', 'uadm-permiso' + (p.critico ? ' uadm-permiso-critico' : '') + (marcado ? ' uadm-permiso-on' : '') + (marcado && !aplicable ? ' uadm-permiso-inefectivo' : ''));
         var cb = crear('input');
         cb.type = 'checkbox';
         cb.id = 'uadm-perm-' + p.id;
@@ -230,12 +241,13 @@
         var nombre = crear('span', 'uadm-permiso-nombre', p.nombre);
         etiqueta.appendChild(nombre);
         if (p.critico) { etiqueta.appendChild(badge('Crítico', 'uadm-b-critico')); }
+        if (marcado && !aplicable) { etiqueta.appendChild(badge('Inefectivo', 'uadm-b-inefectivo')); }
         etiqueta.appendChild(crear('span', 'uadm-permiso-desc', p.descripcion));
         if ((p.dependeDe || []).length > 0) {
           etiqueta.appendChild(crear('span', 'uadm-permiso-dep', 'Requiere: ' + p.dependeDe.map(function (d) { return usuariosAdminLogic_nombrePermiso(estado.catalogo, d); }).join(', ')));
         }
         if (!aplicable) {
-          etiqueta.appendChild(crear('span', 'uadm-permiso-nota', 'No aplicable a usuarios ' + (tipo === 'EXTERNO' ? 'externos' : 'internos') + '.'));
+          etiqueta.appendChild(crear('span', 'uadm-permiso-nota', (marcado ? (heredados.indexOf(p.id) >= 0 ? 'Asignado en origen, pero inefectivo. ' : 'Desmarcalo a mano. ') : '') + 'No aplicable a usuarios ' + (tipo === 'EXTERNO' ? 'externos' : 'internos') + '.'));
         }
         fila.appendChild(cb);
         fila.appendChild(etiqueta);
@@ -729,7 +741,7 @@
     if (destino === 'deshabilitada') { estado.fase = 'deshabilitada'; renderTodo(); return; }
     estado.intencion = null;
     renderTodo();
-    errorDetalle(usuariosAdminLogic_mensajeError(r.code, r));
+    errorDetalle(usuariosAdminLogic_mensajeError(r.code, r, estado.catalogo));
     if (usuariosAdminLogic_codigoRecarga(r.code) && estado.modo === 'detalle') {
       refrescarDetalle(false);
       recargarListado(function () { renderLista(); });

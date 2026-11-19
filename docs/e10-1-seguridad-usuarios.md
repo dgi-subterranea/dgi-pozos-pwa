@@ -24,7 +24,7 @@ Alcance de E10-1: seguridad, autenticación, catálogo de permisos, permisos nue
 
 `tipo` (INTERNO / EXTERNO) + `estado` + permisos individuales. **`tipo` no concede acceso**; la autoridad son los permisos. Dos reglas técnicas donde `tipo` participa:
 
-1. Un permiso con `aplicableExterno = false` (hoy solo `usuarios_admin`) es **efectivo solo para un INTERNO**. Un EXTERNO con `usuarios_admin = SI` en la hoja no es administrador; y la API rechaza *escribir* ese par (`TIPO_NO_PERMITE_PERMISO`), aunque llegue directo.
+1. Un permiso con `aplicableExterno = false` (desde E10-3: `usuarios_admin` y los de autoridad DGI `perfil_validar`, `ubicacion_validar`, `fotos_moderar`, `observaciones_anular`; ver [e10-3-politica-autoridad-externos.md](e10-3-politica-autoridad-externos.md)) es **efectivo solo para un INTERNO**. Un EXTERNO con `usuarios_admin = SI` en la hoja no es administrador; y la API rechaza *escribir* ese par (`TIPO_NO_PERMITE_PERMISO`), aunque llegue directo.
 2. **Administrador efectivo** = `estado = activo` + `tipo = INTERNO` + `usuarios_admin = SI`. La regla del último administrador cuenta exactamente eso.
 
 **Flag `E10_GESTION_EXTERNOS_ACTIVO` (decisión confirmada; antes se llamaba `E10_EXTERNOS_ACTIVO`, nombre descartado por ambiguo).** Gobierna **solo la gestión administrativa de externos**, nunca el acceso:
@@ -44,19 +44,19 @@ Campos de cada entrada: `id`, `nombre`, `descripcion`, `modulo`, `categoria` (`l
 |---|---|---|---|---|---|
 | 10 | `perfil` | lectura | — | no | sí |
 | 11 | `perfil_subir` | escritura | `perfil` | no | sí |
-| 12 | `perfil_validar` | moderación | `perfil` | sí | sí |
+| 12 | `perfil_validar` | moderación | `perfil` | sí | **no (E10-3)** |
 | 20 | `datos` | lectura | — | sí | sí |
 | 30 | `ubicacion` | **lectura** | — | no | sí |
 | 31 | `ubicacion_corregir` | **escritura** (proponer, sugerir, cancelar) | `ubicacion` | no | sí |
-| 32 | `ubicacion_validar` | moderación | `ubicacion` | sí | sí |
+| 32 | `ubicacion_validar` | moderación | `ubicacion` | sí | **no (E10-3)** |
 | 40 | `mapa` *(nuevo)* | lectura | — | no | sí |
 | 50 | `ne` | lectura | — | no | sí |
 | 60 | `fotos` | lectura | — | no | sí |
 | 61 | `fotos_carga` | escritura | — | no | sí |
-| 62 | `fotos_moderar` | moderación | `fotos` | sí | sí |
+| 62 | `fotos_moderar` | moderación | `fotos` | sí | **no (E10-3)** |
 | 70 | `observaciones` | lectura | — | no | sí |
 | 71 | `observaciones_agregar` | escritura | `observaciones` | no | sí |
-| 72 | `observaciones_anular` | moderación | `observaciones` | sí | sí |
+| 72 | `observaciones_anular` | moderación | `observaciones` | sí | **no (E10-3)** |
 | 80 | `reemplazo` | escritura | — | no | sí |
 | 90 | `usuarios_admin` *(nuevo)* | administración | — | sí | **no (techo duro)** |
 

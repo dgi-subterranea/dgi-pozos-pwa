@@ -882,3 +882,132 @@ describe('seguridad del controlador (guardas sobre el texto)', () => {
     expect(codigo).not.toMatch(/localStorage|sessionStorage|document\.cookie/);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+// E10-3: politica de autoridad para EXTERNOS. Un externo consulta, propone y carga, pero no valida, modera, anula contenido ajeno ni administra. Los permisos de autoridad son no aplicables a EXTERNO
+// (aplicableExterno = false en el catalogo, que el backend manda); la pantalla los muestra como INEFECTIVOS cuando estan asignados en la hoja, sin limpiarlos sola ni quitar nada en silencio.
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+describe('E10-3: permisos de autoridad y usuarios externos', () => {
+  const CATALOGO_E103 = CATALOGO.map((p) => (p.id === 'perfil_validar' ? Object.assign({}, p, { aplicableExterno: false }) : p));
+  const catalogo = () => Promise.resolve(ok({ permisos: CATALOGO_E103, categorias: [], tipos: [] }));
+  const HIST = V('hist@x.com', { nombre: 'Hist Externo', tipo: 'EXTERNO', permisos: ['perfil', 'perfil_validar'], cantidadPermisos: 2, permisosInefectivos: ['perfil_validar'] });
+  const INTERNO_VALIDADOR = V('val@x.com', { nombre: 'Validadora', permisos: ['perfil', 'perfil_validar'], cantidadPermisos: 2, permisosInefectivos: [] });
+  const base = () => USUARIOS.concat([HIST, INTERNO_VALIDADOR]);
+  const llenar = (t, email, nombre) => { t.escribir('uadm-email', email); t.escribir('uadm-nombre', nombre); };
+  const montarE103 = (extra) => montar(Object.assign({ catalogo, usuarios: base() }, extra || {}));
+
+  test('el listado marca con "inefectivo" al usuario que tiene permisos asignados que no puede ejercer', async () => {
+    const t = montarE103();
+    await t.abrirPantalla();
+    const texto = (email) => t.tarjetas().filter((b) => b.getAttribute('data-email') === email)[0].descendientes().map((n) => n.textContent).join(' ');
+    expect(texto('hist@x.com')).toContain('1 inefectivo');
+    expect(texto('val@x.com')).not.toContain('inefectivo');
+  });
+
+  test('un EXTERNO con un permiso de autoridad heredado: se ve ASIGNADO pero INEFECTIVO, se puede desmarcar y guardar el resto sin tocarlo', async () => {
+    const t = montarE103();
+    await t.abrirPantalla();
+    await t.abrirDetalle('hist@x.com');
+    expect(t.marcados()).toEqual(['perfil', 'perfil_validar']);
+    expect(t.permiso('perfil_validar').disabled).toBe(false);                   // se puede desmarcar para dejarlo en regla
+    const nodos = t.el['uadm-permisos'].descendientes().map((n) => n.textContent || '');
+    expect(nodos.join(' ')).toContain('INEFECTIVOS');
+    expect(nodos.join(' ')).toContain('Asignado en origen, pero inefectivo');
+    expect(nodos).toContain('Inefectivo');
+    // cambiar solo el nombre no queda bloqueado por el permiso heredado (el backend tampoco lo bloquea: no lo otorga)
+    t.escribir('uadm-nombre', 'Hist Renombrado');
+    expect(t.el['btn-uadm-guardar'].disabled).toBe(false);
+    t.el['btn-uadm-guardar'].click();
+    await flush();
+    const pedido = t.api.apiAdminUsuarioActualizar.mock.calls[0][1];
+    expect(pedido).toMatchObject({ nombre: 'Hist Renombrado' });
+    expect(pedido).not.toHaveProperty('permisos');                              // nada se limpia solo
+  });
+
+  test('desmarcar el permiso inefectivo lo QUITA (decision explicita del administrador) y manda la lista sin el', async () => {
+    const t = montarE103();
+    await t.abrirPantalla();
+    await t.abrirDetalle('hist@x.com');
+    await t.tocar('perfil_validar', false);
+    t.el['btn-uadm-guardar'].click();
+    await flush();
+    expect(t.api.apiAdminUsuarioActualizar.mock.calls[0][1]).toMatchObject({ permisos: ['perfil'] });
+  });
+
+  test('INTERNO -> EXTERNO con un permiso de autoridad: se avisa, NO se desmarca solo, Guardar queda bloqueado hasta que el administrador lo quite', async () => {
+    const t = montarE103();
+    await t.abrirPantalla();
+    await t.abrirDetalle('val@x.com');
+    t.escribir('uadm-tipo', 'EXTERNO', 'change');
+    expect(t.visible('uadm-form-aviso')).toBe(true);
+    expect(t.texto('uadm-form-aviso')).toContain('no puede tener «Validar ITF»');
+    expect(t.marcados()).toContain('perfil_validar');                           // sigue marcado: ninguna cascada silenciosa
+    expect(t.el['btn-uadm-guardar'].disabled).toBe(true);
+    await t.tocar('perfil_validar', false);
+    expect(t.el['btn-uadm-guardar'].disabled).toBe(false);
+    t.el['btn-uadm-guardar'].click();
+    await flush();
+    const d = t.dlg();
+    expect(d.texto).toContain('de interno a externo');
+    expect(d.texto).toContain('no puede validar, moderar, anular contenido ajeno ni administrar usuarios');
+    expect(d.motivoVisible).toBe(true);
+    await t.confirmar('colaborador externo');
+    expect(t.api.apiAdminUsuarioActualizar.mock.calls[0][1]).toMatchObject({ tipo: 'EXTERNO', permisos: ['perfil'], motivo: 'colaborador externo' });
+  });
+
+  test('EXTERNO -> INTERNO con permisos inefectivos: NO se activan de golpe (hay que quitarlos); pasar a interno no concede nada', async () => {
+    const t = montarE103();
+    await t.abrirPantalla();
+    await t.abrirDetalle('hist@x.com');
+    t.escribir('uadm-tipo', 'INTERNO', 'change');
+    expect(t.texto('uadm-form-aviso')).toContain('al pasar a usuario interno se activaría');
+    expect(t.el['btn-uadm-guardar'].disabled).toBe(true);
+    await t.tocar('perfil_validar', false);
+    expect(t.el['btn-uadm-guardar'].disabled).toBe(false);
+    t.el['btn-uadm-guardar'].click();
+    await flush();
+    expect(t.dlg().texto).toContain('no le otorga ningún permiso nuevo');
+  });
+
+  test('un EXTERNO sin permisos heredados pasa a INTERNO sin trabas (no hay nada que se active)', async () => {
+    const t = montarE103();
+    await t.abrirPantalla();
+    await t.abrirDetalle('beto@x.com');
+    t.escribir('uadm-tipo', 'INTERNO', 'change');
+    expect(t.el['btn-uadm-guardar'].disabled).toBe(false);
+  });
+
+  test('la casilla de un permiso de autoridad NO marcado queda deshabilitada para un EXTERNO (nadie se lo puede dar)', async () => {
+    const t = montarE103();
+    await t.abrirPantalla();
+    await t.abrirDetalle('beto@x.com');
+    expect(t.permiso('perfil_validar').disabled).toBe(true);
+    expect(t.permiso('perfil_validar').checked).toBe(false);
+    expect(t.permiso('datos').disabled).toBe(false);                            // lo funcional sigue disponible
+  });
+
+  test('crear un EXTERNO: la confirmacion explica la politica de autoridad', async () => {
+    const t = montarE103();
+    await t.abrirPantalla();
+    t.el['btn-uadm-nuevo'].click();
+    await flush();
+    llenar(t, 'ext@x.com', 'Externo Nuevo');
+    t.escribir('uadm-tipo', 'EXTERNO', 'change');
+    t.el['btn-uadm-guardar'].click();
+    await flush();
+    expect(t.dlg().texto).toContain('consulta, propone y carga según sus permisos');
+  });
+
+  test('error del backend con la lista de permisos: el mensaje los NOMBRA (TIPO_NO_PERMITE_PERMISO y CONCESION_AUTOMATICA)', async () => {
+    const t = montarE103({ actualizar: () => Promise.resolve(err('TIPO_NO_PERMITE_PERMISO', { detalle: ['TIPO_NO_PERMITE_PERMISO:perfil_validar'] })) });
+    await t.abrirPantalla();
+    await t.abrirDetalle('ana@x.com');
+    t.escribir('uadm-nombre', 'Otra');
+    t.el['btn-uadm-guardar'].click();
+    await flush();
+    expect(t.texto('uadm-detalle-error')).toContain('permisos de autoridad');
+    expect(t.texto('uadm-detalle-error')).toContain('«Validar ITF»');
+    expect(t.c.usuariosAdminLogic_mensajeError('CONCESION_AUTOMATICA', { detalle: ['CONCESION_AUTOMATICA:perfil_validar'] }, CATALOGO_E103)).toContain('«Validar ITF»');
+    expect(t.c.usuariosAdminLogic_mensajeError('CONCESION_AUTOMATICA')).toContain('activaría permisos');
+  });
+});

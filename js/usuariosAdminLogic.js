@@ -14,6 +14,9 @@ var USUARIOS_ADMIN_PERMISO_ADMIN = 'usuarios_admin';
 var USUARIOS_ADMIN_ANCHO_DOBLE = 900;
 
 // ¿Se ofrece la tarjeta "Administracion" en el hub? Solo con usuarios_admin === true EXACTO. Es solo la UI: la defensa real es el backend.
+// E10-3: la politica de autoridad, en el texto que ve el administrador antes de crear o convertir a un externo.
+var USUARIOS_ADMIN_TEXTO_EXTERNO = 'Un usuario externo consulta, propone y carga según sus permisos, pero no puede validar, moderar, anular contenido ajeno ni administrar usuarios.';
+
 function usuariosAdminLogic_puedeVer(permisos) {
   return !!permisos && permisos[USUARIOS_ADMIN_PERMISO_ADMIN] === true;
 }
@@ -87,6 +90,9 @@ function usuariosAdminLogic_tarjeta(u) {
     externo: u.tipo === 'EXTERNO',
     esAdmin: u.esAdmin === true,
     permisosTexto: u.cantidadPermisos === 1 ? '1 permiso' : (u.cantidadPermisos || 0) + ' permisos',
+    // E10-3: permisos asignados en la hoja pero INEFECTIVOS para el tipo (lo calcula el backend)
+    inefectivos: Array.isArray(u.permisosInefectivos) ? u.permisosInefectivos.length : 0,
+    inefectivosTexto: (Array.isArray(u.permisosInefectivos) ? u.permisosInefectivos.length : 0) === 1 ? '1 inefectivo' : (Array.isArray(u.permisosInefectivos) ? u.permisosInefectivos.length : 0) + ' inefectivos',
     actualizado: usuariosAdminLogic_formatearFecha(u.actualizadoUtc)
   };
 }
@@ -125,6 +131,14 @@ function usuariosAdminLogic_agruparCatalogo(catalogo) {
 function usuariosAdminLogic_aplicable(permiso, tipo) {
   if (!permiso) { return false; }
   return tipo === 'EXTERNO' ? permiso.aplicableExterno === true : permiso.aplicableInterno === true;
+}
+
+// E10-3: ids (de `ids`) que NO son efectivos para el tipo segun el catalogo: asignados pero que ese tipo no puede ejercer (p. ej. «Validar ITF» en un usuario externo). Sin lista propia: sale del catalogo.
+function usuariosAdminLogic_inefectivos(catalogo, tipo, ids) {
+  return (ids || []).filter(function (id) {
+    var p = usuariosAdminLogic_porId(catalogo, id);
+    return !!p && !usuariosAdminLogic_aplicable(p, tipo);
+  });
 }
 
 // Requeridos TRANSITIVOS de un permiso (dependeDe, y los dependeDe de esos).
@@ -192,17 +206,24 @@ function usuariosAdminLogic_ordenarIds(catalogo, ids) {
   });
 }
 
-// Validacion de apoyo (la autoridad es el backend): {ok, errores:[{codigo, permiso, mensaje}]}. Codigos = los del backend: PERMISO_DESCONOCIDO, TIPO_NO_PERMITE_PERMISO, PERMISOS_INCONSISTENTES.
-function usuariosAdminLogic_validarSeleccion(catalogo, tipo, seleccion) {
+// Validacion de apoyo (la autoridad es el backend): {ok, errores:[{codigo, permiso, mensaje}]}. Codigos = los del backend: PERMISO_DESCONOCIDO, TIPO_NO_PERMITE_PERMISO, PERMISOS_INCONSISTENTES, CONCESION_AUTOMATICA.
+// `original` (opcional, el usuario como esta guardado: {tipo, permisos}) permite las dos reglas de E10-3 que dependen del punto de partida: un permiso que el EXTERNO YA tenia asignado (inefectivo, dato historico) no
+// bloquea guardar mientras siga siendo EXTERNO; y pasar a INTERNO no activa de golpe permisos que eran inefectivos (hay que quitarlos de la seleccion: otorgarlos es un paso aparte).
+function usuariosAdminLogic_validarSeleccion(catalogo, tipo, seleccion, original) {
   var errores = [];
+  var heredados = original && original.tipo === 'EXTERNO' && tipo === 'EXTERNO' ? usuariosAdminLogic_inefectivos(catalogo, 'EXTERNO', original.permisos) : [];
+  var inertes = original && original.tipo !== 'INTERNO' && tipo === 'INTERNO' ? usuariosAdminLogic_inefectivos(catalogo, original.tipo, original.permisos) : [];
   (seleccion || []).forEach(function (id) {
     var p = usuariosAdminLogic_porId(catalogo, id);
     if (!p) {
       errores.push({ codigo: 'PERMISO_DESCONOCIDO', permiso: id, mensaje: usuariosAdminLogic_mensajeError('PERMISO_DESCONOCIDO') });
       return;
     }
-    if (!usuariosAdminLogic_aplicable(p, tipo)) {
-      errores.push({ codigo: 'TIPO_NO_PERMITE_PERMISO', permiso: id, mensaje: 'Un usuario ' + (tipo === 'EXTERNO' ? 'externo' : 'interno') + ' no puede tener «' + p.nombre + '».' });
+    if (!usuariosAdminLogic_aplicable(p, tipo) && heredados.indexOf(id) < 0) {
+      errores.push({ codigo: 'TIPO_NO_PERMITE_PERMISO', permiso: id, mensaje: 'Un usuario ' + (tipo === 'EXTERNO' ? 'externo' : 'interno') + ' no puede tener «' + p.nombre + '». Desmarcalo para continuar.' });
+    }
+    if (inertes.indexOf(id) >= 0) {
+      errores.push({ codigo: 'CONCESION_AUTOMATICA', permiso: id, mensaje: '«' + p.nombre + '» está asignado pero hoy es inefectivo: al pasar a usuario interno se activaría. Desmarcalo para continuar (podés otorgarlo después, en un paso aparte).' });
     }
     (p.dependeDe || []).forEach(function (d) {
       if ((seleccion || []).indexOf(d) < 0) {
@@ -269,6 +290,9 @@ function usuariosAdminLogic_confirmacion(accion, usuario, original, edicion, cat
     var d0 = edicion || {};
     var externo = d0.tipo === 'EXTERNO';
     var lineasC = ['Vas a crear a ' + String(d0.nombre || '').trim() + ' (' + String(d0.email || '').trim() + ') como usuario ' + (externo ? 'externo' : 'interno') + ' con ' + (d0.permisos || []).length + ' permiso(s).'];
+    if (externo) {
+      lineasC.push(USUARIOS_ADMIN_TEXTO_EXTERNO);
+    }
     if ((d0.permisos || []).indexOf(USUARIOS_ADMIN_PERMISO_ADMIN) >= 0) {
       lineasC.push('Tendrá «' + usuariosAdminLogic_nombrePermiso(catalogo, USUARIOS_ADMIN_PERMISO_ADMIN) + '»: podrá crear y editar usuarios y permisos.');
     }
@@ -281,6 +305,7 @@ function usuariosAdminLogic_confirmacion(accion, usuario, original, edicion, cat
     if (d.tipo) {
       critica = true;
       lineas.push('Cambia el tipo de ' + quien + ' de ' + (d.tipo.antes === 'EXTERNO' ? 'externo' : 'interno') + ' a ' + (d.tipo.despues === 'EXTERNO' ? 'externo' : 'interno') + '. El tipo no concede ni quita permisos: conserva los que tiene.');
+      lineas.push(d.tipo.despues === 'EXTERNO' ? USUARIOS_ADMIN_TEXTO_EXTERNO : 'Pasar a interno no le otorga ningún permiso nuevo: si querés darle alguno, es un paso aparte.');
     }
     if (d.agregados.indexOf(USUARIOS_ADMIN_PERMISO_ADMIN) >= 0) {
       critica = true;
@@ -341,7 +366,8 @@ function usuariosAdminLogic_resumenEvento(e, catalogo) {
 // --- errores ---
 
 // Mensaje util por CODIGO del backend. Nunca un "algo salio mal" cuando hay un codigo conocido. `extra` (opcional): {actual} en un conflicto.
-function usuariosAdminLogic_mensajeError(codigo, extra) {
+// `catalogo` (opcional) permite nombrar los permisos que el backend informa en `extra.detalle` (formato CODIGO:permiso).
+function usuariosAdminLogic_mensajeError(codigo, extra, catalogo) {
   var m = {
     E10_ADMIN_INACTIVO: 'Administración temporalmente deshabilitada. No se pueden hacer cambios hasta que se habilite.',
     E10_GESTION_EXTERNOS_INACTIVA: 'La gestión de usuarios externos está deshabilitada: no se pueden crear externos, convertir un usuario a externo ni reactivar un externo.',
@@ -354,7 +380,8 @@ function usuariosAdminLogic_mensajeError(codigo, extra) {
     TIPO_INVALIDO: 'El tipo debe ser Interno o Externo.',
     PERMISO_DESCONOCIDO: 'Se pidió un permiso que no existe en el catálogo. Recargá la pantalla e intentá de nuevo.',
     PERMISOS_INCONSISTENTES: 'Faltan permisos requeridos: algún permiso depende de otro que no está activado.',
-    TIPO_NO_PERMITE_PERMISO: 'Un usuario externo no puede tener el permiso de administración de usuarios ni otros permisos no aplicables a externos.',
+    TIPO_NO_PERMITE_PERMISO: 'Un usuario externo no puede tener permisos de autoridad (validar ITF o ubicaciones, moderar fotos, anular observaciones ajenas) ni de administración de usuarios. No se guardó nada: desmarcá esos permisos.',
+    CONCESION_AUTOMATICA: 'Pasar a usuario interno activaría permisos que hoy están asignados pero son inefectivos. No se guardó nada: desmarcalos y, si corresponde, otorgalos después en un paso aparte.',
     USUARIO_NO_ENCONTRADO: 'El usuario no existe (puede que se haya eliminado de la hoja). Volvé al listado y actualizá.',
     USUARIO_YA_INACTIVO: 'El usuario ya está inactivo. Se recargaron sus datos.',
     USUARIO_YA_ACTIVO: 'El usuario ya está activo. Se recargaron sus datos.',
@@ -370,6 +397,14 @@ function usuariosAdminLogic_mensajeError(codigo, extra) {
   };
   if (codigo === 'CONFLICT_VERSION' && extra && extra.actual && extra.actual.version) {
     return m.CONFLICT_VERSION + ' (versión actual: ' + extra.actual.version + ')';
+  }
+  if ((codigo === 'TIPO_NO_PERMITE_PERMISO' || codigo === 'CONCESION_AUTOMATICA') && extra && Array.isArray(extra.detalle) && extra.detalle.length > 0) {
+    var nombres = [];
+    extra.detalle.forEach(function (d) {
+      var partes = String(d).split(':');
+      if (partes[0] === codigo && partes[1]) { nombres.push('«' + usuariosAdminLogic_nombrePermiso(catalogo, partes[1]) + '»'); }
+    });
+    if (nombres.length > 0) { return m[codigo] + ' Permisos: ' + nombres.join(', ') + '.'; }
   }
   return m[codigo] || 'No se pudo completar la operación (código ' + String(codigo || 'desconocido') + ').';
 }
@@ -402,6 +437,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     USUARIOS_ADMIN_PERMISO_ADMIN,
     USUARIOS_ADMIN_ANCHO_DOBLE,
+    USUARIOS_ADMIN_TEXTO_EXTERNO,
     usuariosAdminLogic_puedeVer,
     usuariosAdminLogic_modoLayout,
     usuariosAdminLogic_normalizarTexto,
@@ -414,6 +450,7 @@ if (typeof module !== 'undefined' && module.exports) {
     usuariosAdminLogic_nombrePermiso,
     usuariosAdminLogic_agruparCatalogo,
     usuariosAdminLogic_aplicable,
+    usuariosAdminLogic_inefectivos,
     usuariosAdminLogic_requeridos,
     usuariosAdminLogic_alActivar,
     usuariosAdminLogic_alQuitar,

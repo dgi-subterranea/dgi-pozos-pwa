@@ -57,10 +57,31 @@ describe('contenido del catalogo', () => {
     expect(C.permisosCatalogo_porId('ubicacion_corregir').dependeDe).toEqual(['ubicacion']);
   });
 
-  test('usuarios_admin: aplicable a INTERNO, NO aplicable a EXTERNO (techo duro) y critico; es el UNICO no aplicable a EXTERNO', () => {
+  test('usuarios_admin: aplicable a INTERNO, NO aplicable a EXTERNO (techo duro) y critico', () => {
     const a = C.permisosCatalogo_porId('usuarios_admin');
     expect(a).toMatchObject({ aplicableInterno: true, aplicableExterno: false, critico: true });
-    expect(C.permisosCatalogo_lista().filter((p) => p.aplicableExterno === false).map((p) => p.id)).toEqual(['usuarios_admin']);
+  });
+
+  // E10-3 (politica de autoridad): un EXTERNO consulta, propone y carga, pero nunca valida, modera, anula lo ajeno ni administra.
+  const RESERVADOS_A_INTERNO = ['perfil_validar', 'ubicacion_validar', 'fotos_moderar', 'observaciones_anular', 'usuarios_admin'];
+  const NO_RESERVADOS = ['perfil', 'perfil_subir', 'datos', 'ubicacion', 'ubicacion_corregir', 'mapa', 'ne', 'fotos', 'fotos_carga', 'observaciones', 'observaciones_agregar', 'reemplazo'];
+
+  test('E10-3: los permisos reservados a INTERNO son EXACTAMENTE estos 5 (y solo estos son no aplicables a EXTERNO)', () => {
+    expect(C.permisosCatalogo_lista().filter((p) => p.aplicableExterno === false).map((p) => p.id).sort()).toEqual(RESERVADOS_A_INTERNO.slice().sort());
+    expect(C.permisosCatalogo_noAplicablesExterno().slice().sort()).toEqual(RESERVADOS_A_INTERNO.slice().sort());
+    RESERVADOS_A_INTERNO.forEach((id) => expect(C.permisosCatalogo_porId(id)).toMatchObject({ aplicableInterno: true, aplicableExterno: false, critico: true }));
+  });
+
+  test('E10-3: los 12 permisos que NO se reservan siguen siendo aplicables a EXTERNO (Gualde y Dietrich conservan los suyos)', () => {
+    NO_RESERVADOS.forEach((id) => expect(C.permisosCatalogo_porId(id)).toMatchObject({ aplicableInterno: true, aplicableExterno: true }));
+    expect(NO_RESERVADOS.length + RESERVADOS_A_INTERNO.length).toBe(C.permisosCatalogo_ids().length);
+  });
+
+  test('E10-3 INVARIANTE: todo permiso de categoria moderacion o administracion tiene aplicableExterno = false, y ninguno de lectura/escritura lo tiene', () => {
+    C.permisosCatalogo_lista().forEach((p) => {
+      const autoridad = p.categoria === 'moderacion' || p.categoria === 'administracion';
+      expect({ id: p.id, aplicableExterno: p.aplicableExterno }).toEqual({ id: p.id, aplicableExterno: !autoridad });
+    });
   });
 
   test('aplicableExterno solo expresa compatibilidad: no concede nada (el catalogo no tiene ninguna nocion de "paquete por defecto" ni de acceso externo)', () => {
@@ -117,9 +138,13 @@ describe('validarConjunto', () => {
     expect(r.errores.find((e) => e.codigo === 'TIPO_NO_PERMITE_PERMISO').permiso).toBe('usuarios_admin');
   });
 
-  test('un EXTERNO con cualquier otro permiso es compatible (no se decide politica externa)', () => {
-    const otros = C.permisosCatalogo_ids().filter((id) => id !== 'usuarios_admin');
+  test('un EXTERNO con cualquier permiso NO reservado es compatible; con uno reservado, TIPO_NO_PERMITE_PERMISO (E10-3)', () => {
+    const otros = C.permisosCatalogo_ids().filter((id) => !C.permisosCatalogo_noAplicablesExterno().includes(id));
     expect(C.permisosCatalogo_validarConjunto('EXTERNO', otros).errores.filter((e) => e.codigo === 'TIPO_NO_PERMITE_PERMISO')).toEqual([]);
+    ['perfil_validar', 'ubicacion_validar', 'fotos_moderar', 'observaciones_anular', 'usuarios_admin'].forEach((id) => {
+      const r = C.permisosCatalogo_validarConjunto('EXTERNO', ['perfil', 'fotos', 'ubicacion', 'observaciones', id]);
+      expect(r.errores.find((e) => e.codigo === 'TIPO_NO_PERMITE_PERMISO')).toMatchObject({ permiso: id });
+    });
   });
 
   test.each([

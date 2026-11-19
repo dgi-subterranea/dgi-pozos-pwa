@@ -91,23 +91,24 @@ describe('matriz de permisos: cada causa posible de "tiene todo en la hoja pero 
     expect(u.anomalias).toContain('CELDA_VACIA_CUENTA_NO:ne');
   });
 
-  test('TODO en la hoja pero tipo EXTERNO: usuarios_admin no es efectivo -> TODO_DECLARADO_NO_EFECTIVO (y ADMIN_DECLARADO_NO_EFECTIVO_POR_TIPO)', () => {
+  test('TODO en la hoja pero tipo EXTERNO: usuarios_admin y la autoridad no son efectivos -> TODO_DECLARADO_NO_EFECTIVO (y ADMIN_DECLARADO_NO_EFECTIVO_POR_TIPO)', () => {
     TODOS.forEach((id) => celda('externo@x.com', id, 'SI'));
     const u = usuarioDe(informe(), 'e***@x.com');
     expect(u.declarados).toHaveLength(17);
-    expect(u.efectivos).toHaveLength(16);
-    expect(u.declaradosNoEfectivos).toEqual(['usuarios_admin']);
+    expect(u.efectivos).toHaveLength(12);                              // E10-3: 17 declarados - los 5 que un EXTERNO nunca ejerce
+    expect(u.declaradosNoEfectivos).toEqual(['perfil_validar', 'ubicacion_validar', 'fotos_moderar', 'observaciones_anular', 'usuarios_admin']);
     expect(u.anomalias).toEqual(expect.arrayContaining(['TODO_DECLARADO_NO_EFECTIVO', 'ADMIN_DECLARADO_NO_EFECTIVO_POR_TIPO']));
     expect(informe().resumen.todoDeclaradoNoEfectivo).toBe(1);
   });
 
-  test('TODO en la hoja con tipo VACIO: solo usuarios_admin se pierde, ubicacion y el resto llegan', () => {
+  test('TODO en la hoja con tipo VACIO: se pierde la autoridad (usuarios_admin y los 4 de validar/moderar/anular); ubicacion y el resto llegan', () => {
     TODOS.forEach((id) => celda('interno@x.com', id, 'SI'));
     celda('interno@x.com', 'tipo', '');
     const u = usuarioDe(informe(), 'i***@x.com');
     expect(u.tipo).toBe('(vacio/invalido)');
-    expect(u.noTiene).toEqual(['usuarios_admin']);
-    expect(u.efectivos).toEqual(expect.arrayContaining(['ubicacion', 'ubicacion_corregir', 'ubicacion_validar', 'mapa']));
+    expect(u.noTiene).toEqual(['perfil_validar', 'ubicacion_validar', 'fotos_moderar', 'observaciones_anular', 'usuarios_admin']);   // E10-3: la autoridad solo vale con tipo INTERNO
+    expect(u.efectivos).toEqual(expect.arrayContaining(['ubicacion', 'ubicacion_corregir', 'mapa']));
+    expect(u.efectivos).not.toContain('ubicacion_validar');
     expect(u.anomalias).toEqual(expect.arrayContaining(['TIPO_VACIO_O_INVALIDO', 'TODO_DECLARADO_NO_EFECTIVO']));
   });
 

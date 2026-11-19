@@ -148,7 +148,8 @@ describe('LISTADO', () => {
     expect(a.permisos).toContain('usuarios_admin');
     expect(typeof a.etag).toBe('string');
     expect(a.actualizadoPor).toBe('migracion:E10-1');                   // lo que la migracion dejo en la hoja
-    expect(Object.keys(a).sort()).toEqual(['actualizadoPor', 'actualizadoUtc', 'cantidadPermisos', 'email', 'esAdmin', 'estado', 'etag', 'nombre', 'permisos', 'tipo', 'version']);
+    expect(Object.keys(a).sort()).toEqual(['actualizadoPor', 'actualizadoUtc', 'cantidadPermisos', 'email', 'esAdmin', 'estado', 'etag', 'nombre', 'permisos', 'permisosInefectivos', 'tipo', 'version']);
+    expect(a.permisosInefectivos).toEqual([]);
     expect(r.data.usuarios.find((u) => u.email === 'externo@x.com')).toMatchObject({ tipo: 'EXTERNO', esAdmin: false });
     expect(r.data.usuarios.find((u) => u.email === 'baja@x.com')).toMatchObject({ estado: 'inactivo', esAdmin: false });
   });

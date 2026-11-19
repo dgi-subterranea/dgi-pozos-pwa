@@ -1,6 +1,6 @@
 # E10-2: Administración → Usuarios (CERRADA y PRODUCTIVA)
 
-Estado: **E10-2 CERRADA / PRODUCTIVA.** Backend v53 en producción, frontend publicado en GitHub Pages (commit `b267717`), `E10_ADMIN_USUARIOS_ACTIVO = SI` y `E10_GESTION_EXTERNOS_ACTIVO` **ausente** (gestión de externos apagada). Historia de validación y promoción en §15. El texto de las §1–§14 describe el diseño y el plan de validación tal como se escribió antes de promover (el estado «local / no desplegado» de esas secciones ya no rige). Base: [e10-1-seguridad-usuarios.md](e10-1-seguridad-usuarios.md) (infraestructura reutilizada sin rediseño). Contexto: [e10-acceso-externo-y-administracion-usuarios.md](e10-acceso-externo-y-administracion-usuarios.md).
+Estado: **E10-2 CERRADA / PRODUCTIVA.** (La política de autoridad para externos de E10-3 modifica las reglas de §5: ver [e10-3-politica-autoridad-externos.md](e10-3-politica-autoridad-externos.md).) Backend v53 en producción, frontend publicado en GitHub Pages (commit `b267717`), `E10_ADMIN_USUARIOS_ACTIVO = SI` y `E10_GESTION_EXTERNOS_ACTIVO` **ausente** (gestión de externos apagada). Historia de validación y promoción en §15. El texto de las §1–§14 describe el diseño y el plan de validación tal como se escribió antes de promover (el estado «local / no desplegado» de esas secciones ya no rige). Base: [e10-1-seguridad-usuarios.md](e10-1-seguridad-usuarios.md) (infraestructura reutilizada sin rediseño). Contexto: [e10-acceso-externo-y-administracion-usuarios.md](e10-acceso-externo-y-administracion-usuarios.md).
 
 Alcance: una sección **Administración → Usuarios** dentro de la app para que un administrador autorizado **liste, busque, filtre, vea el detalle, cree, edite, cambie permisos, desactive y reactive** usuarios. **No** define qué puede usar un EXTERNO (E10-3 / E10-4), **no** cambia el email de un usuario, **no** borra filas.
 
@@ -82,11 +82,11 @@ Siete acciones POST (mismo `doPost`, mismo formato `{status, code, message, data
 | Operación | INTERNO | EXTERNO |
 |---|---|---|
 | Crear | permitido | requiere `E10_GESTION_EXTERNOS_ACTIVO = SI` |
-| Permisos | los que el catálogo permita | los mismos **salvo** los `aplicableExterno = false` (hoy solo `usuarios_admin`) |
-| INTERNO → EXTERNO | requiere flag de externos + motivo; no puede terminar con `usuarios_admin`; conserva sus demás permisos | — |
-| EXTERNO → INTERNO | permitido, con motivo; conserva sus permisos | — |
+| Permisos | los que el catálogo permita | los mismos **salvo** los `aplicableExterno = false` (E10-3: `usuarios_admin` y los de autoridad DGI; **también al editar un EXTERNO activo ya existente**, no solo al crear) |
+| INTERNO → EXTERNO | requiere flag de externos + motivo; **se rechaza si queda con permisos de autoridad** (E10-3: no se quitan solos, el administrador los desmarca); conserva sus demás permisos | — |
+| EXTERNO → INTERNO | permitido, con motivo; conserva sus permisos y **no concede nada**: si la fila tenía permisos de autoridad inefectivos, se rechaza (`CONCESION_AUTOMATICA`) hasta que se quiten | — |
 | Desactivar | permitido (motivo) | permitido sin el flag (el flag gobierna solo las altas nuevas) |
-| Reactivar | permitido (motivo) | requiere flag de externos (+ motivo) |
+| Reactivar | permitido (motivo) | requiere flag de externos (+ motivo) y **sin permisos de autoridad heredados** (E10-3) |
 | Login / permisos existentes | sin cambios | **sin cambios**, con el flag apagado o encendido |
 
 ## 6. Auditoría

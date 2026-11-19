@@ -3,7 +3,10 @@
 //
 // Modelo (aprobado): `tipo` (INTERNO | EXTERNO) + `estado` (activo | inactivo) + permisos individuales.
 //   - `tipo` NO concede permisos. La autoridad de acceso son los permisos.
-//   - Un permiso cuyo catalogo dice aplicableExterno = false (hoy: usuarios_admin) solo es EFECTIVO para un usuario INTERNO. Es una regla de seguridad dura, no de negocio.
+//   - Un permiso cuyo catalogo dice aplicableExterno = false (E10-3: usuarios_admin y los de autoridad DGI: perfil_validar, ubicacion_validar, fotos_moderar, observaciones_anular) solo es EFECTIVO para un
+//     usuario INTERNO. Es una regla de seguridad dura, no de negocio. Un valor CRUDO en SI de esos permisos en una fila EXTERNO (edicion manual de la hoja, dato historico) queda INEFECTIVO: nunca se
+//     ejerce, la hoja NO se limpia sola y la administracion lo muestra como "asignado en origen pero inefectivo".
+//   - `tipo` describe UNICAMENTE a personas autenticadas. PUBLICO / ANONIMO no es un tipo de usuario: no esta en `Usuarios`, no tiene sesion ni permisos individuales.
 //   - Administrador EFECTIVO = estado activo + tipo INTERNO + usuarios_admin = SI.
 //
 // Un "usuario" en este modulo es {email, nombre, estado, tipo, version, permisos: {id: boolean}}.
@@ -47,6 +50,14 @@ function usuariosDominio_permisosEfectivos(crudos, tipo) {
     salida[p.id] = valor;
   });
   return salida;
+}
+
+// E10-3: ids CRUDOS en SI que NO son efectivos para ese tipo (aplicableExterno = false y el usuario no es INTERNO), en el orden del catalogo. Es el complemento exacto de usuariosDominio_permisosEfectivos.
+function usuariosDominio_permisosInefectivos(crudos, tipo) {
+  var c = crudos || {};
+  return permisosCatalogo_lista().filter(function (p) {
+    return c[p.id] === true && p.aplicableExterno !== true && tipo !== 'INTERNO';
+  }).map(function (p) { return p.id; });
 }
 
 // Estado de acceso de UN usuario a partir de lo que leyo el repositorio: {found, active, permisos (crudos), nombre, tipo, version}.
@@ -113,10 +124,27 @@ function usuariosDominio_validarMutacion(antes, despues, todosAntes, opciones) {
   }
   var ids = permisosCatalogo_aLista(d.permisos);
   var validacion = permisosCatalogo_validarConjunto(tipo, ids);
+  var antesTipo = antes ? usuariosDominio_normalizarTipo(antes.tipo) : '';
+  var antesIds = antes ? permisosCatalogo_aLista(antes.permisos) : [];
+  var reactiva = !!antes && usuariosDominio_normalizarEstado(antes.estado) !== 'activo' && usuariosDominio_normalizarEstado(d.estado) === 'activo';
+  // E10-3: un permiso no aplicable a EXTERNO que la fila YA tenia (dato historico, inefectivo) no se OTORGA ni se reotorga, asi que no bloquea lo que no lo concede (desactivar, cambiar el nombre, editar estando
+  // inactivo): si bloqueara, no se podria ni dar de baja a un usuario por culpa de un permiso que ya no vale. Se rechaza siempre que sea un ALTA, una CONVERSION a EXTERNO, una REACTIVACION o un permiso NUEVO.
+  var heredaSinOtorgar = !!antes && antesTipo === 'EXTERNO' && tipo === 'EXTERNO' && !reactiva;
   var errores = validacion.errores.filter(function (e) {
+    if (e.codigo === 'TIPO_NO_PERMITE_PERMISO' && heredaSinOtorgar && antesIds.indexOf(e.permiso) >= 0) {
+      return false;
+    }
     // las dependencias solo se exigen si se tocan los permisos (o es un alta)
     return e.codigo !== 'PERMISOS_INCONSISTENTES' || o.cambiaPermisos === true || antes === null || antes === undefined;
   });
+  if (errores.length === 0 && !!antes && antesTipo !== 'INTERNO' && tipo === 'INTERNO') {
+    // E10-3: pasar a INTERNO no concede nada por si solo. Los permisos que la fila tenia en SI pero que eran INEFECTIVOS (EXTERNO) se activarian de golpe: el administrador tiene que quitarlos de la
+    // seleccion y, si corresponde, otorgarlos despues en un paso aparte y explicito.
+    var inertes = usuariosDominio_permisosInefectivos(antes.permisos, antesTipo).filter(function (id) { return ids.indexOf(id) >= 0; });
+    if (inertes.length > 0) {
+      return { ok: false, codigo: 'CONCESION_AUTOMATICA', mensaje: 'el cambio a INTERNO activaria permisos que hoy son inefectivos: ' + inertes.join(', '), detalle: inertes.map(function (id) { return 'CONCESION_AUTOMATICA:' + id; }) };
+    }
+  }
   if (errores.length > 0) {
     // TIPO_NO_PERMITE_PERMISO (EXTERNO + usuarios_admin) tiene prioridad: es la regla dura
     var duro = errores.filter(function (e) { return e.codigo === 'TIPO_NO_PERMITE_PERMISO'; })[0] || errores[0];
@@ -182,6 +210,7 @@ if (typeof module !== 'undefined' && module.exports) {
     usuariosDominio_normalizarEstado,
     usuariosDominio_normalizarVersion,
     usuariosDominio_permisosEfectivos,
+    usuariosDominio_permisosInefectivos,
     usuariosDominio_accesoEfectivo,
     usuariosDominio_esAdminEfectivo,
     usuariosDominio_contarAdmins,

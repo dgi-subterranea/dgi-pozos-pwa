@@ -6259,6 +6259,25 @@ textarea.uadm-input {
   font-size: 0.78rem;
   color: var(--color-warn);
 }
+/* E10-3: permiso asignado en la hoja pero INEFECTIVO para el tipo de usuario (p. ej. «Validar ITF» en un externo) */
+.uadm-b-inefectivo {
+  background: var(--color-warn-tint);
+  border-color: #ecd9a8;
+  color: var(--color-warn);
+}
+.uadm-permiso-inefectivo {
+  background: var(--color-warn-tint);
+  border-radius: 8px;
+}
+.uadm-aviso-inefectivos {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid #ecd9a8;
+  border-radius: 8px;
+  background: var(--color-warn-tint);
+  color: var(--color-warn);
+  font-size: 0.85rem;
+}
 .uadm-permiso-critico {
   background: #fff8f7;
   border-radius: 8px;

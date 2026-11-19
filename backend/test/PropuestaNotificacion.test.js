@@ -133,16 +133,16 @@ describe('mensaje', () => {
 
 // Hojas de Usuarios simuladas, filtradas con la funcion REAL del repositorio (para demostrar que NO se agrega ningun permiso por detras).
 describe('1. permisos configurables: se evalua EXACTAMENTE lo que pide el tipo, sin nada implicito', () => {
-  const ENC = ['email', 'nombre', 'estado', 'perfil', 'perfil_validar', 'ubicacion_validar', 'fotos_moderar'];
+  const ENC = ['email', 'nombre', 'estado', 'perfil', 'perfil_validar', 'ubicacion_validar', 'fotos_moderar', 'tipo'];
   const USU = [
     ENC,
-    ['solo-ubicacion@example.com', 'Solo Ubicacion', 'activo', 'NO', 'NO', 'SI', 'NO'],
-    ['ubicacion-y-perfil@example.com', 'Ubic y Perfil', 'activo', 'SI', 'NO', 'SI', 'NO'],
-    ['solo-fotos@example.com', 'Solo Fotos', 'activo', 'NO', 'NO', 'NO', 'SI'],
-    ['perfil-sin-nada@example.com', 'Perfil Sin Nada', 'activo', 'SI', 'NO', 'NO', 'NO'],
-    ['itf-completo@example.com', 'Validador ITF', 'activo', 'SI', 'SI', 'NO', 'NO'],
-    ['solo-validar@example.com', 'Solo Validar', 'activo', 'NO', 'SI', 'NO', 'NO'],
-    ['inactivo-ubicacion@example.com', 'Inactivo', 'inactivo', 'NO', 'NO', 'SI', 'NO']
+    ['solo-ubicacion@example.com', 'Solo Ubicacion', 'activo', 'NO', 'NO', 'SI', 'NO', 'INTERNO'],
+    ['ubicacion-y-perfil@example.com', 'Ubic y Perfil', 'activo', 'SI', 'NO', 'SI', 'NO', 'INTERNO'],
+    ['solo-fotos@example.com', 'Solo Fotos', 'activo', 'NO', 'NO', 'NO', 'SI', 'INTERNO'],
+    ['perfil-sin-nada@example.com', 'Perfil Sin Nada', 'activo', 'SI', 'NO', 'NO', 'NO', 'INTERNO'],
+    ['itf-completo@example.com', 'Validador ITF', 'activo', 'SI', 'SI', 'NO', 'NO', 'INTERNO'],
+    ['solo-validar@example.com', 'Solo Validar', 'activo', 'NO', 'SI', 'NO', 'NO', 'INTERNO'],
+    ['inactivo-ubicacion@example.com', 'Inactivo', 'inactivo', 'NO', 'NO', 'SI', 'NO', 'INTERNO']
   ];
 
   beforeEach(() => {

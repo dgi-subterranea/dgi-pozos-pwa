@@ -289,3 +289,58 @@ describe('el modulo no mantiene una lista literal de permisos ni infiere permiso
     expect(L.usuariosAdminLogic_activar(CATALOGO, [], 'datos', false)).toEqual(['datos']);
   });
 });
+
+// E10-3: politica de autoridad para EXTERNOS (el techo sale del catalogo: aplicableExterno = false; el backend es la autoridad, esto es apoyo para no armar estados invalidos).
+describe('E10-3: inefectivos, validarSeleccion con punto de partida y confirmaciones', () => {
+  const CAT = CATALOGO.map((p) => (['perfil_validar', 'fotos_moderar'].includes(p.id) ? Object.assign({}, p, { aplicableExterno: false }) : p));
+  const codigos = (r) => r.errores.map((e) => e.codigo + ':' + e.permiso);
+
+  test('usuariosAdminLogic_inefectivos: solo los asignados que el tipo no puede ejercer, segun el catalogo', () => {
+    expect(L.usuariosAdminLogic_inefectivos(CAT, 'EXTERNO', ['perfil', 'perfil_validar', 'fotos', 'fotos_moderar', 'usuarios_admin'])).toEqual(['perfil_validar', 'fotos_moderar', 'usuarios_admin']);
+    expect(L.usuariosAdminLogic_inefectivos(CAT, 'INTERNO', ['perfil_validar', 'fotos_moderar'])).toEqual([]);
+    expect(L.usuariosAdminLogic_inefectivos(CAT, 'EXTERNO', ['no_existe'])).toEqual([]);
+    expect(L.usuariosAdminLogic_inefectivos(CAT, 'EXTERNO', null)).toEqual([]);
+  });
+
+  test('un EXTERNO nuevo o convertido con autoridad: TIPO_NO_PERMITE_PERMISO por cada uno', () => {
+    expect(codigos(L.usuariosAdminLogic_validarSeleccion(CAT, 'EXTERNO', ['perfil', 'perfil_validar', 'fotos', 'fotos_moderar']))).toEqual(['TIPO_NO_PERMITE_PERMISO:perfil_validar', 'TIPO_NO_PERMITE_PERMISO:fotos_moderar']);
+    const original = { tipo: 'INTERNO', permisos: ['perfil', 'perfil_validar'] };
+    expect(codigos(L.usuariosAdminLogic_validarSeleccion(CAT, 'EXTERNO', ['perfil', 'perfil_validar'], original))).toEqual(['TIPO_NO_PERMITE_PERMISO:perfil_validar']);
+  });
+
+  test('un EXTERNO que ya los tenia asignados (heredados) puede seguir editandose sin que lo bloqueen, pero NO se le agrega otro', () => {
+    const original = { tipo: 'EXTERNO', permisos: ['perfil', 'perfil_validar'] };
+    expect(L.usuariosAdminLogic_validarSeleccion(CAT, 'EXTERNO', ['perfil', 'perfil_validar'], original).ok).toBe(true);
+    expect(codigos(L.usuariosAdminLogic_validarSeleccion(CAT, 'EXTERNO', ['perfil', 'perfil_validar', 'fotos', 'fotos_moderar'], original))).toEqual(['TIPO_NO_PERMITE_PERMISO:fotos_moderar']);
+  });
+
+  test('EXTERNO -> INTERNO: los inefectivos que se conservan dan CONCESION_AUTOMATICA; quitados, no', () => {
+    const original = { tipo: 'EXTERNO', permisos: ['perfil', 'perfil_validar'] };
+    expect(codigos(L.usuariosAdminLogic_validarSeleccion(CAT, 'INTERNO', ['perfil', 'perfil_validar'], original))).toEqual(['CONCESION_AUTOMATICA:perfil_validar']);
+    expect(L.usuariosAdminLogic_validarSeleccion(CAT, 'INTERNO', ['perfil'], original).ok).toBe(true);
+    // otorgar autoridad a quien ya es INTERNO no es una concesion automatica
+    expect(L.usuariosAdminLogic_validarSeleccion(CAT, 'INTERNO', ['perfil', 'perfil_validar'], { tipo: 'INTERNO', permisos: ['perfil'] }).ok).toBe(true);
+  });
+
+  test('la tarjeta informa la cantidad de inefectivos (y 0 si el backend no la manda)', () => {
+    expect(L.usuariosAdminLogic_tarjeta(U({ tipo: 'EXTERNO', permisosInefectivos: ['perfil_validar'] }))).toMatchObject({ inefectivos: 1, inefectivosTexto: '1 inefectivo' });
+    expect(L.usuariosAdminLogic_tarjeta(U({ permisosInefectivos: ['a', 'b'] }))).toMatchObject({ inefectivos: 2, inefectivosTexto: '2 inefectivos' });
+    expect(L.usuariosAdminLogic_tarjeta(U())).toMatchObject({ inefectivos: 0 });
+  });
+
+  test('confirmaciones: crear o convertir a externo explica la politica; pasar a interno aclara que no concede nada', () => {
+    expect(L.USUARIOS_ADMIN_TEXTO_EXTERNO).toContain('no puede validar, moderar, anular contenido ajeno ni administrar usuarios');
+    const crear = L.usuariosAdminLogic_confirmacion('CREAR', null, null, { email: 'e@x.com', nombre: 'E', tipo: 'EXTERNO', permisos: ['perfil'] }, CAT);
+    expect(crear.lineas).toContain(L.USUARIOS_ADMIN_TEXTO_EXTERNO);
+    const aExterno = L.usuariosAdminLogic_confirmacion('ACTUALIZAR', { nombre: 'Ana', email: 'a@x.com' }, { tipo: 'INTERNO', nombre: 'Ana', permisos: ['perfil'] }, { tipo: 'EXTERNO', nombre: 'Ana', permisos: ['perfil'] }, CAT);
+    expect(aExterno.lineas).toContain(L.USUARIOS_ADMIN_TEXTO_EXTERNO);
+    const aInterno = L.usuariosAdminLogic_confirmacion('ACTUALIZAR', { nombre: 'Ana', email: 'a@x.com' }, { tipo: 'EXTERNO', nombre: 'Ana', permisos: ['perfil'] }, { tipo: 'INTERNO', nombre: 'Ana', permisos: ['perfil'] }, CAT);
+    expect(aInterno.lineas.join(' ')).toContain('no le otorga ningún permiso nuevo');
+  });
+
+  test('mensajes de error: los codigos nuevos tienen texto propio y nombran los permisos del detalle', () => {
+    expect(L.usuariosAdminLogic_mensajeError('CONCESION_AUTOMATICA')).toContain('activaría permisos');
+    expect(L.usuariosAdminLogic_mensajeError('TIPO_NO_PERMITE_PERMISO')).toContain('permisos de autoridad');
+    expect(L.usuariosAdminLogic_mensajeError('TIPO_NO_PERMITE_PERMISO', { detalle: ['TIPO_NO_PERMITE_PERMISO:perfil_validar', 'TIPO_NO_PERMITE_PERMISO:fotos_moderar', 'PERMISOS_INCONSISTENTES:x'] }, CAT)).toMatch(/«Validar ITF», «Moderar fotos»/);
+  });
+});

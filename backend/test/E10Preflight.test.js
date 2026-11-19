@@ -21,12 +21,12 @@ const evaluar = (extra) => { entorno(extra); return P.preflightE10_evaluar(P.pre
 const item = (r, id) => r.items.find((i) => i.id === id);
 
 describe('estado migrado y sano: todo en verde', () => {
-  test('listo = true, 11 items en verde, contadores correctos', () => {
+  test('listo = true, 13 items en verde, contadores correctos', () => {
     const r = evaluar();
     expect(r.listo).toBe(true);
-    expect(r.items.map((i) => i.id)).toEqual(['usuarios_hoja', 'usuarios_columnas', 'catalogo', 'usuarios_eventos', 'mapa', 'admins', 'flags', 'tipo', 'consistencia', 'ultimo_admin', 'email_verified_modo', 'telegram_gates']);
+    expect(r.items.map((i) => i.id)).toEqual(['usuarios_hoja', 'usuarios_columnas', 'catalogo', 'usuarios_eventos', 'mapa', 'admins', 'politica_autoridad', 'externos_sin_autoridad', 'flags', 'tipo', 'consistencia', 'ultimo_admin', 'email_verified_modo', 'telegram_gates']);
     expect(r.items.every((i) => i.ok)).toBe(true);
-    expect(r.contadores).toEqual({ usuarios: 11, activos: 11, administradoresEfectivos: 2, internos: 9, externos: 2, conMapa: 11 });
+    expect(r.contadores).toEqual({ usuarios: 11, activos: 11, administradoresEfectivos: 2, internos: 9, externos: 2, conMapa: 11, filasConPermisosInefectivos: 0 });
     expect(r.soloLectura).toBe(true);
     expect(r.advertencias).toEqual([]);
   });
@@ -86,6 +86,47 @@ describe('cada item detecta su falla (y solo ella)', () => {
     expect(item(externoAdmin, 'admins').ok).toBe(false);
     expect(item(externoAdmin, 'admins').detalle).toMatch(/1 EXTERNO/);
     expect(externoAdmin.contadores.administradoresEfectivos).toBe(2);              // el externo no cuenta
+  });
+
+  // E10-3: politica de autoridad. Un EXTERNO nunca valida, modera, anula lo ajeno ni administra: el catalogo lo reserva y la hoja no deberia tener esos permisos en filas que no son INTERNO.
+  test('E10-3: el escenario real (2 externos con los permisos de siempre) esta en verde: ninguna fila NO INTERNO con autoridad', () => {
+    const r = evaluar();
+    expect(item(r, 'politica_autoridad')).toMatchObject({ ok: true });
+    expect(item(r, 'politica_autoridad').detalle).toContain('perfil_validar, ubicacion_validar, fotos_moderar, observaciones_anular, usuarios_admin');
+    expect(item(r, 'externos_sin_autoridad').ok).toBe(true);
+    expect(r.contadores.filasConPermisosInefectivos).toBe(0);
+  });
+
+  test('E10-3: un EXTERNO con permisos de autoridad en la hoja se detecta (rojo + advertencia), se CUENTA sin nombrar a nadie y no afecta a los administradores', () => {
+    const conAutoridad = evaluar({ usuarios: MIGRADOS.map((u, i) => (i === 3 ? Object.assign({}, u, { permisos: u.permisos.concat(['perfil_validar', 'fotos', 'fotos_moderar', 'observaciones', 'observaciones_anular']) }) : u)) });
+    expect(item(conAutoridad, 'externos_sin_autoridad').ok).toBe(false);
+    expect(item(conAutoridad, 'externos_sin_autoridad').detalle).toMatch(/1 fila\(s\) NO INTERNO con 3 permiso\(s\) de autoridad/);
+    expect(conAutoridad.contadores.filasConPermisosInefectivos).toBe(1);
+    expect(conAutoridad.advertencias.join(' ')).toMatch(/1 usuario\(s\) no INTERNO tienen permisos de autoridad/);
+    expect(conAutoridad.listo).toBe(false);
+    expect(JSON.stringify(conAutoridad)).not.toMatch(/@test\.local/);              // ni emails ni nombres
+    expect(conAutoridad.contadores.administradoresEfectivos).toBe(2);
+    // los INTERNOS con esos mismos permisos NO son un problema (pueden tenerlos)
+    const interno = evaluar({ usuarios: MIGRADOS.map((u, i) => (i === 2 ? Object.assign({}, u, { permisos: u.permisos.concat(['perfil_validar']) }) : u)) });
+    expect(item(interno, 'externos_sin_autoridad').ok).toBe(true);
+  });
+
+  test('E10-3: un usuario con tipo vacio o invalido tambien tendria esos permisos inefectivos y se cuenta', () => {
+    const r = evaluar({ usuarios: MIGRADOS.map((u, i) => (i === 5 ? Object.assign({}, u, { tipo: '', permisos: u.permisos.concat(['ubicacion_validar']) }) : u)) });
+    expect(item(r, 'externos_sin_autoridad').ok).toBe(false);
+    expect(r.contadores.filasConPermisosInefectivos).toBe(1);
+  });
+
+  test('E10-3: el catalogo se compara contra la politica: si un permiso de moderacion volviera a ser aplicable a EXTERNO, el item se pone en rojo', () => {
+    evaluar();
+    const original = global.permisosCatalogo_lista;
+    global.permisosCatalogo_lista = () => original().map((p) => (p.id === 'fotos_moderar' ? Object.assign({}, p, { aplicableExterno: true }) : p));
+    try {
+      const r = P.preflightE10_evaluar(P.preflightE10_recolectar({ leerTabla: () => global.sheetUserRepository_leerTabla() }));
+      expect(item(r, 'politica_autoridad').ok).toBe(false);
+    } finally {
+      global.permisosCatalogo_lista = original;
+    }
   });
 
   test('un solo administrador efectivo: verde con ADVERTENCIA', () => {

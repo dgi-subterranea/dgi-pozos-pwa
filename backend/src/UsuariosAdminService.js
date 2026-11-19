@@ -15,9 +15,12 @@
 //   E10_ADMIN_INACTIVO, E10_GESTION_EXTERNOS_INACTIVA, PERMISSION_DENIED, INVALID_REQUEST, SERVICE_UNAVAILABLE (lock),
 //   USUARIOS_NO_EXISTE / USUARIOS_ESQUEMA_INCOMPLETO / AUDITORIA_NO_DISPONIBLE (fail-closed: sin esquema no se escribe nada),
 //   USUARIO_EXISTE, USUARIO_NO_ENCONTRADO, EMAIL_DUPLICADO_EN_HOJA, CONFLICT_VERSION, EMAIL_INVALIDO, NOMBRE_INVALIDO, ESTADO_INVALIDO, TIPO_INVALIDO,
-//   PERMISO_DESCONOCIDO, PERMISOS_INCONSISTENTES, TIPO_NO_PERMITE_PERMISO, ULTIMO_ADMIN,
+//   PERMISO_DESCONOCIDO, PERMISOS_INCONSISTENTES, TIPO_NO_PERMITE_PERMISO, CONCESION_AUTOMATICA (E10-3), ULTIMO_ADMIN,
 //   MOTIVO_REQUERIDO (E10-2: desactivar, reactivar, quitar usuarios_admin y cambiar INTERNO <-> EXTERNO exigen motivo), USUARIO_YA_ACTIVO / USUARIO_YA_INACTIVO (E10-2).
 // E10_GESTION_EXTERNOS_ACTIVO gobierna SOLO las altas NUEVAS de externos (crear uno, convertir uno a EXTERNO, reactivar uno): no el acceso de los externos ya existentes.
+// E10-3 (politica de autoridad): independiente de ese flag, el techo de permisos de un EXTERNO (aplicableExterno = false: usuarios_admin y los de autoridad DGI) lo aplica usuariosDominio_validarMutacion a TODA
+// mutacion, tambien a un EXTERNO ACTIVO ya existente: ningun administrador puede otorgarle esos permisos. Convertir INTERNO -> EXTERNO con permisos de autoridad se rechaza listando TODOS (sin quitar nada en silencio);
+// pasar EXTERNO -> INTERNO no activa por si solo permisos inefectivos (CONCESION_AUTOMATICA); reactivar un EXTERNO con permisos incompatibles heredados se rechaza hasta que se quiten.
 var USUARIOS_ADMIN_LOCK_MS = 10000;
 var USUARIOS_ADMIN_MOTIVO_MAX = 200;
 var USUARIOS_ADMIN_CLIENT_REQUEST_ID_REGEX = /^[A-Za-z0-9._:-]{1,80}$/;
@@ -55,6 +58,9 @@ function usuariosAdmin_vista(u) {
     etag: usuariosDominio_etag(u),
     permisos: permisos,
     cantidadPermisos: permisos.length,
+    // E10-3: permisos asignados en la hoja que NO son efectivos para este tipo (p. ej. un EXTERNO con perfil_validar en SI por edicion manual o dato historico). La pantalla los muestra como
+    // "asignado en origen pero inefectivo"; la hoja no se limpia sola.
+    permisosInefectivos: usuariosDominio_permisosInefectivos(u.permisos, usuariosDominio_normalizarTipo(u.tipo)),
     esAdmin: usuariosDominio_esAdminEfectivo(u),
     actualizadoUtc: u.actualizadoUtc || '',
     actualizadoPor: u.actualizadoPor || ''

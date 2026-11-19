@@ -104,6 +104,18 @@ function preflightE10_evaluar(estado) {
     advertencias.push('hay UN solo administrador efectivo: conviene tener al menos dos');
   }
 
+  // 5b. E10-3 (politica de autoridad): un EXTERNO nunca valida, modera, anula lo ajeno ni administra. (a) El catalogo tiene que reservar a INTERNO exactamente la autoridad (categorias moderacion y administracion);
+  // (b) ninguna fila que no sea INTERNO puede tener esos permisos en SI en la hoja: si los tiene (edicion manual, dato historico) el runtime los anula (inefectivos) pero hay que verlos y limpiarlos a mano.
+  // Solo se cuentan filas (nunca emails ni nombres).
+  var autoridadOk = lista.every(function (p) { return (p.categoria === 'moderacion' || p.categoria === 'administracion') === (p.aplicableExterno === false); });
+  item('politica_autoridad', autoridadOk, autoridadOk ? 'el catalogo reserva a INTERNO la autoridad: ' + permisosCatalogo_noAplicablesExterno().join(', ') : 'el catalogo NO reserva a INTERNO exactamente los permisos de moderacion y administracion');
+  var inefectivosPorFila = u.usuarios.map(function (x) { return usuariosDominio_permisosInefectivos(x.permisos, x.tipo); }).filter(function (ids) { return ids.length > 0; });
+  var filasConInefectivos = inefectivosPorFila.length;
+  item('externos_sin_autoridad', filasConInefectivos === 0, filasConInefectivos === 0 ? 'ningun usuario que no sea INTERNO tiene permisos de autoridad en SI en la hoja' : filasConInefectivos + ' fila(s) NO INTERNO con ' + inefectivosPorFila.reduce(function (t, ids) { return t + ids.length; }, 0) + ' permiso(s) de autoridad en SI en la hoja: son INEFECTIVOS (no se ejercen) pero conviene quitarlos desde Administracion');
+  if (filasConInefectivos > 0) {
+    advertencias.push(filasConInefectivos + ' usuario(s) no INTERNO tienen permisos de autoridad asignados en la hoja (inefectivos): la hoja no se limpia sola');
+  }
+
   // 6. flags (se informan; en E10-1 deben estar APAGADOS)
   var f = { E10_ADMIN_USUARIOS_ACTIVO: flags.adminUsuarios === true ? 'ENCENDIDO' : 'APAGADO', E10_GESTION_EXTERNOS_ACTIVO: flags.gestionExternos === true ? 'ENCENDIDO' : 'APAGADO' };
   item('flags', true, 'E10_ADMIN_USUARIOS_ACTIVO ' + f.E10_ADMIN_USUARIOS_ACTIVO + ', E10_GESTION_EXTERNOS_ACTIVO ' + f.E10_GESTION_EXTERNOS_ACTIVO + ' (en E10-1 se espera APAGADO)');
@@ -157,7 +169,7 @@ function preflightE10_evaluar(estado) {
     listo: listo,
     items: items,
     advertencias: advertencias,
-    contadores: { usuarios: u.usuarios.length, activos: activos.length, administradoresEfectivos: admins.length, internos: internos, externos: externos, conMapa: activos.length - sinMapa },
+    contadores: { usuarios: u.usuarios.length, activos: activos.length, administradoresEfectivos: admins.length, internos: internos, externos: externos, conMapa: activos.length - sinMapa, filasConPermisosInefectivos: filasConInefectivos },
     flags: f
   };
 }

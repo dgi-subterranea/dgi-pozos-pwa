@@ -13,21 +13,22 @@ const LEASE = 300000;
 const T0 = Date.parse('2026-11-03T17:05:00.000Z');
 
 // Hoja Usuarios simulada (encabezado + filas); se filtra con la funcion REAL del repositorio. Validan (activos, perfil=SI, perfil_validar=SI): val1 y val2.
-const ENCABEZADO = ['email', 'nombre', 'estado', 'perfil', 'perfil_subir', 'perfil_validar'];
-const FILA_PROPONENTE = [EMAIL, 'Ana Proponente', 'activo', 'SI', 'SI', 'NO'];
+// E10-3: un permiso de autoridad (validar) solo es efectivo para un INTERNO, asi que la hoja simulada lleva la columna `tipo` (como la real) con INTERNO.
+const ENCABEZADO = ['email', 'nombre', 'estado', 'perfil', 'perfil_subir', 'perfil_validar', 'tipo'];
+const FILA_PROPONENTE = [EMAIL, 'Ana Proponente', 'activo', 'SI', 'SI', 'NO', 'INTERNO'];
 const USUARIOS = [
   ENCABEZADO,
   FILA_PROPONENTE,
-  ['val1@example.com', 'Valeria Validadora', 'activo', 'SI', 'NO', 'SI'],
-  ['val2@example.com', 'Vero Validadora', 'Activo ', 'SI', 'SI', ' si '],
-  ['sinpermiso@example.com', 'Sin Permiso', 'activo', 'SI', 'SI', 'NO'],
-  ['solosubir@example.com', 'Solo Subir', 'activo', 'SI', 'SI', ''],
-  ['permisotexto@example.com', 'Permiso Texto', 'activo', 'SI', 'NO', 'true'],
-  ['inactivo@example.com', 'Inactivo', 'inactivo', 'SI', 'NO', 'SI'],
-  ['bloqueado@example.com', 'Bloqueado', 'bloqueado', 'SI', 'NO', 'SI'],
-  ['sinperfil@example.com', 'Sin Perfil', 'activo', 'NO', 'NO', 'SI'],
-  ['VAL1@Example.com', 'Valeria repetida', 'activo', 'SI', 'NO', 'SI'],
-  ['malformado', 'Malformado', 'activo', 'SI', 'NO', 'SI']
+  ['val1@example.com', 'Valeria Validadora', 'activo', 'SI', 'NO', 'SI', 'INTERNO'],
+  ['val2@example.com', 'Vero Validadora', 'Activo ', 'SI', 'SI', ' si ', 'INTERNO'],
+  ['sinpermiso@example.com', 'Sin Permiso', 'activo', 'SI', 'SI', 'NO', 'INTERNO'],
+  ['solosubir@example.com', 'Solo Subir', 'activo', 'SI', 'SI', '', 'INTERNO'],
+  ['permisotexto@example.com', 'Permiso Texto', 'activo', 'SI', 'NO', 'true', 'INTERNO'],
+  ['inactivo@example.com', 'Inactivo', 'inactivo', 'SI', 'NO', 'SI', 'INTERNO'],
+  ['bloqueado@example.com', 'Bloqueado', 'bloqueado', 'SI', 'NO', 'SI', 'INTERNO'],
+  ['sinperfil@example.com', 'Sin Perfil', 'activo', 'NO', 'NO', 'SI', 'INTERNO'],
+  ['VAL1@Example.com', 'Valeria repetida', 'activo', 'SI', 'NO', 'SI', 'INTERNO'],
+  ['malformado', 'Malformado', 'activo', 'SI', 'NO', 'SI', 'INTERNO']
 ];
 
 let E;
@@ -255,7 +256,7 @@ describe('3. usuario sin permiso -> no recibe', () => {
   });
 
   test('si la hoja ni siquiera tiene la columna perfil_validar: NADIE recibe (fail-closed), la propuesta funciona y el aviso queda reintentable', () => {
-    usuarios = [['email', 'nombre', 'estado', 'perfil'], ['val1@example.com', 'V', 'activo', 'SI']];
+    usuarios = [['email', 'nombre', 'estado', 'perfil', 'tipo'], ['val1@example.com', 'V', 'activo', 'SI', 'INTERNO']];
     expect(proponer().status).toBe('ok');
     expect(enviados).toHaveLength(0);
     expect(outbox()[0]).toMatchObject({ estado: 'ERROR', ultimoError: 'SIN_DESTINATARIOS' });
@@ -666,7 +667,7 @@ describe('8. propuesta fallida -> NO hay email ni fila en el outbox', () => {
 
 describe('9. el proponente tambien es validador -> comportamiento definido: RECIBE el aviso', () => {
   test('quien propone y tambien valida (perfil_validar = SI) recibe el mismo email que los demas', () => {
-    usuarios = USUARIOS.map((f, i) => (i === 1 ? [EMAIL, 'Ana Proponente', 'activo', 'SI', 'SI', 'SI'] : f));
+    usuarios = USUARIOS.map((f, i) => (i === 1 ? [EMAIL, 'Ana Proponente', 'activo', 'SI', 'SI', 'SI', 'INTERNO'] : f));
     expect(proponer().status).toBe('ok');
     expect(destinatarios()).toEqual(['sesion@example.com', 'val1@example.com', 'val2@example.com']);
     expect(outbox()[0]).toMatchObject({ estado: 'ENVIADA', destinatariosEnviados: 'sesion@example.com;val1@example.com;val2@example.com' });
@@ -680,7 +681,7 @@ describe('9. el proponente tambien es validador -> comportamiento definido: RECI
 
 describe('10. cero validadores -> la propuesta funciona igualmente', () => {
   test('nadie con perfil_validar: propuesta creada, sin emails, aviso reintentable y Historial limpio', () => {
-    usuarios = [ENCABEZADO, FILA_PROPONENTE, ['inactivo@example.com', 'Inactivo', 'inactivo', 'SI', 'NO', 'SI']];
+    usuarios = [ENCABEZADO, FILA_PROPONENTE, ['inactivo@example.com', 'Inactivo', 'inactivo', 'SI', 'NO', 'SI', 'INTERNO']];
     const r = proponer();
     expect(r.status).toBe('ok');
     expect(r.data.estado).toBe('PROPUESTO');

@@ -7,10 +7,11 @@ const { instalarSheetsFalsos } = require('./fakeSheets');
 const W = '14-0001';
 const OFICIAL = { estado: 'unica', fuente: 'reportePozos', lat: -33.34765, lon: -69.14545 };
 const norte = (g) => OFICIAL.lat + g;
-const ENCABEZADO_USUARIOS = ['email', 'nombre', 'estado', 'fecha_alta', 'perfil', 'datos', 'ubicacion', 'ne', 'reemplazo', 'fotos', 'fotos_carga', 'ubicacion_corregir', 'ubicacion_validar'];
+// E10-3: un permiso de autoridad (validar) solo es efectivo para un INTERNO, asi que la hoja simulada lleva la columna `tipo` (como la real) con INTERNO.
+const ENCABEZADO_USUARIOS = ['email', 'nombre', 'estado', 'fecha_alta', 'perfil', 'datos', 'ubicacion', 'ne', 'reemplazo', 'fotos', 'fotos_carga', 'ubicacion_corregir', 'ubicacion_validar', 'tipo'];
 const fila = (email, nombre, estado, p) => {
   const permisos = Object.assign({ ubicacion: 'NO', ubicacion_corregir: 'NO', ubicacion_validar: 'NO' }, p || {});
-  return [email, nombre, estado, '2026-01-01', 'SI', 'SI', permisos.ubicacion, 'NO', 'NO', 'NO', 'NO', permisos.ubicacion_corregir, permisos.ubicacion_validar];
+  return [email, nombre, estado, '2026-01-01', 'SI', 'SI', permisos.ubicacion, 'NO', 'NO', 'NO', 'NO', permisos.ubicacion_corregir, permisos.ubicacion_validar, 'INTERNO'];
 };
 
 let N;
@@ -358,7 +359,7 @@ describe('SheetUserRepository: validadores activos', () => {
   });
 
   test('columnas en cualquier orden; hoja vacia o sin datos; sin permisos pedidos no devuelve a todos', () => {
-    const reordenada = [['ubicacion_validar', 'ubicacion', 'estado', 'nombre', 'email'], ['SI', 'SI', 'activo', 'Val', 'val@x.com']];
+    const reordenada = [['tipo', 'ubicacion_validar', 'ubicacion', 'estado', 'nombre', 'email'], ['INTERNO', 'SI', 'SI', 'activo', 'Val', 'val@x.com']];
     expect(filtrar(reordenada)).toEqual([{ email: 'val@x.com', nombre: 'Val' }]);
     expect(filtrar([])).toEqual([]);
     expect(filtrar(null)).toEqual([]);
@@ -367,7 +368,7 @@ describe('SheetUserRepository: validadores activos', () => {
   });
 
   test('nombre ausente -> null', () => {
-    const data = [['email', 'estado', 'ubicacion', 'ubicacion_validar'], ['v@x.com', 'activo', 'SI', 'SI']];
+    const data = [['email', 'estado', 'ubicacion', 'ubicacion_validar', 'tipo'], ['v@x.com', 'activo', 'SI', 'SI', 'INTERNO']];
     expect(filtrar(data)).toEqual([{ email: 'v@x.com', nombre: null }]);
   });
 

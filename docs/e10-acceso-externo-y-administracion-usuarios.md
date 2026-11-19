@@ -501,10 +501,11 @@ Universo: **16.599** ITF legacy canónicos (`DD-PPPP.jpg`), mediana ~0,78 MB, m�
 |---|---|
 | **E10-1** | **Seguridad + catálogo + nuevos permisos + esquema base** (este plan) |
 | **E10-2** | **Administración > Usuarios**: alta, edición, baja lógica, reactivación, cambio de permisos, búsqueda y filtros (pantalla) |
-| **E10-3** | **Primer usuario externo piloto** (incluye decidir `accesoHasta`, el resultado de la revisión de ITF de §12 y encender `E10_GESTION_EXTERNOS_ACTIVO` solo para el piloto) |
-| **E10-4** | **Decisión funcional sobre datos externos** (ITF, mapa, niveles, fotos, exportaciones, etc.), con auditoría específica de los datos reales |
-| **E10-5** | **Rate limits / protección de abuso** (login, imágenes, mapa, telemetría, Telegram) |
-| **E10-6** | **Piloto ampliado** |
+| **E10-3** | **Política de autoridad para el EXTERNO autenticado** (adoptado el 19/11/2026): un externo consulta, propone y carga según sus permisos, pero nunca valida, modera, anula contenido ajeno ni administra. Cierra la brecha de E10-2. Ver [e10-3-politica-autoridad-externos.md](e10-3-politica-autoridad-externos.md) |
+| **E10-4** | **Decisiones de información**: qué ve un EXTERNO y qué ve el PÚBLICO / ANÓNIMO (ITF, ubicación, NC16, datos, fotos, observaciones), URL pública (`wellId` vs. opaco) y QR/NFC; incluye la revisión de contenido de ITF (§12). Solo decisiones y diseño. Ver [e10-publico-anonimo-diseno.md](e10-publico-anonimo-diseno.md) |
+| **E10-5** | **Hardening**: rate limiting, scraping, kill-switch, aislamiento de cuota, `email_verified = EXIGIR`, logging público, vencimiento de externos, protección de endpoints públicos |
+| **Etapa posterior: capa pública** | pipeline con whitelist, índice público reducido, `/publico`, búsqueda, ficha, mapa si corresponde, QR/NFC opcional. Se construye **después** del hardening |
+| **E10-6** | **Piloto de gestión real de externos** con `E10_GESTION_EXTERNOS_ACTIVO` |
 | **E10-7** | **Cierre productivo** |
 
 ### 14.1 Orden de implementación de E10-1 (cada paso con sus tests y sin encender flags)
