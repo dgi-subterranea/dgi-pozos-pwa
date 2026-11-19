@@ -65,6 +65,10 @@ function itfPreflight_evaluar(estado) {
   };
 }
 
+// Cuenta usuarios ACTIVOS con perfil = SI y la columna = SI TAL COMO ESTAN EN LA HOJA (permisos DECLARADOS, no efectivos). Es un dato puramente INFORMATIVO del preflight manual: nada decide con el (ni
+// listoParaEncender ni ningun item dependen de estos contadores; itfE9Encender solo mira listoParaEncender). Decision de E10-3: se mantiene asi a proposito. Un EXTERNO con perfil_validar = SI en la hoja
+// se cuenta aqui aunque su permiso sea INEFECTIVO; esa discrepancia la informa E10Preflight (item externos_sin_autoridad). Si algun dia hiciera falta "quien puede validar de verdad", se usa
+// sheetUserRepository_filtrarConPermisos (permisos efectivos), no este conteo.
 function itfPreflight_cuantosActivosCon(data, columna) {
   if (!data || data.length < 2) {
     return 0;

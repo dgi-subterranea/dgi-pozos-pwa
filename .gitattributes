@@ -1,0 +1,18 @@
+# Fin de linea EXPLICITO: LF en el repositorio Y en el arbol de trabajo, sin depender de core.autocrlf.
+#
+# Por que: muchos tests leen codigo fuente, HTML, CSS y docs como TEXTO (fs.readFileSync) y asumen LF: regex con "\n" literal, guardas de "sin caracteres de control ni invisibles
+# crudos" (un "\r" lo es) y comparaciones de bloques de codigo. Con core.autocrlf=true (el valor por defecto de Git para Windows) un checkout o worktree NUEVO deja todo en CRLF y esas
+# suites fallan, aunque el codigo sea el mismo. Con este archivo el checkout es LF en Windows y en Linux. El contenido del repositorio no cambia (el indice ya esta en LF): no hay conversion masiva.
+* text=auto eol=lf
+
+# binarios: nunca se tocan
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.zip binary
+*.xlsx binary

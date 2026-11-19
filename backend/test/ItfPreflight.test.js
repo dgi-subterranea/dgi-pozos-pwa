@@ -93,6 +93,37 @@ describe('evaluar (puro)', () => {
   });
 });
 
+// E10-3: SEMANTICA explicita de los contadores de usuarios del preflight de E9: son permisos DECLARADOS en la hoja (no efectivos) y solo informativos.
+describe('contadores de usuarios: DECLARADOS (hoja) e informativos, no efectivos ni decisorios (E10-3)', () => {
+  const data = [
+    ['email', 'nombre', 'estado', 'perfil', 'perfil_subir', 'perfil_validar', 'tipo'],
+    ['interno@x.com', 'Interno', 'activo', 'SI', 'SI', 'SI', 'INTERNO'],
+    ['externo@x.com', 'Externo', 'activo', 'SI', 'SI', 'SI', 'EXTERNO']
+  ];
+
+  test('un EXTERNO con perfil_validar = SI en la hoja SE CUENTA (permiso declarado), aunque su permiso efectivo sea false', () => {
+    expect(P.itfPreflight_cuantosActivosCon(data, 'perfil_validar')).toBe(2);
+    expect(P.itfPreflight_cuantosActivosCon(data, 'perfil_subir')).toBe(2);
+    // el permiso EFECTIVO (el que de verdad se ejerce) es otra cosa y lo calcula el dominio de usuarios
+    const repo = require('../src/SheetUserRepository');
+    Object.assign(global, require('../src/PermisosCatalogo'), require('../src/UsuariosDominio'));
+    expect(repo.sheetUserRepository_filtrarConPermisos(data, ['perfil', 'perfil_validar']).map((u) => u.email)).toEqual(['interno@x.com']);
+    expect(repo.sheetUserRepository_filtrarConPermisos(data, ['perfil', 'perfil_subir']).map((u) => u.email)).toEqual(['interno@x.com', 'externo@x.com']);
+  });
+
+  test('ningun item ni listoParaEncender dependen de los contadores: con 0 o con 99 la decision es la misma', () => {
+    const base = OK_ESTADO();
+    const alto = OK_ESTADO();
+    alto.usuarios.activosConSubir = 99;
+    alto.usuarios.activosConValidar = 99;
+    const a = P.itfPreflight_evaluar(base);
+    const b = P.itfPreflight_evaluar(alto);
+    expect(b.items).toEqual(a.items);
+    expect(b.listoParaEncender).toBe(a.listoParaEncender);
+    expect(b.contadores.usuariosActivosConPerfilValidar).toBe(99);
+  });
+});
+
 // ---------------------------------------------------------------------------------------------------------
 describe('preflight y interruptor contra Apps Script falso', () => {
   const SECRETOS = ['FOLDER-ID-LEGACY-SECRETO', 'SPREADSHEET-ID-SECRETO', 'https://script.google.com/macros/s/URL-SECRETA-DEL-STORAGE/exec', 'secreto-compartido-de-32-caracteres-o-mas-xxxx'];
